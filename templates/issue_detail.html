@@ -1,0 +1,375 @@
+{% extends "base.html" %}
+
+{% block title %}{% match issue.title %}{% when Some with (t) %}{{ t }}{% when None %}Issue{% endmatch %} - Stackpit{% endblock %}
+
+{% block breadcrumbs %}
+<span class="sep" aria-hidden="true">/</span>
+<a href="/web/projects/">Projects</a>
+<span class="sep" aria-hidden="true">/</span>
+<a href="/web/projects/{{ issue.project_id }}/">Project {{ issue.project_id }}</a>
+<span class="sep" aria-hidden="true">/</span>
+<span>{{ issue.fingerprint|truncate_id }}</span>
+{% endblock %}
+
+{% block content %}
+<div class="issue-header">
+    <h1>{% match issue.title %}{% when Some with (t) %}{{ t|split_error_type }}{% when None %}(untitled){% endmatch %}</h1>
+    {% match issue.title %}{% when Some with (t) %}<p class="issue-title-msg">{{ t|split_error_message }}</p>{% when None %}{% endmatch %}
+</div>
+
+{% if !summary_tags.is_empty() %}
+<div class="summary-tags">
+    {% for st in summary_tags %}
+    <a class="summary-tag" href="/web/projects/{{ issue.project_id }}/?tag={{ st.label }}%3D{{ st.value|urlencode }}"><span class="summary-tag-label">{{ st.label }}</span><span class="summary-tag-value">{{ st.value }}</span></a>
+    {% endfor %}
+</div>
+{% endif %}
+
+<nav class="project-tabs" role="tablist" aria-label="Issue tabs">
+    <a href="/web/projects/{{ issue.project_id }}/issues/{{ issue.fingerprint }}/?tab=details" class="project-tab{% if tab == "details" %} active{% endif %}">Details</a>
+    <a href="/web/projects/{{ issue.project_id }}/issues/{{ issue.fingerprint }}/?tab=events" class="project-tab{% if tab == "events" %} active{% endif %}">All Events <span class="tab-count">{{ issue.event_count }}</span></a>
+</nav>
+
+<div class="issue-layout">
+    <div class="issue-main">
+
+{% if tab == "details" %}
+    {% match event %}{% when Some with (ev) %}
+
+    {% if !exceptions.is_empty() %}
+    <details open>
+        <summary>Exception &amp; Stacktrace</summary>
+        <div class="detail-body">
+            {% for exc in exceptions %}
+            <div style="margin-bottom: 1rem;">
+                <strong>{{ exc.exc_type }}</strong>: {{ exc.exc_value }}
+                {% match exc.mechanism_type %}{% when Some with (mt) %}
+                <span class="badge badge-debug">{{ mt }}</span>
+                {% when None %}{% endmatch %}
+                {% match exc.mechanism_handled %}{% when Some with (h) %}
+                {% if h %}<span class="badge badge-info">handled</span>{% else %}<span class="badge badge-error">unhandled</span>{% endif %}
+                {% when None %}{% endmatch %}
+            </div>
+            {% for frame in exc.frames %}
+            <details class="frame"{% if frame.in_app && frame.has_detail() %} open{% endif %}>
+                <summary class="frame-header{% if frame.in_app %} in-app{% else %} library{% endif %}">
+                    {{ frame.filename }}{% match frame.lineno %}{% when Some with (ln) %}:{{ ln }}{% match frame.colno %}{% when Some with (cn) %}:{{ cn }}{% when None %}{% endmatch %}{% when None %}{% endmatch %} in <strong>{{ frame.function }}</strong>
+                    {% if !frame.source_links.is_empty() %}
+                    <span class="source-links">{% for link in frame.source_links %}<a href="{{ link.url }}" target="_blank" rel="noopener" class="source-link" onclick="event.stopPropagation()">{{ link.label }}</a>{% endfor %}</span>
+                    {% endif %}
+                </summary>
+                {% if frame.context_line.is_some() || !frame.pre_context.is_empty() || !frame.post_context.is_empty() %}
+                <div class="frame-context">
+                    <ol start="{{ frame.context_start_line() }}">
+                    {% for line in frame.pre_context %}
+                        <li>{{ line }}</li>
+                    {% endfor %}
+                    {% match frame.context_line %}{% when Some with (cl) %}
+                        <li class="context-current">{{ cl }}</li>
+                    {% when None %}{% endmatch %}
+                    {% for line in frame.post_context %}
+                        <li>{{ line }}</li>
+                    {% endfor %}
+                    </ol>
+                </div>
+                {% endif %}
+                {% if !frame.vars.is_empty() %}
+                <div class="frame-vars">
+                    <table>
+                        <thead><tr><th scope="col">Variable</th><th scope="col">Value</th></tr></thead>
+                        <tbody>
+                        {% for var in frame.vars %}
+                            <tr><td><code>{{ var.0 }}</code></td><td><code>{{ var.1 }}</code></td></tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% endif %}
+                {% if !frame.has_detail() %}
+                <div class="detail-body"><span class="empty" style="padding: 0.5rem;">No source context available</span></div>
+                {% endif %}
+            </details>
+            {% endfor %}
+            {% endfor %}
+        </div>
+    </details>
+    {% endif %}
+
+    {% if !breadcrumbs.is_empty() %}
+    <details>
+        <summary>Breadcrumbs ({{ breadcrumbs.len() }})</summary>
+        <div class="detail-body">
+            <div class="table-wrap">
+            <table class="breadcrumb-table">
+                <thead>
+                    <tr>
+                        <th scope="col">Time</th>
+                        <th scope="col">Level</th>
+                        <th scope="col">Category</th>
+                        <th scope="col">Message</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for crumb in breadcrumbs %}
+                    <tr>
+                        <td class="ts">{{ crumb.timestamp }}</td>
+                        <td>{% if !crumb.level.is_empty() %}<span class="badge badge-{{ crumb.level }}">{{ crumb.level }}</span>{% endif %}</td>
+                        <td>{{ crumb.category }}</td>
+                        <td>{{ crumb.message }}{% if !crumb.data.is_empty() %}<details class="breadcrumb-data"><summary>data</summary><pre>{{ crumb.data }}</pre></details>{% endif %}</td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            </div>
+        </div>
+    </details>
+    {% endif %}
+
+    {% if !tags.is_empty() %}
+    <details>
+        <summary>Tags ({{ tags.len() }})</summary>
+        <div class="detail-body">
+            <dl class="tag-grid">
+            {% for tag in tags %}
+                <dt>{{ tag.key }}</dt>
+                <dd>{{ tag.value }}</dd>
+            {% endfor %}
+            </dl>
+        </div>
+    </details>
+    {% endif %}
+
+    {% if !contexts.is_empty() %}
+    <details>
+        <summary>Contexts</summary>
+        <div class="detail-body">
+            {% for group in contexts %}
+            <div class="context-group">
+                <h3>{{ group.name }}</h3>
+                <dl class="meta-grid">
+                {% for entry in group.entries %}
+                    <dt>{{ entry.0 }}</dt>
+                    <dd><code>{{ entry.1 }}</code></dd>
+                {% endfor %}
+                </dl>
+            </div>
+            {% endfor %}
+        </div>
+    </details>
+    {% endif %}
+
+    {% match request %}{% when Some with (req) %}
+    <details>
+        <summary>Request</summary>
+        <div class="detail-body">
+            {% if !req.method.is_empty() || !req.url.is_empty() %}
+            <p class="request-method"><code>{{ req.method }} {{ req.url }}</code></p>
+            {% endif %}
+            {% if !req.headers.is_empty() %}
+            <h3>Headers</h3>
+            <div class="table-wrap">
+            <table class="request-headers">
+                <thead><tr><th scope="col">Header</th><th scope="col">Value</th></tr></thead>
+                <tbody>
+                {% for h in req.headers %}
+                    <tr><td><strong>{{ h.0 }}</strong></td><td>{{ h.1 }}</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            </div>
+            {% endif %}
+            {% if !req.query_string.is_empty() %}
+            <h3>Query String</h3>
+            <pre>{{ req.query_string }}</pre>
+            {% endif %}
+            {% if !req.body.is_empty() %}
+            <h3>Body</h3>
+            <pre>{{ req.body }}</pre>
+            {% endif %}
+            {% if !req.env.is_empty() %}
+            <h3>Environment</h3>
+            <dl class="meta-grid">
+            {% for e in req.env %}
+                <dt>{{ e.0 }}</dt>
+                <dd>{{ e.1 }}</dd>
+            {% endfor %}
+            </dl>
+            {% endif %}
+        </div>
+    </details>
+    {% when None %}{% endmatch %}
+
+    {% if !user_reports.is_empty() %}
+    <details open>
+        <summary>User Reports ({{ user_reports.len() }})</summary>
+        <div class="detail-body">
+            {% for report in user_reports %}
+            <div class="user-report">
+                <p>
+                    <strong>{% match report.name %}{% when Some with (n) %}{{ n }}{% when None %}Anonymous{% endmatch %}</strong>
+                    {% match report.email %}{% when Some with (e) %}&lt;{{ e }}&gt;{% when None %}{% endmatch %}
+                    <span class="muted">&mdash; <time datetime="{{ report.timestamp|format_ts }}" title="{{ report.timestamp|format_ts }}">{{ report.timestamp|format_relative }}</time></span>
+                </p>
+                {% match report.comments %}{% when Some with (c) %}<blockquote>{{ c }}</blockquote>{% when None %}{% endmatch %}
+            </div>
+            {% endfor %}
+        </div>
+    </details>
+    {% endif %}
+
+    {% if !attachments.is_empty() %}
+    <details>
+        <summary>Attachments ({{ attachments.len() }})</summary>
+        <div class="detail-body">
+            <div class="table-wrap">
+            <table>
+                <thead><tr><th scope="col">Filename</th><th scope="col">Type</th><th scope="col">Size</th><th scope="col"></th></tr></thead>
+                <tbody>
+                {% for att in attachments %}
+                <tr>
+                    <td>{{ att.filename }}</td>
+                    <td>{% match att.content_type %}{% when Some with (ct) %}{{ ct }}{% when None %}&mdash;{% endmatch %}</td>
+                    <td>{{ att.size|filesizeformat }}</td>
+                    <td><a href="/web/projects/{{ issue.project_id }}/events/{{ ev.event_id }}/attachments/{{ att.filename }}">Download</a></td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            </div>
+        </div>
+    </details>
+    {% endif %}
+
+    {% if !raw_json.is_empty() %}
+    <details>
+        <summary>Raw JSON</summary>
+        <div class="detail-body">
+            <pre>{{ raw_json }}</pre>
+        </div>
+    </details>
+    {% endif %}
+
+    {% when None %}
+    <p class="empty">No events found for this issue.</p>
+    {% endmatch %}
+
+{% else %}
+
+    {% if events.items.is_empty() %}
+    <p class="empty">No events found for this issue.</p>
+    {% else %}
+    <div class="table-wrap">
+    <table>
+        <thead>
+            <tr>
+                <th scope="col">Event ID</th>
+                <th scope="col">Timestamp</th>
+                <th scope="col">Level</th>
+                <th scope="col">Title</th>
+                <th scope="col" class="hide-mobile">Platform</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for ev in events.items %}
+            <tr{% match ev.level %}{% when Some with (lvl) %} data-level="{{ lvl }}"{% when None %}{% endmatch %}>
+                <td><a href="/web/projects/{{ issue.project_id }}/events/{{ ev.event_id }}/">{{ ev.event_id|truncate_id }}</a></td>
+                <td><time datetime="{{ ev.timestamp|format_ts }}" title="{{ ev.timestamp|format_ts }}">{{ ev.timestamp|format_relative }}</time></td>
+                <td>
+                    {% match ev.level %}{% when Some with (lvl) %}<span class="badge badge-{{ lvl }}">{{ lvl }}</span>{% when None %}{% endmatch %}
+                </td>
+                <td class="truncate" title="{% match ev.title %}{% when Some with (t) %}{{ t }}{% when None %}{% endmatch %}">{% match ev.title %}{% when Some with (t) %}{{ t }}{% when None %}{% endmatch %}</td>
+                <td class="hide-mobile">{% match ev.platform %}{% when Some with (p) %}{{ p }}{% when None %}{% endmatch %}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+
+    <nav class="pagination" aria-label="Pagination">
+        <span>{{ events.total }} event{% if events.total != 1 %}s{% endif %}</span>
+        <span>
+            {% if events.has_prev() %}
+            <a href="/web/projects/{{ issue.project_id }}/issues/{{ issue.fingerprint }}/?tab=events&amp;offset={{ events.prev_offset() }}&amp;limit={{ events.limit }}">&laquo; Previous</a>
+            {% endif %}
+            {% if events.has_next() %}
+            <a href="/web/projects/{{ issue.project_id }}/issues/{{ issue.fingerprint }}/?tab=events&amp;offset={{ events.next_offset() }}&amp;limit={{ events.limit }}">Next &raquo;</a>
+            {% endif %}
+        </span>
+    </nav>
+    {% endif %}
+
+{% endif %}
+
+    </div>{# .issue-main #}
+
+    <aside class="issue-sidebar">
+        <dl class="meta-grid">
+            <dt>Fingerprint</dt>
+            <dd><code>{{ issue.fingerprint }}</code></dd>
+            <dt>Level</dt>
+            <dd>
+                {% match issue.level %}{% when Some with (lvl) %}<span class="badge badge-{{ lvl }}">{{ lvl }}</span>{% when None %}&mdash;{% endmatch %}
+            </dd>
+            <dt>Status</dt>
+            <dd><span class="badge badge-{{ issue.status }}">{{ issue.status }}</span></dd>
+            <dt>Events</dt>
+            <dd>{{ issue.event_count }}</dd>
+            <dt>Users</dt>
+            <dd>{{ issue.user_count }}</dd>
+            <dt>First Seen</dt>
+            <dd><time datetime="{{ issue.first_seen|format_ts }}" title="{{ issue.first_seen|format_ts }}">{{ issue.first_seen|format_relative }}</time>{% match first_seen_release %}{% when Some with (rel) %} <span class="muted">in <a href="/web/projects/{{ issue.project_id }}/?release={{ rel|urlencode }}">{{ rel }}</a></span>{% when None %}{% endmatch %}</dd>
+            <dt>Last Seen</dt>
+            <dd><time datetime="{{ issue.last_seen|format_ts }}" title="{{ issue.last_seen|format_ts }}">{{ issue.last_seen|format_relative }}</time>{% match last_seen_release %}{% when Some with (rel) %} <span class="muted">in <a href="/web/projects/{{ issue.project_id }}/?release={{ rel|urlencode }}">{{ rel }}</a></span>{% when None %}{% endmatch %}</dd>
+        </dl>
+
+        <form class="status-form" method="post" action="/web/projects/{{ issue.project_id }}/issues/{{ issue.fingerprint }}/status">
+            <select name="status" aria-label="Issue status">
+                <option value="unresolved"{% if issue.status == "unresolved" %} selected{% endif %}>unresolved</option>
+                <option value="resolved"{% if issue.status == "resolved" %} selected{% endif %}>resolved</option>
+                <option value="ignored"{% if issue.status == "ignored" %} selected{% endif %}>ignored</option>
+            </select>
+            <button type="submit" class="btn">Update Status</button>
+        </form>
+
+        <form method="post" action="/web/projects/{{ issue.project_id }}/issues/{{ issue.fingerprint }}/discard" style="margin-top: 0.5rem;">
+            {% if is_discarded %}
+            <button type="submit" class="btn" title="Resume accepting future events with this fingerprint">Undo Discard</button>
+            {% else %}
+            <button type="submit" class="btn btn-danger" onclick="return confirm('Discard all future events with this fingerprint?')" title="Silently drop future events matching this fingerprint">Discard Future Events</button>
+            {% endif %}
+        </form>
+
+        {% if !chart_svg.is_empty() %}
+        <div class="event-chart">{{ chart_svg|safe }}</div>
+        {% endif %}
+
+        {% if !tag_facets.is_empty() %}
+        <h3>Tags</h3>
+        {% for facet in tag_facets %}
+        <div class="tag-facet">
+            <input type="checkbox" class="tag-facet-toggle" id="tf-{{ loop.index }}">
+            <label class="tag-facet-key" for="tf-{{ loop.index }}">{{ facet.key }}</label>
+            <div class="tag-facet-bar-stack">
+                {% for tv in facet.top_values %}
+                <div class="tag-facet-segment tag-facet-color-{{ loop.index0 }}" style="flex: {{ tv.count }} 0 2px;">
+                    {% if facet.total_count > 0 && tv.count * 100 / facet.total_count >= 20 %}
+                    <span class="tag-facet-seg-label">{{ tv.value }}</span>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+            <div class="tag-facet-details">
+                {% for tv in facet.top_values %}
+                <div class="tag-facet-row">
+                    <div class="tag-facet-bar" style="width: {% if facet.total_count > 0 %}{{ tv.count * 100 / facet.total_count }}{% else %}0{% endif %}%;"></div>
+                    <a class="tag-facet-value" href="/web/projects/{{ issue.project_id }}/?tag={{ facet.key }}%3D{{ tv.value|urlencode }}">{{ tv.value }}</a>
+                    <span class="tag-facet-count">{{ tv.count }}</span>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endfor %}
+        {% endif %}
+    </aside>
+</div>
+{% endblock %}

@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+
+{% block title %}Add Slack - Stackpit{% endblock %}
+
+{% block breadcrumbs %}
+<span class="sep" aria-hidden="true">/</span>
+<a href="/web/settings/integrations/">Settings</a>
+<span class="sep" aria-hidden="true">/</span>
+<span>Add Slack</span>
+{% endblock %}
+
+{% block content %}
+<h1>Add Slack Integration</h1>
+
+<p><a href="/web/settings/integrations/">&larr; Back to Integrations</a></p>
+
+<form class="settings-form" method="post" action="/web/settings/integrations/create">
+    <input type="hidden" name="kind" value="slack">
+
+    <label for="int_name">Name</label>
+    <input type="text" id="int_name" name="name" placeholder="e.g. #alerts channel" required>
+
+    <label for="int_url">Slack Webhook URL</label>
+    <input type="url" id="int_url" name="url" placeholder="https://hooks.slack.com/services/..." required>
+
+    <button type="submit" class="btn">Create Integration</button>
+</form>
+{% endblock %}

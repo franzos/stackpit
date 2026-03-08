@@ -1,0 +1,86 @@
+use axum::extract::State;
+use axum::middleware::Next;
+use axum::response::IntoResponse;
+use subtle::ConstantTimeEq;
+
+use crate::encoding::percent_decode;
+
+const CSRF_COOKIE_NAME: &str = "csrf_token";
+const CSRF_TOKEN_LEN: usize = 16; // 128-bit hex token
+
+fn generate_csrf_token() -> String {
+    use rand::RngCore;
+    let mut buf = [0u8; CSRF_TOKEN_LEN];
+    rand::rngs::OsRng.fill_bytes(&mut buf);
+    hex::encode(buf)
+}
+
+fn extract_csrf_cookie(headers: &axum::http::HeaderMap) -> Option<String> {
+    super::cookie::extract_cookie_value(headers, CSRF_COOKIE_NAME)
+}
+
+fn extract_csrf_field(body: &[u8]) -> Option<String> {
+    let body_str = std::str::from_utf8(body).ok()?;
+    for pair in body_str.split('&') {
+        if let Some(val) = pair.strip_prefix("csrf_token=") {
+            return Some(percent_decode(val.trim()));
+        }
+    }
+    None
+}
+
+pub async fn csrf_middleware(
+    State(use_secure_cookies): State<bool>,
+    req: axum::http::Request<axum::body::Body>,
+    next: Next,
+) -> axum::response::Response {
+    let is_post = req.method() == axum::http::Method::POST;
+    let path = req.uri().path();
+    let is_web = path.starts_with("/web/");
+    let is_login = path == "/web/login";
+    let cookie_token = extract_csrf_cookie(req.headers());
+
+    if is_post && is_web && !is_login {
+        let cookie_token_for_check = cookie_token.clone();
+        let (parts, body) = req.into_parts();
+        let bytes = match axum::body::to_bytes(body, 10 * 1024 * 1024).await {
+            Ok(b) => b,
+            Err(_) => {
+                return (axum::http::StatusCode::BAD_REQUEST, "request too large").into_response();
+            }
+        };
+
+        let form_token = extract_csrf_field(&bytes);
+
+        let valid = match (&cookie_token_for_check, &form_token) {
+            (Some(cookie), Some(field)) => {
+                !cookie.is_empty()
+                    && !field.is_empty()
+                    && cookie.as_bytes().ct_eq(field.as_bytes()).into()
+            }
+            _ => false,
+        };
+
+        if !valid {
+            return (axum::http::StatusCode::FORBIDDEN, "CSRF token mismatch").into_response();
+        }
+
+        let req = axum::http::Request::from_parts(parts, axum::body::Body::from(bytes));
+        next.run(req).await
+    } else {
+        let needs_cookie = is_web && cookie_token.is_none();
+        let mut resp = next.run(req).await;
+        if needs_cookie {
+            let token = generate_csrf_token();
+            let secure_flag = if use_secure_cookies { "; Secure" } else { "" };
+            if let Ok(val) = format!(
+                "{CSRF_COOKIE_NAME}={token}; Path=/web; HttpOnly; SameSite=Strict{secure_flag}"
+            )
+            .parse()
+            {
+                resp.headers_mut().append("set-cookie", val);
+            }
+        }
+        resp
+    }
+}

@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+
+{% block title %}Metrics - Project {{ project_id }} - Stackpit{% endblock %}
+
+{% block breadcrumbs %}
+<span class="sep" aria-hidden="true">/</span>
+<a href="/web/projects/">Projects</a>
+<span class="sep" aria-hidden="true">/</span>
+<a href="/web/projects/{{ project_id }}/">Project {{ project_id }}</a>
+<span class="sep" aria-hidden="true">/</span>
+<span>Metrics</span>
+{% endblock %}
+
+{% block content %}
+<h1>Project {{ project_id }}</h1>
+<nav class="project-tabs" aria-label="Project sections">
+    <a href="/web/projects/{{ project_id }}/" class="project-tab"><span class="type-icon type-icon-event"></span>Issues</a>
+    {% if nav.transaction_count > 0 %}<a href="/web/projects/{{ project_id }}/transactions/" class="project-tab"><span class="type-icon type-icon-transaction"></span>Transactions <span class="tab-count">{{ nav.transaction_count }}</span></a>{% endif %}
+    {% if nav.span_count > 0 %}<a href="/web/projects/{{ project_id }}/spans/" class="project-tab"><span class="type-icon type-icon-span"></span>Spans <span class="tab-count">{{ nav.span_count }}</span></a>{% endif %}
+    {% if nav.log_count > 0 %}<a href="/web/projects/{{ project_id }}/logs/" class="project-tab"><span class="type-icon type-icon-log"></span>Logs <span class="tab-count">{{ nav.log_count }}</span></a>{% endif %}
+    <a href="/web/projects/{{ project_id }}/metrics/" class="project-tab active"><span class="type-icon type-icon-metric"></span>Metrics</a>
+    {% if nav.monitor_count > 0 %}<a href="/web/projects/{{ project_id }}/monitors/" class="project-tab"><span class="type-icon type-icon-check_in"></span>Monitors <span class="tab-count">{{ nav.monitor_count }}</span></a>{% endif %}
+    {% if nav.profile_count > 0 %}<a href="/web/projects/{{ project_id }}/profiles/" class="project-tab"><span class="type-icon type-icon-profile"></span>Profiles <span class="tab-count">{{ nav.profile_count }}</span></a>{% endif %}
+    {% if nav.replay_count > 0 %}<a href="/web/projects/{{ project_id }}/replays/" class="project-tab"><span class="type-icon type-icon-replay"></span>Replays <span class="tab-count">{{ nav.replay_count }}</span></a>{% endif %}
+    {% if nav.session_count > 0 %}<a href="/web/projects/{{ project_id }}/health/" class="project-tab"><span class="type-icon type-icon-session"></span>Health <span class="tab-count">{{ nav.session_count }}</span></a>{% endif %}
+    {% if nav.user_report_count > 0 %}<a href="/web/projects/{{ project_id }}/user-reports/" class="project-tab"><span class="type-icon type-icon-user_report"></span>User Reports <span class="tab-count">{{ nav.user_report_count }}</span></a>{% endif %}
+    {% if nav.client_report_count > 0 %}<a href="/web/projects/{{ project_id }}/client-reports/" class="project-tab"><span class="type-icon type-icon-client_report"></span>Client Reports <span class="tab-count">{{ nav.client_report_count }}</span></a>{% endif %}
+    <a href="/web/projects/{{ project_id }}/settings/" class="project-tab"><span class="type-icon type-icon-settings"></span>Settings</a>
+</nav>
+
+{% if result.items.is_empty() %}
+<p class="empty">No metrics found. Metric events will appear here once received.</p>
+{% else %}
+<div class="table-wrap">
+<table>
+    <thead>
+        <tr>
+            <th scope="col">MRI</th>
+            <th scope="col">Type</th>
+            <th scope="col">Data Points</th>
+            <th scope="col">First Seen</th>
+            <th scope="col">Last Seen</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for m in result.items %}
+        <tr>
+            <td><a href="/web/projects/{{ project_id }}/metrics/{{ m.mri|urlencode }}/">{{ m.mri }}</a></td>
+            <td><span class="badge">{{ m.metric_type }}</span></td>
+            <td>{{ m.data_points }}</td>
+            <td><time datetime="{{ m.first_seen|format_ts }}" title="{{ m.first_seen|format_ts }}">{{ m.first_seen|format_relative }}</time></td>
+            <td><time datetime="{{ m.last_seen|format_ts }}" title="{{ m.last_seen|format_ts }}">{{ m.last_seen|format_relative }}</time></td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+
+<nav class="pagination" aria-label="Pagination">
+    <span>{{ result.total }} metric{% if result.total != 1 %}s{% endif %}</span>
+    <span>
+        {% if result.has_prev() %}
+        <a href="/web/projects/{{ project_id }}/metrics/?offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}">&laquo; Previous</a>
+        {% endif %}
+        {% if result.has_next() %}
+        <a href="/web/projects/{{ project_id }}/metrics/?offset={{ result.next_offset() }}&amp;limit={{ result.limit }}">Next &raquo;</a>
+        {% endif %}
+    </span>
+</nav>
+{% endif %}
+{% endblock %}

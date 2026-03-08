@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+
+{% block title %}New Project - Stackpit{% endblock %}
+
+{% block breadcrumbs %}
+<span class="sep" aria-hidden="true">/</span>
+<a href="/web/projects/">Projects</a>
+<span class="sep" aria-hidden="true">/</span>
+<span>New Project</span>
+{% endblock %}
+
+{% block content %}
+<h1>New Project</h1>
+
+{% match message %}{% when Some with (msg) %}
+<p class="settings-message">{{ msg }}</p>
+{% when None %}{% endmatch %}
+
+<form class="settings-form" method="post" action="/web/projects/new">
+    <label for="project_name">Project Name</label>
+    <input type="text" id="project_name" name="name" placeholder="My Project" required>
+
+    <label for="platform">Platform <span style="font-weight: 400; color: var(--muted);">(optional)</span></label>
+    <select id="platform" name="platform">
+        <option value="">Select a platform...</option>
+        <option value="javascript">JavaScript</option>
+        <option value="python">Python</option>
+        <option value="rust">Rust</option>
+        <option value="go">Go</option>
+        <option value="java">Java</option>
+        <option value="node">Node.js</option>
+        <option value="ruby">Ruby</option>
+        <option value="php">PHP</option>
+        <option value="elixir">Elixir</option>
+        <option value="csharp">C#</option>
+        <option value="swift">Swift</option>
+        <option value="kotlin">Kotlin</option>
+        <option value="native">Native (C/C++)</option>
+        <option value="other">Other</option>
+    </select>
+
+    <button type="submit" class="btn">Create Project</button>
+</form>
+{% endblock %}

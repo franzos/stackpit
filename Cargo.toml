@@ -1,0 +1,58 @@
+[package]
+name = "stackpit"
+version = "0.1.0"
+edition = "2021"
+description = "Lightweight, self-hosted error tracking and event monitoring"
+authors = ["Franz Geffke <mail@gofranz.com>"]
+license = "MIT"
+repository = "https://github.com/franzos/stackpit"
+homepage = "https://github.com/franzos/stackpit"
+keywords = ["error-tracking", "monitoring", "observability", "self-hosted", "sentry"]
+categories = ["web-programming", "development-tools"]
+readme = "README.md"
+
+[features]
+default = ["sqlite"]
+sqlite = ["sqlx/sqlite"]
+postgres = ["sqlx/postgres"]
+
+[dependencies]
+anyhow = "1"
+form_urlencoded = "1"
+askama = "0.15"
+axum = { version = "0.8", features = ["multipart"] }
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+memchr = "2"
+sqlx = { version = "0.8", features = ["runtime-tokio", "chrono", "migrate", "macros"], default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+toml = "0.8"
+tower-http = { version = "0.6", features = ["cors", "decompression-gzip", "decompression-zstd", "limit", "timeout"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+zstd = "0.13"
+dashmap = "6"
+parking_lot = "0.12"
+simple_hll = "0.0.4"
+charts-rs = "0.3"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+aes-gcm = "0.10"
+base64 = "0.22"
+rand = "0.8"
+hmac = "0.12"
+sha1 = "0.10"
+sha2 = "0.10"
+hex = "0.4"
+subtle = "2"
+sourcemap = "9"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+strip = "symbols"

@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block title %}Project Created - Stackpit{% endblock %}
+
+{% block breadcrumbs %}
+<span class="sep" aria-hidden="true">/</span>
+<a href="/web/projects/">Projects</a>
+<span class="sep" aria-hidden="true">/</span>
+<a href="/web/projects/{{ project_id }}/">Project {{ project_id }}</a>
+<span class="sep" aria-hidden="true">/</span>
+<span>Created</span>
+{% endblock %}
+
+{% block content %}
+<h1>Project Created</h1>
+
+<p>Your project has been created. Use the DSN below to configure your Sentry SDK.</p>
+
+<h2>DSN</h2>
+<pre><code>{{ dsn }}</code></pre>
+
+<h2>Project Details</h2>
+<div class="table-wrap">
+<table>
+    <tbody>
+        <tr><th scope="row">Project ID</th><td>{{ project_id }}</td></tr>
+        <tr><th scope="row">Public Key</th><td><code>{{ public_key }}</code></td></tr>
+        {% if !platform.is_empty() %}<tr><th scope="row">Platform</th><td>{{ platform }}</td></tr>{% endif %}
+    </tbody>
+</table>
+</div>
+
+{% if !platform.is_empty() %}
+<h2>SDK Setup</h2>
+<p>Install the Sentry SDK for <strong>{{ platform }}</strong> and initialize it with the DSN above.</p>
+<p>
+{% if platform == "javascript" %}See <a href="https://docs.sentry.io/platforms/javascript/" target="_blank" rel="noopener">Sentry JavaScript docs</a>.
+{% else if platform == "python" %}See <a href="https://docs.sentry.io/platforms/python/" target="_blank" rel="noopener">Sentry Python docs</a>.
+{% else if platform == "rust" %}See <a href="https://docs.sentry.io/platforms/rust/" target="_blank" rel="noopener">Sentry Rust docs</a>.
+{% else if platform == "go" %}See <a href="https://docs.sentry.io/platforms/go/" target="_blank" rel="noopener">Sentry Go docs</a>.
+{% else if platform == "node" %}See <a href="https://docs.sentry.io/platforms/node/" target="_blank" rel="noopener">Sentry Node.js docs</a>.
+{% else if platform == "java" %}See <a href="https://docs.sentry.io/platforms/java/" target="_blank" rel="noopener">Sentry Java docs</a>.
+{% else if platform == "ruby" %}See <a href="https://docs.sentry.io/platforms/ruby/" target="_blank" rel="noopener">Sentry Ruby docs</a>.
+{% else if platform == "php" %}See <a href="https://docs.sentry.io/platforms/php/" target="_blank" rel="noopener">Sentry PHP docs</a>.
+{% else if platform == "elixir" %}See <a href="https://docs.sentry.io/platforms/elixir/" target="_blank" rel="noopener">Sentry Elixir docs</a>.
+{% else if platform == "csharp" %}See <a href="https://docs.sentry.io/platforms/dotnet/" target="_blank" rel="noopener">Sentry .NET docs</a>.
+{% else if platform == "swift" %}See <a href="https://docs.sentry.io/platforms/apple/" target="_blank" rel="noopener">Sentry Apple docs</a>.
+{% else if platform == "kotlin" %}See <a href="https://docs.sentry.io/platforms/kotlin-multiplatform/" target="_blank" rel="noopener">Sentry Kotlin docs</a>.
+{% else if platform == "native" %}See <a href="https://docs.sentry.io/platforms/native/" target="_blank" rel="noopener">Sentry Native docs</a>.
+{% else %}See <a href="https://docs.sentry.io/platforms/" target="_blank" rel="noopener">Sentry platform docs</a>.
+{% endif %}
+</p>
+{% endif %}
+
+<p style="margin-top: 2rem;">
+    <a href="/web/projects/{{ project_id }}/settings/" class="btn">Project Settings</a>
+    <a href="/web/projects/" class="btn-link" style="margin-left: 1rem;">Back to Projects</a>
+</p>
+{% endblock %}

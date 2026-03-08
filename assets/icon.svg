@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none">
+  <defs>
+    <linearGradient id="pit-grad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f87171"/>
+      <stop offset="100%" stop-color="#991b1b"/>
+    </linearGradient>
+    <linearGradient id="s1" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#60a5fa"/>
+      <stop offset="100%" stop-color="#3b82f6"/>
+    </linearGradient>
+    <linearGradient id="s2" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#a78bfa"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+    <linearGradient id="s3" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#fbbf24"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+    <linearGradient id="s4" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#34d399"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+  </defs>
+
+  <!-- pit walls -->
+  <path d="M14 16 L38 88 L62 88 L86 16" stroke="url(#pit-grad)" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0.8"/>
+
+  <!-- bottom of pit -->
+  <rect x="38" y="84" width="24" height="6" rx="3" fill="url(#pit-grad)" opacity="0.6"/>
+
+  <!-- stacked lines -->
+  <rect x="18" y="22" width="64" height="5" rx="2.5" fill="url(#s1)" opacity="0.7"/>
+  <rect x="24" y="36" width="52" height="5" rx="2.5" fill="url(#s2)" opacity="0.7"/>
+  <rect x="30" y="50" width="40" height="5" rx="2.5" fill="url(#s3)" opacity="0.7"/>
+  <rect x="35" y="63" width="30" height="5" rx="2.5" fill="url(#s4)" opacity="0.7"/>
+  <rect x="40" y="75" width="20" height="4" rx="2" fill="#f87171" opacity="0.5"/>
+</svg>

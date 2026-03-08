@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+
+{% block title %}Alerts & Digests - Stackpit{% endblock %}
+
+{% block breadcrumbs %}
+<span class="sep" aria-hidden="true">/</span>
+<span>Settings</span>
+<span class="sep" aria-hidden="true">/</span>
+<span>Alerts & Digests</span>
+{% endblock %}
+
+{% block content %}
+<h1>Alerts & Digests</h1>
+
+{% match message %}{% when Some with (msg) %}
+<p class="settings-message">{{ msg }}</p>
+{% when None %}{% endmatch %}
+
+<h2>Threshold Alert Rules</h2>
+<p class="help-text">Fire a notification when an issue receives a certain number of events within a time window.</p>
+
+{% if alert_rules.is_empty() %}
+<p class="empty">No alert rules configured.</p>
+{% else %}
+<div class="table-wrap">
+<table>
+    <thead>
+        <tr>
+            <th scope="col">Project</th>
+            <th scope="col">Fingerprint</th>
+            <th scope="col">Threshold</th>
+            <th scope="col">Window</th>
+            <th scope="col">Cooldown</th>
+            <th scope="col">Enabled</th>
+            <th scope="col"></th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for r in alert_rules %}
+        <tr>
+            <td>{% match r.project_id %}{% when Some with (pid) %}{{ pid }}{% when None %}Global{% endmatch %}</td>
+            <td>{% match r.fingerprint %}{% when Some with (fp) %}<code title="{{ fp }}">{{ fp|truncate_url }}</code>{% when None %}Any{% endmatch %}</td>
+            <td>{% match r.threshold_count %}{% when Some with (c) %}{{ c }}{% when None %}-{% endmatch %}</td>
+            <td>{% match r.window_secs %}{% when Some with (w) %}{{ w }}s{% when None %}-{% endmatch %}</td>
+            <td>{{ r.cooldown_secs }}s</td>
+            <td>{% if r.enabled %}Yes{% else %}No{% endif %}</td>
+            <td>
+                <form method="post" action="/web/settings/alerts/rules/{{ r.id }}/delete" style="display: inline; margin: 0;">
+                    <button type="submit" class="btn btn-danger" onclick="return confirm('Delete this alert rule?')">Delete</button>
+                </form>
+            </td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+{% endif %}
+
+<h3>Add Alert Rule</h3>
+<form class="settings-form" method="post" action="/web/settings/alerts/rules/create">
+    <label for="ar_project">Project ID <span style="font-weight: 400; color: var(--muted);">(blank = global)</span></label>
+    <input type="text" id="ar_project" name="project_id" placeholder="Leave empty for all projects">
+
+    <label for="ar_fp">Fingerprint <span style="font-weight: 400; color: var(--muted);">(blank = any issue)</span></label>
+    <input type="text" id="ar_fp" name="fingerprint" placeholder="Leave empty for any issue">
+
+    <label for="ar_threshold">Event Count Threshold</label>
+    <input type="number" id="ar_threshold" name="threshold_count" value="100" min="1" required>
+
+    <label for="ar_window">Time Window (seconds)</label>
+    <input type="number" id="ar_window" name="window_secs" value="3600" min="60" required>
+
+    <label for="ar_cooldown">Cooldown (seconds)</label>
+    <input type="number" id="ar_cooldown" name="cooldown_secs" value="3600" min="60">
+
+    <button type="submit" class="btn">Create Alert Rule</button>
+</form>
+
+<hr>
+
+<h2>Digest Schedules</h2>
+<p class="help-text">Periodic summary notifications of recent activity.</p>
+
+{% if digest_schedules.is_empty() %}
+<p class="empty">No digest schedules configured.</p>
+{% else %}
+<div class="table-wrap">
+<table>
+    <thead>
+        <tr>
+            <th scope="col">Project</th>
+            <th scope="col">Interval</th>
+            <th scope="col">Last Sent</th>
+            <th scope="col">Enabled</th>
+            <th scope="col"></th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for s in digest_schedules %}
+        <tr>
+            <td>{% match s.project_id %}{% when Some with (pid) %}{{ pid }}{% when None %}Global{% endmatch %}</td>
+            <td>{{ s.interval_secs }}s</td>
+            <td>{% if s.last_sent == 0 %}Never{% else %}<time datetime="{{ s.last_sent|format_ts }}" title="{{ s.last_sent|format_ts }}">{{ s.last_sent|format_relative }}</time>{% endif %}</td>
+            <td>{% if s.enabled %}Yes{% else %}No{% endif %}</td>
+            <td>
+                <form method="post" action="/web/settings/alerts/digests/{{ s.id }}/delete" style="display: inline; margin: 0;">
+                    <button type="submit" class="btn btn-danger" onclick="return confirm('Delete this digest schedule?')">Delete</button>
+                </form>
+            </td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+{% endif %}
+
+<h3>Add Digest Schedule</h3>
+<form class="settings-form" method="post" action="/web/settings/alerts/digests/create">
+    <label for="ds_project">Project ID <span style="font-weight: 400; color: var(--muted);">(blank = global)</span></label>
+    <input type="text" id="ds_project" name="project_id" placeholder="Leave empty for all projects">
+
+    <label for="ds_interval">Interval</label>
+    <select id="ds_interval" name="interval_secs">
+        <option value="86400">Daily (24h)</option>
+        <option value="604800">Weekly (7d)</option>
+        <option value="3600">Hourly</option>
+    </select>
+
+    <button type="submit" class="btn">Create Digest Schedule</button>
+</form>
+{% endblock %}

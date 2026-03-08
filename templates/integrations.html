@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+
+{% block title %}Integrations - Stackpit{% endblock %}
+
+{% block breadcrumbs %}
+<span class="sep" aria-hidden="true">/</span>
+<span>Settings</span>
+<span class="sep" aria-hidden="true">/</span>
+<span>Integrations</span>
+{% endblock %}
+
+{% block content %}
+<h1>Integrations</h1>
+
+{% match message %}{% when Some with (msg) %}
+<p class="settings-message">{{ msg }}</p>
+{% when None %}{% endmatch %}
+
+{% if integrations.is_empty() %}
+<p class="empty">No integrations configured.</p>
+{% else %}
+<div class="table-wrap">
+<table>
+    <thead>
+        <tr>
+            <th scope="col">Name</th>
+            <th scope="col">Type</th>
+            <th scope="col">URL</th>
+            <th scope="col">Created</th>
+            <th scope="col"></th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for i in integrations %}
+        <tr>
+            <td>{{ i.name }}</td>
+            <td>{{ i.kind }}</td>
+            <td><code title="{{ i.url }}">{{ i.url|truncate_url }}</code></td>
+            <td><time datetime="{{ i.created_at|format_ts }}" title="{{ i.created_at|format_ts }}">{{ i.created_at|format_relative }}</time></td>
+            <td style="white-space: nowrap;">
+                <form method="post" action="/web/settings/integrations/{{ i.id }}/test" style="display: inline; margin: 0;">
+                    <button type="submit" class="btn">Test</button>
+                </form>
+                <form method="post" action="/web/settings/integrations/{{ i.id }}/delete" style="display: inline; margin: 0;">
+                    <button type="submit" class="btn btn-danger" onclick="return confirm('Delete this integration? It will be removed from all projects.')">Delete</button>
+                </form>
+            </td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+{% endif %}
+
+<h2>Add Integration</h2>
+<p>
+    <a href="/web/settings/integrations/new/webhook" class="btn">Add Webhook</a>
+    <a href="/web/settings/integrations/new/slack" class="btn" style="margin-left: 0.5rem;">Add Slack</a>
+    <a href="/web/settings/integrations/new/email" class="btn" style="margin-left: 0.5rem;">Add Postmark Email</a>
+</p>
+{% endblock %}

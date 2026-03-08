@@ -1,0 +1,10 @@
+target/
+.git/
+.gitignore
+.dockerignore
+*.md
+deploy.sh
+stackpit.toml
+*.db
+*.db-wal
+*.db-shm

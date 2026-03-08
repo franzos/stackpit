@@ -1,0 +1,315 @@
+{% extends "base.html" %}
+
+{% block title %}Filters - Project {{ project_id }} - Stackpit{% endblock %}
+
+{% block breadcrumbs %}
+<span class="sep" aria-hidden="true">/</span>
+<a href="/web/projects/">Projects</a>
+<span class="sep" aria-hidden="true">/</span>
+<a href="/web/projects/{{ project_id }}/">Project {{ project_id }}</a>
+<span class="sep" aria-hidden="true">/</span>
+<a href="/web/projects/{{ project_id }}/settings/">Settings</a>
+<span class="sep" aria-hidden="true">/</span>
+<span>Filters</span>
+{% endblock %}
+
+{% block content %}
+<h1>Project {{ project_id }}</h1>
+<nav class="project-tabs" aria-label="Project sections">
+    <a href="/web/projects/{{ project_id }}/" class="project-tab"><span class="type-icon type-icon-event"></span>Issues</a>
+    {% if nav.transaction_count > 0 %}<a href="/web/projects/{{ project_id }}/transactions/" class="project-tab"><span class="type-icon type-icon-transaction"></span>Transactions <span class="tab-count">{{ nav.transaction_count }}</span></a>{% endif %}
+    {% if nav.span_count > 0 %}<a href="/web/projects/{{ project_id }}/spans/" class="project-tab"><span class="type-icon type-icon-span"></span>Spans <span class="tab-count">{{ nav.span_count }}</span></a>{% endif %}
+    {% if nav.log_count > 0 %}<a href="/web/projects/{{ project_id }}/logs/" class="project-tab"><span class="type-icon type-icon-log"></span>Logs <span class="tab-count">{{ nav.log_count }}</span></a>{% endif %}
+    {% if nav.metric_count > 0 %}<a href="/web/projects/{{ project_id }}/metrics/" class="project-tab"><span class="type-icon type-icon-metric"></span>Metrics <span class="tab-count">{{ nav.metric_count }}</span></a>{% endif %}
+    {% if nav.monitor_count > 0 %}<a href="/web/projects/{{ project_id }}/monitors/" class="project-tab"><span class="type-icon type-icon-check_in"></span>Monitors <span class="tab-count">{{ nav.monitor_count }}</span></a>{% endif %}
+    {% if nav.profile_count > 0 %}<a href="/web/projects/{{ project_id }}/profiles/" class="project-tab"><span class="type-icon type-icon-profile"></span>Profiles <span class="tab-count">{{ nav.profile_count }}</span></a>{% endif %}
+    {% if nav.replay_count > 0 %}<a href="/web/projects/{{ project_id }}/replays/" class="project-tab"><span class="type-icon type-icon-replay"></span>Replays <span class="tab-count">{{ nav.replay_count }}</span></a>{% endif %}
+    {% if nav.session_count > 0 %}<a href="/web/projects/{{ project_id }}/health/" class="project-tab"><span class="type-icon type-icon-session"></span>Health <span class="tab-count">{{ nav.session_count }}</span></a>{% endif %}
+    {% if nav.user_report_count > 0 %}<a href="/web/projects/{{ project_id }}/user-reports/" class="project-tab"><span class="type-icon type-icon-user_report"></span>User Reports <span class="tab-count">{{ nav.user_report_count }}</span></a>{% endif %}
+    {% if nav.client_report_count > 0 %}<a href="/web/projects/{{ project_id }}/client-reports/" class="project-tab"><span class="type-icon type-icon-client_report"></span>Client Reports <span class="tab-count">{{ nav.client_report_count }}</span></a>{% endif %}
+    <a href="/web/projects/{{ project_id }}/settings/" class="project-tab active"><span class="type-icon type-icon-settings"></span>Settings</a>
+</nav>
+
+<nav class="project-tabs" aria-label="Settings sections">
+    <a href="/web/projects/{{ project_id }}/settings/" class="project-tab">General</a>
+    <a href="/web/projects/{{ project_id }}/settings/keys/" class="project-tab">SDK Setup</a>
+    <a href="/web/projects/{{ project_id }}/settings/filters/" class="project-tab active">Filters</a>
+    <a href="/web/projects/{{ project_id }}/settings/integrations/" class="project-tab">Integrations</a>
+</nav>
+
+{% match message %}{% when Some with (msg) %}
+<p class="settings-message">{{ msg }}</p>
+{% when None %}{% endmatch %}
+
+<h2>Inbound Filters</h2>
+<p style="font-size: 0.9rem; color: var(--muted);">Built-in filters that drop events matching common noise patterns.</p>
+<form method="post" action="/web/projects/{{ project_id }}/settings/filters/inbound">
+    <div style="display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 1rem;">
+        <label><input type="checkbox" name="browser_extensions" value="1"{% if browser_extensions_enabled %} checked{% endif %}> Browser Extensions &mdash; drop events from Chrome/Firefox/Safari extensions</label>
+        <label><input type="checkbox" name="localhost" value="1"{% if localhost_enabled %} checked{% endif %}> Localhost &mdash; drop events from localhost, 127.0.0.1, private IPs</label>
+    </div>
+    <button type="submit" class="btn">Save Inbound Filters</button>
+</form>
+
+<h2>Message Filters</h2>
+<p style="font-size: 0.9rem; color: var(--muted);">Glob patterns matched against event titles. Use <code>*</code> for any sequence, <code>?</code> for single char.</p>
+
+{% if !message_filters.is_empty() %}
+<div class="table-wrap">
+<table>
+    <thead><tr><th scope="col">Pattern</th><th scope="col"></th></tr></thead>
+    <tbody>
+    {% for mf in message_filters %}
+    <tr>
+        <td><code>{{ mf.1 }}</code></td>
+        <td>
+            <form method="post" action="/web/projects/{{ project_id }}/settings/filters/messages/{{ mf.0 }}/delete" style="margin: 0;">
+                <button type="submit" class="btn btn-danger">Remove</button>
+            </form>
+        </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+{% else %}
+<p class="empty">No message filters configured.</p>
+{% endif %}
+
+<form class="settings-form" method="post" action="/web/projects/{{ project_id }}/settings/filters/messages">
+    <label for="msg_pattern">Add Pattern</label>
+    <input type="text" id="msg_pattern" name="pattern" placeholder="*timeout*" required>
+    <button type="submit" class="btn">Add Message Filter</button>
+</form>
+
+<h2>Rate Limit</h2>
+<p style="font-size: 0.9rem; color: var(--muted);">Maximum events per minute for this project. 0 = unlimited.</p>
+<form class="settings-form" method="post" action="/web/projects/{{ project_id }}/settings/filters/rate-limit">
+    <label for="rate_limit">Events per minute</label>
+    <input type="number" id="rate_limit" name="max_events_per_minute" min="0" value="{{ rate_limit }}">
+    <button type="submit" class="btn">Save Rate Limit</button>
+</form>
+
+<h2>Excluded Environments</h2>
+<p style="font-size: 0.9rem; color: var(--muted);">Events from these environments will be silently dropped.</p>
+
+{% if !environment_filters.is_empty() %}
+<div class="table-wrap">
+<table>
+    <thead><tr><th scope="col">Environment</th><th scope="col"></th></tr></thead>
+    <tbody>
+    {% for ef in environment_filters %}
+    <tr>
+        <td><code>{{ ef.1 }}</code></td>
+        <td>
+            <form method="post" action="/web/projects/{{ project_id }}/settings/filters/environments/{{ ef.0 }}/delete" style="margin: 0;">
+                <button type="submit" class="btn btn-danger">Remove</button>
+            </form>
+        </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+{% else %}
+<p class="empty">No excluded environments.</p>
+{% endif %}
+
+<form class="settings-form" method="post" action="/web/projects/{{ project_id }}/settings/filters/environments">
+    <label for="env_name">Add Excluded Environment</label>
+    <input type="text" id="env_name" name="environment" placeholder="development" required>
+    <button type="submit" class="btn">Exclude Environment</button>
+</form>
+
+<h2>Release Filters</h2>
+<p style="font-size: 0.9rem; color: var(--muted);">Glob patterns matched against release versions. Matching events are dropped.</p>
+
+{% if !release_filters.is_empty() %}
+<div class="table-wrap">
+<table>
+    <thead><tr><th scope="col">Pattern</th><th scope="col"></th></tr></thead>
+    <tbody>
+    {% for rf in release_filters %}
+    <tr>
+        <td><code>{{ rf.1 }}</code></td>
+        <td>
+            <form method="post" action="/web/projects/{{ project_id }}/settings/filters/releases/{{ rf.0 }}/delete" style="margin: 0;">
+                <button type="submit" class="btn btn-danger">Remove</button>
+            </form>
+        </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+{% else %}
+<p class="empty">No release filters.</p>
+{% endif %}
+
+<form class="settings-form" method="post" action="/web/projects/{{ project_id }}/settings/filters/releases">
+    <label for="release_pattern">Add Pattern</label>
+    <input type="text" id="release_pattern" name="pattern" placeholder="*-dev*" required>
+    <button type="submit" class="btn">Add Release Filter</button>
+</form>
+
+<h2>User-Agent Filters</h2>
+<p style="font-size: 0.9rem; color: var(--muted);">Glob patterns matched against User-Agent headers. Built-in patterns for kube-probe and health checkers are always active.</p>
+
+{% if !ua_filters.is_empty() %}
+<div class="table-wrap">
+<table>
+    <thead><tr><th scope="col">Pattern</th><th scope="col"></th></tr></thead>
+    <tbody>
+    {% for ua in ua_filters %}
+    <tr>
+        <td><code>{{ ua.1 }}</code></td>
+        <td>
+            <form method="post" action="/web/projects/{{ project_id }}/settings/filters/user-agents/{{ ua.0 }}/delete" style="margin: 0;">
+                <button type="submit" class="btn btn-danger">Remove</button>
+            </form>
+        </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+{% else %}
+<p class="empty">No custom user-agent filters.</p>
+{% endif %}
+
+<form class="settings-form" method="post" action="/web/projects/{{ project_id }}/settings/filters/user-agents">
+    <label for="ua_pattern">Add Pattern</label>
+    <input type="text" id="ua_pattern" name="pattern" placeholder="*bot*" required>
+    <button type="submit" class="btn">Add User-Agent Filter</button>
+</form>
+
+<h2>Custom Rules</h2>
+<p style="font-size: 0.9rem; color: var(--muted);">Advanced rules that match event fields. Higher priority rules are evaluated first.</p>
+
+{% if !filter_rules.is_empty() %}
+<div class="table-wrap">
+<table>
+    <thead><tr><th scope="col">Field</th><th scope="col">Operator</th><th scope="col">Value</th><th scope="col">Action</th><th scope="col">Priority</th><th scope="col"></th></tr></thead>
+    <tbody>
+    {% for rule in filter_rules %}
+    <tr>
+        <td><code>{{ rule.field }}</code></td>
+        <td>{{ rule.operator }}</td>
+        <td><code>{{ rule.value }}</code></td>
+        <td>{{ rule.action }}{% match rule.sample_rate %}{% when Some with (r) %} ({{ r }}){% when None %}{% endmatch %}</td>
+        <td>{{ rule.priority }}</td>
+        <td>
+            <form method="post" action="/web/projects/{{ project_id }}/settings/filters/rules/{{ rule.id }}/delete" style="margin: 0;">
+                <button type="submit" class="btn btn-danger">Remove</button>
+            </form>
+        </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+{% else %}
+<p class="empty">No custom rules.</p>
+{% endif %}
+
+<form class="settings-form" method="post" action="/web/projects/{{ project_id }}/settings/filters/rules">
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem;">
+        <div>
+            <label for="rule_field">Field</label>
+            <select id="rule_field" name="field">
+                <option value="level">level</option>
+                <option value="platform">platform</option>
+                <option value="title">title</option>
+                <option value="sdk_name">sdk_name</option>
+                <option value="sdk_version">sdk_version</option>
+                <option value="transaction_name">transaction_name</option>
+                <option value="server_name">server_name</option>
+                <option value="environment">environment</option>
+                <option value="release">release</option>
+            </select>
+        </div>
+        <div>
+            <label for="rule_operator">Operator</label>
+            <select id="rule_operator" name="operator">
+                <option value="equals">equals</option>
+                <option value="not_equals">not_equals</option>
+                <option value="contains">contains</option>
+                <option value="not_contains">not_contains</option>
+                <option value="starts_with">starts_with</option>
+                <option value="in">in</option>
+                <option value="not_in">not_in</option>
+            </select>
+        </div>
+    </div>
+    <label for="rule_value">Value</label>
+    <input type="text" id="rule_value" name="value" placeholder="error" required>
+    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.5rem;">
+        <div>
+            <label for="rule_action">Action</label>
+            <select id="rule_action" name="action">
+                <option value="drop">drop</option>
+                <option value="sample">sample</option>
+            </select>
+        </div>
+        <div>
+            <label for="rule_sample_rate">Sample Rate <span style="font-weight: 400; color: var(--muted);">(0.0-1.0)</span></label>
+            <input type="number" id="rule_sample_rate" name="sample_rate" step="0.01" min="0" max="1" placeholder="0.5">
+        </div>
+        <div>
+            <label for="rule_priority">Priority</label>
+            <input type="number" id="rule_priority" name="priority" value="0">
+        </div>
+    </div>
+    <button type="submit" class="btn">Add Rule</button>
+</form>
+
+<h2>IP Blocklist</h2>
+<p style="font-size: 0.9rem; color: var(--muted);">CIDR blocks or individual IPs. Events from blocked IPs are silently dropped.</p>
+
+{% if !ip_blocks.is_empty() %}
+<div class="table-wrap">
+<table>
+    <thead><tr><th scope="col">CIDR</th><th scope="col"></th></tr></thead>
+    <tbody>
+    {% for ipb in ip_blocks %}
+    <tr>
+        <td><code>{{ ipb.1 }}</code></td>
+        <td>
+            <form method="post" action="/web/projects/{{ project_id }}/settings/filters/ip-blocks/{{ ipb.0 }}/delete" style="margin: 0;">
+                <button type="submit" class="btn btn-danger">Remove</button>
+            </form>
+        </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+{% else %}
+<p class="empty">No IP blocks configured.</p>
+{% endif %}
+
+<form class="settings-form" method="post" action="/web/projects/{{ project_id }}/settings/filters/ip-blocks">
+    <label for="ip_cidr">Add CIDR</label>
+    <input type="text" id="ip_cidr" name="cidr" placeholder="192.168.1.0/24" required>
+    <button type="submit" class="btn">Block IP Range</button>
+</form>
+
+{% if !discard_stats.is_empty() %}
+<h2>Discard Stats (Last 7 Days)</h2>
+<div class="table-wrap">
+<table>
+    <thead><tr><th scope="col">Date</th><th scope="col">Reason</th><th scope="col">Count</th></tr></thead>
+    <tbody>
+    {% for stat in discard_stats %}
+    <tr>
+        <td>{{ stat.0 }}</td>
+        <td>{{ stat.1 }}</td>
+        <td>{{ stat.2 }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+{% endif %}
+
+{% endblock %}

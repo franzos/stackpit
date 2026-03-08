@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+
+{% block title %}Logs - Project {{ project_id }} - Stackpit{% endblock %}
+
+{% block breadcrumbs %}
+<span class="sep" aria-hidden="true">/</span>
+<a href="/web/projects/">Projects</a>
+<span class="sep" aria-hidden="true">/</span>
+<a href="/web/projects/{{ project_id }}/">Project {{ project_id }}</a>
+<span class="sep" aria-hidden="true">/</span>
+<span>Logs</span>
+{% endblock %}
+
+{% block content %}
+<h1>Project {{ project_id }}</h1>
+<nav class="project-tabs" aria-label="Project sections">
+    <a href="/web/projects/{{ project_id }}/" class="project-tab"><span class="type-icon type-icon-event"></span>Issues</a>
+    {% if nav.transaction_count > 0 %}<a href="/web/projects/{{ project_id }}/transactions/" class="project-tab"><span class="type-icon type-icon-transaction"></span>Transactions <span class="tab-count">{{ nav.transaction_count }}</span></a>{% endif %}
+    {% if nav.span_count > 0 %}<a href="/web/projects/{{ project_id }}/spans/" class="project-tab"><span class="type-icon type-icon-span"></span>Spans <span class="tab-count">{{ nav.span_count }}</span></a>{% endif %}
+    <a href="/web/projects/{{ project_id }}/logs/" class="project-tab active"><span class="type-icon type-icon-log"></span>Logs</a>
+    {% if nav.metric_count > 0 %}<a href="/web/projects/{{ project_id }}/metrics/" class="project-tab"><span class="type-icon type-icon-metric"></span>Metrics <span class="tab-count">{{ nav.metric_count }}</span></a>{% endif %}
+    {% if nav.monitor_count > 0 %}<a href="/web/projects/{{ project_id }}/monitors/" class="project-tab"><span class="type-icon type-icon-check_in"></span>Monitors <span class="tab-count">{{ nav.monitor_count }}</span></a>{% endif %}
+    {% if nav.profile_count > 0 %}<a href="/web/projects/{{ project_id }}/profiles/" class="project-tab"><span class="type-icon type-icon-profile"></span>Profiles <span class="tab-count">{{ nav.profile_count }}</span></a>{% endif %}
+    {% if nav.replay_count > 0 %}<a href="/web/projects/{{ project_id }}/replays/" class="project-tab"><span class="type-icon type-icon-replay"></span>Replays <span class="tab-count">{{ nav.replay_count }}</span></a>{% endif %}
+    {% if nav.session_count > 0 %}<a href="/web/projects/{{ project_id }}/health/" class="project-tab"><span class="type-icon type-icon-session"></span>Health <span class="tab-count">{{ nav.session_count }}</span></a>{% endif %}
+    {% if nav.user_report_count > 0 %}<a href="/web/projects/{{ project_id }}/user-reports/" class="project-tab"><span class="type-icon type-icon-user_report"></span>User Reports <span class="tab-count">{{ nav.user_report_count }}</span></a>{% endif %}
+    {% if nav.client_report_count > 0 %}<a href="/web/projects/{{ project_id }}/client-reports/" class="project-tab"><span class="type-icon type-icon-client_report"></span>Client Reports <span class="tab-count">{{ nav.client_report_count }}</span></a>{% endif %}
+    <a href="/web/projects/{{ project_id }}/settings/" class="project-tab"><span class="type-icon type-icon-settings"></span>Settings</a>
+</nav>
+
+<form class="filter-form" method="get" action="/web/projects/{{ project_id }}/logs/">
+    <input type="text" name="query" placeholder="Search logs..." value="{{ query }}" aria-label="Search logs">
+    <select name="level" aria-label="Filter by level">
+        <option value="">All levels</option>
+        <option value="error"{% if level == "error" %} selected{% endif %}>error</option>
+        <option value="warning"{% if level == "warning" %} selected{% endif %}>warning</option>
+        <option value="info"{% if level == "info" %} selected{% endif %}>info</option>
+        <option value="debug"{% if level == "debug" %} selected{% endif %}>debug</option>
+        <option value="trace"{% if level == "trace" %} selected{% endif %}>trace</option>
+    </select>
+    <button type="submit">Filter</button>
+</form>
+
+{% if result.items.is_empty() %}
+<p class="empty">No logs match the current filters.</p>
+{% else %}
+
+<div class="table-wrap">
+<table>
+    <thead>
+        <tr>
+            <th scope="col">Timestamp</th>
+            <th scope="col">Level</th>
+            <th scope="col">Body</th>
+            <th scope="col" class="hide-mobile">Trace ID</th>
+            <th scope="col" class="hide-mobile">Release</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for log in result.items %}
+        <tr>
+            <td><time datetime="{{ log.timestamp|format_ts }}" title="{{ log.timestamp|format_ts }}">{{ log.timestamp|format_relative }}</time></td>
+            <td>{% match log.level %}{% when Some with (lvl) %}<span class="log-level log-level-{{ lvl }}">{{ lvl }}</span>{% when None %}{% endmatch %}</td>
+            <td class="truncate" title="{% match log.body %}{% when Some with (b) %}{{ b }}{% when None %}{% endmatch %}">{% match log.body %}{% when Some with (b) %}{{ b }}{% when None %}<span class="muted">(empty)</span>{% endmatch %}</td>
+            <td class="hide-mobile">{% match log.trace_id %}{% when Some with (tid) %}<code title="{{ tid }}">{{ tid|truncate_id }}</code>{% when None %}{% endmatch %}</td>
+            <td class="hide-mobile">{% match log.release %}{% when Some with (r) %}{{ r }}{% when None %}{% endmatch %}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+
+<nav class="pagination" aria-label="Pagination">
+    <span>{{ result.total }} log{% if result.total != 1 %}s{% endif %}</span>
+    <span>
+        {% if result.has_prev() %}
+        <a href="/web/projects/{{ project_id }}/logs/?offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}{{ filter_qs }}">&laquo; Previous</a>
+        {% endif %}
+        {% if result.has_next() %}
+        <a href="/web/projects/{{ project_id }}/logs/?offset={{ result.next_offset() }}&amp;limit={{ result.limit }}{{ filter_qs }}">Next &raquo;</a>
+        {% endif %}
+    </span>
+</nav>
+{% endif %}
+{% endblock %}

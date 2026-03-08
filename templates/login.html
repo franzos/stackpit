@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><title>Login - Stackpit</title>
+<link rel="stylesheet" href="/web/_assets/style.css"></head>
+<body>
+<header><nav><a href="/web/projects/" class="nav-logo"><img src="/web/_assets/icon.svg" alt="Stackpit" width="24" height="24"> Stackpit</a></nav></header>
+<main>
+<h1>Login</h1>
+{% if let Some(error) = error %}<p style="color: var(--red, #c00);">{{ error }}</p>{% endif %}
+<form method="POST" action="/web/login">
+<label for="token">Admin Token</label>
+<input type="password" id="token" name="token" required autofocus>
+<button type="submit">Login</button>
+</form>
+</main>
+<footer><small>Stackpit</small></footer>
+</body></html>

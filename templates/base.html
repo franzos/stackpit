@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>{% block title %}Stackpit{% endblock %}</title>
+    <link rel="stylesheet" href="/web/_assets/style.css">
+</head>
+<body>
+    <header>
+        <nav aria-label="Breadcrumb">
+            <a href="/web/projects/" class="nav-logo"><img src="/web/_assets/icon.svg" alt="Stackpit" width="24" height="24"> Stackpit</a>
+            {% block breadcrumbs %}{% endblock %}
+            <a href="/web/settings/integrations/" class="nav-settings" style="margin-left: auto; font-size: 0.85rem;">Settings</a>
+        </nav>
+    </header>
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+    <footer>
+        <small>Stackpit</small>
+    </footer>
+    {% block scripts %}{% endblock %}
+    <script>
+    (function(){
+        var bar=document.querySelector('.bulk-bar');if(!bar)return;
+        var form=bar.closest('form'),boxes=form?form.querySelectorAll('input[type="checkbox"][name="ids"]'):[];
+        if(!boxes.length)return;
+        var cnt=document.createElement('span');cnt.textContent='0 selected';cnt.style.marginRight='0.25rem';
+        bar.insertBefore(cnt,bar.firstChild);
+        bar.style.display='none';
+        var allTh=form.querySelector('th.col-check');
+        if(allTh&&!allTh.querySelector('input')){var a=document.createElement('input');a.type='checkbox';a.setAttribute('aria-label','Select all');allTh.appendChild(a);
+            a.addEventListener('change',function(){boxes.forEach(function(cb){cb.checked=a.checked});upd()});
+        }
+        function upd(){var n=form.querySelectorAll('input[name="ids"]:checked').length;cnt.textContent=n+' selected';bar.style.display=n?'flex':'none'}
+        boxes.forEach(function(cb){cb.addEventListener('change',upd)});
+    })();
+    </script>
+    <script>
+    (function(){var m=document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/);if(!m)return;var t=m[1];document.querySelectorAll('form[method="post"],form[method="POST"]').forEach(function(f){if(!f.querySelector('input[name="csrf_token"]')){var i=document.createElement('input');i.type='hidden';i.name='csrf_token';i.value=t;f.appendChild(i)}})})();
+    </script>
+</body>
+</html>

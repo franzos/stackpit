@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+
+{% block title %}Events - Stackpit{% endblock %}
+
+{% block breadcrumbs %}
+<span class="sep" aria-hidden="true">/</span>
+<span>Events</span>
+{% endblock %}
+
+{% block content %}
+<h1>Events</h1>
+
+<form class="filter-form" method="get" action="/web/events/">
+    {% if !sort.is_empty() %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
+    <input type="text" name="query" placeholder="Search events..." value="{{ query }}" aria-label="Search events">
+    <select name="level" aria-label="Filter by level">
+        <option value="">All levels</option>
+        <option value="fatal"{% if level == "fatal" %} selected{% endif %}>fatal</option>
+        <option value="error"{% if level == "error" %} selected{% endif %}>error</option>
+        <option value="warning"{% if level == "warning" %} selected{% endif %}>warning</option>
+        <option value="info"{% if level == "info" %} selected{% endif %}>info</option>
+        <option value="debug"{% if level == "debug" %} selected{% endif %}>debug</option>
+    </select>
+    <select name="item_type" aria-label="Filter by type">
+        <option value="">All types</option>
+        <option value="event"{% if item_type == "event" %} selected{% endif %}>event</option>
+        <option value="transaction"{% if item_type == "transaction" %} selected{% endif %}>transaction</option>
+        <option value="session"{% if item_type == "session" %} selected{% endif %}>session</option>
+        <option value="check_in"{% if item_type == "check_in" %} selected{% endif %}>check_in</option>
+        <option value="user_report"{% if item_type == "user_report" %} selected{% endif %}>user_report</option>
+        <option value="client_report"{% if item_type == "client_report" %} selected{% endif %}>client_report</option>
+        <option value="profile"{% if item_type == "profile" %} selected{% endif %}>profile</option>
+        <option value="replay_event"{% if item_type == "replay_event" %} selected{% endif %}>replay_event</option>
+        <option value="replay_recording"{% if item_type == "replay_recording" %} selected{% endif %}>replay_recording</option>
+    </select>
+    <input type="text" name="project_id" placeholder="Project ID" value="{{ project_id }}" aria-label="Filter by project" size="10">
+    <button type="submit">Filter</button>
+</form>
+
+{% if result.items.is_empty() %}
+<p class="empty">No events match the current filters.</p>
+{% else %}
+
+<form method="post" action="/web/events/bulk">
+<input type="hidden" name="action" value="delete">
+<input type="hidden" name="mode" value="selected">
+<div class="bulk-bar">
+    <button type="submit" class="btn btn-danger">Delete</button>
+</div>
+
+<div class="table-wrap">
+<table>
+    <thead>
+        <tr>
+            <th scope="col" class="col-check"></th>
+            <th scope="col">Title</th>
+            <th scope="col" class="hide-mobile">Type</th>
+            <th scope="col">Level</th>
+            <th scope="col"><a href="/web/events/?sort=project_id{{ base_qs }}"{% if sort == "project_id" %} class="active-sort"{% endif %}>Project</a></th>
+            <th scope="col" class="hide-mobile"><a href="/web/events/?sort=platform{{ base_qs }}"{% if sort == "platform" %} class="active-sort"{% endif %}>Platform</a></th>
+            <th scope="col" class="hide-mobile">Environment</th>
+            <th scope="col"><a href="/web/events/?{{ base_qs }}"{% if sort.is_empty() %} class="active-sort"{% endif %}>Time</a></th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for event in result.items %}
+        <tr{% match event.level %}{% when Some with (lvl) %} data-level="{{ lvl }}"{% when None %}{% endmatch %}>
+            <td class="col-check"><input type="checkbox" name="ids" value="{{ event.event_id }}" aria-label="Select event"></td>
+            <td class="truncate" title="{% match event.title %}{% when Some with (t) %}{{ t }}{% when None %}(untitled){% endmatch %}">
+                <a href="/web/projects/{{ event.project_id }}/events/{{ event.event_id }}/">{% match event.title %}{% when Some with (t) %}{{ t }}{% when None %}(untitled){% endmatch %}</a>
+            </td>
+            <td class="hide-mobile"><span class="type-icon type-icon-{{ event.item_type }}" title="{{ event.item_type }}"></span>{{ event.item_type }}</td>
+            <td>
+                {% match event.level %}{% when Some with (lvl) %}<span class="badge badge-{{ lvl }}">{{ lvl }}</span>{% when None %}{% endmatch %}
+            </td>
+            <td><a href="/web/projects/{{ event.project_id }}/">{{ event.project_id }}</a></td>
+            <td class="hide-mobile">{% match event.platform %}{% when Some with (p) %}{{ p }}{% when None %}&mdash;{% endmatch %}</td>
+            <td class="hide-mobile">{% match event.environment %}{% when Some with (e) %}{{ e }}{% when None %}&mdash;{% endmatch %}</td>
+            <td><time datetime="{{ event.timestamp|format_ts }}" title="{{ event.timestamp|format_ts }}">{{ event.timestamp|format_relative }}</time></td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+</form>
+
+{% if result.total > 0 %}
+<form class="bulk-all-form" method="post" action="/web/events/bulk">
+    <input type="hidden" name="action" value="delete">
+    <input type="hidden" name="mode" value="all_matching">
+    {% if !query.is_empty() %}<input type="hidden" name="query" value="{{ query }}">{% endif %}
+    {% if !level.is_empty() %}<input type="hidden" name="level" value="{{ level }}">{% endif %}
+    {% if !item_type.is_empty() %}<input type="hidden" name="item_type" value="{{ item_type }}">{% endif %}
+    <button type="submit" class="btn btn-danger">Delete all {{ result.total }} matching</button>
+</form>
+{% endif %}
+
+<nav class="pagination" aria-label="Pagination">
+    <span>{{ result.total }} event{% if result.total != 1 %}s{% endif %}</span>
+    <span>
+        {% if result.has_prev() %}
+        <a href="/web/events/?offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}{{ filter_qs }}">&laquo; Previous</a>
+        {% endif %}
+        {% if result.has_next() %}
+        <a href="/web/events/?offset={{ result.next_offset() }}&amp;limit={{ result.limit }}{{ filter_qs }}">Next &raquo;</a>
+        {% endif %}
+    </span>
+</nav>
+{% endif %}
+{% endblock %}
+

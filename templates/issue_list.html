@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+
+{% block title %}Project {{ project_id }} - Stackpit{% endblock %}
+
+{% block breadcrumbs %}
+<span class="sep" aria-hidden="true">/</span>
+<a href="/web/projects/">Projects</a>
+<span class="sep" aria-hidden="true">/</span>
+<span>Project {{ project_id }}</span>
+{% endblock %}
+
+{% block content %}
+<h1>Project {{ project_id }}</h1>
+<nav class="project-tabs" aria-label="Project sections">
+    <a href="/web/projects/{{ project_id }}/" class="project-tab active"><span class="type-icon type-icon-event"></span>Issues</a>
+    {% if nav.transaction_count > 0 %}<a href="/web/projects/{{ project_id }}/transactions/" class="project-tab"><span class="type-icon type-icon-transaction"></span>Transactions <span class="tab-count">{{ nav.transaction_count }}</span></a>{% endif %}
+    {% if nav.span_count > 0 %}<a href="/web/projects/{{ project_id }}/spans/" class="project-tab"><span class="type-icon type-icon-span"></span>Spans <span class="tab-count">{{ nav.span_count }}</span></a>{% endif %}
+    {% if nav.log_count > 0 %}<a href="/web/projects/{{ project_id }}/logs/" class="project-tab"><span class="type-icon type-icon-log"></span>Logs <span class="tab-count">{{ nav.log_count }}</span></a>{% endif %}
+    {% if nav.metric_count > 0 %}<a href="/web/projects/{{ project_id }}/metrics/" class="project-tab"><span class="type-icon type-icon-metric"></span>Metrics <span class="tab-count">{{ nav.metric_count }}</span></a>{% endif %}
+    {% if nav.monitor_count > 0 %}<a href="/web/projects/{{ project_id }}/monitors/" class="project-tab"><span class="type-icon type-icon-check_in"></span>Monitors <span class="tab-count">{{ nav.monitor_count }}</span></a>{% endif %}
+    {% if nav.profile_count > 0 %}<a href="/web/projects/{{ project_id }}/profiles/" class="project-tab"><span class="type-icon type-icon-profile"></span>Profiles <span class="tab-count">{{ nav.profile_count }}</span></a>{% endif %}
+    {% if nav.replay_count > 0 %}<a href="/web/projects/{{ project_id }}/replays/" class="project-tab"><span class="type-icon type-icon-replay"></span>Replays <span class="tab-count">{{ nav.replay_count }}</span></a>{% endif %}
+    {% if nav.session_count > 0 %}<a href="/web/projects/{{ project_id }}/health/" class="project-tab"><span class="type-icon type-icon-session"></span>Health <span class="tab-count">{{ nav.session_count }}</span></a>{% endif %}
+    {% if nav.user_report_count > 0 %}<a href="/web/projects/{{ project_id }}/user-reports/" class="project-tab"><span class="type-icon type-icon-user_report"></span>User Reports <span class="tab-count">{{ nav.user_report_count }}</span></a>{% endif %}
+    {% if nav.client_report_count > 0 %}<a href="/web/projects/{{ project_id }}/client-reports/" class="project-tab"><span class="type-icon type-icon-client_report"></span>Client Reports <span class="tab-count">{{ nav.client_report_count }}</span></a>{% endif %}
+    <a href="/web/projects/{{ project_id }}/settings/" class="project-tab"><span class="type-icon type-icon-settings"></span>Settings</a>
+</nav>
+
+{% if !chart_svg.is_empty() %}
+<div class="event-chart">{{ chart_svg|safe }}</div>
+{% endif %}
+
+{% if !tag.is_empty() %}
+<div class="active-filter">Filtered by tag: <strong>{{ tag }}</strong> <a href="/web/projects/{{ project_id }}/?{% if !query.is_empty() %}query={{ query }}&amp;{% endif %}{% if !level.is_empty() %}level={{ level }}&amp;{% endif %}{% if !status.is_empty() %}status={{ status }}&amp;{% endif %}{% if !release.is_empty() %}release={{ release }}&amp;{% endif %}{% if !sort.is_empty() %}sort={{ sort }}&amp;{% endif %}{% if !period.is_empty() %}period={{ period }}{% endif %}" title="Clear tag filter">&times;</a></div>
+{% endif %}
+
+<form class="filter-form" method="get" action="/web/projects/{{ project_id }}/">
+    {% if !sort.is_empty() %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
+    {% if !tag.is_empty() %}<input type="hidden" name="tag" value="{{ tag }}">{% endif %}
+    <input type="text" name="query" placeholder="Search issues..." value="{{ query }}" aria-label="Search issues">
+    <select name="status" aria-label="Filter by status">
+        <option value="">All statuses</option>
+        <option value="unresolved"{% if status == "unresolved" %} selected{% endif %}>Unresolved</option>
+        <option value="resolved"{% if status == "resolved" %} selected{% endif %}>Resolved</option>
+        <option value="ignored"{% if status == "ignored" %} selected{% endif %}>Ignored</option>
+    </select>
+    <select name="level" aria-label="Filter by level">
+        <option value="">All levels</option>
+        <option value="fatal"{% if level == "fatal" %} selected{% endif %}>fatal</option>
+        <option value="error"{% if level == "error" %} selected{% endif %}>error</option>
+        <option value="warning"{% if level == "warning" %} selected{% endif %}>warning</option>
+        <option value="info"{% if level == "info" %} selected{% endif %}>info</option>
+        <option value="debug"{% if level == "debug" %} selected{% endif %}>debug</option>
+    </select>
+    {% if !releases.is_empty() %}
+    <select name="release" aria-label="Filter by release">
+        <option value="">All releases</option>
+        {% for r in releases %}
+        <option value="{{ r }}"{% if release == *r %} selected{% endif %}>{{ r }}</option>
+        {% endfor %}
+    </select>
+    {% endif %}
+    <select name="period" aria-label="Time range">
+        <option value="">All time</option>
+        <option value="1h"{% if period == "1h" %} selected{% endif %}>Last hour</option>
+        <option value="24h"{% if period == "24h" %} selected{% endif %}>Last 24h</option>
+        <option value="7d"{% if period == "7d" %} selected{% endif %}>Last 7 days</option>
+        <option value="14d"{% if period == "14d" %} selected{% endif %}>Last 14 days</option>
+        <option value="30d"{% if period == "30d" %} selected{% endif %}>Last 30 days</option>
+        <option value="90d"{% if period == "90d" %} selected{% endif %}>Last 90 days</option>
+        <option value="365d"{% if period == "365d" %} selected{% endif %}>Last 365 days</option>
+    </select>
+    <button type="submit">Filter</button>
+</form>
+
+{% if result.items.is_empty() %}
+<p class="empty">No issues match the current filters.</p>
+{% else %}
+
+{% if result.total > 0 %}
+<form class="bulk-all-form" method="post" action="/web/projects/{{ project_id }}/bulk">
+    <input type="hidden" name="mode" value="all_matching">
+    {% if !query.is_empty() %}<input type="hidden" name="query" value="{{ query }}">{% endif %}
+    {% if !level.is_empty() %}<input type="hidden" name="level" value="{{ level }}">{% endif %}
+    {% if !status.is_empty() %}<input type="hidden" name="status" value="{{ status }}">{% endif %}
+    {% if !release.is_empty() %}<input type="hidden" name="release" value="{{ release }}">{% endif %}
+    {% if !tag.is_empty() %}<input type="hidden" name="tag" value="{{ tag }}">{% endif %}
+    {% if !period.is_empty() %}<input type="hidden" name="period" value="{{ period }}">{% endif %}
+    <button type="submit" name="action" value="resolve" class="btn">Resolve all {{ result.total }}</button>
+    <button type="submit" name="action" value="ignore" class="btn">Ignore all {{ result.total }}</button>
+    <button type="submit" name="action" value="delete" class="btn btn-danger">Delete all {{ result.total }}</button>
+</form>
+{% endif %}
+
+<form method="post" action="/web/projects/{{ project_id }}/bulk">
+<input type="hidden" name="mode" value="selected">
+{% if !period.is_empty() %}<input type="hidden" name="period" value="{{ period }}">{% endif %}
+<div class="bulk-bar">
+    <button type="submit" name="action" value="resolve" class="btn">Resolve</button>
+    <button type="submit" name="action" value="ignore" class="btn">Ignore</button>
+    <button type="submit" name="action" value="delete" class="btn btn-danger">Delete</button>
+</div>
+
+<div class="table-wrap">
+<table>
+    <thead>
+        <tr>
+            <th scope="col" class="col-check"></th>
+            <th scope="col">Title</th>
+            <th scope="col">Level</th>
+            <th scope="col"><a href="/web/projects/{{ project_id }}/?sort=event_count{{ base_qs }}"{% if sort == "event_count" %} class="active-sort"{% endif %}>Events</a></th>
+            <th scope="col">Users</th>
+            <th scope="col" class="hide-mobile"><a href="/web/projects/{{ project_id }}/?sort=first_seen{{ base_qs }}"{% if sort == "first_seen" %} class="active-sort"{% endif %}>First Seen</a></th>
+            <th scope="col"><a href="/web/projects/{{ project_id }}/?{{ base_qs }}"{% if sort.is_empty() %} class="active-sort"{% endif %}>Last Seen</a></th>
+            <th scope="col">Status</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for issue in result.items %}
+        <tr{% match issue.level %}{% when Some with (lvl) %} data-level="{{ lvl }}"{% when None %}{% endmatch %}>
+            <td class="col-check"><input type="checkbox" class="bulk-check" name="ids" value="{{ issue.fingerprint }}" aria-label="Select issue"></td>
+            <td class="truncate" title="{% match issue.title %}{% when Some with (t) %}{{ t }}{% when None %}(untitled){% endmatch %}">
+                <span class="type-icon type-icon-{{ issue.item_type }}" title="{{ issue.item_type }}"></span><a href="/web/projects/{{ project_id }}/issues/{{ issue.fingerprint }}/">{% match issue.title %}{% when Some with (t) %}{{ t|split_error_type }}{% when None %}(untitled){% endmatch %}</a>
+                {% match issue.title %}{% when Some with (t) %}<div class="issue-title-msg">{{ t|split_error_message }}</div>{% when None %}{% endmatch %}
+            </td>
+            <td>
+                {% match issue.level %}{% when Some with (lvl) %}<span class="badge badge-{{ lvl }}">{{ lvl }}</span>{% when None %}{% endmatch %}
+            </td>
+            <td>{{ issue.event_count }}</td>
+            <td>{{ issue.user_count }}</td>
+            <td class="hide-mobile"><time datetime="{{ issue.first_seen|format_ts }}" title="{{ issue.first_seen|format_ts }}">{{ issue.first_seen|format_relative }}</time></td>
+            <td><time datetime="{{ issue.last_seen|format_ts }}" title="{{ issue.last_seen|format_ts }}">{{ issue.last_seen|format_relative }}</time></td>
+            <td><span class="badge badge-{{ issue.status }}">{{ issue.status }}</span></td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+</form>
+
+<nav class="pagination" aria-label="Pagination">
+    <span>{{ result.total }} issue{% if result.total != 1 %}s{% endif %}</span>
+    <span>
+        {% if result.has_prev() %}
+        <a href="/web/projects/{{ project_id }}/?offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}{{ filter_qs }}">&laquo; Previous</a>
+        {% endif %}
+        {% if result.has_next() %}
+        <a href="/web/projects/{{ project_id }}/?offset={{ result.next_offset() }}&amp;limit={{ result.limit }}{{ filter_qs }}">Next &raquo;</a>
+        {% endif %}
+    </span>
+</nav>
+{% endif %}
+{% endblock %}
+

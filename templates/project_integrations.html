@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+
+{% block title %}Integrations - Project {{ project_id }} - Stackpit{% endblock %}
+
+{% block breadcrumbs %}
+<span class="sep" aria-hidden="true">/</span>
+<a href="/web/projects/">Projects</a>
+<span class="sep" aria-hidden="true">/</span>
+<a href="/web/projects/{{ project_id }}/">Project {{ project_id }}</a>
+<span class="sep" aria-hidden="true">/</span>
+<a href="/web/projects/{{ project_id }}/settings/">Settings</a>
+<span class="sep" aria-hidden="true">/</span>
+<span>Integrations</span>
+{% endblock %}
+
+{% block content %}
+<h1>Project {{ project_id }}{% if project_status == "archived" %} <span style="color: var(--muted); font-size: 0.8rem;">(archived)</span>{% endif %}</h1>
+<nav class="project-tabs" aria-label="Project sections">
+    <a href="/web/projects/{{ project_id }}/" class="project-tab"><span class="type-icon type-icon-event"></span>Issues</a>
+    {% if nav.transaction_count > 0 %}<a href="/web/projects/{{ project_id }}/transactions/" class="project-tab"><span class="type-icon type-icon-transaction"></span>Transactions <span class="tab-count">{{ nav.transaction_count }}</span></a>{% endif %}
+    {% if nav.span_count > 0 %}<a href="/web/projects/{{ project_id }}/spans/" class="project-tab"><span class="type-icon type-icon-span"></span>Spans <span class="tab-count">{{ nav.span_count }}</span></a>{% endif %}
+    {% if nav.log_count > 0 %}<a href="/web/projects/{{ project_id }}/logs/" class="project-tab"><span class="type-icon type-icon-log"></span>Logs <span class="tab-count">{{ nav.log_count }}</span></a>{% endif %}
+    {% if nav.metric_count > 0 %}<a href="/web/projects/{{ project_id }}/metrics/" class="project-tab"><span class="type-icon type-icon-metric"></span>Metrics <span class="tab-count">{{ nav.metric_count }}</span></a>{% endif %}
+    {% if nav.monitor_count > 0 %}<a href="/web/projects/{{ project_id }}/monitors/" class="project-tab"><span class="type-icon type-icon-check_in"></span>Monitors <span class="tab-count">{{ nav.monitor_count }}</span></a>{% endif %}
+    {% if nav.profile_count > 0 %}<a href="/web/projects/{{ project_id }}/profiles/" class="project-tab"><span class="type-icon type-icon-profile"></span>Profiles <span class="tab-count">{{ nav.profile_count }}</span></a>{% endif %}
+    {% if nav.replay_count > 0 %}<a href="/web/projects/{{ project_id }}/replays/" class="project-tab"><span class="type-icon type-icon-replay"></span>Replays <span class="tab-count">{{ nav.replay_count }}</span></a>{% endif %}
+    {% if nav.session_count > 0 %}<a href="/web/projects/{{ project_id }}/health/" class="project-tab"><span class="type-icon type-icon-session"></span>Health <span class="tab-count">{{ nav.session_count }}</span></a>{% endif %}
+    {% if nav.user_report_count > 0 %}<a href="/web/projects/{{ project_id }}/user-reports/" class="project-tab"><span class="type-icon type-icon-user_report"></span>User Reports <span class="tab-count">{{ nav.user_report_count }}</span></a>{% endif %}
+    {% if nav.client_report_count > 0 %}<a href="/web/projects/{{ project_id }}/client-reports/" class="project-tab"><span class="type-icon type-icon-client_report"></span>Client Reports <span class="tab-count">{{ nav.client_report_count }}</span></a>{% endif %}
+    <a href="/web/projects/{{ project_id }}/settings/" class="project-tab active"><span class="type-icon type-icon-settings"></span>Settings</a>
+</nav>
+
+<nav class="project-tabs" aria-label="Settings sections">
+    <a href="/web/projects/{{ project_id }}/settings/" class="project-tab">General</a>
+    <a href="/web/projects/{{ project_id }}/settings/keys/" class="project-tab">SDK Setup</a>
+    <a href="/web/projects/{{ project_id }}/settings/filters/" class="project-tab">Filters</a>
+    <a href="/web/projects/{{ project_id }}/settings/integrations/" class="project-tab active">Integrations</a>
+</nav>
+
+{% match message %}{% when Some with (msg) %}
+<p class="settings-message">{{ msg }}</p>
+{% when None %}{% endmatch %}
+
+<h2>Active Integrations</h2>
+
+{% if active.is_empty() %}
+<p class="empty">No integrations activated for this project.</p>
+{% else %}
+{% for pi in active %}
+<div style="border: 1px solid var(--border); border-radius: 0.5rem; padding: 1rem; margin-bottom: 1rem;">
+    <h3 style="margin-top: 0;">{{ pi.integration_name }} <span style="color: var(--muted); font-weight: 400; font-size: 0.85rem;">({{ pi.integration_kind }})</span></h3>
+    <form class="settings-form" method="post" action="/web/projects/{{ project_id }}/settings/integrations/{{ pi.id }}/update">
+        <label style="display: inline; margin-right: 1rem;">
+            <input type="checkbox" name="notify_new_issues" value="1" {% if pi.notify_new_issues %}checked{% endif %}> New issues
+        </label>
+        <label style="display: inline; margin-right: 1rem;">
+            <input type="checkbox" name="notify_regressions" value="1" {% if pi.notify_regressions %}checked{% endif %}> Regressions
+        </label>
+        <label style="display: inline; margin-right: 1rem;">
+            <input type="checkbox" name="notify_threshold" value="1" {% if pi.notify_threshold %}checked{% endif %}> Threshold alerts
+        </label>
+        <label style="display: inline; margin-right: 1rem;">
+            <input type="checkbox" name="notify_digests" value="1" {% if pi.notify_digests %}checked{% endif %}> Digests
+        </label>
+        <br><br>
+        <label for="min_level_{{ pi.id }}">Minimum Level</label>
+        <select id="min_level_{{ pi.id }}" name="min_level">
+            <option value="">Any</option>
+            <option value="debug" {% match pi.min_level %}{% when Some with (l) %}{% if l == "debug" %}selected{% endif %}{% when None %}{% endmatch %}>debug</option>
+            <option value="info" {% match pi.min_level %}{% when Some with (l) %}{% if l == "info" %}selected{% endif %}{% when None %}{% endmatch %}>info</option>
+            <option value="warning" {% match pi.min_level %}{% when Some with (l) %}{% if l == "warning" %}selected{% endif %}{% when None %}{% endmatch %}>warning</option>
+            <option value="error" {% match pi.min_level %}{% when Some with (l) %}{% if l == "error" %}selected{% endif %}{% when None %}{% endmatch %}>error</option>
+            <option value="fatal" {% match pi.min_level %}{% when Some with (l) %}{% if l == "fatal" %}selected{% endif %}{% when None %}{% endmatch %}>fatal</option>
+        </select>
+        <label for="env_{{ pi.id }}">Environment Filter</label>
+        <input type="text" id="env_{{ pi.id }}" name="environment_filter" placeholder="e.g. production" value="{% match pi.environment_filter %}{% when Some with (e) %}{{ e }}{% when None %}{% endmatch %}">
+        {% if pi.integration_kind == "email" %}
+        <label for="to_{{ pi.id }}">To Address</label>
+        <input type="email" id="to_{{ pi.id }}" name="to_address" placeholder="alerts@example.com" value="{% match pi.config %}{% when Some with (c) %}{{ c }}{% when None %}{% endmatch %}">
+        {% endif %}
+        <div style="margin-top: 0.5rem;">
+            <button type="submit" class="btn">Save</button>
+        </div>
+    </form>
+    <form method="post" action="/web/projects/{{ project_id }}/settings/integrations/{{ pi.id }}/delete" style="display: inline; margin: 0;">
+        <button type="submit" class="btn btn-danger">Deactivate</button>
+    </form>
+</div>
+{% endfor %}
+{% endif %}
+
+{% if !available.is_empty() %}
+<h2>Activate Integration</h2>
+<form class="settings-form" method="post" action="/web/projects/{{ project_id }}/settings/integrations/activate">
+    <label for="pi_integration_id">Integration</label>
+    <select id="pi_integration_id" name="integration_id">
+    {% for i in available %}
+        <option value="{{ i.id }}">{{ i.name }} ({{ i.kind }})</option>
+    {% endfor %}
+    </select>
+
+    <label style="display: inline; margin-right: 1rem;">
+        <input type="checkbox" name="notify_new_issues" value="1" checked> New issues
+    </label>
+    <label style="display: inline; margin-right: 1rem;">
+        <input type="checkbox" name="notify_regressions" value="1" checked> Regressions
+    </label>
+    <label style="display: inline; margin-right: 1rem;">
+        <input type="checkbox" name="notify_threshold" value="1" checked> Threshold alerts
+    </label>
+    <label style="display: inline; margin-right: 1rem;">
+        <input type="checkbox" name="notify_digests" value="1" checked> Digests
+    </label>
+    <br><br>
+
+    <label for="pi_min_level">Minimum Level</label>
+    <select id="pi_min_level" name="min_level">
+        <option value="">Any</option>
+        <option value="debug">debug</option>
+        <option value="info">info</option>
+        <option value="warning">warning</option>
+        <option value="error">error</option>
+        <option value="fatal">fatal</option>
+    </select>
+
+    <label for="pi_env">Environment Filter</label>
+    <input type="text" id="pi_env" name="environment_filter" placeholder="e.g. production">
+
+    <label for="pi_to">To Address <span style="font-weight: 400; color: var(--muted);">(email integrations only)</span></label>
+    <input type="email" id="pi_to" name="to_address" placeholder="alerts@example.com">
+
+    <button type="submit" class="btn">Activate</button>
+</form>
+{% else %}
+<p class="empty" style="margin-top: 2rem;">No integrations available. <a href="/web/settings/integrations/">Create one first</a>.</p>
+{% endif %}
+{% endblock %}

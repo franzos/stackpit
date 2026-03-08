@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block title %}Add Webhook - Stackpit{% endblock %}
+
+{% block breadcrumbs %}
+<span class="sep" aria-hidden="true">/</span>
+<a href="/web/settings/integrations/">Settings</a>
+<span class="sep" aria-hidden="true">/</span>
+<span>Add Webhook</span>
+{% endblock %}
+
+{% block content %}
+<h1>Add Webhook Integration</h1>
+
+<p><a href="/web/settings/integrations/">&larr; Back to Integrations</a></p>
+
+<form class="settings-form" method="post" action="/web/settings/integrations/create">
+    <input type="hidden" name="kind" value="webhook">
+
+    <label for="int_name">Name</label>
+    <input type="text" id="int_name" name="name" placeholder="e.g. Production Alerts" required>
+
+    <label for="int_url">Webhook URL</label>
+    <input type="url" id="int_url" name="url" placeholder="https://example.com/webhook" required>
+
+    <label for="int_secret">HMAC Secret <span style="font-weight: 400; color: var(--muted);">(optional)</span></label>
+    <input type="password" id="int_secret" name="secret" placeholder="Optional signing secret">
+
+    <button type="submit" class="btn">Create Integration</button>
+</form>
+{% endblock %}

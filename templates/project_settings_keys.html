@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+
+{% block title %}SDK Setup - Project {{ project_id }} - Stackpit{% endblock %}
+
+{% block breadcrumbs %}
+<span class="sep" aria-hidden="true">/</span>
+<a href="/web/projects/">Projects</a>
+<span class="sep" aria-hidden="true">/</span>
+<a href="/web/projects/{{ project_id }}/">Project {{ project_id }}</a>
+<span class="sep" aria-hidden="true">/</span>
+<a href="/web/projects/{{ project_id }}/settings/">Settings</a>
+<span class="sep" aria-hidden="true">/</span>
+<span>SDK Setup</span>
+{% endblock %}
+
+{% block content %}
+<h1>Project {{ project_id }}{% if project_status == "archived" %} <span style="color: var(--muted); font-size: 0.8rem;">(archived)</span>{% endif %}</h1>
+<nav class="project-tabs" aria-label="Project sections">
+    <a href="/web/projects/{{ project_id }}/" class="project-tab"><span class="type-icon type-icon-event"></span>Issues</a>
+    {% if nav.transaction_count > 0 %}<a href="/web/projects/{{ project_id }}/transactions/" class="project-tab"><span class="type-icon type-icon-transaction"></span>Transactions <span class="tab-count">{{ nav.transaction_count }}</span></a>{% endif %}
+    {% if nav.span_count > 0 %}<a href="/web/projects/{{ project_id }}/spans/" class="project-tab"><span class="type-icon type-icon-span"></span>Spans <span class="tab-count">{{ nav.span_count }}</span></a>{% endif %}
+    {% if nav.log_count > 0 %}<a href="/web/projects/{{ project_id }}/logs/" class="project-tab"><span class="type-icon type-icon-log"></span>Logs <span class="tab-count">{{ nav.log_count }}</span></a>{% endif %}
+    {% if nav.metric_count > 0 %}<a href="/web/projects/{{ project_id }}/metrics/" class="project-tab"><span class="type-icon type-icon-metric"></span>Metrics <span class="tab-count">{{ nav.metric_count }}</span></a>{% endif %}
+    {% if nav.monitor_count > 0 %}<a href="/web/projects/{{ project_id }}/monitors/" class="project-tab"><span class="type-icon type-icon-check_in"></span>Monitors <span class="tab-count">{{ nav.monitor_count }}</span></a>{% endif %}
+    {% if nav.profile_count > 0 %}<a href="/web/projects/{{ project_id }}/profiles/" class="project-tab"><span class="type-icon type-icon-profile"></span>Profiles <span class="tab-count">{{ nav.profile_count }}</span></a>{% endif %}
+    {% if nav.replay_count > 0 %}<a href="/web/projects/{{ project_id }}/replays/" class="project-tab"><span class="type-icon type-icon-replay"></span>Replays <span class="tab-count">{{ nav.replay_count }}</span></a>{% endif %}
+    {% if nav.session_count > 0 %}<a href="/web/projects/{{ project_id }}/health/" class="project-tab"><span class="type-icon type-icon-session"></span>Health <span class="tab-count">{{ nav.session_count }}</span></a>{% endif %}
+    {% if nav.user_report_count > 0 %}<a href="/web/projects/{{ project_id }}/user-reports/" class="project-tab"><span class="type-icon type-icon-user_report"></span>User Reports <span class="tab-count">{{ nav.user_report_count }}</span></a>{% endif %}
+    {% if nav.client_report_count > 0 %}<a href="/web/projects/{{ project_id }}/client-reports/" class="project-tab"><span class="type-icon type-icon-client_report"></span>Client Reports <span class="tab-count">{{ nav.client_report_count }}</span></a>{% endif %}
+    <a href="/web/projects/{{ project_id }}/settings/" class="project-tab active"><span class="type-icon type-icon-settings"></span>Settings</a>
+</nav>
+
+<nav class="project-tabs" aria-label="Settings sections">
+    <a href="/web/projects/{{ project_id }}/settings/" class="project-tab">General</a>
+    <a href="/web/projects/{{ project_id }}/settings/keys/" class="project-tab active">SDK Setup</a>
+    <a href="/web/projects/{{ project_id }}/settings/filters/" class="project-tab">Filters</a>
+    <a href="/web/projects/{{ project_id }}/settings/integrations/" class="project-tab">Integrations</a>
+</nav>
+
+{% match message %}{% when Some with (msg) %}
+<p class="settings-message">{{ msg }}</p>
+{% when None %}{% endmatch %}
+
+<h2>DSN</h2>
+{% if dsn.is_empty() %}
+<p class="empty">No keys registered. Create a key below to get a DSN.</p>
+{% else %}
+<pre><code>{{ dsn }}</code></pre>
+{% endif %}
+
+<h2>Project Keys</h2>
+{% if keys.is_empty() %}
+<p class="empty">No keys registered for this project.</p>
+{% else %}
+<div class="table-wrap">
+<table>
+    <thead>
+        <tr>
+            <th scope="col">Public Key</th>
+            <th scope="col">Label</th>
+            <th scope="col">Status</th>
+            <th scope="col">Created</th>
+            <th scope="col"></th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for key in keys %}
+        <tr>
+            <td><code>{{ key.public_key }}</code></td>
+            <td>{% match key.label %}{% when Some with (l) %}{{ l }}{% when None %}&mdash;{% endmatch %}</td>
+            <td>{{ key.status }}</td>
+            <td><time datetime="{{ key.created_at|format_ts }}" title="{{ key.created_at|format_ts }}">{{ key.created_at|format_relative }}</time></td>
+            <td>
+                <form method="post" action="/web/projects/{{ project_id }}/settings/keys/{{ key.public_key }}/delete" style="margin: 0;">
+                    <button type="submit" class="btn btn-danger" onclick="return confirm('Delete this key? SDKs using it will stop working.')">Delete</button>
+                </form>
+            </td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+{% endif %}
+
+<h2>Create Key</h2>
+<form class="settings-form" method="post" action="/web/projects/{{ project_id }}/settings/keys/create">
+    <label for="key_label">Label <span style="font-weight: 400; color: var(--muted);">(optional)</span></label>
+    <input type="text" id="key_label" name="label" placeholder="e.g. production, staging">
+    <button type="submit" class="btn">Create Key</button>
+</form>
+{% endblock %}

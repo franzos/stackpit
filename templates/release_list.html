@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+
+{% block title %}Releases - Stackpit{% endblock %}
+
+{% block breadcrumbs %}
+<span class="sep" aria-hidden="true">/</span>
+<span>Releases</span>
+{% endblock %}
+
+{% block content %}
+<h1>Releases</h1>
+
+<form class="filter-form" method="get" action="/web/releases/">
+    {% if !sort.is_empty() %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
+    <input type="text" name="query" placeholder="Search releases..." value="{{ query }}" aria-label="Search releases">
+    <input type="text" name="project_id" placeholder="Project ID" value="{{ project_id }}" aria-label="Filter by project" size="10">
+    <select name="period" aria-label="Adoption period">
+        <option value="24h"{% if period == "24h" %} selected{% endif %}>Last 24h</option>
+        <option value="7d"{% if period == "7d" %} selected{% endif %}>Last 7 days</option>
+        <option value="30d"{% if period == "30d" %} selected{% endif %}>Last 30 days</option>
+    </select>
+    <button type="submit">Filter</button>
+</form>
+
+{% if result.items.is_empty() %}
+<p class="empty">No releases found.</p>
+{% else %}
+<div class="table-wrap">
+<table>
+    <thead>
+        <tr>
+            <th scope="col">Version</th>
+            <th scope="col"><a href="/web/releases/?sort=project_id{{ base_qs }}"{% if sort == "project_id" %} class="active-sort"{% endif %}>Project</a></th>
+            <th scope="col"><a href="/web/releases/?sort=issues{{ base_qs }}"{% if sort == "issues" %} class="active-sort"{% endif %}>Issues</a></th>
+            <th scope="col"><a href="/web/releases/?sort=events{{ base_qs }}"{% if sort == "events" %} class="active-sort"{% endif %}>Events</a></th>
+            <th scope="col"><a href="/web/releases/?sort=adoption{{ base_qs }}"{% if sort == "adoption" %} class="active-sort"{% endif %}>Adoption</a></th>
+            <th scope="col" class="hide-mobile"><a href="/web/releases/?sort=first_seen{{ base_qs }}"{% if sort == "first_seen" %} class="active-sort"{% endif %}>First Seen</a></th>
+            <th scope="col"><a href="/web/releases/?{{ base_qs }}"{% if sort.is_empty() %} class="active-sort"{% endif %}>Last Seen</a></th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for r in result.items %}
+        <tr>
+            <td class="truncate" title="{{ r.version }}">{{ r.version }}</td>
+            <td><a href="/web/projects/{{ r.project_id }}/">{% match r.project_name %}{% when Some with (n) %}{{ n }}{% when None %}{{ r.project_id }}{% endmatch %}</a></td>
+            <td>{{ r.issue_count }}</td>
+            <td>{{ r.event_count }}</td>
+            <td>{{ r.adoption }}%</td>
+            <td class="hide-mobile"><time datetime="{{ r.first_seen|format_ts }}" title="{{ r.first_seen|format_ts }}">{{ r.first_seen|format_relative }}</time></td>
+            <td><time datetime="{{ r.last_seen|format_ts }}" title="{{ r.last_seen|format_ts }}">{{ r.last_seen|format_relative }}</time></td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+
+<nav class="pagination" aria-label="Pagination">
+    <span>{{ result.total }} release{% if result.total != 1 %}s{% endif %}</span>
+    <span>
+        {% if result.has_prev() %}
+        <a href="/web/releases/?offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}{{ filter_qs }}">&laquo; Previous</a>
+        {% endif %}
+        {% if result.has_next() %}
+        <a href="/web/releases/?offset={{ result.next_offset() }}&amp;limit={{ result.limit }}{{ filter_qs }}">Next &raquo;</a>
+        {% endif %}
+    </span>
+</nav>
+{% endif %}
+{% endblock %}

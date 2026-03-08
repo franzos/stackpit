@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+
+{% block title %}General - Project {{ project_id }} - Stackpit{% endblock %}
+
+{% block breadcrumbs %}
+<span class="sep" aria-hidden="true">/</span>
+<a href="/web/projects/">Projects</a>
+<span class="sep" aria-hidden="true">/</span>
+<a href="/web/projects/{{ project_id }}/">Project {{ project_id }}</a>
+<span class="sep" aria-hidden="true">/</span>
+<span>Settings</span>
+{% endblock %}
+
+{% block content %}
+<h1>Project {{ project_id }}{% if project_status == "archived" %} <span style="color: var(--muted); font-size: 0.8rem;">(archived)</span>{% endif %}</h1>
+<nav class="project-tabs" aria-label="Project sections">
+    <a href="/web/projects/{{ project_id }}/" class="project-tab"><span class="type-icon type-icon-event"></span>Issues</a>
+    {% if nav.transaction_count > 0 %}<a href="/web/projects/{{ project_id }}/transactions/" class="project-tab"><span class="type-icon type-icon-transaction"></span>Transactions <span class="tab-count">{{ nav.transaction_count }}</span></a>{% endif %}
+    {% if nav.span_count > 0 %}<a href="/web/projects/{{ project_id }}/spans/" class="project-tab"><span class="type-icon type-icon-span"></span>Spans <span class="tab-count">{{ nav.span_count }}</span></a>{% endif %}
+    {% if nav.log_count > 0 %}<a href="/web/projects/{{ project_id }}/logs/" class="project-tab"><span class="type-icon type-icon-log"></span>Logs <span class="tab-count">{{ nav.log_count }}</span></a>{% endif %}
+    {% if nav.metric_count > 0 %}<a href="/web/projects/{{ project_id }}/metrics/" class="project-tab"><span class="type-icon type-icon-metric"></span>Metrics <span class="tab-count">{{ nav.metric_count }}</span></a>{% endif %}
+    {% if nav.monitor_count > 0 %}<a href="/web/projects/{{ project_id }}/monitors/" class="project-tab"><span class="type-icon type-icon-check_in"></span>Monitors <span class="tab-count">{{ nav.monitor_count }}</span></a>{% endif %}
+    {% if nav.profile_count > 0 %}<a href="/web/projects/{{ project_id }}/profiles/" class="project-tab"><span class="type-icon type-icon-profile"></span>Profiles <span class="tab-count">{{ nav.profile_count }}</span></a>{% endif %}
+    {% if nav.replay_count > 0 %}<a href="/web/projects/{{ project_id }}/replays/" class="project-tab"><span class="type-icon type-icon-replay"></span>Replays <span class="tab-count">{{ nav.replay_count }}</span></a>{% endif %}
+    {% if nav.session_count > 0 %}<a href="/web/projects/{{ project_id }}/health/" class="project-tab"><span class="type-icon type-icon-session"></span>Health <span class="tab-count">{{ nav.session_count }}</span></a>{% endif %}
+    {% if nav.user_report_count > 0 %}<a href="/web/projects/{{ project_id }}/user-reports/" class="project-tab"><span class="type-icon type-icon-user_report"></span>User Reports <span class="tab-count">{{ nav.user_report_count }}</span></a>{% endif %}
+    {% if nav.client_report_count > 0 %}<a href="/web/projects/{{ project_id }}/client-reports/" class="project-tab"><span class="type-icon type-icon-client_report"></span>Client Reports <span class="tab-count">{{ nav.client_report_count }}</span></a>{% endif %}
+    <a href="/web/projects/{{ project_id }}/settings/" class="project-tab active"><span class="type-icon type-icon-settings"></span>Settings</a>
+</nav>
+
+<nav class="project-tabs" aria-label="Settings sections">
+    <a href="/web/projects/{{ project_id }}/settings/" class="project-tab active">General</a>
+    <a href="/web/projects/{{ project_id }}/settings/keys/" class="project-tab">SDK Setup</a>
+    <a href="/web/projects/{{ project_id }}/settings/filters/" class="project-tab">Filters</a>
+    <a href="/web/projects/{{ project_id }}/settings/integrations/" class="project-tab">Integrations</a>
+</nav>
+
+{% match message %}{% when Some with (msg) %}
+<p class="settings-message">{{ msg }}</p>
+{% when None %}{% endmatch %}
+
+<h2>Project Name</h2>
+<form class="settings-form" method="post" action="/web/projects/{{ project_id }}/settings/name">
+    <label for="project_name">Display Name</label>
+    <input type="text" id="project_name" name="name" placeholder="My Project" value="{{ project_name }}">
+    <button type="submit" class="btn">Save Name</button>
+</form>
+
+<h2>Project Info</h2>
+<div class="table-wrap">
+<table>
+    <tbody>
+        <tr><th scope="row">Status</th><td>{{ project_status }}</td></tr>
+        <tr><th scope="row">Source</th><td>{{ project_source }}</td></tr>
+    </tbody>
+</table>
+</div>
+
+<h2>Source Repositories</h2>
+<p style="font-size: 0.9rem; color: var(--muted);">Link stack frames to source code on your forge. Register a release with a commit SHA via <code>sentry-cli</code> to activate links.</p>
+
+{% if repos.is_empty() %}
+<p class="empty">No repositories configured.</p>
+{% else %}
+<div class="table-wrap">
+<table>
+    <thead>
+        <tr>
+            <th scope="col">Repository URL</th>
+            <th scope="col">Forge</th>
+            <th scope="col">URL Template</th>
+            <th scope="col"></th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for repo in repos %}
+        <tr>
+            <td><code>{{ repo.repo_url }}</code></td>
+            <td>{{ repo.forge_type }}</td>
+            <td>{% match repo.url_template %}{% when Some with (t) %}<code>{{ t }}</code>{% when None %}<span class="empty" style="padding: 0;">auto</span>{% endmatch %}</td>
+            <td>
+                <form method="post" action="/web/projects/{{ project_id }}/settings/repos/{{ repo.id }}/delete" style="margin: 0;">
+                    <button type="submit" class="btn btn-danger" onclick="return confirm('Remove this repository?')">Remove</button>
+                </form>
+            </td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+{% endif %}
+
+<h2>Add Repository</h2>
+<p style="font-size: 0.9rem; color: var(--muted);">Adds clickable source links (e.g. "View on GitHub") next to stack frames. Requires a release with a commit SHA — the forge type is auto-detected from the URL. Supported: GitHub, GitLab, Gitea/Codeberg, Bitbucket, Sourcehut, Gitee, Azure DevOps. For other forges, provide a URL template.</p>
+<form class="settings-form" method="post" action="/web/projects/{{ project_id }}/settings/repos">
+    <label for="repo_url">Repository URL</label>
+    <input type="text" id="repo_url" name="repo_url" placeholder="https://github.com/org/repo" required>
+    <label for="url_template">URL Template <span style="font-weight: 400; color: var(--muted);">(optional, for custom forges)</span></label>
+    <input type="text" id="url_template" name="url_template" placeholder="{repo}/blob/{commit}/{path}#L{line}">
+    <button type="submit" class="btn">Add Repository</button>
+</form>
+
+<h2 style="color: var(--danger, #c0392b); margin-top: 3rem;">Danger Zone</h2>
+<div style="border: 1px solid var(--danger, #c0392b); border-radius: 0.5rem; padding: 1rem;">
+    {% if project_status == "active" %}
+    <form method="post" action="/web/projects/{{ project_id }}/settings/archive" style="margin-bottom: 1rem;">
+        <p style="margin: 0 0 0.5rem;">Archive this project. Archived projects reject new events.</p>
+        <button type="submit" class="btn btn-danger" onclick="return confirm('Archive this project? New events will be rejected.')">Archive Project</button>
+    </form>
+    {% else %}
+    <form method="post" action="/web/projects/{{ project_id }}/settings/unarchive" style="margin-bottom: 1rem;">
+        <p style="margin: 0 0 0.5rem;">Unarchive this project to resume accepting events.</p>
+        <button type="submit" class="btn">Unarchive Project</button>
+    </form>
+    {% endif %}
+
+    <form method="post" action="/web/projects/{{ project_id }}/settings/delete">
+        <p style="margin: 0 0 0.5rem;">Permanently delete this project and all its data. This cannot be undone.</p>
+        <button type="submit" class="btn btn-danger" onclick="return confirm('Delete this project and ALL its data? This cannot be undone.')">Delete Project</button>
+    </form>
+</div>
+{% endblock %}

@@ -1,0 +1,6 @@
+target
+*.db
+*.db-*
+stackpit.toml
+scripts/sentry-test-client/.venv
+deploy.sh

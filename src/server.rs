@@ -46,6 +46,50 @@ pub struct AppState {
     pub ingest_stats: Arc<IngestStats>,
 }
 
+async fn ingest_landing() -> axum::response::Html<&'static str> {
+    axum::response::Html(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stackpit — Ingest</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         background: #0f1117; color: #c9d1d9; display: flex; align-items: center;
+         justify-content: center; min-height: 100vh; }
+  .card { max-width: 540px; padding: 2.5rem; text-align: center; }
+  h1 { font-size: 1.8rem; color: #e6edf3; margin-bottom: 0.3rem; }
+  .sub { color: #8b949e; font-size: 0.95rem; margin-bottom: 1.8rem; }
+  .info { text-align: left; font-size: 0.85rem; line-height: 1.7; color: #8b949e; }
+  .info strong { color: #c9d1d9; }
+  hr { border: none; border-top: 1px solid #21262d; margin: 1.2rem 0; }
+  .footer { font-size: 0.75rem; color: #484f58; margin-top: 1.5rem; }
+  a { color: #58a6ff; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Stackpit</h1>
+  <p class="sub">Sentry-compatible error tracking</p>
+  <div class="info">
+    <p><strong>This is the ingest port.</strong></p>
+    <p>Sentry SDKs submit events here. Point your DSN at this address.</p>
+    <hr>
+    <p>The web UI and API are served on a separate port.</p>
+    <p>Check <strong>/health</strong> for service status.</p>
+  </div>
+  <div class="footer">
+    <p>Developed by <a href="https://gofranz.com/">Franz Geffke</a></p>
+  </div>
+</div>
+</body>
+</html>"#,
+    )
+}
+
 async fn health_handler(
     axum::extract::State(state): axum::extract::State<AppState>,
 ) -> impl axum::response::IntoResponse {
@@ -176,6 +220,7 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
 
     // Ingestion routes get permissive CORS (SDKs send from any origin)
     let ingest_app = Router::new()
+        .route("/", get(ingest_landing))
         .route("/health", get(health_handler))
         .route(
             "/api/{project_id}/envelope/",

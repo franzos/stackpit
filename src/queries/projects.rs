@@ -336,7 +336,7 @@ pub async fn create_project(
 
     let public_key = {
         let mut buf = [0u8; 16];
-        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut buf);
+        rand::fill(&mut buf);
         hex::encode(buf)
     };
     let name_val: Option<&str> = if name.is_empty() { None } else { Some(name) };
@@ -430,7 +430,7 @@ pub async fn create_project_key(
 ) -> Result<String> {
     let public_key = {
         let mut buf = [0u8; 16];
-        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut buf);
+        rand::fill(&mut buf);
         hex::encode(buf)
     };
     sqlx::query(sql!(

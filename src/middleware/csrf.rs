@@ -9,9 +9,8 @@ const CSRF_COOKIE_NAME: &str = "csrf_token";
 const CSRF_TOKEN_LEN: usize = 16; // 128-bit hex token
 
 fn generate_csrf_token() -> String {
-    use rand::RngCore;
     let mut buf = [0u8; CSRF_TOKEN_LEN];
-    rand::rngs::OsRng.fill_bytes(&mut buf);
+    rand::fill(&mut buf);
     hex::encode(buf)
 }
 

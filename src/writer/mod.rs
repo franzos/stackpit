@@ -63,8 +63,7 @@ async fn writer_loop(
     let mut accumulators = Accumulators::new();
     let mut retry_pending: Vec<WriteMsg> = Vec::new();
 
-    let flush_interval =
-        std::time::Duration::from_millis(AGGREGATION_FLUSH_INTERVAL_MS as u64);
+    let flush_interval = std::time::Duration::from_millis(AGGREGATION_FLUSH_INTERVAL_MS as u64);
     let mut tick = tokio::time::interval(flush_interval);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // Skip the immediate first tick
@@ -547,12 +546,11 @@ mod tests {
         // Let events process, then wait for timer
         tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
 
-        let row: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM issues WHERE fingerprint LIKE 'multi_fp_%'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let row: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM issues WHERE fingerprint LIKE 'multi_fp_%'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(row.0, 5, "all 5 fingerprints should have issue rows");
 
         let _ = handle.shutdown();
@@ -597,7 +595,11 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(row.get::<i64, _>("event_count"), 2, "should be 2 after second cycle");
+        assert_eq!(
+            row.get::<i64, _>("event_count"),
+            2,
+            "should be 2 after second cycle"
+        );
         assert_eq!(row.get::<i64, _>("first_seen"), 100);
         assert_eq!(row.get::<i64, _>("last_seen"), 200);
 
@@ -683,7 +685,10 @@ mod tests {
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(row.0, 1, "second fingerprint should be flushed by next cycle");
+        assert_eq!(
+            row.0, 1,
+            "second fingerprint should be flushed by next cycle"
+        );
 
         // First fingerprint count should still be 1 (not double-counted)
         let row: (i64,) =
@@ -744,7 +749,10 @@ mod tests {
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(row.0, 2, "both events must be counted even near tick boundary");
+        assert_eq!(
+            row.0, 2,
+            "both events must be counted even near tick boundary"
+        );
 
         let _ = handle.shutdown();
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;

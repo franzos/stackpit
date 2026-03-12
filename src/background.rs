@@ -58,13 +58,14 @@ pub fn spawn_discard_stats_task(
 
 pub fn spawn_wal_checkpoint_task(pool: DbPool, cancel: CancellationToken) {
     tokio::spawn(async move {
+        let _pool = pool;
         loop {
             tokio::select! {
                 _ = cancel.cancelled() => return,
                 _ = tokio::time::sleep(Duration::from_secs(60)) => {}
             }
             #[cfg(feature = "sqlite")]
-            if let Err(e) = crate::db::sqlite_pragma(&pool, "PRAGMA wal_checkpoint(PASSIVE)").await
+            if let Err(e) = crate::db::sqlite_pragma(&_pool, "PRAGMA wal_checkpoint(PASSIVE)").await
             {
                 tracing::warn!("WAL checkpoint error: {e}");
             }

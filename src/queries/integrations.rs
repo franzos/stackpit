@@ -47,7 +47,7 @@ pub async fn get_integration(pool: &DbPool, id: i64) -> Result<Option<Integratio
 fn row_to_project_integration(row: &crate::db::DbRow) -> ProjectIntegration {
     ProjectIntegration {
         id: row.get(0),
-        project_id: row.get(1),
+        project_id: row.get::<i64, _>(1) as u64,
         integration_id: row.get(2),
         integration_name: row.get(3),
         integration_kind: row.get(4),

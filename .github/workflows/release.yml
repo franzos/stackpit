@@ -21,7 +21,7 @@ jobs:
             os: ubuntu-latest
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -38,7 +38,7 @@ jobs:
           shasum -a 256 stackpit-${{ matrix.target }}.tar.gz > stackpit-${{ matrix.target }}.tar.gz.sha256
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: stackpit-${{ matrix.target }}
           path: |
@@ -48,7 +48,7 @@ jobs:
   deb:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -59,7 +59,7 @@ jobs:
         run: cargo deb
 
       - name: Upload deb artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: stackpit-deb
           path: target/debian/*.deb
@@ -67,7 +67,7 @@ jobs:
   rpm:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -81,7 +81,7 @@ jobs:
         run: cargo generate-rpm
 
       - name: Upload rpm artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: stackpit-rpm
           path: target/generate-rpm/*.rpm
@@ -91,7 +91,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           merge-multiple: true
 

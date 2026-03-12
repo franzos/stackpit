@@ -1,6 +1,6 @@
 [package]
 name = "stackpit"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 description = "Lightweight, self-hosted error tracking and event monitoring"
 authors = ["Franz Geffke <mail@gofranz.com>"]
@@ -50,6 +50,18 @@ hex = "0.4"
 subtle = "2"
 sourcemap = "9"
 zip = { version = "8", default-features = false, features = ["deflate"] }
+
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/stackpit", dest = "/usr/bin/stackpit", mode = "755" },
+]
+
+[package.metadata.deb]
+maintainer = "Franz Geffke <mail@gofranz.com>"
+section = "web"
+assets = [
+    ["target/release/stackpit", "usr/bin/", "755"],
+]
 
 [profile.release]
 opt-level = "s"

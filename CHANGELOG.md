@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3] - 2026-03-12
+
+### Fixed
+- RPM build failing due to missing `package.metadata.generate-rpm` config
+- GitHub Actions Node.js 20 deprecation warnings (checkout v5, artifact actions v6)
+- Added explicit deb packaging metadata
+
 ## [0.1.2] - 2026-03-12
 
 ### Added

@@ -8,6 +8,12 @@ use crate::encoding::percent_decode;
 const CSRF_COOKIE_NAME: &str = "csrf_token";
 const CSRF_TOKEN_LEN: usize = 16; // 128-bit hex token
 
+#[derive(Clone)]
+pub struct CsrfConfig {
+    pub use_secure_cookies: bool,
+    pub max_body_size: usize,
+}
+
 fn generate_csrf_token() -> String {
     let mut buf = [0u8; CSRF_TOKEN_LEN];
     rand::fill(&mut buf);
@@ -29,7 +35,7 @@ fn extract_csrf_field(body: &[u8]) -> Option<String> {
 }
 
 pub async fn csrf_middleware(
-    State(use_secure_cookies): State<bool>,
+    State(config): State<CsrfConfig>,
     req: axum::http::Request<axum::body::Body>,
     next: Next,
 ) -> axum::response::Response {
@@ -42,7 +48,7 @@ pub async fn csrf_middleware(
     if is_post && is_web && !is_login {
         let cookie_token_for_check = cookie_token.clone();
         let (parts, body) = req.into_parts();
-        let bytes = match axum::body::to_bytes(body, 10 * 1024 * 1024).await {
+        let bytes = match axum::body::to_bytes(body, config.max_body_size).await {
             Ok(b) => b,
             Err(_) => {
                 return (axum::http::StatusCode::BAD_REQUEST, "request too large").into_response();
@@ -71,11 +77,14 @@ pub async fn csrf_middleware(
         let mut resp = next.run(req).await;
         if needs_cookie {
             let token = generate_csrf_token();
-            let secure_flag = if use_secure_cookies { "; Secure" } else { "" };
-            if let Ok(val) = format!(
-                "{CSRF_COOKIE_NAME}={token}; Path=/web; HttpOnly; SameSite=Strict{secure_flag}"
-            )
-            .parse()
+            let secure_flag = if config.use_secure_cookies {
+                "; Secure"
+            } else {
+                ""
+            };
+            if let Ok(val) =
+                format!("{CSRF_COOKIE_NAME}={token}; Path=/web; SameSite=Strict{secure_flag}")
+                    .parse()
             {
                 resp.headers_mut().append("set-cookie", val);
             }

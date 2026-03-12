@@ -45,8 +45,9 @@ pub async fn handle_login(
             .as_ref()
             .is_some_and(|u| u.starts_with("https://"));
         let secure_flag = if secure { "; Secure" } else { "" };
+        let hashed = crate::middleware::hash_token_for_cookie(&token);
         let cookie =
-            format!("stackpit_token={token}; Path=/; SameSite=Strict; HttpOnly{secure_flag}");
+            format!("stackpit_token={hashed}; Path=/; SameSite=Strict; HttpOnly{secure_flag}");
         let mut resp = axum::response::Redirect::to("/web/projects/").into_response();
         if let Ok(val) = cookie.parse() {
             resp.headers_mut().insert("set-cookie", val);
@@ -60,4 +61,21 @@ pub async fn handle_login(
 #[derive(Deserialize)]
 pub struct LoginForm {
     token: String,
+}
+
+pub async fn handle_logout(State(state): State<AppState>) -> impl IntoResponse {
+    let secure = state
+        .config
+        .server
+        .external_url
+        .as_ref()
+        .is_some_and(|u| u.starts_with("https://"));
+    let secure_flag = if secure { "; Secure" } else { "" };
+    let cookie =
+        format!("stackpit_token=; Path=/; SameSite=Strict; HttpOnly; Max-Age=0{secure_flag}");
+    let mut resp = axum::response::Redirect::to("/web/login").into_response();
+    if let Ok(val) = cookie.parse() {
+        resp.headers_mut().insert("set-cookie", val);
+    }
+    resp
 }

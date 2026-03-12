@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.1.2] - 2026-03-12
+
+### Added
+- Logout mechanism with nav bar button
+- Security headers on all admin responses (CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy)
+- Login-specific rate limiting (10/min per IP, separate from general admin limit)
+- Periodic eviction of stale notification rate limiter entries
+
+### Fixed
+- CSRF cookie no longer set as HttpOnly, allowing JS double-submit injection to work
+- Login cookie stores a SHA-256 derivative instead of the raw admin token
+- CSRF body size limit now uses configured `max_body_size` instead of hardcoded 10MB
+- Notification rate limiter no longer wastes per-project budget when global limit rejects
+- Discard stats flush no longer double-counts on partial DB write failures
+- Threshold alert state update failures are now logged instead of silently dropped
+
 ## [0.1.1] - 2026-03-09
 
 ### Added

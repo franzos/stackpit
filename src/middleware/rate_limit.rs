@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 const ADMIN_RATE_LIMIT: u32 = 120;
+const LOGIN_RATE_LIMIT: u32 = 10;
 const ADMIN_RATE_WINDOW_SECS: u64 = 60;
 
 pub(crate) struct IpBucket {
@@ -61,7 +62,15 @@ fn check_rate_limit(
         inner.last_cleanup = now;
     }
 
-    let bucket = inner.buckets.entry(ip).or_insert(IpBucket {
+    let is_login_post =
+        req.uri().path() == "/web/login" && req.method() == axum::http::Method::POST;
+    let (key, limit) = if is_login_post {
+        (format!("{ip}:login"), LOGIN_RATE_LIMIT)
+    } else {
+        (ip, ADMIN_RATE_LIMIT)
+    };
+
+    let bucket = inner.buckets.entry(key).or_insert(IpBucket {
         count: 0,
         window_start: now,
     });
@@ -71,7 +80,7 @@ fn check_rate_limit(
         bucket.window_start = now;
     }
 
-    if bucket.count >= ADMIN_RATE_LIMIT {
+    if bucket.count >= limit {
         false
     } else {
         bucket.count += 1;

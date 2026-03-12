@@ -52,19 +52,24 @@ impl DiscardStats {
             .map(|r| (r.key().clone(), *r.value()))
             .collect();
 
+        let mut flushed = Vec::with_capacity(entries.len());
         for (key, count) in &entries {
             let (pid, reason, rule_id, date) = key;
-            crate::queries::filters::upsert_discard_stats(
+            match crate::queries::filters::upsert_discard_stats(
                 pool, *pid, reason, *rule_id, date, *count,
             )
-            .await?;
+            .await
+            {
+                Ok(()) => flushed.push((key.clone(), *count)),
+                Err(e) => tracing::warn!("discard stats: failed to flush entry: {e}"),
+            }
         }
 
         // Subtract only what we successfully wrote -- new increments are preserved
-        for (key, flushed) in entries {
+        for (key, count) in flushed {
             self.buffer
                 .entry(key)
-                .and_modify(|v| *v = v.saturating_sub(flushed));
+                .and_modify(|v| *v = v.saturating_sub(count));
         }
         self.buffer.retain(|_, v| *v > 0);
 

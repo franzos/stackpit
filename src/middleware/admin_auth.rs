@@ -51,13 +51,15 @@ pub async fn admin_auth_middleware(
         return next.run(req).await;
     }
 
-    // Try Bearer header first, then fall back to cookie
-    let provided =
-        extract_bearer_token(req.headers()).or_else(|| extract_auth_cookie(req.headers()));
-
-    let is_valid = match &provided {
-        Some(p) => !p.is_empty() && p.as_bytes().ct_eq(expected.as_bytes()).into(),
-        None => false,
+    // Bearer header: compare raw token. Cookie: compare SHA-256 hash so
+    // the raw admin token is never stored in the browser cookie jar.
+    let is_valid = if let Some(ref bearer) = extract_bearer_token(req.headers()) {
+        !bearer.is_empty() && bearer.as_bytes().ct_eq(expected.as_bytes()).into()
+    } else if let Some(ref cookie_val) = extract_auth_cookie(req.headers()) {
+        let expected_hash = super::hash_token_for_cookie(expected);
+        !cookie_val.is_empty() && cookie_val.as_bytes().ct_eq(expected_hash.as_bytes()).into()
+    } else {
+        false
     };
 
     if is_valid {

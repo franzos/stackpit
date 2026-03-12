@@ -1,4 +1,5 @@
 use dashmap::DashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 /// A sliding window over 60 one-second buckets.
@@ -56,6 +57,7 @@ pub struct NotifyRateLimiter {
     global_window: Mutex<SlidingWindow>,
     project_limit: u32,
     global_limit: u32,
+    last_cleanup: AtomicU64,
 }
 
 impl NotifyRateLimiter {
@@ -65,12 +67,25 @@ impl NotifyRateLimiter {
             global_window: Mutex::new(SlidingWindow::new()),
             project_limit,
             global_limit,
+            last_cleanup: AtomicU64::new(0),
         }
     }
 
     /// Returns `true` if the notification is allowed, `false` if rate-limited.
     pub fn check_and_record(&self, project_id: u64, now_secs: u64) -> bool {
-        // Check per-project limit
+        // Periodic cleanup: evict stale project entries every 2 minutes
+        let last = self.last_cleanup.load(Ordering::Relaxed);
+        if now_secs.saturating_sub(last) >= 120
+            && self
+                .last_cleanup
+                .compare_exchange(last, now_secs, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+        {
+            self.project_windows
+                .retain(|_, w| now_secs.saturating_sub(w.current_second) < 120);
+        }
+
+        // Check per-project limit (don't increment yet -- wait for global check)
         if self.project_limit > 0 {
             let mut entry = self
                 .project_windows
@@ -81,7 +96,6 @@ impl NotifyRateLimiter {
             if window.count() >= self.project_limit {
                 return false;
             }
-            window.increment(now_secs);
         }
 
         // Check global limit
@@ -92,6 +106,13 @@ impl NotifyRateLimiter {
                 return false;
             }
             global.increment(now_secs);
+        }
+
+        // Both limits passed -- now safe to increment per-project
+        if self.project_limit > 0 {
+            if let Some(mut entry) = self.project_windows.get_mut(&project_id) {
+                entry.value_mut().increment(now_secs);
+            }
         }
 
         true

@@ -312,7 +312,10 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
                 config.server.compressed_body_limit(),
             ))
             .layer(axum::middleware::from_fn_with_state(
-                use_secure_cookies,
+                middleware::CsrfConfig {
+                    use_secure_cookies,
+                    max_body_size: config.server.max_body_size,
+                },
                 middleware::csrf_middleware,
             ))
             .layer(axum::middleware::from_fn_with_state(
@@ -322,6 +325,9 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
             .layer(axum::middleware::from_fn_with_state(
                 rate_limiter,
                 middleware::rate_limit_middleware,
+            ))
+            .layer(axum::middleware::from_fn(
+                middleware::security_headers_middleware,
             ))
             .with_state(state);
 

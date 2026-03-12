@@ -716,7 +716,7 @@ async fn check_threshold_alerts(
             }
 
             // State updates are rare (only when threshold is actually exceeded)
-            let _ = sqlx::query(sql!(
+            if let Err(e) = sqlx::query(sql!(
                 "INSERT INTO alert_state (alert_rule_id, fingerprint, last_triggered)
                  VALUES (?1, ?2, ?3)
                  ON CONFLICT(alert_rule_id, fingerprint) DO UPDATE SET last_triggered = excluded.last_triggered"
@@ -725,7 +725,13 @@ async fn check_threshold_alerts(
             .bind(&c.fingerprint)
             .bind(now)
             .execute(pool)
-            .await;
+            .await
+            {
+                tracing::warn!(
+                    "threshold alert: failed to update cooldown state for rule {}: {e}",
+                    rule.id
+                );
+            }
 
             pending.push(crate::notify::NotificationEvent {
                 trigger: crate::notify::NotifyTrigger::ThresholdExceeded {

@@ -316,6 +316,7 @@ pub fn routes() -> Router<AppState> {
             "/web/login",
             get(login::login_form).post(login::handle_login),
         )
+        .route("/web/logout", post(login::handle_logout))
         // -- legacy redirects --
         .route(
             "/web/",

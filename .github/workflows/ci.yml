@@ -6,15 +6,8 @@ on:
   pull_request:
 
 jobs:
-  test:
-    strategy:
-      matrix:
-        include:
-          - features: sqlite
-            os: ubuntu-latest
-          - features: postgres
-            os: ubuntu-latest
-    runs-on: ${{ matrix.os }}
+  test-sqlite:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
 
@@ -23,12 +16,55 @@ jobs:
           components: clippy
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: sqlite
 
       - name: Check
-        run: cargo check --no-default-features --features ${{ matrix.features }}
+        run: cargo check --no-default-features --features sqlite
 
       - name: Clippy
-        run: cargo clippy --no-default-features --features ${{ matrix.features }} -- -D warnings
+        run: cargo clippy --no-default-features --features sqlite -- -D warnings
 
       - name: Test
-        run: cargo test --no-default-features --features ${{ matrix.features }}
+        run: cargo test --no-default-features --features sqlite
+
+  test-postgres:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: stackpit
+          POSTGRES_PASSWORD: stackpit
+          POSTGRES_DB: stackpit_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://stackpit:stackpit@localhost:5432/stackpit_test
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: postgres
+
+      - name: Check
+        run: cargo check --no-default-features --features postgres
+
+      - name: Clippy
+        run: cargo clippy --no-default-features --features postgres -- -D warnings
+
+      - name: Test
+        run: cargo test --no-default-features --features postgres -- --test-threads=1

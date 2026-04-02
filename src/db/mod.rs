@@ -158,8 +158,38 @@ pub(crate) struct EventRow {
 
 #[cfg(test)]
 pub(crate) async fn open_test_pool() -> DbPool {
-    let pool = pool::create_write_pool("sqlite::memory:").await.unwrap();
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
+    let url = "sqlite::memory:";
+
+    #[cfg(all(feature = "postgres", not(feature = "sqlite")))]
+    let url_owned = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://stackpit:stackpit@localhost:5432/stackpit_test".into());
+    #[cfg(all(feature = "postgres", not(feature = "sqlite")))]
+    let url = url_owned.as_str();
+
+    let pool = pool::create_write_pool(url).await.unwrap();
     pool::run_migrations(&pool).await.unwrap();
+
+    // Postgres tests share a real database -- clean all data between tests.
+    // TRUNCATE CASCADE handles foreign key ordering for us.
+    #[cfg(all(feature = "postgres", not(feature = "sqlite")))]
+    {
+        sqlx::query(
+            "TRUNCATE events, issues, logs, spans, metrics, attachments, \
+             issue_tag_values, integrations, project_integrations, \
+             alert_rules, alert_state, digest_schedules, \
+             project_keys, projects, releases, sourcemaps, upload_chunks, \
+             discard_stats, discarded_fingerprints, inbound_filters, \
+             message_filters, rate_limits, environment_filters, \
+             release_filters, user_agent_filters, filter_rules, \
+             ip_blocklist, project_repos, sync_state \
+             CASCADE",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
     pool
 }
 

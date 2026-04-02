@@ -4,7 +4,9 @@ use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::IntoResponse;
 
 use crate::endpoints::pipeline::{authenticate_and_prefilter, check_event_filter};
-use crate::endpoints::responses::{error_response, overloaded_response, sentry_response};
+use crate::endpoints::responses::{
+    error_response, overloaded_response, sentry_response, sentry_response_with_discarded,
+};
 use crate::envelope;
 use crate::server::AppState;
 
@@ -32,7 +34,7 @@ pub async fn handle(
     crate::enrich::enrich_event(&mut event);
 
     if check_event_filter(&state, &event, project_id) {
-        return sentry_response(&event.event_id).into_response();
+        return sentry_response_with_discarded(&event.event_id, 1).into_response();
     }
 
     let event_id = event.event_id.clone();

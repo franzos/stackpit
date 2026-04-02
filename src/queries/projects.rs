@@ -182,23 +182,27 @@ pub async fn get_project_repos(
         .collect())
 }
 
-/// Load nav badge counts for a project in one shot. Uses EXISTS subqueries
-/// that short-circuit on the first match -- way cheaper than full counts.
+/// Load nav badge counts for a project in one shot. Scans the events table
+/// once with conditional aggregation, plus EXISTS for logs/spans/metrics.
 pub async fn get_nav_counts(pool: &crate::db::DbPool, project_id: u64) -> ProjectNavCounts {
     // Transactions live in the issues table; everything else comes from events
     let transaction_count = count_transactions(pool, project_id).await.unwrap_or(0);
 
+    // Single scan of the events table for all event-based flags, plus
+    // one EXISTS each for the separate logs/spans/metrics tables.
     let result = sqlx::query(sql!(
         "SELECT
-            CASE WHEN EXISTS(SELECT 1 FROM events WHERE project_id = ?1 AND monitor_slug IS NOT NULL) THEN 1 ELSE 0 END,
-            CASE WHEN EXISTS(SELECT 1 FROM events WHERE project_id = ?1 AND item_type IN ('session', 'sessions') AND session_status IS NOT NULL) THEN 1 ELSE 0 END,
-            CASE WHEN EXISTS(SELECT 1 FROM events WHERE project_id = ?1 AND item_type = 'user_report') THEN 1 ELSE 0 END,
-            CASE WHEN EXISTS(SELECT 1 FROM events WHERE project_id = ?1 AND item_type = 'client_report') THEN 1 ELSE 0 END,
+            COALESCE(MAX(CASE WHEN monitor_slug IS NOT NULL THEN 1 ELSE 0 END), 0),
+            COALESCE(MAX(CASE WHEN item_type IN ('session', 'sessions') AND session_status IS NOT NULL THEN 1 ELSE 0 END), 0),
+            COALESCE(MAX(CASE WHEN item_type = 'user_report' THEN 1 ELSE 0 END), 0),
+            COALESCE(MAX(CASE WHEN item_type = 'client_report' THEN 1 ELSE 0 END), 0),
             CASE WHEN EXISTS(SELECT 1 FROM logs WHERE project_id = ?1) THEN 1 ELSE 0 END,
             CASE WHEN EXISTS(SELECT 1 FROM spans WHERE project_id = ?1) THEN 1 ELSE 0 END,
             CASE WHEN EXISTS(SELECT 1 FROM metrics WHERE project_id = ?1) THEN 1 ELSE 0 END,
-            CASE WHEN EXISTS(SELECT 1 FROM events WHERE project_id = ?1 AND item_type IN ('profile', 'profile_chunk')) THEN 1 ELSE 0 END,
-            CASE WHEN EXISTS(SELECT 1 FROM events WHERE project_id = ?1 AND item_type = 'replay_event') THEN 1 ELSE 0 END"
+            COALESCE(MAX(CASE WHEN item_type IN ('profile', 'profile_chunk') THEN 1 ELSE 0 END), 0),
+            COALESCE(MAX(CASE WHEN item_type = 'replay_event' THEN 1 ELSE 0 END), 0)
+         FROM events
+         WHERE project_id = ?1"
     ))
     .bind(project_id as i64)
     .fetch_optional(pool)

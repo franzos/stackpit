@@ -8,6 +8,18 @@ pub fn sentry_response(event_id: &str) -> impl IntoResponse {
     (StatusCode::OK, axum::Json(body))
 }
 
+/// Same 200 response but with X-Sentry-Discarded so operators can tell
+/// that some items were dropped by filters. SDKs ignore unknown headers,
+/// so this is purely informational for debugging.
+pub fn sentry_response_with_discarded(event_id: &str, discarded: usize) -> impl IntoResponse {
+    let body = json!({ "id": event_id });
+    let mut headers = HeaderMap::new();
+    if let Ok(val) = discarded.to_string().parse() {
+        headers.insert("X-Sentry-Discarded", val);
+    }
+    (StatusCode::OK, headers, axum::Json(body))
+}
+
 /// 429 with Retry-After so the SDK knows when to back off.
 pub fn rate_limited_response_with_retry(retry_after: u32) -> impl IntoResponse {
     let mut headers = HeaderMap::new();

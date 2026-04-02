@@ -5,7 +5,7 @@ use axum::response::IntoResponse;
 
 use crate::endpoints::{
     authenticate_and_prefilter, check_event_filter, error_response, overloaded_response,
-    sentry_response,
+    sentry_response, sentry_response_with_discarded,
 };
 use crate::envelope;
 use crate::server::AppState;
@@ -86,6 +86,10 @@ pub async fn handle(
     // are tracked in discard_stats so we can surface them in the UI.
     if accepted == 0 && filtered > 0 {
         tracing::debug!("all {filtered} event(s) in envelope were filtered");
+    }
+
+    if filtered > 0 {
+        return sentry_response_with_discarded(&event_id, filtered).into_response();
     }
 
     sentry_response(&event_id).into_response()

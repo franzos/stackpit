@@ -12,6 +12,8 @@
 
 ### Changed
 - Event severity `level` field is now a typed enum instead of a free-form string
+- Nav badge counts consolidated from 9 subqueries to a single events table scan
+- Filtered events now return `X-Sentry-Discarded` header so operators can detect drops
 
 ## [0.1.3] - 2026-03-12
 

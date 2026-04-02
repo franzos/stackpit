@@ -717,6 +717,6 @@ mod tests {
         let result = get_event_detail(&pool, "bad").await;
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("decompress"));
+        assert!(err.contains("neither valid zstd nor valid JSON"));
     }
 }

@@ -188,7 +188,7 @@ mod tests {
         StorableEvent::test_default(event_id)
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn spawn_and_send_event() {
         let pool = test_pool().await;
         let (handle, _join) = spawn(pool.clone(), None, None, test_stats()).await.unwrap();
@@ -204,7 +204,7 @@ mod tests {
         assert_eq!(event.unwrap().title.as_deref(), Some("test"));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn spawn_and_send_event_with_attachment() {
         let pool = test_pool().await;
         let (handle, _join) = spawn(pool.clone(), None, None, test_stats()).await.unwrap();
@@ -232,7 +232,7 @@ mod tests {
         assert_eq!(row.0, 1);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn batch_flushing_multiple_events() {
         let pool = test_pool().await;
         let (handle, _join) = spawn(pool.clone(), None, None, test_stats()).await.unwrap();
@@ -251,7 +251,7 @@ mod tests {
         assert_eq!(row.0, 10);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn shutdown_without_events() {
         let pool = test_pool().await;
         let (handle, _join) = spawn(pool.clone(), None, None, test_stats()).await.unwrap();
@@ -259,7 +259,7 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn insert_event_with_fingerprint_creates_issue() {
         let pool = test_pool().await;
         let (handle, _join) = spawn(pool.clone(), None, None, test_stats()).await.unwrap();
@@ -280,7 +280,7 @@ mod tests {
         assert_eq!(row.0, 1);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn duplicate_event_does_not_increment_issue_count() {
         let pool = test_pool().await;
 
@@ -305,7 +305,7 @@ mod tests {
         assert_eq!(row.0, 1);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn two_events_same_fingerprint_increments_count() {
         let pool = test_pool().await;
 
@@ -341,7 +341,7 @@ mod tests {
         assert_eq!(last_seen, 200);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn resolved_issue_reopens_on_new_event() {
         let pool = test_pool().await;
 
@@ -374,7 +374,7 @@ mod tests {
         assert_eq!(row.0, "unresolved");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn deferred_flush_batches_tags() {
         let pool = test_pool().await;
 
@@ -418,7 +418,7 @@ mod tests {
     /// Regression test for the accumulate-then-clear race: when `should_agg=true`,
     /// events in the current batch must be accumulated *before* the aggregation
     /// flush runs, so every fingerprint gets a matching issue row.
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn flush_batch_with_agg_creates_issue_for_all_events() {
         let pool = test_pool().await;
         let mut acc = Accumulators::new();
@@ -463,7 +463,7 @@ mod tests {
         assert_eq!(row.0, 1, "batch-2 fingerprint must have an issue row");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn deferred_flush_merges_hll() {
         let pool = test_pool().await;
 
@@ -496,7 +496,7 @@ mod tests {
 
     /// The periodic timer should flush accumulated issue deltas to the DB
     /// even when no new events arrive -- without needing a shutdown.
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn periodic_timer_flushes_issues_without_new_events() {
         let pool = test_pool().await;
         let (handle, _join) = spawn(pool.clone(), None, None, test_stats()).await.unwrap();
@@ -532,7 +532,7 @@ mod tests {
 
     /// Multiple fingerprints accumulated in a single batch should all get
     /// flushed together when the periodic timer fires.
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn periodic_timer_flushes_multiple_fingerprints() {
         let pool = test_pool().await;
         let (handle, _join) = spawn(pool.clone(), None, None, test_stats()).await.unwrap();
@@ -559,7 +559,7 @@ mod tests {
 
     /// Same fingerprint across two timer cycles: event_count should
     /// correctly increment, not reset or double-count.
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn periodic_timer_same_fingerprint_across_cycles() {
         let pool = test_pool().await;
         let (handle, _join) = spawn(pool.clone(), None, None, test_stats()).await.unwrap();
@@ -609,7 +609,7 @@ mod tests {
 
     /// Tags and HLL data should be flushed by the periodic timer,
     /// not just issue rows.
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn periodic_timer_flushes_tags_and_hll() {
         let pool = test_pool().await;
         let (handle, _join) = spawn(pool.clone(), None, None, test_stats()).await.unwrap();
@@ -654,7 +654,7 @@ mod tests {
 
     /// After a periodic flush, new events for fresh fingerprints should
     /// accumulate and flush correctly on the next cycle.
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn periodic_timer_handles_subsequent_events() {
         let pool = test_pool().await;
         let (handle, _join) = spawn(pool.clone(), None, None, test_stats()).await.unwrap();
@@ -703,7 +703,7 @@ mod tests {
     }
 
     /// The periodic timer should be a no-op when there's nothing accumulated.
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn periodic_timer_noop_when_empty() {
         let pool = test_pool().await;
         let (handle, _join) = spawn(pool.clone(), None, None, test_stats()).await.unwrap();
@@ -725,7 +725,7 @@ mod tests {
     /// Events arriving right as the timer would fire should not lose data.
     /// The biased select prioritizes rx.recv(), so events get batched first;
     /// accumulated deltas from the batch flush via the next timer tick.
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn periodic_timer_events_near_tick_boundary() {
         let pool = test_pool().await;
         let (handle, _join) = spawn(pool.clone(), None, None, test_stats()).await.unwrap();

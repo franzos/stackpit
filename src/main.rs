@@ -252,7 +252,7 @@ mod integration_tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn ingest_event_then_query_back() {
         let pool = db::open_test_pool().await;
 
@@ -320,7 +320,7 @@ mod integration_tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn ingest_and_update_issue_status() {
         let pool = db::open_test_pool().await;
 

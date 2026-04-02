@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- SVG text escaping order causing double-encoded ampersands in chart labels
+- SVG sanitizer bypasses for unquoted attribute values and long handler names
+- Missing master key now blocks startup if encrypted integration secrets exist
+
 ## [0.1.3] - 2026-03-12
 
 ### Fixed

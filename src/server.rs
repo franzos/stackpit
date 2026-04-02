@@ -182,8 +182,23 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
 
     let encryptor = SecretEncryptor::from_env().map(Arc::new);
     if encryptor.is_none() {
+        let (count,): (i64,) = sqlx::query_as(db::sql!(
+            "SELECT COUNT(*) FROM integrations WHERE encrypted = TRUE"
+        ))
+        .fetch_one(&pool)
+        .await?;
+
+        if count > 0 {
+            anyhow::bail!(
+                "STACKPIT_MASTER_KEY is not set but {count} integration(s) have encrypted secrets. \
+                 Set STACKPIT_MASTER_KEY to the same key used when the secrets were created, \
+                 otherwise those secrets cannot be decrypted and notifications will fail."
+            );
+        }
+
         tracing::warn!(
-            "STACKPIT_MASTER_KEY not set — integration secrets will be stored in plaintext"
+            "STACKPIT_MASTER_KEY is not set — integration secrets will be stored in plaintext. \
+             Set a 64-character hex key to enable encryption."
         );
     }
 

@@ -143,9 +143,9 @@ pub fn urlencoded(s: &str) -> String {
 
 /// Strips characters that'd break SVG text elements.
 pub fn sanitize_svg_text(s: &str) -> String {
-    s.replace('<', "&lt;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
         .replace('>', "&gt;")
-        .replace('&', "&amp;")
 }
 
 /// Strips `<script>` tags and on* event handlers from SVG output. Defense in depth.
@@ -176,7 +176,7 @@ fn regex_lite_on_handler(svg: &str) -> String {
     while let Some(ch) = chars.next() {
         if ch == ' ' || ch == '\t' || ch == '\n' {
             // Peek ahead to see if this is an on* event handler attribute
-            let rest: String = chars.clone().take(20).collect();
+            let rest: String = chars.clone().take(40).collect();
             if rest.starts_with("on") && rest.contains('=') {
                 // Walk past the attribute value
                 let eq_pos = match rest.find('=') {
@@ -191,7 +191,7 @@ fn regex_lite_on_handler(svg: &str) -> String {
                 while chars.peek() == Some(&' ') {
                     chars.next();
                 }
-                // Consume the quoted value
+                // Consume the attribute value (quoted or unquoted)
                 if let Some(&quote) = chars.peek() {
                     if quote == '"' || quote == '\'' {
                         chars.next(); // opening quote
@@ -199,6 +199,14 @@ fn regex_lite_on_handler(svg: &str) -> String {
                             if c == quote {
                                 break;
                             }
+                        }
+                    } else {
+                        // Unquoted value -- consume until whitespace or tag end
+                        while let Some(&c) = chars.peek() {
+                            if c == ' ' || c == '\t' || c == '\n' || c == '>' || c == '/' {
+                                break;
+                            }
+                            chars.next();
                         }
                     }
                 }

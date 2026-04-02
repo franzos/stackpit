@@ -75,7 +75,7 @@ where
         .bind(event.project_id as i64)
         .bind(&event.public_key)
         .bind(event.timestamp)
-        .bind(&event.level)
+        .bind(event.level.as_ref().map(|l| l.as_str()))
         .bind(&event.platform)
         .bind(&event.release)
         .bind(&event.environment)
@@ -119,6 +119,7 @@ fn span_status_from_code(code: u64) -> String {
 fn extract_span_fields(payload: &[u8]) -> SpanFields {
     let json: Option<serde_json::Value> = zstd::decode_all(payload)
         .ok()
+        .or_else(|| Some(payload.to_vec()))
         .and_then(|bytes| serde_json::from_slice(&bytes).ok());
 
     match json {
@@ -184,7 +185,7 @@ fn extract_span_fields(payload: &[u8]) -> SpanFields {
 fn parse_metric_payload(payload: &[u8]) -> Vec<MetricRow> {
     let decoded_bytes = match zstd::decode_all(std::io::Cursor::new(payload)) {
         Ok(bytes) => bytes,
-        Err(_) => return Vec::new(),
+        Err(_) => payload.to_vec(),
     };
 
     const MAX_METRIC_ENTRIES: usize = 10_000;
@@ -430,6 +431,7 @@ fn parse_log_entries(payload: &[u8]) -> Vec<serde_json::Value> {
 
     let json: Option<serde_json::Value> = zstd::decode_all(std::io::Cursor::new(payload))
         .ok()
+        .or_else(|| Some(payload.to_vec()))
         .and_then(|bytes| serde_json::from_slice(&bytes).ok());
     match json {
         Some(serde_json::Value::Array(mut arr)) => {
@@ -517,7 +519,7 @@ async fn bulk_insert_events_table(
             b.push_bind(event.project_id as i64);
             b.push_bind(&event.public_key);
             b.push_bind(event.timestamp);
-            b.push_bind(&event.level);
+            b.push_bind(event.level.as_ref().map(|l| l.as_str()));
             b.push_bind(&event.platform);
             b.push_bind(&event.release);
             b.push_bind(&event.environment);
@@ -785,7 +787,7 @@ pub async fn upsert_issue_from_event(pool: &DbPool, event: &StorableEvent) -> Re
         .bind(fp)
         .bind(event.project_id as i64)
         .bind(&event.title)
-        .bind(&event.level)
+        .bind(event.level.as_ref().map(|l| l.as_str()))
         .bind(event.timestamp)
         .bind(event.timestamp)
         .bind(1i64)

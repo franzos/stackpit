@@ -67,17 +67,15 @@ pub struct DigestIssue {
     pub first_seen: i64,
 }
 
-const LEVEL_ORDER: &[&str] = &["debug", "info", "warning", "error", "fatal"];
-
-fn level_rank(level: &str) -> usize {
-    LEVEL_ORDER.iter().position(|&l| l == level).unwrap_or(0)
-}
-
 fn passes_min_level(event_level: Option<&str>, min_level: Option<&str>) -> bool {
     match (event_level, min_level) {
         (_, None) => true,
         (None, Some(_)) => true, // no level on the event -- let it through rather than silently drop it
-        (Some(ev), Some(min)) => level_rank(ev) >= level_rank(min),
+        (Some(ev), Some(min)) => {
+            let ev_level: crate::models::Level = ev.parse().unwrap();
+            let min_level: crate::models::Level = min.parse().unwrap();
+            ev_level.rank() >= min_level.rank()
+        }
     }
 }
 

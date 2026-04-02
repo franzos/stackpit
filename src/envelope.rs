@@ -283,7 +283,7 @@ fn extract_fields(
         .get("level")
         .or_else(|| json.get("severity_text"))
         .and_then(|v| v.as_str())
-        .map(String::from);
+        .map(|s| s.parse::<crate::models::Level>().unwrap());
     event.platform = json
         .get("platform")
         .and_then(|v| v.as_str())
@@ -457,7 +457,7 @@ pub fn parse_security_body(
         project_id,
         auth.sentry_key.clone(),
     );
-    event.level = Some("warning".to_string());
+    event.level = Some(crate::models::Level::Warning);
     event.platform = Some("other".to_string());
     Ok(event)
 }
@@ -478,7 +478,7 @@ pub fn parse_minidump(event_id: &str, project_id: u64, public_key: &str) -> Resu
         project_id,
         public_key.to_string(),
     );
-    event.level = Some("error".to_string());
+    event.level = Some(crate::models::Level::Error);
     event.platform = Some("native".to_string());
     event.title = Some("Minidump".to_string());
     event.fingerprint =
@@ -605,7 +605,7 @@ mod tests {
         assert_eq!(event.event_id, "store1");
         assert_eq!(event.item_type, ItemType::Event);
         assert_eq!(event.project_id, 7);
-        assert_eq!(event.level.as_deref(), Some("error"));
+        assert_eq!(event.level, Some(crate::models::Level::Error));
         assert_eq!(event.timestamp, 5000);
         // Title is now computed in extract_fields (same JSON parse)
         assert_eq!(event.title.as_deref(), Some("boom"));
@@ -625,7 +625,7 @@ mod tests {
         let mut event = parse_security_body(body, 3, &test_auth()).unwrap();
         assert_eq!(event.item_type, ItemType::Event);
         assert_eq!(event.project_id, 3);
-        assert_eq!(event.level.as_deref(), Some("warning"));
+        assert_eq!(event.level, Some(crate::models::Level::Warning));
         assert_eq!(event.platform.as_deref(), Some("other"));
 
         // Payload is still raw JSON before finalize

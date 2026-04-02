@@ -6,6 +6,12 @@
 - SVG text escaping order causing double-encoded ampersands in chart labels
 - SVG sanitizer bypasses for unquoted attribute values and long handler names
 - Missing master key now blocks startup if encrypted integration secrets exist
+- Compression failures no longer corrupt stored events (read path falls back to raw JSON)
+- zstd compression no longer blocks the async runtime (`block_in_place`)
+- `WriteError` now implements `std::error::Error` for proper error chain composition
+
+### Changed
+- Event severity `level` field is now a typed enum instead of a free-form string
 
 ## [0.1.3] - 2026-03-12
 

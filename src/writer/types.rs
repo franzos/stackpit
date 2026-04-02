@@ -14,6 +14,8 @@ impl std::fmt::Display for WriteError {
     }
 }
 
+impl std::error::Error for WriteError {}
+
 impl WriteError {
     pub fn is_not_found(&self) -> bool {
         matches!(self, WriteError::NotFound(_))

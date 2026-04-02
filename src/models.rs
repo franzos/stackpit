@@ -6,6 +6,64 @@ pub const MAX_TAGS_PER_EVENT: usize = 200;
 /// HLL-12 precision — 4096 registers per sketch, good enough for our counts.
 pub const HLL_REGISTER_COUNT: usize = 1 << 12;
 
+/// Event severity level — the five standard Sentry levels plus an Unknown
+/// fallback for unrecognized values from SDKs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Level {
+    Debug,
+    Info,
+    Warning,
+    Error,
+    Fatal,
+    Unknown,
+}
+
+impl Level {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Debug => "debug",
+            Self::Info => "info",
+            Self::Warning => "warning",
+            Self::Error => "error",
+            Self::Fatal => "fatal",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    /// Numeric rank for severity comparisons — higher means more severe.
+    pub fn rank(self) -> usize {
+        match self {
+            Self::Debug => 0,
+            Self::Info => 1,
+            Self::Warning => 2,
+            Self::Error => 3,
+            Self::Fatal => 4,
+            Self::Unknown => 0,
+        }
+    }
+}
+
+impl std::str::FromStr for Level {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.to_ascii_lowercase().as_str() {
+            "debug" => Self::Debug,
+            "info" => Self::Info,
+            "warning" | "warn" => Self::Warning,
+            "error" => Self::Error,
+            "fatal" => Self::Fatal,
+            _ => Self::Unknown,
+        })
+    }
+}
+
+impl std::fmt::Display for Level {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct StorableEvent {
     pub event_id: String,
@@ -14,7 +72,7 @@ pub struct StorableEvent {
     pub project_id: u64,
     pub public_key: String,
     pub timestamp: i64,
-    pub level: Option<String>,
+    pub level: Option<Level>,
     pub platform: Option<String>,
     pub release: Option<String>,
     pub environment: Option<String>,
@@ -163,7 +221,7 @@ impl StorableEvent {
             project_id: 1,
             public_key: "test-key".to_string(),
             timestamp: 1000,
-            level: Some("error".to_string()),
+            level: Some(Level::Error),
             platform: None,
             release: None,
             environment: None,
@@ -248,5 +306,49 @@ mod tests {
             assert_eq!(format!("{variant}"), variant.as_str());
         }
         assert_eq!(format!("{}", ItemType::Unknown), "unknown");
+    }
+
+    // --- Level ---
+
+    #[test]
+    fn level_from_str_round_trip() {
+        let cases = &[
+            ("debug", Level::Debug),
+            ("info", Level::Info),
+            ("warning", Level::Warning),
+            ("error", Level::Error),
+            ("fatal", Level::Fatal),
+        ];
+        for (s, variant) in cases {
+            assert_eq!(s.parse::<Level>().unwrap(), *variant);
+            assert_eq!(variant.as_str(), *s);
+            assert_eq!(format!("{variant}"), *s);
+        }
+    }
+
+    #[test]
+    fn level_from_str_case_insensitive() {
+        assert_eq!("ERROR".parse::<Level>().unwrap(), Level::Error);
+        assert_eq!("Warning".parse::<Level>().unwrap(), Level::Warning);
+        assert_eq!("DEBUG".parse::<Level>().unwrap(), Level::Debug);
+    }
+
+    #[test]
+    fn level_from_str_warn_alias() {
+        assert_eq!("warn".parse::<Level>().unwrap(), Level::Warning);
+    }
+
+    #[test]
+    fn level_from_str_unknown_input() {
+        assert_eq!("garbage".parse::<Level>().unwrap(), Level::Unknown);
+        assert_eq!("".parse::<Level>().unwrap(), Level::Unknown);
+    }
+
+    #[test]
+    fn level_rank_ordering() {
+        assert!(Level::Debug.rank() < Level::Info.rank());
+        assert!(Level::Info.rank() < Level::Warning.rank());
+        assert!(Level::Warning.rank() < Level::Error.rank());
+        assert!(Level::Error.rank() < Level::Fatal.rank());
     }
 }

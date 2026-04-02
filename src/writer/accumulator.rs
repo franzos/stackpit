@@ -1,4 +1,4 @@
-use crate::models::{StorableEvent, MAX_TAGS_PER_EVENT};
+use crate::models::{Level, StorableEvent, MAX_TAGS_PER_EVENT};
 use simple_hll::HyperLogLog;
 use std::collections::HashMap;
 use std::time::Instant;
@@ -15,7 +15,7 @@ pub(super) struct IssueDelta {
     pub first_seen: i64,
     pub last_seen: i64,
     pub title: Option<String>,
-    pub level: Option<String>,
+    pub level: Option<Level>,
     pub item_type: String,
     pub hll: HyperLogLog<12>,
     pub has_hll_data: bool,

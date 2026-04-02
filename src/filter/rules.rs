@@ -63,7 +63,7 @@ impl FilterField {
 
     pub fn extract<'a>(&self, event: &'a StorableEvent) -> Option<&'a str> {
         match self {
-            Self::Level => event.level.as_deref(),
+            Self::Level => event.level.as_ref().map(|l| l.as_str()),
             Self::Platform => event.platform.as_deref(),
             Self::SdkName => event.sdk_name.as_deref(),
             Self::SdkVersion => event.sdk_version.as_deref(),
@@ -220,7 +220,7 @@ mod tests {
             project_id: 1,
             public_key: "key".to_string(),
             timestamp: 0,
-            level: Some("error".to_string()),
+            level: Some(crate::models::Level::Error),
             platform: Some("python".to_string()),
             release: Some("1.0.0".to_string()),
             environment: Some("production".to_string()),

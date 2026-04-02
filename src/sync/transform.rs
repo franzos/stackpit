@@ -29,12 +29,8 @@ pub fn to_storable_event(sentry_event: &SentryEvent, project_id: u64) -> Result<
     let level = json
         .get("level")
         .and_then(|v| v.as_str())
-        .map(String::from)
-        .or_else(|| {
-            json.get("tags")
-                .and_then(|t| find_tag(t, "level"))
-                .map(String::from)
-        });
+        .or_else(|| json.get("tags").and_then(|t| find_tag(t, "level")))
+        .map(|s| s.parse::<crate::models::Level>().unwrap());
     let platform = json
         .get("platform")
         .and_then(|v| v.as_str())
@@ -430,7 +426,7 @@ mod tests {
 
         assert_eq!(storable.event_id, "abc123");
         assert_eq!(storable.project_id, 42);
-        assert_eq!(storable.level.as_deref(), Some("error"));
+        assert_eq!(storable.level, Some(crate::models::Level::Error));
         assert_eq!(storable.platform.as_deref(), Some("javascript"));
         assert_eq!(
             storable.title.as_deref(),

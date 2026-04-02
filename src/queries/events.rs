@@ -391,19 +391,31 @@ pub async fn get_tag_facets(pool: &crate::db::DbPool, fingerprint: &str) -> Resu
 const MAX_DECOMPRESSED_SIZE: u64 = 16 * 1024 * 1024;
 
 /// Decompress a zstd blob and parse it as JSON.
+///
+/// Falls back to parsing the raw bytes as JSON if zstd decompression fails,
+/// since payloads may be stored uncompressed when compression fails on the
+/// write path.
 pub(crate) fn decompress_payload(blob: &[u8]) -> Result<serde_json::Value> {
-    let mut decoder = zstd::Decoder::new(blob).context("Failed to create zstd decoder")?;
-    let mut decompressed = Vec::new();
-    std::io::Read::read_to_end(
-        &mut std::io::Read::take(&mut decoder, MAX_DECOMPRESSED_SIZE + 1),
-        &mut decompressed,
-    )
-    .context("Failed to decompress zstd payload")?;
-    if decompressed.len() as u64 > MAX_DECOMPRESSED_SIZE {
-        anyhow::bail!("decompressed payload exceeds {MAX_DECOMPRESSED_SIZE} byte limit");
+    if let Ok(mut decoder) = zstd::Decoder::new(blob) {
+        let mut decompressed = Vec::new();
+        if std::io::Read::read_to_end(
+            &mut std::io::Read::take(&mut decoder, MAX_DECOMPRESSED_SIZE + 1),
+            &mut decompressed,
+        )
+        .is_ok()
+        {
+            if decompressed.len() as u64 > MAX_DECOMPRESSED_SIZE {
+                anyhow::bail!("decompressed payload exceeds {MAX_DECOMPRESSED_SIZE} byte limit");
+            }
+            let value: serde_json::Value = serde_json::from_slice(&decompressed)
+                .context("Failed to parse decompressed payload as JSON")?;
+            return Ok(value);
+        }
     }
-    let value: serde_json::Value = serde_json::from_slice(&decompressed)
-        .context("Failed to parse decompressed payload as JSON")?;
+
+    // Payload wasn't zstd-compressed -- try parsing the raw bytes as JSON
+    let value: serde_json::Value =
+        serde_json::from_slice(blob).context("Payload is neither valid zstd nor valid JSON")?;
     Ok(value)
 }
 

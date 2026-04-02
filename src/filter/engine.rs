@@ -796,10 +796,10 @@ mod tests {
         let engine = FilterEngine::new(data, 0, vec![], vec![]);
 
         let mut event = make_test_event();
-        event.level = Some("debug".to_string());
+        event.level = Some(crate::models::Level::Debug);
         assert!(engine.check(&event).is_drop());
 
-        event.level = Some("error".to_string());
+        event.level = Some(crate::models::Level::Error);
         assert!(!engine.check(&event).is_drop());
     }
 }

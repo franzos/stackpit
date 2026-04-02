@@ -17,19 +17,31 @@ const TRIGGER_CHUNK_SIZE: usize = 30_000;
 /// 32766 / 9 = 3640, use 3600 for margin.
 const ISSUE_UPSERT_CHUNK_SIZE: usize = 3600;
 
-/// Compress event payloads with zstd. Runs on the writer task, keeping
-/// CPU-bound compression off the HTTP handler threads.
+/// Compress event payloads with zstd. Uses `block_in_place` to move the
+/// CPU-bound compression off the async runtime's cooperative budget.
 fn compress_batch(batch: &mut [WriteMsg]) {
-    for msg in batch.iter_mut() {
-        match msg {
-            WriteMsg::Event(event) | WriteMsg::EventWithAttachments(event, _) => {
-                if let Ok(compressed) = zstd::encode_all(event.payload.as_slice(), 3) {
-                    event.payload = compressed;
+    tokio::task::block_in_place(|| {
+        for msg in batch.iter_mut() {
+            match msg {
+                WriteMsg::Event(event) | WriteMsg::EventWithAttachments(event, _) => {
+                    match zstd::encode_all(event.payload.as_slice(), 3) {
+                        Ok(compressed) => {
+                            event.payload = compressed;
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                event_id = %event.event_id,
+                                item_type = %event.item_type,
+                                payload_len = event.payload.len(),
+                                "zstd compression failed, storing uncompressed: {e}"
+                            );
+                        }
+                    }
                 }
+                _ => {}
             }
-            _ => {}
         }
-    }
+    });
 }
 
 /// Flushes a batch of events -- and if the accumulators are ready, the
@@ -312,7 +324,7 @@ async fn flush_aggregation_inner(
                     project_id: delta.project_id,
                     fingerprint: fingerprint.clone(),
                     title: delta.title.clone(),
-                    level: delta.level.clone(),
+                    level: delta.level.map(|l| l.to_string()),
                     environment: None,
                     event_id: String::new(),
                     digest: None,
@@ -324,7 +336,7 @@ async fn flush_aggregation_inner(
                     project_id: delta.project_id,
                     fingerprint: fingerprint.clone(),
                     title: delta.title.clone(),
-                    level: delta.level.clone(),
+                    level: delta.level.map(|l| l.to_string()),
                     environment: None,
                     event_id: String::new(),
                     digest: None,
@@ -336,7 +348,7 @@ async fn flush_aggregation_inner(
                     fingerprint: fingerprint.clone(),
                     project_id: delta.project_id,
                     title: delta.title.clone(),
-                    level: delta.level.clone(),
+                    level: delta.level.map(|l| l.to_string()),
                 });
             }
         }
@@ -372,7 +384,7 @@ async fn flush_aggregation_inner(
             fingerprint,
             project_id: delta.project_id as i64,
             title: delta.title.as_deref(),
-            level: delta.level.as_deref(),
+            level: delta.level.as_ref().map(|l| l.as_str()),
             first_seen,
             last_seen,
             event_count: delta.event_count as i64,

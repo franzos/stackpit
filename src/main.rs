@@ -215,7 +215,7 @@ fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod integration_tests {
     use crate::db;
-    use crate::models::{ItemType, StorableEvent};
+    use crate::models::{ItemType, Level, StorableEvent};
     use crate::writer::{self, WriteMsg};
 
     fn make_event(event_id: &str, project_id: u64, fingerprint: &str) -> StorableEvent {
@@ -234,7 +234,7 @@ mod integration_tests {
             project_id,
             public_key: "test-key".to_string(),
             timestamp: 1700000000,
-            level: Some("error".to_string()),
+            level: Some(Level::Error),
             platform: Some("python".to_string()),
             release: Some("1.0.0".to_string()),
             environment: Some("production".to_string()),

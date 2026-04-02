@@ -49,7 +49,8 @@ fn compute_row_fingerprint(row: &BackfillRow) -> Option<String> {
         _ => return None,
     }
 
-    let payload_json = zstd::decode_all(row.payload_blob.as_slice()).ok()?;
+    let payload_json =
+        zstd::decode_all(row.payload_blob.as_slice()).unwrap_or_else(|_| row.payload_blob.clone());
 
     fingerprint::compute_fingerprint(row.project_id, &item_type, &payload_json)
 }

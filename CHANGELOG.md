@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.1.4] - 2026-04-02
 
 ### Fixed
 - SVG text escaping order causing double-encoded ampersands in chart labels

@@ -205,9 +205,10 @@ mod tests {
     async fn insert_test_event(pool: &DbPool, event_id: &str, project_id: i64, timestamp: i64) {
         sqlx::query(sql!(
             "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, level, title, received_at, monitor_slug, session_status, parent_event_id)
-             VALUES (?1, 'event', X'00', ?2, 'testkey', ?3, 'error', 'test title', ?3, NULL, NULL, NULL)",
+             VALUES (?1, 'event', ?2, ?3, 'testkey', ?4, 'error', 'test title', ?4, NULL, NULL, NULL)",
         ))
         .bind(event_id)
+        .bind(&[0u8] as &[u8])
         .bind(project_id)
         .bind(timestamp)
         .execute(pool)
@@ -286,9 +287,10 @@ mod tests {
     ) {
         sqlx::query(sql!(
             "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, level, title, received_at, fingerprint)
-             VALUES (?1, 'event', X'00', ?2, 'testkey', ?3, 'error', 'test title', ?3, ?4)",
+             VALUES (?1, 'event', ?2, ?3, 'testkey', ?4, 'error', 'test title', ?4, ?5)",
         ))
         .bind(event_id)
+        .bind(&[0u8] as &[u8])
         .bind(project_id)
         .bind(received_at)
         .bind(fingerprint)

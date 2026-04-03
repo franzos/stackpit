@@ -710,8 +710,9 @@ mod tests {
         // Shove in a garbage payload to make sure decompression errors surface
         sqlx::query(sql!(
             "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, received_at)
-             VALUES ('bad', 'event', X'DEADBEEF', 1, 'testkey', 100, 100)"
+             VALUES ('bad', 'event', ?1, 1, 'testkey', 100, 100)"
         ))
+        .bind(&[0xDE, 0xAD, 0xBE, 0xEF] as &[u8])
         .execute(&pool)
         .await
         .unwrap();

@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.1.5] - 2026-04-03
 
 ### Changed
 - Event detail page queries run concurrently instead of sequentially

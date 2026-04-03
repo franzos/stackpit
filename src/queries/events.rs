@@ -78,7 +78,9 @@ pub async fn list_all_events(
         "SELECT event_id, item_type, project_id, fingerprint, timestamp, level, title, platform, release, environment FROM events",
     );
     push_event_filter_conditions(&mut select_qb, filter);
-    select_qb.push(format!(" ORDER BY {sort_col} LIMIT "));
+    select_qb.push(" ORDER BY ");
+    select_qb.push(sort_col);
+    select_qb.push(" LIMIT ");
     select_qb.push_bind(page.limit as i64);
     select_qb.push(" OFFSET ");
     select_qb.push_bind(page.offset as i64);

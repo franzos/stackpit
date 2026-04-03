@@ -46,7 +46,14 @@ pub async fn csrf_middleware(
     let cookie_token = extract_csrf_cookie(req.headers());
 
     if is_post && is_web && !is_login {
-        let cookie_token_for_check = cookie_token.clone();
+        // Reject early if the CSRF cookie is missing -- no need to read the body.
+        let cookie_val = match &cookie_token {
+            Some(c) if !c.is_empty() => c.clone(),
+            _ => {
+                return (axum::http::StatusCode::FORBIDDEN, "CSRF token mismatch").into_response();
+            }
+        };
+
         let (parts, body) = req.into_parts();
         let bytes = match axum::body::to_bytes(body, config.max_body_size).await {
             Ok(b) => b,
@@ -55,13 +62,9 @@ pub async fn csrf_middleware(
             }
         };
 
-        let form_token = extract_csrf_field(&bytes);
-
-        let valid = match (&cookie_token_for_check, &form_token) {
-            (Some(cookie), Some(field)) => {
-                !cookie.is_empty()
-                    && !field.is_empty()
-                    && cookie.as_bytes().ct_eq(field.as_bytes()).into()
+        let valid = match extract_csrf_field(&bytes) {
+            Some(field) if !field.is_empty() => {
+                cookie_val.as_bytes().ct_eq(field.as_bytes()).into()
             }
             _ => false,
         };

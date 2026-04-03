@@ -41,7 +41,9 @@ pub async fn list_issues(
     );
     select_qb.push_bind(project_id as i64);
     push_issue_filter_conditions(&mut select_qb, filter, since);
-    select_qb.push(format!(" ORDER BY {sort_col} DESC LIMIT "));
+    select_qb.push(" ORDER BY ");
+    select_qb.push(sort_col);
+    select_qb.push(" DESC LIMIT ");
     select_qb.push_bind(page.limit as i64);
     select_qb.push(" OFFSET ");
     select_qb.push_bind(page.offset as i64);

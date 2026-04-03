@@ -15,6 +15,7 @@ pub async fn list_projects(
     query: Option<&str>,
     since: Option<i64>,
 ) -> Result<Vec<ProjectSummary>> {
+    // Safety: order_expr is always a hardcoded literal from this match, never user input.
     let order_expr = match sort {
         Some("issues") => "issue_count",
         Some("events") => "e.event_count",

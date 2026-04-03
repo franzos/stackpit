@@ -262,9 +262,9 @@ pub async fn list_all_releases(
         qb.push(" ESCAPE '\\'");
     }
 
-    qb.push(format!(
-        " GROUP BY e.project_id, e.release ORDER BY {sort_col} LIMIT "
-    ));
+    qb.push(" GROUP BY e.project_id, e.release ORDER BY ");
+    qb.push(sort_col);
+    qb.push(" LIMIT ");
     qb.push_bind(page.limit as i64);
     qb.push(" OFFSET ");
     qb.push_bind(page.offset as i64);

@@ -134,10 +134,7 @@ pub async fn validate_project_key(
                     auto_register_key(state, sentry_key, project_id).await;
                 }
                 Err(e) => {
-                    tracing::warn!(
-                        "open-mode auth: DB lookup failed for key '{}...': {e}",
-                        &sentry_key[..sentry_key.len().min(8)]
-                    );
+                    tracing::warn!("open-mode auth: DB lookup failed: {e}");
                     return Err(AuthError::InternalError);
                 }
             }

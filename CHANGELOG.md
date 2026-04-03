@@ -7,9 +7,13 @@
 - Event navigation (prev/next/total) consolidated from 3 queries to 1
 - Project list replaces correlated subquery with a pre-aggregated JOIN
 - Tag facet lookups covered by a new composite index
+- CSRF middleware rejects missing cookie before consuming request body
+- ORDER BY columns use static pushes instead of format interpolation
 
 ### Fixed
 - SVG sanitizer no longer re-allocates on each loop iteration
+- Partial sentry keys no longer logged on auth failure
+- Infallible parse calls use `expect` instead of `unwrap`
 
 ## [0.1.4] - 2026-04-02
 

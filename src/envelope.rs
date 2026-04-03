@@ -3,7 +3,6 @@ use crate::auth::SentryAuth;
 use crate::models::{ItemType, StorableAttachment, StorableEvent};
 use anyhow::{bail, Result};
 use serde_json::Value;
-use std::str::FromStr;
 
 pub struct ParsedEnvelope {
     pub auth: Option<SentryAuth>,
@@ -118,7 +117,7 @@ pub fn parse(body: &[u8], project_id: u64, auth: &SentryAuth) -> Result<ParsedEn
             .get("type")
             .and_then(|v| v.as_str())
             .unwrap_or("event");
-        let item_type = ItemType::from_str(item_type_str).unwrap();
+        let item_type = item_type_str.parse::<ItemType>().expect("infallible");
         let declared_length = item_header.get("length").and_then(|v| v.as_u64());
         let filename = item_header
             .get("filename")
@@ -283,7 +282,7 @@ fn extract_fields(
         .get("level")
         .or_else(|| json.get("severity_text"))
         .and_then(|v| v.as_str())
-        .map(|s| s.parse::<crate::models::Level>().unwrap());
+        .map(|s| s.parse::<crate::models::Level>().expect("infallible"));
     event.platform = json
         .get("platform")
         .and_then(|v| v.as_str())

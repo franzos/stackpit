@@ -42,7 +42,7 @@ pub async fn list_projects(
             e.first_seen,
             e.last_seen,
             e.platforms,
-            e.latest_release,
+            lr.version AS latest_release,
             e.error_count,
             e.transaction_count,
             e.session_count,
@@ -58,10 +58,7 @@ pub async fn list_projects(
                 SUM(CASE WHEN item_type NOT IN ('event', 'transaction', 'session', 'sessions') THEN 1 ELSE 0 END) AS other_count,
                 MIN(timestamp) AS first_seen,
                 MAX(timestamp) AS last_seen,
-                {platform_agg} AS platforms,
-                (SELECT version FROM releases r
-                 WHERE r.project_id = events.project_id
-                 ORDER BY r.created_at DESC LIMIT 1) AS latest_release
+                {platform_agg} AS platforms
             FROM events
             {time_filter}
             GROUP BY project_id
@@ -71,6 +68,13 @@ pub async fn list_projects(
             FROM issues
             GROUP BY project_id
          ) i ON e.project_id = i.project_id
+         LEFT JOIN (
+            SELECT project_id, version
+            FROM releases
+            WHERE id IN (
+                SELECT MAX(id) FROM releases GROUP BY project_id
+            )
+         ) lr ON e.project_id = lr.project_id
          LEFT JOIN projects p ON e.project_id = p.project_id
          ORDER BY {order_expr} DESC"
     );

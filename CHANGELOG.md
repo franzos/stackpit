@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- Event detail page queries run concurrently instead of sequentially
+- Event navigation (prev/next/total) consolidated from 3 queries to 1
+- Project list replaces correlated subquery with a pre-aggregated JOIN
+- Tag facet lookups covered by a new composite index
+
+### Fixed
+- SVG sanitizer no longer re-allocates on each loop iteration
+
 ## [0.1.4] - 2026-04-02
 
 ### Fixed

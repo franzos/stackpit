@@ -150,19 +150,27 @@ pub fn sanitize_svg_text(s: &str) -> String {
 
 /// Strips `<script>` tags and on* event handlers from SVG output. Defense in depth.
 pub fn sanitize_svg_output(svg: &str) -> String {
-    // Nuke any <script>...</script> blocks (case-insensitive)
-    let mut result = svg.to_string();
+    // Nuke any <script>...</script> blocks (case-insensitive).
+    // We lowercase once and walk byte offsets so this is O(n) not O(n²).
+    let lower = svg.to_lowercase();
+    let mut kept: Vec<&str> = Vec::new();
+    let mut cursor = 0;
 
-    // Find and remove script blocks
-    while let Some(start) = result.to_lowercase().find("<script") {
-        if let Some(end) = result.to_lowercase()[start..].find("</script>") {
-            result = format!("{}{}", &result[..start], &result[start + end + 9..]);
+    while let Some(rel) = lower[cursor..].find("<script") {
+        let start = cursor + rel;
+        if let Some(end_rel) = lower[start..].find("</script>") {
+            kept.push(&svg[cursor..start]);
+            cursor = start + end_rel + 9; // skip past </script>
         } else {
-            // Malformed script tag -- cut everything from here
-            result = result[..start].to_string();
+            // Malformed script tag -- keep everything before it, drop the rest
+            kept.push(&svg[cursor..start]);
+            cursor = svg.len();
             break;
         }
     }
+    kept.push(&svg[cursor..]);
+
+    let result = kept.concat();
 
     // Also strip on* event handlers (onclick, onload, etc.)
     regex_lite_on_handler(&result)

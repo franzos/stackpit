@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.1.6] - 2026-04-04
 
 ### Added
 - Per-project API keys for source map and release uploads (`spk_` prefix, SHA-256 hashed)

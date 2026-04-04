@@ -240,7 +240,7 @@ fn extract_context(source: &str, line_idx: usize) -> (Option<String>, Vec<String
 
 // ── DB helpers ──────────────────────────────────────────────────────
 
-use crate::db::{sql, DbPool};
+use crate::db::{sql, translate_sql, DbPool};
 use sqlx::Row;
 
 /// Store a sourcemap entry (zstd-compressed) in the database.
@@ -264,12 +264,18 @@ pub async fn store_sourcemap(pool: &DbPool, entry: &SourcemapEntry, project_id: 
 }
 
 /// Store a chunk for later assembly.
-pub async fn store_chunk(pool: &DbPool, checksum: &str, data: &[u8]) -> Result<()> {
+pub async fn store_chunk(
+    pool: &DbPool,
+    checksum: &str,
+    data: &[u8],
+    project_id: u64,
+) -> Result<()> {
     sqlx::query(sql!(
-        "INSERT INTO upload_chunks (checksum, data) VALUES (?1, ?2)
-         ON CONFLICT (checksum) DO NOTHING"
+        "INSERT INTO upload_chunks (checksum, project_id, data) VALUES (?1, ?2, ?3)
+         ON CONFLICT (checksum, project_id) DO NOTHING"
     ))
     .bind(checksum)
+    .bind(project_id as i64)
     .bind(data)
     .execute(pool)
     .await?;
@@ -277,14 +283,54 @@ pub async fn store_chunk(pool: &DbPool, checksum: &str, data: &[u8]) -> Result<(
     Ok(())
 }
 
+/// Return the subset of `checksums` that are not yet stored.
+pub async fn find_missing_chunks(
+    pool: &DbPool,
+    checksums: &[String],
+    project_id: u64,
+) -> Result<Vec<String>> {
+    if checksums.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let placeholders: Vec<String> = (1..=checksums.len()).map(|i| format!("?{i}")).collect();
+    let pid_idx = checksums.len() + 1;
+    let query = format!(
+        "SELECT checksum FROM upload_chunks WHERE project_id = ?{pid_idx} AND checksum IN ({})",
+        placeholders.join(", ")
+    );
+    let query = translate_sql(&query);
+
+    let mut q = sqlx::query_scalar::<_, String>(&query);
+    for cs in checksums {
+        q = q.bind(cs.clone());
+    }
+    q = q.bind(project_id as i64);
+
+    let found: Vec<String> = q.fetch_all(pool).await?;
+    let found_set: std::collections::HashSet<&str> = found.iter().map(|s| s.as_str()).collect();
+    Ok(checksums
+        .iter()
+        .filter(|cs| !found_set.contains(cs.as_str()))
+        .cloned()
+        .collect())
+}
+
 /// Read chunks in order and concatenate them into a single buffer.
-pub async fn assemble_chunks(pool: &DbPool, checksums: &[String]) -> Result<Vec<u8>> {
+pub async fn assemble_chunks(
+    pool: &DbPool,
+    checksums: &[String],
+    project_id: u64,
+) -> Result<Vec<u8>> {
     let mut result = Vec::new();
     for checksum in checksums {
-        let row = sqlx::query(sql!("SELECT data FROM upload_chunks WHERE checksum = ?1"))
-            .bind(checksum)
-            .fetch_optional(pool)
-            .await?;
+        let row = sqlx::query(sql!(
+            "SELECT data FROM upload_chunks WHERE checksum = ?1 AND project_id = ?2"
+        ))
+        .bind(checksum)
+        .bind(project_id as i64)
+        .fetch_optional(pool)
+        .await?;
 
         match row {
             Some(row) => {
@@ -298,12 +344,15 @@ pub async fn assemble_chunks(pool: &DbPool, checksums: &[String]) -> Result<Vec<
 }
 
 /// Delete chunks after successful assembly.
-pub async fn delete_chunks(pool: &DbPool, checksums: &[String]) -> Result<()> {
+pub async fn delete_chunks(pool: &DbPool, checksums: &[String], project_id: u64) -> Result<()> {
     for checksum in checksums {
-        sqlx::query(sql!("DELETE FROM upload_chunks WHERE checksum = ?1"))
-            .bind(checksum)
-            .execute(pool)
-            .await?;
+        sqlx::query(sql!(
+            "DELETE FROM upload_chunks WHERE checksum = ?1 AND project_id = ?2"
+        ))
+        .bind(checksum)
+        .bind(project_id as i64)
+        .execute(pool)
+        .await?;
     }
     Ok(())
 }

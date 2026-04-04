@@ -119,13 +119,20 @@ Alert rules and digest schedules are managed via the web UI under **Alerts**, or
 
 ## Source Maps
 
-stackpit supports source map uploads so JavaScript stack traces resolve to original source locations. Upload artifact bundles using the standard Sentry CLI:
+stackpit supports source map uploads so minified stack traces resolve to original source locations.
+
+Generate a project API key in **Settings → Source Maps** for the project you want to upload to. Then configure `sentry-cli` or your bundler plugin with the ingest URL (the same host as your DSN):
 
 ```bash
-sentry-cli sourcemaps upload --org my-org --project my-project ./dist
+export SENTRY_URL=https://errors.example.com   # ingest host
+export SENTRY_AUTH_TOKEN=spk_...                # project API key
+export SENTRY_ORG=default                       # any value works
+export SENTRY_PROJECT=1                         # project ID
+
+sentry-cli sourcemaps upload ./dist
 ```
 
-The upload endpoints (`/api/0/organizations/{org}/chunk-upload/` and `.../artifactbundle/assemble/`) are Sentry-compatible. Source maps are matched by debug ID and applied automatically when rendering stack traces in the web UI.
+Bundler plugins (`@sentry/vite-plugin`, `@sentry/webpack-plugin`, etc.) accept the same environment variables, or you can pass them as options. Source maps are matched by debug ID and applied automatically when rendering stack traces in the web UI.
 
 Stale upload chunks older than 24 hours are cleaned up by a background task.
 

@@ -39,6 +39,7 @@ pub struct AppState {
     pub config: Arc<Config>,
     pub writer: WriterHandle,
     pub pool: DbPool,
+    pub sourcemap_pool: DbPool,
     pub filter_engine: Arc<FilterEngine>,
     pub discard_stats: Arc<DiscardStats>,
     pub auth_cache: AuthCache,
@@ -152,6 +153,8 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
     // contend with the read pool for SQLite's single write lock.
     let bg_writer_pool = db::create_writer_pool(&db_url).await?;
 
+    let sourcemap_pool = db::create_writer_pool(&db_url).await?;
+
     let ingest_stats = Arc::new(IngestStats::new());
 
     let (writer_tx, writer_join) = writer::spawn(
@@ -222,6 +225,7 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
         config: config.clone(),
         writer: writer_tx.clone(),
         pool,
+        sourcemap_pool,
         filter_engine,
         discard_stats,
         auth_cache,
@@ -234,9 +238,16 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
     // parsing), so no additional rate-limit layer is needed here.
 
     // Ingestion routes get permissive CORS (SDKs send from any origin)
-    let ingest_app = Router::new()
-        .route("/", get(ingest_landing))
-        .route("/health", get(health_handler))
+    // Sentry-compatible API routes (releases, sourcemaps) need a generous
+    // body limit because artifact bundles can be tens of megabytes.
+    let sentry_api = api::sentry_api_routes()
+        .layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024))
+        .layer(RequestBodyLimitLayer::new(64 * 1024 * 1024))
+        .with_state(state.clone());
+
+    // Ingestion routes keep the tight limits (compressed-limit → decompress
+    // → decompressed-limit → handler).
+    let ingest_routes = Router::new()
         .route(
             "/api/{project_id}/envelope/",
             post(endpoints::envelope::handle),
@@ -263,6 +274,19 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
             "/api/{project_id}/minidump",
             post(endpoints::minidump::handle),
         )
+        .layer(RequestBodyLimitLayer::new(config.server.max_body_size))
+        .layer(RequestDecompressionLayer::new())
+        .layer(RequestBodyLimitLayer::new(
+            config.server.compressed_body_limit(),
+        ))
+        .with_state(state.clone());
+
+    let ingest_app = Router::new()
+        .route("/", get(ingest_landing))
+        .route("/health", get(health_handler))
+        .with_state(state.clone())
+        .merge(sentry_api)
+        .merge(ingest_routes)
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
@@ -273,14 +297,6 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
             axum::http::StatusCode::REQUEST_TIMEOUT,
             std::time::Duration::from_secs(30),
         ))
-        // Layers apply bottom-up (last-added = outermost = runs first).
-        // Request flow: compressed-limit → decompress → decompressed-limit → handler
-        .layer(RequestBodyLimitLayer::new(config.server.max_body_size))
-        .layer(RequestDecompressionLayer::new())
-        .layer(RequestBodyLimitLayer::new(
-            config.server.compressed_body_limit(),
-        ))
-        .with_state(state.clone())
         .into_make_service_with_connect_info::<std::net::SocketAddr>();
 
     let ingest_bind = &config.server.ingest_bind;

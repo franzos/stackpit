@@ -12,8 +12,10 @@ use crate::extractors::ApiReadPool;
 #[derive(Deserialize)]
 pub struct CreateReleaseRequest {
     pub version: String,
+    /// sentry-cli sends slugs as strings and numeric IDs as integers,
+    /// so we accept arbitrary JSON values and parse them ourselves.
     #[serde(default)]
-    pub projects: Vec<String>,
+    pub projects: Vec<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -33,12 +35,30 @@ pub struct CommitRef {
     pub commit: String,
 }
 
+/// POST /api/0/projects/{org}/{project_slug}/releases/
+pub async fn create_project_scoped(
+    State(state): State<AppState>,
+    Path((_org, _project)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(body): Json<CreateReleaseRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
+    create_inner(state, headers, body).await
+}
+
 /// POST /api/0/organizations/{org}/releases/
 pub async fn create(
     State(state): State<AppState>,
     Path(_org): Path<String>,
     headers: HeaderMap,
     Json(body): Json<CreateReleaseRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
+    create_inner(state, headers, body).await
+}
+
+async fn create_inner(
+    state: AppState,
+    headers: HeaderMap,
+    body: CreateReleaseRequest,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
     let key_project_id = super::validate_api_key(&state.pool, &headers, "sourcemap").await?;
     if body.version.is_empty() {
@@ -52,13 +72,16 @@ pub async fn create(
     }
 
     // Create release for each project in the list (must match the key's project)
-    for project_str in &body.projects {
-        let project_id: u64 = project_str.parse().map_err(|_| {
-            api_error(
-                StatusCode::BAD_REQUEST,
-                &format!("invalid project id: {project_str}"),
-            )
-        })?;
+    for project_val in &body.projects {
+        let project_id: u64 = project_val
+            .as_u64()
+            .or_else(|| project_val.as_str().and_then(|s| s.parse().ok()))
+            .ok_or_else(|| {
+                api_error(
+                    StatusCode::BAD_REQUEST,
+                    &format!("invalid project id: {project_val}"),
+                )
+            })?;
 
         if project_id != key_project_id {
             return Err(api_error(
@@ -87,6 +110,17 @@ pub async fn create(
     ))
 }
 
+/// PUT /api/0/projects/{org}/{project_slug}/releases/{version}/
+pub async fn update_project_scoped(
+    State(state): State<AppState>,
+    ApiReadPool(pool): ApiReadPool,
+    Path((_org, _project, version)): Path<(String, String, String)>,
+    headers: HeaderMap,
+    Json(body): Json<UpdateReleaseRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    update_inner(state, pool, version, headers, body).await
+}
+
 /// PUT /api/0/organizations/{org}/releases/{version}/
 pub async fn update(
     State(state): State<AppState>,
@@ -94,6 +128,16 @@ pub async fn update(
     Path((_org, version)): Path<(String, String)>,
     headers: HeaderMap,
     Json(body): Json<UpdateReleaseRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    update_inner(state, pool, version, headers, body).await
+}
+
+async fn update_inner(
+    state: AppState,
+    pool: crate::db::DbPool,
+    version: String,
+    headers: HeaderMap,
+    body: UpdateReleaseRequest,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let key_project_id = super::validate_api_key(&state.pool, &headers, "sourcemap").await?;
     // Process commit refs — take the first ref's commit as the release commit

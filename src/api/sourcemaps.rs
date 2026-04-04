@@ -34,8 +34,7 @@ pub async fn chunk_upload_config(
             "bcsymbolmaps",
             "il2cpp",
             "portablepdbs",
-            "artifact_bundles",
-            "artifact_bundles_v2"
+            "artifact_bundles"
         ]
     })))
 }
@@ -49,27 +48,39 @@ pub async fn chunk_upload(
     headers: HeaderMap,
     mut multipart: Multipart,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    super::validate_api_key(&state.pool, &headers, "sourcemap").await?;
-    let pool = &state.pool;
+    let key_project_id = super::validate_api_key(&state.pool, &headers, "sourcemap").await?;
+    let pool = &state.sourcemap_pool;
     let mut count = 0u32;
 
-    while let Ok(Some(field)) = multipart.next_field().await {
-        let data = field.bytes().await.map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "detail": format!("failed to read chunk: {e}") })),
-            )
-        })?;
+    loop {
+        match multipart.next_field().await {
+            Ok(Some(field)) => {
+                let data = field.bytes().await.map_err(|e| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({ "detail": format!("failed to read chunk: {e}") })),
+                    )
+                })?;
 
-        let checksum = sha1_hex(&data);
-        sourcemap::store_chunk(pool, &checksum, &data)
-            .await
-            .map_err(|e| {
-                tracing::error!("store chunk: {e}");
-                super::internal_error(e)
-            })?;
+                let checksum = sha1_hex(&data);
+                sourcemap::store_chunk(pool, &checksum, &data, key_project_id)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("store chunk: {e}");
+                        super::internal_error(e)
+                    })?;
 
-        count += 1;
+                count += 1;
+            }
+            Ok(None) => break,
+            Err(e) => {
+                tracing::warn!("multipart parse error: {e}");
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "detail": format!("failed to read chunk: {e}") })),
+                ));
+            }
+        }
     }
 
     tracing::debug!("stored {count} chunks");
@@ -78,7 +89,6 @@ pub async fn chunk_upload(
 
 #[derive(Deserialize)]
 pub struct AssembleRequest {
-    #[allow(dead_code)]
     pub checksum: Option<String>,
     pub chunks: Vec<String>,
     pub projects: Option<Vec<serde_json::Value>>,
@@ -94,7 +104,7 @@ pub async fn assemble(
     Json(body): Json<AssembleRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let key_project_id = super::validate_api_key(&state.pool, &headers, "sourcemap").await?;
-    let pool = &state.pool;
+    let pool = &state.sourcemap_pool;
 
     // Resolve the project ID from the request, falling back to the key's project
     let project_id = match resolve_project_id(&body.projects) {
@@ -108,24 +118,58 @@ pub async fn assemble(
         }
     };
 
-    // Concatenate chunks into the full artifact bundle
-    let zip_data = sourcemap::assemble_chunks(pool, &body.chunks)
+    // Validate chunk checksums (must be 40-char lowercase hex SHA1)
+    if body.chunks.len() > 128 {
+        return Err(super::api_error(StatusCode::BAD_REQUEST, "too many chunks"));
+    }
+    for checksum in &body.chunks {
+        if checksum.len() != 40 || !checksum.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(super::api_error(
+                StatusCode::BAD_REQUEST,
+                "invalid chunk checksum",
+            ));
+        }
+    }
+
+    // Check which chunks are already uploaded — return missing ones so
+    // sentry-cli can upload them before retrying the assemble call.
+    let missing = sourcemap::find_missing_chunks(pool, &body.chunks, project_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("check missing chunks: {e}");
+            super::internal_error(e)
+        })?;
+
+    if !missing.is_empty() {
+        return Ok(Json(json!({
+            "state": "not_found",
+            "missingChunks": missing,
+        })));
+    }
+
+    // All chunks present — concatenate into the full artifact bundle
+    let zip_data = sourcemap::assemble_chunks(pool, &body.chunks, project_id)
         .await
         .map_err(|e| {
             tracing::error!("assemble chunks: {e}");
-            (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "detail": format!("chunk assembly failed: {e}") })),
-            )
+            super::internal_error(e)
         })?;
+
+    // Verify bundle integrity
+    if let Some(ref expected) = body.checksum {
+        let actual = sha1_hex(&zip_data);
+        if actual != *expected {
+            return Err(super::api_error(
+                StatusCode::BAD_REQUEST,
+                "bundle checksum mismatch",
+            ));
+        }
+    }
 
     // Parse the artifact bundle and extract sourcemaps
     let entries = sourcemap::parse_artifact_bundle(&zip_data).map_err(|e| {
         tracing::error!("parse artifact bundle: {e}");
-        (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "detail": format!("invalid artifact bundle: {e}") })),
-        )
+        super::internal_error(e)
     })?;
 
     let stored = entries.len();
@@ -136,7 +180,7 @@ pub async fn assemble(
     }
 
     // Clean up the chunks we consumed
-    if let Err(e) = sourcemap::delete_chunks(pool, &body.chunks).await {
+    if let Err(e) = sourcemap::delete_chunks(pool, &body.chunks, project_id).await {
         tracing::warn!("cleanup chunks: {e}");
     }
 

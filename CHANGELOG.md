@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.7] - 2026-04-04
+
+### Fixed
+- Source map and release uploads via sentry-cli
+- Upload chunk isolation and write safety
+
 ## [0.1.6] - 2026-04-04
 
 ### Added

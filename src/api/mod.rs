@@ -14,6 +14,69 @@ pub mod projects;
 pub mod releases;
 pub mod sourcemaps;
 
+/// Sentry-compatible API routes (releases, sourcemaps) that authenticate
+/// via per-project API keys. Served on the ingest port since sentry-cli
+/// sends requests to the DSN host (SENTRY_URL).
+pub fn sentry_api_routes() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/api/0/projects/{org}/{project_slug}/",
+            get(projects::sentry_get),
+        )
+        .route(
+            "/api/0/projects/{org}/{project_slug}",
+            get(projects::sentry_get),
+        )
+        .route(
+            "/api/0/organizations/{org}/releases/",
+            post(releases::create),
+        )
+        .route(
+            "/api/0/organizations/{org}/releases",
+            post(releases::create),
+        )
+        .route(
+            "/api/0/projects/{org}/{project_slug}/releases/",
+            post(releases::create_project_scoped),
+        )
+        .route(
+            "/api/0/projects/{org}/{project_slug}/releases",
+            post(releases::create_project_scoped),
+        )
+        .route(
+            "/api/0/organizations/{org}/releases/{version}/",
+            put(releases::update),
+        )
+        .route(
+            "/api/0/organizations/{org}/releases/{version}",
+            put(releases::update),
+        )
+        .route(
+            "/api/0/projects/{org}/{project_slug}/releases/{version}/",
+            put(releases::update_project_scoped),
+        )
+        .route(
+            "/api/0/projects/{org}/{project_slug}/releases/{version}",
+            put(releases::update_project_scoped),
+        )
+        .route(
+            "/api/0/organizations/{org}/chunk-upload/",
+            get(sourcemaps::chunk_upload_config).post(sourcemaps::chunk_upload),
+        )
+        .route(
+            "/api/0/organizations/{org}/chunk-upload",
+            get(sourcemaps::chunk_upload_config).post(sourcemaps::chunk_upload),
+        )
+        .route(
+            "/api/0/organizations/{org}/artifactbundle/assemble/",
+            post(sourcemaps::assemble),
+        )
+        .route(
+            "/api/0/organizations/{org}/artifactbundle/assemble",
+            post(sourcemaps::assemble),
+        )
+}
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/v1/projects/", get(projects::list))
@@ -38,24 +101,6 @@ pub fn routes() -> Router<AppState> {
             get(events::latest_for_issue),
         )
         .route("/api/v1/events/{event_id}/", get(events::get))
-        // Sentry-compatible release API
-        .route(
-            "/api/0/organizations/{org}/releases/",
-            post(releases::create),
-        )
-        .route(
-            "/api/0/organizations/{org}/releases/{version}/",
-            put(releases::update),
-        )
-        // Sentry-compatible sourcemap / artifact bundle API
-        .route(
-            "/api/0/organizations/{org}/chunk-upload/",
-            get(sourcemaps::chunk_upload_config).post(sourcemaps::chunk_upload),
-        )
-        .route(
-            "/api/0/organizations/{org}/artifactbundle/assemble/",
-            post(sourcemaps::assemble),
-        )
         // Alert rules
         .route(
             "/api/v1/alerts/rules",

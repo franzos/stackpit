@@ -1,10 +1,11 @@
 use askama::Template;
-use axum::extract::{Query, State};
+use axum::extract::{Query, RawQuery, State};
 use axum::http::StatusCode;
+use axum::response::IntoResponse;
 
-use crate::extractors::ReadPool;
+use crate::extractors::{BrowserDefaults, ReadPool};
 use crate::html::render_template;
-use crate::html::utils::{build_filter_qs, ListParams};
+use crate::html::utils::{build_filter_qs, defaults_redirect_url, ListParams};
 use crate::queries;
 use crate::queries::types::{EventFilter, Page, PagedResult};
 use crate::server::AppState;
@@ -28,10 +29,20 @@ struct EventListTemplate {
 }
 
 pub async fn handler(
+    BrowserDefaults(defaults): BrowserDefaults,
+    RawQuery(raw_qs): RawQuery,
     State(_state): State<AppState>,
     ReadPool(pool): ReadPool,
     Query(params): Query<ListParams>,
 ) -> axum::response::Response {
+    if let Some(url) = defaults_redirect_url(
+        "/web/events/",
+        raw_qs.as_deref(),
+        &defaults,
+        &["level", "item_type"],
+    ) {
+        return axum::response::Redirect::to(&url).into_response();
+    }
     let query_str = params.query.clone().unwrap_or_default();
     let level_str = params.level.clone().unwrap_or_default();
     let project_id_str = params.project_id.map(|p| p.to_string()).unwrap_or_default();

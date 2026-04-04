@@ -1,5 +1,5 @@
 /// Extract a named cookie value from request headers.
-pub(super) fn extract_cookie_value(headers: &axum::http::HeaderMap, name: &str) -> Option<String> {
+pub(crate) fn extract_cookie_value(headers: &axum::http::HeaderMap, name: &str) -> Option<String> {
     for val in headers.get_all("cookie") {
         if let Ok(s) = val.to_str() {
             for pair in s.split(';') {

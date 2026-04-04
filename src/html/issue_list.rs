@@ -1,11 +1,12 @@
 use askama::Template;
-use axum::extract::{Path, Query};
+use axum::extract::{Path, Query, RawQuery};
 use axum::http::StatusCode;
+use axum::response::IntoResponse;
 
 use crate::db::DbPool;
-use crate::extractors::ReadPool;
+use crate::extractors::{BrowserDefaults, ReadPool};
 use crate::html::render_template;
-use crate::html::utils::{build_filter_qs, period_to_timestamp, ListParams};
+use crate::html::utils::{build_filter_qs, defaults_redirect_url, period_to_timestamp, ListParams};
 use crate::queries;
 use crate::queries::types::{IssueFilter, Page, PagedResult};
 use crate::queries::ProjectNavCounts;
@@ -55,18 +56,38 @@ struct TransactionListTemplate {
 }
 
 pub async fn handler(
+    BrowserDefaults(defaults): BrowserDefaults,
+    RawQuery(raw_qs): RawQuery,
     ReadPool(pool): ReadPool,
     Path(project_id): Path<u64>,
     Query(params): Query<ListParams>,
 ) -> axum::response::Response {
+    if let Some(url) = defaults_redirect_url(
+        &format!("/web/projects/{project_id}/"),
+        raw_qs.as_deref(),
+        &defaults,
+        &["status", "level", "period"],
+    ) {
+        return axum::response::Redirect::to(&url).into_response();
+    }
     issue_or_transaction_handler(&pool, project_id, params, "event").await
 }
 
 pub async fn transaction_handler(
+    BrowserDefaults(defaults): BrowserDefaults,
+    RawQuery(raw_qs): RawQuery,
     ReadPool(pool): ReadPool,
     Path(project_id): Path<u64>,
     Query(params): Query<ListParams>,
 ) -> axum::response::Response {
+    if let Some(url) = defaults_redirect_url(
+        &format!("/web/projects/{project_id}/transactions/"),
+        raw_qs.as_deref(),
+        &defaults,
+        &["status", "level", "period"],
+    ) {
+        return axum::response::Redirect::to(&url).into_response();
+    }
     issue_or_transaction_handler(&pool, project_id, params, "transaction").await
 }
 

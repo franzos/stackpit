@@ -1,5 +1,5 @@
 mod admin_auth;
-mod cookie;
+pub(crate) mod cookie;
 mod csrf;
 mod rate_limit;
 

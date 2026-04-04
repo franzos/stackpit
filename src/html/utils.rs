@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::Deserialize;
 
 use crate::writer::msg::WriteMsg;
@@ -139,6 +141,74 @@ pub fn urlencoded(s: &str) -> String {
         .replace('+', "%2B")
         .replace(' ', "+")
         .replace('#', "%23")
+}
+
+pub const DEFAULTS_COOKIE: &str = "sp_defaults";
+
+/// Parses the `sp_defaults` cookie value (format: `status:resolved|period:7d`)
+/// into a map. Invalid segments are silently skipped.
+pub fn parse_defaults_cookie(value: &str) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for segment in value.split('|') {
+        if let Some((k, v)) = segment.split_once(':') {
+            let k = k.trim();
+            let v = v.trim();
+            if !k.is_empty() && !v.is_empty() {
+                map.insert(k.to_string(), v.to_string());
+            }
+        }
+    }
+    map
+}
+
+/// Serializes a defaults map back into cookie format: `status:resolved|period:7d`.
+pub fn serialize_defaults_cookie(defaults: &HashMap<String, String>) -> String {
+    let mut parts: Vec<String> = defaults
+        .iter()
+        .filter(|(_, v)| !v.is_empty())
+        .map(|(k, v)| format!("{k}:{v}"))
+        .collect();
+    parts.sort(); // deterministic order
+    parts.join("|")
+}
+
+/// Checks which applicable keys are missing from the query string but present
+/// in cookie defaults. Returns a redirect URL with those defaults appended,
+/// preserving all existing params. Returns `None` when nothing needs adding.
+pub fn defaults_redirect_url(
+    path: &str,
+    raw_qs: Option<&str>,
+    defaults: &HashMap<String, String>,
+    applicable_keys: &[&str],
+) -> Option<String> {
+    let qs = raw_qs.unwrap_or("");
+
+    // Collect keys already present in the query string (even if empty-valued).
+    let existing_keys: std::collections::HashSet<&str> = qs
+        .split('&')
+        .filter_map(|pair| pair.split_once('=').map(|(k, _)| k))
+        .collect();
+
+    let mut additions = Vec::new();
+    for &key in applicable_keys {
+        if !existing_keys.contains(key) {
+            if let Some(val) = defaults.get(key) {
+                if !val.is_empty() {
+                    additions.push(format!("{key}={}", urlencoded(val)));
+                }
+            }
+        }
+    }
+    if additions.is_empty() {
+        return None;
+    }
+
+    let merged = if qs.is_empty() {
+        additions.join("&")
+    } else {
+        format!("{qs}&{}", additions.join("&"))
+    };
+    Some(format!("{path}?{merged}"))
 }
 
 /// Strips characters that'd break SVG text elements.

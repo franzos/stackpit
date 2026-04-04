@@ -1,10 +1,11 @@
 use askama::Template;
-use axum::extract::{Query, State};
+use axum::extract::{Query, RawQuery, State};
 use axum::http::StatusCode;
+use axum::response::IntoResponse;
 
-use crate::extractors::ReadPool;
+use crate::extractors::{BrowserDefaults, ReadPool};
 use crate::html::render_template;
-use crate::html::utils::{period_to_timestamp, ListParams};
+use crate::html::utils::{defaults_redirect_url, period_to_timestamp, ListParams};
 use crate::queries;
 use crate::server::AppState;
 
@@ -23,10 +24,17 @@ struct ProjectListTemplate {
 }
 
 pub async fn handler(
+    BrowserDefaults(defaults): BrowserDefaults,
+    RawQuery(raw_qs): RawQuery,
     State(_state): State<AppState>,
     ReadPool(pool): ReadPool,
     Query(params): Query<ListParams>,
 ) -> axum::response::Response {
+    if let Some(url) =
+        defaults_redirect_url("/web/projects/", raw_qs.as_deref(), &defaults, &["period"])
+    {
+        return axum::response::Redirect::to(&url).into_response();
+    }
     let sort_str = params.sort.clone().unwrap_or_default();
     let query_str = params.query.clone().unwrap_or_default();
     let period_str = params.period.clone().unwrap_or_else(|| "7d".to_string());

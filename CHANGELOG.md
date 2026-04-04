@@ -11,6 +11,11 @@
 - Project "First Seen" no longer changes with the time filter
 - "All time" filter now propagates correctly to project detail views
 
+### Added
+- Browser defaults: configurable default filters (status, level, period) stored as a cookie
+- Settings page at `/web/settings/defaults/` to manage defaults
+- List pages redirect to fill in missing filter params from saved defaults
+
 ## [0.1.5] - 2026-04-03
 
 ### Changed

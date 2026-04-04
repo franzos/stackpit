@@ -8,6 +8,7 @@ use axum::Router;
 use crate::server::AppState;
 
 pub mod alerts;
+pub mod browser_defaults;
 pub mod bulk;
 pub mod charts;
 pub mod event_detail;
@@ -278,6 +279,15 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/web/settings/integrations/{id}/test",
             post(integrations::test_integration),
+        )
+        // -- global settings: browser defaults --
+        .route(
+            "/web/settings/defaults/",
+            get(browser_defaults::handler).post(browser_defaults::save_defaults),
+        )
+        .route(
+            "/web/settings/defaults/clear",
+            post(browser_defaults::clear_defaults),
         )
         // -- global settings: alerts & digests --
         .route("/web/settings/alerts/", get(alerts::handler))

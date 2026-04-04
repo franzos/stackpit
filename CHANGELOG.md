@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- Per-project API keys for source map and release uploads (`spk_` prefix, SHA-256 hashed)
+- Source Maps settings page with key generation, setup guide for `sentry-cli`
+- API key auth on all Sentry-compatible upload endpoints (`/api/0/`)
+
+### Fixed
+- Project "First Seen" no longer changes with the time filter
+- "All time" filter now propagates correctly to project detail views
+
 ## [0.1.5] - 2026-04-03
 
 ### Changed

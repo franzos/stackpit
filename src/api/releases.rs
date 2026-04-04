@@ -1,5 +1,5 @@
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::Deserialize;
 use serde_json::json;
@@ -37,8 +37,10 @@ pub struct CommitRef {
 pub async fn create(
     State(state): State<AppState>,
     Path(_org): Path<String>,
+    headers: HeaderMap,
     Json(body): Json<CreateReleaseRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
+    let key_project_id = super::validate_api_key(&state.pool, &headers, "sourcemap").await?;
     if body.version.is_empty() {
         return Err(api_error(StatusCode::BAD_REQUEST, "version is required"));
     }
@@ -49,7 +51,7 @@ pub async fn create(
         ));
     }
 
-    // Create release for each project in the list
+    // Create release for each project in the list (must match the key's project)
     for project_str in &body.projects {
         let project_id: u64 = project_str.parse().map_err(|_| {
             api_error(
@@ -57,6 +59,13 @@ pub async fn create(
                 &format!("invalid project id: {project_str}"),
             )
         })?;
+
+        if project_id != key_project_id {
+            return Err(api_error(
+                StatusCode::FORBIDDEN,
+                "API key not valid for this project",
+            ));
+        }
 
         let rx = state
             .writer
@@ -83,19 +92,19 @@ pub async fn update(
     State(state): State<AppState>,
     ApiReadPool(pool): ApiReadPool,
     Path((_org, version)): Path<(String, String)>,
+    headers: HeaderMap,
     Json(body): Json<UpdateReleaseRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let key_project_id = super::validate_api_key(&state.pool, &headers, "sourcemap").await?;
     // Process commit refs — take the first ref's commit as the release commit
     if let Some(ref_info) = body.refs.first() {
         if !ref_info.commit.is_empty() {
-            // We need the project_id, but this endpoint doesn't include it directly.
-            // Look up the release across all projects to find which one matches.
-
+            // Only update the release for the key's project
             let project_ids = crate::queries::releases::find_projects_by_version(&pool, &version)
                 .await
                 .map_err(internal_error)?;
 
-            for project_id in project_ids {
+            for project_id in project_ids.into_iter().filter(|&id| id == key_project_id) {
                 let rx = state
                     .writer
                     .upsert_release(project_id, version.clone(), Some(ref_info.commit.clone()))

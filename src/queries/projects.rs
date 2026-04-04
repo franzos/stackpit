@@ -19,7 +19,7 @@ pub async fn list_projects(
     let order_expr = match sort {
         Some("issues") => "issue_count",
         Some("events") => "e.event_count",
-        Some("first_seen") => "e.first_seen",
+        Some("first_seen") => "fs.first_seen",
         Some("project_id") => "e.project_id",
         _ => "e.last_seen",
     };
@@ -40,7 +40,7 @@ pub async fn list_projects(
             e.project_id,
             e.event_count,
             COALESCE(i.issue_count, 0) AS issue_count,
-            e.first_seen,
+            fs.first_seen,
             e.last_seen,
             e.platforms,
             lr.version AS latest_release,
@@ -57,13 +57,17 @@ pub async fn list_projects(
                 SUM(CASE WHEN item_type = 'transaction' THEN 1 ELSE 0 END) AS transaction_count,
                 SUM(CASE WHEN item_type IN ('session', 'sessions') THEN 1 ELSE 0 END) AS session_count,
                 SUM(CASE WHEN item_type NOT IN ('event', 'transaction', 'session', 'sessions') THEN 1 ELSE 0 END) AS other_count,
-                MIN(timestamp) AS first_seen,
                 MAX(timestamp) AS last_seen,
                 {platform_agg} AS platforms
             FROM events
             {time_filter}
             GROUP BY project_id
          ) e
+         LEFT JOIN (
+            SELECT project_id, MIN(timestamp) AS first_seen
+            FROM events
+            GROUP BY project_id
+         ) fs ON e.project_id = fs.project_id
          LEFT JOIN (
             SELECT project_id, COUNT(*) AS issue_count
             FROM issues
@@ -718,6 +722,11 @@ pub async fn delete_project(pool: &crate::db::DbPool, project_id: u64) -> Result
         .await?;
 
     sqlx::query(sql!("DELETE FROM digest_schedules WHERE project_id = ?1"))
+        .bind(pid)
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query(sql!("DELETE FROM api_keys WHERE project_id = ?1"))
         .bind(pid)
         .execute(&mut *tx)
         .await?;

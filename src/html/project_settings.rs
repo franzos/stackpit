@@ -329,3 +329,89 @@ async fn render_keys(
 
     render_template(&tmpl)
 }
+
+// ---------------------------------------------------------------------------
+// Source Maps tab
+// ---------------------------------------------------------------------------
+
+#[derive(Template)]
+#[template(path = "project_settings_sourcemaps.html")]
+struct SourceMapsTemplate {
+    project_id: u64,
+    key_prefix: String,
+    key_created_at: i64,
+    new_key: String,
+    message: Option<String>,
+    sentry_url: String,
+    nav: ProjectNavCounts,
+}
+
+pub async fn sourcemaps_handler(
+    State(state): State<AppState>,
+    Path(project_id): Path<u64>,
+) -> axum::response::Response {
+    render_sourcemaps(&state, project_id, String::new(), None).await
+}
+
+pub async fn generate_sourcemap_key(
+    State(state): State<AppState>,
+    Path(project_id): Path<u64>,
+) -> axum::response::Response {
+    let raw_key = {
+        let mut buf = [0u8; 16];
+        rand::fill(&mut buf);
+        format!("spk_{}", hex::encode(buf))
+    };
+
+    let hash = {
+        use sha2::{Digest, Sha256};
+        hex::encode(Sha256::digest(raw_key.as_bytes()))
+    };
+
+    let prefix = &raw_key[..12];
+
+    match queries::api_keys::create_api_key(&state.pool, project_id, "sourcemap", &hash, prefix)
+        .await
+    {
+        Ok(()) => render_sourcemaps(&state, project_id, raw_key, None).await,
+        Err(e) => {
+            render_sourcemaps(
+                &state,
+                project_id,
+                String::new(),
+                Some(format!("Error: {e}")),
+            )
+            .await
+        }
+    }
+}
+
+async fn render_sourcemaps(
+    state: &AppState,
+    project_id: u64,
+    new_key: String,
+    message: Option<String>,
+) -> axum::response::Response {
+    let existing = queries::api_keys::get_api_key_for_project(&state.pool, project_id, "sourcemap")
+        .await
+        .unwrap_or(None);
+
+    let nav = queries::projects::get_nav_counts(&state.pool, project_id).await;
+
+    let sentry_url = format!("http://{}", state.config.server.bind);
+
+    let tmpl = SourceMapsTemplate {
+        project_id,
+        key_prefix: existing
+            .as_ref()
+            .map(|k| k.key_prefix.clone())
+            .unwrap_or_default(),
+        key_created_at: existing.as_ref().map(|k| k.created_at).unwrap_or(0),
+        new_key,
+        message,
+        sentry_url,
+        nav,
+    };
+
+    render_template(&tmpl)
+}

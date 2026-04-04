@@ -154,6 +154,14 @@ pub fn routes() -> Router<AppState> {
             post(project_settings::delete_key),
         )
         .route(
+            "/web/projects/{project_id}/settings/sourcemaps/",
+            get(project_settings::sourcemaps_handler),
+        )
+        .route(
+            "/web/projects/{project_id}/settings/sourcemaps/generate",
+            post(project_settings::generate_sourcemap_key),
+        )
+        .route(
             "/web/projects/{project_id}/settings/archive",
             post(project_settings::archive_project),
         )

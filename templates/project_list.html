@@ -44,7 +44,7 @@
     <tbody>
         {% for p in projects %}
         <tr>
-            <td><a href="/web/projects/{{ p.project_id }}/?{% if !query.is_empty() %}query={{ query }}&amp;{% endif %}{% if !period.is_empty() %}period={{ period }}{% endif %}">{% match p.name %}{% when Some with (n) %}{{ n }}{% when None %}{{ p.project_id }}{% endmatch %}</a></td>
+            <td><a href="/web/projects/{{ p.project_id }}/?{% if !query.is_empty() %}query={{ query }}&amp;{% endif %}period={{ period }}">{% match p.name %}{% when Some with (n) %}{{ n }}{% when None %}{{ p.project_id }}{% endmatch %}</a></td>
             <td>{{ p.platforms }}</td>
             <td>{{ p.issue_count }}</td>
             <td>{{ p.event_count }}</td>

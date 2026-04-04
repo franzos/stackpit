@@ -47,7 +47,8 @@ pub async fn admin_auth_middleware(
 
     // Let login and static assets through without auth
     let path = req.uri().path();
-    if path == "/web/login" || path.starts_with("/web/_assets/") {
+    // Sentry-compatible API endpoints handle their own auth via API keys
+    if path == "/web/login" || path.starts_with("/web/_assets/") || path.starts_with("/api/0/") {
         return next.run(req).await;
     }
 

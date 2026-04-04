@@ -1,8 +1,10 @@
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 
+use crate::db::DbPool;
 use crate::server::AppState;
 
 pub mod alerts;
@@ -72,6 +74,38 @@ pub fn routes() -> Router<AppState> {
             "/api/v1/digests/{id}",
             put(alerts::update_digest).delete(alerts::delete_digest),
         )
+}
+
+/// Validate an API key from the Authorization header.
+/// Returns the associated project_id on success, or a 401 response.
+pub async fn validate_api_key(
+    pool: &DbPool,
+    headers: &HeaderMap,
+    scope: &str,
+) -> Result<u64, (StatusCode, Json<serde_json::Value>)> {
+    let token = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+
+    let token = match token {
+        Some(t) => t,
+        None => {
+            return Err(api_error(
+                StatusCode::UNAUTHORIZED,
+                "authentication required",
+            ))
+        }
+    };
+
+    let hash = hex::encode(Sha256::digest(token.as_bytes()));
+
+    match crate::queries::api_keys::get_api_key_by_hash(pool, &hash).await {
+        Ok(Some(info)) if info.scope == scope => Ok(info.project_id),
+        _ => Err(api_error(StatusCode::UNAUTHORIZED, "invalid API key")),
+    }
 }
 
 pub fn api_error(status: StatusCode, detail: &str) -> (StatusCode, Json<serde_json::Value>) {

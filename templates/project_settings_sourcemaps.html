@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}SDK Setup - Project {{ project_id }} - Stackpit{% endblock %}
+{% block title %}Source Maps - Project {{ project_id }} - Stackpit{% endblock %}
 
 {% block breadcrumbs %}
 <span class="sep" aria-hidden="true">/</span>
@@ -10,11 +10,11 @@
 <span class="sep" aria-hidden="true">/</span>
 <a href="/web/projects/{{ project_id }}/settings/">Settings</a>
 <span class="sep" aria-hidden="true">/</span>
-<span>SDK Setup</span>
+<span>Source Maps</span>
 {% endblock %}
 
 {% block content %}
-<h1>Project {{ project_id }}{% if project_status == "archived" %} <span style="color: var(--muted); font-size: 0.8rem;">(archived)</span>{% endif %}</h1>
+<h1>Project {{ project_id }}</h1>
 <nav class="project-tabs" aria-label="Project sections">
     <a href="/web/projects/{{ project_id }}/" class="project-tab"><span class="type-icon type-icon-event"></span>Issues</a>
     {% if nav.transaction_count > 0 %}<a href="/web/projects/{{ project_id }}/transactions/" class="project-tab"><span class="type-icon type-icon-transaction"></span>Transactions <span class="tab-count">{{ nav.transaction_count }}</span></a>{% endif %}
@@ -32,61 +32,65 @@
 
 <nav class="project-tabs" aria-label="Settings sections">
     <a href="/web/projects/{{ project_id }}/settings/" class="project-tab">General</a>
-    <a href="/web/projects/{{ project_id }}/settings/keys/" class="project-tab active">SDK Setup</a>
-    <a href="/web/projects/{{ project_id }}/settings/sourcemaps/" class="project-tab">Source Maps</a>
+    <a href="/web/projects/{{ project_id }}/settings/keys/" class="project-tab">SDK Setup</a>
+    <a href="/web/projects/{{ project_id }}/settings/sourcemaps/" class="project-tab active">Source Maps</a>
     <a href="/web/projects/{{ project_id }}/settings/filters/" class="project-tab">Filters</a>
     <a href="/web/projects/{{ project_id }}/settings/integrations/" class="project-tab">Integrations</a>
 </nav>
+
+<h2>API Key</h2>
 
 {% match message %}{% when Some with (msg) %}
 <p class="settings-message">{{ msg }}</p>
 {% when None %}{% endmatch %}
 
-<h2>DSN</h2>
-{% if dsn.is_empty() %}
-<p class="empty">No keys registered. Create a key below to get a DSN.</p>
-{% else %}
-<pre><code>{{ dsn }}</code></pre>
+<p>Source map uploads require an API key. This key is specific to this project and can only be used for source map operations.</p>
+
+{% if !new_key.is_empty() %}
+<div class="settings-message" style="word-break: break-all;">
+    Key generated: <code>{{ new_key }}</code><br>
+    <strong>Copy this key now — it will not be shown again.</strong>
+</div>
 {% endif %}
 
-<h2>Project Keys</h2>
-{% if keys.is_empty() %}
-<p class="empty">No keys registered for this project.</p>
-{% else %}
+{% if !key_prefix.is_empty() %}
 <div class="table-wrap">
 <table>
     <thead>
         <tr>
-            <th scope="col">Public Key</th>
-            <th scope="col">Label</th>
-            <th scope="col">Status</th>
+            <th scope="col">Key</th>
             <th scope="col">Created</th>
             <th scope="col"></th>
         </tr>
     </thead>
     <tbody>
-    {% for key in keys %}
         <tr>
-            <td><code>{{ key.public_key }}</code></td>
-            <td>{% match key.label %}{% when Some with (l) %}{{ l }}{% when None %}&mdash;{% endmatch %}</td>
-            <td>{{ key.status }}</td>
-            <td><time datetime="{{ key.created_at|format_ts }}" title="{{ key.created_at|format_ts }}">{{ key.created_at|format_relative }}</time></td>
+            <td><code>{{ key_prefix }}...</code></td>
+            <td><time datetime="{{ key_created_at|format_ts }}" title="{{ key_created_at|format_ts }}">{{ key_created_at|format_relative }}</time></td>
             <td>
-                <form method="post" action="/web/projects/{{ project_id }}/settings/keys/{{ key.public_key }}/delete" style="margin: 0;">
-                    <button type="submit" class="btn btn-danger" onclick="return confirm('Delete this key? SDKs using it will stop working.')">Delete</button>
+                <form method="post" action="/web/projects/{{ project_id }}/settings/sourcemaps/generate" style="margin: 0;">
+                    <button type="submit" class="btn" onclick="return confirm('Regenerate key? The current key will stop working.')">Regenerate</button>
                 </form>
             </td>
         </tr>
-    {% endfor %}
     </tbody>
 </table>
 </div>
+{% else %}
+{% if new_key.is_empty() %}
+<p class="empty">No source map API key for this project.</p>
+<form method="post" action="/web/projects/{{ project_id }}/settings/sourcemaps/generate">
+    <button type="submit" class="btn">Generate Key</button>
+</form>
+{% endif %}
 {% endif %}
 
-<h2>Create Key</h2>
-<form class="settings-form" method="post" action="/web/projects/{{ project_id }}/settings/keys/create">
-    <label for="key_label">Label <span style="font-weight: 400; color: var(--muted);">(optional)</span></label>
-    <input type="text" id="key_label" name="label" placeholder="e.g. production, staging">
-    <button type="submit" class="btn">Create Key</button>
-</form>
+<h2>Setup</h2>
+<p>Use <a href="https://docs.sentry.io/cli/" rel="noopener noreferrer">sentry-cli</a> to upload source maps. Set these environment variables:</p>
+<pre><code>export SENTRY_URL={{ sentry_url }}
+export SENTRY_AUTH_TOKEN=&lt;your API key&gt;
+export SENTRY_ORG=default
+export SENTRY_PROJECT={{ project_id }}</code></pre>
+<p>Then upload:</p>
+<pre><code>sentry-cli sourcemaps upload --release=&lt;version&gt; ./dist</code></pre>
 {% endblock %}

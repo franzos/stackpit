@@ -1,5 +1,5 @@
 use axum::extract::{Multipart, Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
@@ -12,8 +12,13 @@ use crate::sourcemap;
 ///
 /// Returns upload configuration. `sentry-cli` calls this first to learn
 /// chunk size, hash algorithm, and where to POST chunks.
-pub async fn chunk_upload_config(Path(org): Path<String>) -> impl IntoResponse {
-    Json(json!({
+pub async fn chunk_upload_config(
+    State(state): State<AppState>,
+    Path(org): Path<String>,
+    req: axum::http::Request<axum::body::Body>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    super::validate_api_key(&state.pool, req.headers(), "sourcemap").await?;
+    Ok(Json(json!({
         "url": format!("/api/0/organizations/{org}/chunk-upload/"),
         "chunkSize": 8_388_608,
         "chunksPerRequest": 64,
@@ -32,7 +37,7 @@ pub async fn chunk_upload_config(Path(org): Path<String>) -> impl IntoResponse {
             "artifact_bundles",
             "artifact_bundles_v2"
         ]
-    }))
+    })))
 }
 
 /// `POST /api/0/organizations/{org}/chunk-upload/`
@@ -41,8 +46,10 @@ pub async fn chunk_upload_config(Path(org): Path<String>) -> impl IntoResponse {
 /// keyed by its SHA1 checksum for later assembly.
 pub async fn chunk_upload(
     State(state): State<AppState>,
+    headers: HeaderMap,
     mut multipart: Multipart,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    super::validate_api_key(&state.pool, &headers, "sourcemap").await?;
     let pool = &state.pool;
     let mut count = 0u32;
 
@@ -83,12 +90,23 @@ pub struct AssembleRequest {
 /// extracts sourcemaps by debug ID, and stores them.
 pub async fn assemble(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<AssembleRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let key_project_id = super::validate_api_key(&state.pool, &headers, "sourcemap").await?;
     let pool = &state.pool;
 
-    // Resolve the project ID from the request
-    let project_id = resolve_project_id(&body.projects);
+    // Resolve the project ID from the request, falling back to the key's project
+    let project_id = match resolve_project_id(&body.projects) {
+        0 => key_project_id,
+        id if id == key_project_id => id,
+        _ => {
+            return Err(super::api_error(
+                StatusCode::FORBIDDEN,
+                "API key not valid for this project",
+            ))
+        }
+    };
 
     // Concatenate chunks into the full artifact bundle
     let zip_data = sourcemap::assemble_chunks(pool, &body.chunks)

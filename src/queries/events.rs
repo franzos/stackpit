@@ -712,7 +712,7 @@ mod tests {
             "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, received_at)
              VALUES ('bad', 'event', ?1, 1, 'testkey', 100, 100)"
         ))
-        .bind(&[0xDE, 0xAD, 0xBE, 0xEF] as &[u8])
+        .bind([0xDEu8, 0xAD, 0xBE, 0xEF].as_slice())
         .execute(&pool)
         .await
         .unwrap();

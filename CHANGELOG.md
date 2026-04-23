@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.1.8] - 2026-04-23
+
+### Security
+- SSRF: decode IPv6-embedded IPv4 in 6to4, NAT64, Teredo, and IPv4-compatible forms before private-range checks
+- SSRF: block additional v4 ranges (0.0.0.0/8, limited broadcast, 198.18.0.0/15 benchmark, 240.0.0.0/4 class E)
+- Webhook test client refuses HTTP redirects to keep DNS-pinning effective
+- API key validation runs constant-time compare on hit, miss, and DB-error paths
+
+### Changed
+- Filter engine snapshot switched from `RwLock<Arc<_>>` to `arc_swap::ArcSwap` for lock-free reads
+- Release profile `opt-level` raised from `"s"` to `3`
+- Source map artifact bundle parsing moved off the async runtime via `spawn_blocking`
+- Threshold alert accumulators use `BTreeMap` for deterministic iteration
+
+### Added
+- Background tasks run under a panic-observing supervisor that logs instead of silently dropping
+- Chunk upload enforces per-request field count and total byte caps
+- Artifact bundle parser caps entry count and per-entry size
+
+### Fixed
+- Envelope and notification dispatch no longer panic on unknown `level`/`type` values
+
 ## [0.1.7] - 2026-04-04
 
 ### Fixed

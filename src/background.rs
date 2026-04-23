@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -6,11 +7,35 @@ use tokio_util::sync::CancellationToken;
 use crate::db::DbPool;
 use crate::stats::DiscardStats;
 
+/// Spawn a background task and log a tracing::error! if it panics.
+///
+/// This only observes — it does not restart. Panics in background
+/// tasks otherwise disappear silently, which is how we lose retention
+/// or digest processing for the lifetime of the process.
+pub fn supervise<F>(name: &'static str, fut: F)
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let handle = tokio::spawn(fut);
+    tokio::spawn(async move {
+        match handle.await {
+            Ok(()) => tracing::debug!("background task {name} exited cleanly"),
+            Err(e) if e.is_panic() => {
+                tracing::error!("background task {name} panicked — not restarted");
+            }
+            Err(e) if e.is_cancelled() => {
+                tracing::debug!("background task {name} cancelled");
+            }
+            Err(e) => tracing::warn!("background task {name} join error: {e}"),
+        }
+    });
+}
+
 pub fn spawn_retention_task(pool: DbPool, retention_days: u32, cancel: CancellationToken) {
     if retention_days == 0 {
         return;
     }
-    tokio::spawn(async move {
+    supervise("retention", async move {
         loop {
             tokio::select! {
                 _ = cancel.cancelled() => return,
@@ -43,7 +68,7 @@ pub fn spawn_discard_stats_task(
     discard_stats: Arc<DiscardStats>,
     cancel: CancellationToken,
 ) {
-    tokio::spawn(async move {
+    supervise("discard_stats", async move {
         loop {
             tokio::select! {
                 _ = cancel.cancelled() => return,
@@ -57,7 +82,7 @@ pub fn spawn_discard_stats_task(
 }
 
 pub fn spawn_wal_checkpoint_task(pool: DbPool, cancel: CancellationToken) {
-    tokio::spawn(async move {
+    supervise("wal_checkpoint", async move {
         let _pool = pool;
         loop {
             tokio::select! {
@@ -78,7 +103,7 @@ pub fn spawn_digest_task(
     notify_tx: tokio::sync::mpsc::Sender<crate::notify::NotificationEvent>,
     cancel: CancellationToken,
 ) {
-    tokio::spawn(async move {
+    supervise("digest", async move {
         loop {
             tokio::select! {
                 _ = cancel.cancelled() => return,

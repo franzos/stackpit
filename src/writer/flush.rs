@@ -3,7 +3,7 @@ use crate::models::StorableEvent;
 use crate::queries::event_writes;
 use anyhow::Result;
 use sqlx::QueryBuilder;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::time::Instant;
 
 use super::accumulator::Accumulators;
@@ -656,7 +656,7 @@ async fn check_threshold_alerts(
         candidate_idx: usize,
     }
 
-    let mut by_window: HashMap<i64, Vec<PendingCheck>> = HashMap::new();
+    let mut by_window: BTreeMap<i64, Vec<PendingCheck>> = BTreeMap::new();
     for m in &matches {
         let rule = &rules[m.rule_idx];
         let fp = &candidates[m.candidate_idx].fingerprint;
@@ -680,7 +680,7 @@ async fn check_threshold_alerts(
 
     // -- Step 5: batch COUNT per window (typically 1-2 distinct windows) --
 
-    let mut event_counts: HashMap<(i64, String), i64> = HashMap::new();
+    let mut event_counts: BTreeMap<(i64, String), i64> = BTreeMap::new();
     for (&window, checks) in &by_window {
         let mut fps: Vec<&str> = checks
             .iter()

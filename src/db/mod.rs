@@ -144,6 +144,7 @@ pub(crate) struct EventRow {
     pub project_id: u64,
     #[allow(dead_code)]
     pub timestamp: i64,
+    #[allow(dead_code)]
     pub level: Option<String>,
     pub title: Option<String>,
     #[allow(dead_code)]

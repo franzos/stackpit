@@ -117,7 +117,9 @@ pub fn parse(body: &[u8], project_id: u64, auth: &SentryAuth) -> Result<ParsedEn
             .get("type")
             .and_then(|v| v.as_str())
             .unwrap_or("event");
-        let item_type = item_type_str.parse::<ItemType>().expect("infallible");
+        let item_type = item_type_str
+            .parse::<ItemType>()
+            .unwrap_or(ItemType::Unknown);
         let declared_length = item_header.get("length").and_then(|v| v.as_u64());
         let filename = item_header
             .get("filename")
@@ -282,7 +284,10 @@ fn extract_fields(
         .get("level")
         .or_else(|| json.get("severity_text"))
         .and_then(|v| v.as_str())
-        .map(|s| s.parse::<crate::models::Level>().expect("infallible"));
+        .map(|s| {
+            s.parse::<crate::models::Level>()
+                .unwrap_or(crate::models::Level::Unknown)
+        });
     event.platform = json
         .get("platform")
         .and_then(|v| v.as_str())
@@ -600,7 +605,7 @@ mod tests {
     #[test]
     fn parse_store_body_valid_json() {
         let body = br#"{"event_id":"store1","level":"error","message":"boom","timestamp":5000}"#;
-        let mut event = parse_store_body(body, 7, &test_auth()).unwrap();
+        let event = parse_store_body(body, 7, &test_auth()).unwrap();
         assert_eq!(event.event_id, "store1");
         assert_eq!(event.item_type, ItemType::Event);
         assert_eq!(event.project_id, 7);

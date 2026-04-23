@@ -72,8 +72,10 @@ fn passes_min_level(event_level: Option<&str>, min_level: Option<&str>) -> bool 
         (_, None) => true,
         (None, Some(_)) => true, // no level on the event -- let it through rather than silently drop it
         (Some(ev), Some(min)) => {
-            let ev_level: crate::models::Level = ev.parse().unwrap();
-            let min_level: crate::models::Level = min.parse().unwrap();
+            let ev_level: crate::models::Level =
+                ev.parse().unwrap_or(crate::models::Level::Unknown);
+            let min_level: crate::models::Level =
+                min.parse().unwrap_or(crate::models::Level::Unknown);
             ev_level.rank() >= min_level.rank()
         }
     }
@@ -85,6 +87,25 @@ fn passes_env_filter(event_env: Option<&str>, filter: Option<&str>) -> bool {
         (None, Some(_)) => false,
         (Some(ev), Some(f)) => ev == f,
     }
+}
+
+/// Spawn the dispatcher under a panic-observing supervisor.
+///
+/// The dispatcher owns the mpsc Receiver, so if the future panics
+/// the channel is dropped and all senders break — supervision here
+/// logs the panic but cannot cleanly restart without rebuilding the
+/// whole channel. Treat a panic as fatal for notifications; fix the
+/// underlying bug and restart the process.
+pub fn spawn_dispatcher(
+    rx: tokio::sync::mpsc::Receiver<NotificationEvent>,
+    pool: DbPool,
+    encryptor: Option<Arc<SecretEncryptor>>,
+    rate_limiter: Arc<NotifyRateLimiter>,
+) {
+    crate::background::supervise(
+        "notify_dispatcher",
+        run_dispatcher(rx, pool, encryptor, rate_limiter),
+    );
 }
 
 pub async fn run_dispatcher(

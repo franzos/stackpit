@@ -5,6 +5,13 @@
 use anyhow::{Context, Result};
 use std::io::Read;
 
+// ── Bundle parsing limits ───────────────────────────────────────────
+// The ZIP central directory is attacker-controlled; never trust its
+// declared sizes without a hard cap.
+
+const MAX_BUNDLE_ENTRIES: usize = 10_000;
+const MAX_BUNDLE_ENTRY_BYTES: usize = 64 * 1024 * 1024; // 64 MiB per entry
+
 // ── Types ───────────────────────────────────────────────────────────
 
 pub struct SourcemapEntry {
@@ -30,9 +37,25 @@ pub struct ResolvedFrame {
 /// The bundle is produced by `sentry-cli sourcemaps upload` and contains
 /// a manifest plus the actual `.map` files. The manifest maps debug IDs
 /// to source file paths.
-pub fn parse_artifact_bundle(zip_data: &[u8]) -> Result<Vec<SourcemapEntry>> {
+///
+/// ZIP decoding and JSON parsing are CPU-bound, so we offload to a blocking
+/// task to keep the async runtime responsive on large uploads.
+pub async fn parse_artifact_bundle(zip_data: Vec<u8>) -> Result<Vec<SourcemapEntry>> {
+    tokio::task::spawn_blocking(move || parse_artifact_bundle_sync(&zip_data))
+        .await
+        .context("sourcemap bundle parse task join failed")?
+}
+
+fn parse_artifact_bundle_sync(zip_data: &[u8]) -> Result<Vec<SourcemapEntry>> {
     let cursor = std::io::Cursor::new(zip_data);
     let mut archive = zip::ZipArchive::new(cursor).context("invalid ZIP archive")?;
+
+    if archive.len() > MAX_BUNDLE_ENTRIES {
+        anyhow::bail!(
+            "bundle exceeds entry count limit ({} > {MAX_BUNDLE_ENTRIES})",
+            archive.len()
+        );
+    }
 
     // Try to find the manifest — could be at the root or under artifact-bundle/
     let manifest: serde_json::Value = try_read_manifest(&mut archive)?;
@@ -134,8 +157,17 @@ fn read_zip_entry(
     name: &str,
 ) -> Result<Vec<u8>> {
     let mut file = archive.by_name(name)?;
-    let mut buf = Vec::with_capacity(file.size() as usize);
+    // `file.size()` comes from the ZIP central directory and is attacker-controlled,
+    // so clamp the preallocation. The post-read check catches under-declared sizes too.
+    let cap = file.size().min(MAX_BUNDLE_ENTRY_BYTES as u64) as usize;
+    let mut buf = Vec::with_capacity(cap);
     file.read_to_end(&mut buf)?;
+    if buf.len() > MAX_BUNDLE_ENTRY_BYTES {
+        anyhow::bail!(
+            "bundle entry {name} exceeds size limit ({} > {MAX_BUNDLE_ENTRY_BYTES})",
+            buf.len()
+        );
+    }
     Ok(buf)
 }
 

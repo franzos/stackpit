@@ -154,6 +154,7 @@ pub async fn test_integration(
 
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none())
         .resolve(&resolved.hostname, resolved.addr)
         .build()
     {

@@ -1,6 +1,6 @@
 [package]
 name = "stackpit"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 description = "Lightweight, self-hosted error tracking and event monitoring"
 authors = ["Franz Geffke <mail@gofranz.com>"]
@@ -37,6 +37,7 @@ uuid = { version = "1", features = ["v4"] }
 zstd = "0.13"
 dashmap = "6"
 parking_lot = "0.12"
+arc-swap = "1"
 simple_hll = "0.0.4"
 charts-rs = "0.3"
 reqwest = { version = "0.13", features = ["json", "rustls"], default-features = false }
@@ -64,7 +65,7 @@ assets = [
 ]
 
 [profile.release]
-opt-level = "s"
+opt-level = 3
 lto = "fat"
 codegen-units = 1
 strip = "symbols"

@@ -8,6 +8,11 @@ use serde_json::json;
 use crate::server::AppState;
 use crate::sourcemap;
 
+// ── Request limits ──────────────────────────────────────────────────
+// Keep in sync with `maxRequestSize` advertised in `chunk_upload_config`.
+const MAX_CHUNK_FIELDS: usize = 128;
+const MAX_CHUNK_TOTAL_BYTES: usize = 32 * 1024 * 1024;
+
 /// `GET /api/0/organizations/{org}/chunk-upload/`
 ///
 /// Returns upload configuration. `sentry-cli` calls this first to learn
@@ -51,16 +56,38 @@ pub async fn chunk_upload(
     let key_project_id = super::validate_api_key(&state.pool, &headers, "sourcemap").await?;
     let pool = &state.sourcemap_pool;
     let mut count = 0u32;
+    let mut total_bytes: usize = 0;
 
     loop {
         match multipart.next_field().await {
             Ok(Some(field)) => {
+                if count as usize >= MAX_CHUNK_FIELDS {
+                    tracing::warn!(
+                        "chunk-upload field limit reached ({MAX_CHUNK_FIELDS}), rejecting request"
+                    );
+                    return Err((
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        Json(json!({ "detail": "too many multipart fields" })),
+                    ));
+                }
+
                 let data = field.bytes().await.map_err(|e| {
                     (
                         StatusCode::BAD_REQUEST,
                         Json(json!({ "detail": format!("failed to read chunk: {e}") })),
                     )
                 })?;
+
+                total_bytes = total_bytes.saturating_add(data.len());
+                if total_bytes > MAX_CHUNK_TOTAL_BYTES {
+                    tracing::warn!(
+                        "chunk-upload byte limit reached ({total_bytes} > {MAX_CHUNK_TOTAL_BYTES})"
+                    );
+                    return Err((
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        Json(json!({ "detail": "request body too large" })),
+                    ));
+                }
 
                 let checksum = sha1_hex(&data);
                 sourcemap::store_chunk(pool, &checksum, &data, key_project_id)
@@ -83,7 +110,7 @@ pub async fn chunk_upload(
         }
     }
 
-    tracing::debug!("stored {count} chunks");
+    tracing::debug!("stored {count} chunks ({total_bytes} bytes)");
     Ok(StatusCode::OK)
 }
 
@@ -166,11 +193,14 @@ pub async fn assemble(
         }
     }
 
-    // Parse the artifact bundle and extract sourcemaps
-    let entries = sourcemap::parse_artifact_bundle(&zip_data).map_err(|e| {
-        tracing::error!("parse artifact bundle: {e}");
-        super::internal_error(e)
-    })?;
+    // Parse the artifact bundle and extract sourcemaps. Offloaded to a blocking
+    // task so ZIP decoding + JSON parsing don't stall the async runtime.
+    let entries = sourcemap::parse_artifact_bundle(zip_data)
+        .await
+        .map_err(|e| {
+            tracing::error!("parse artifact bundle: {e}");
+            super::internal_error(e)
+        })?;
 
     let stored = entries.len();
     for entry in &entries {

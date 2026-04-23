@@ -80,11 +80,12 @@ impl FilterSnapshot {
 /// - Tier 2: rate limits, user-agent blocking, environment/release exclusions
 /// - Tier 3: custom filter rules, IP blocklists
 ///
-/// The read-only filter data sits behind a single `RwLock` + `Arc` swap.
-/// Discarded fingerprints get their own lock because they're mutated
-/// independently of full reloads.
+/// A lock-free `arc_swap::ArcSwap<FilterSnapshot>` gives every reader a
+/// consistent snapshot without contention; writers swap a fresh `Arc` on
+/// reload. Discarded fingerprints get their own lock because they're
+/// mutated independently of full reloads.
 pub struct FilterEngine {
-    snapshot: RwLock<Arc<FilterSnapshot>>,
+    snapshot: arc_swap::ArcSwap<FilterSnapshot>,
     /// Separate from snapshot -- fingerprints get added/removed on the fly.
     discarded: RwLock<HashSet<String>>,
     /// Per-key sliding windows. DashMap gives us lock-free concurrent access.
@@ -110,7 +111,7 @@ impl FilterEngine {
             .as_secs();
         let discarded = initial_data.discarded.clone();
         Self {
-            snapshot: RwLock::new(Arc::new(FilterSnapshot::from_data(initial_data))),
+            snapshot: arc_swap::ArcSwap::new(Arc::new(FilterSnapshot::from_data(initial_data))),
             discarded: RwLock::new(discarded),
             rate_windows: dashmap::DashMap::new(),
             global_rate_limit,
@@ -128,13 +129,13 @@ impl FilterEngine {
     pub fn apply_data(&self, data: FilterData) {
         *self.discarded.write() = data.discarded.clone();
         let new_snapshot = Arc::new(FilterSnapshot::from_data(data));
-        *self.snapshot.write() = new_snapshot;
+        self.snapshot.store(new_snapshot);
     }
 
-    /// Grab an Arc clone of the current snapshot -- one quick read lock,
-    /// then all checks run lock-free against the immutable data.
+    /// Grab an Arc clone of the current snapshot -- lock-free load,
+    /// then all checks run against the immutable data.
     fn snapshot(&self) -> Arc<FilterSnapshot> {
-        self.snapshot.read().clone()
+        self.snapshot.load_full()
     }
 
     // ---

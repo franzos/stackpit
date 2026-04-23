@@ -213,12 +213,12 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
             config.notifications.rate_limit_per_project,
             config.notifications.rate_limit_global,
         ));
-        tokio::spawn(crate::notify::run_dispatcher(
+        crate::notify::spawn_dispatcher(
             notify_rx,
             notify_pool,
             notify_encryptor,
             notify_rate_limiter,
-        ));
+        );
     }
 
     let state = AppState {

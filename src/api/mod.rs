@@ -3,6 +3,7 @@ use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 
 use crate::db::DbPool;
 use crate::server::AppState;
@@ -145,11 +146,43 @@ pub async fn validate_api_key(
         }
     };
 
-    let hash = hex::encode(Sha256::digest(token.as_bytes()));
+    // Hash the presented token once; keep the raw 32-byte digest so every
+    // code path compares the same number of bytes.
+    let hash_bytes = Sha256::digest(token.as_bytes());
+    let hash_hex = hex::encode(hash_bytes);
 
-    match crate::queries::api_keys::get_api_key_by_hash(pool, &hash).await {
-        Ok(Some(info)) if info.scope == scope => Ok(info.project_id),
-        _ => Err(api_error(StatusCode::UNAUTHORIZED, "invalid API key")),
+    // Compute the dummy digest unconditionally so hit, miss, and DB-error
+    // paths all pay the same CPU cost. Without this the Err(_) arm would
+    // skip the ct_eq and leak a third timing profile.
+    let dummy = Sha256::digest(b"stackpit-dummy-api-key-for-timing");
+
+    let row = crate::queries::api_keys::get_api_key_by_hash(pool, &hash_hex).await;
+
+    match row {
+        Ok(Some(info)) => {
+            // The SQL WHERE already narrowed to an exact match, but run a
+            // constant-time compare on the raw 32-byte digest to match the
+            // CPU profile of the miss/error paths below.
+            let matches: bool = hash_bytes.as_slice().ct_eq(hash_bytes.as_slice()).into();
+            if matches && info.scope == scope {
+                Ok(info.project_id)
+            } else {
+                Err(api_error(StatusCode::UNAUTHORIZED, "invalid API key"))
+            }
+        }
+        Ok(None) => {
+            // DB miss: burn the same compare cycles so the response time
+            // doesn't leak "key prefix matches nothing" vs "key exists but
+            // scope wrong".
+            let _equal: bool = hash_bytes.as_slice().ct_eq(dummy.as_slice()).into();
+            Err(api_error(StatusCode::UNAUTHORIZED, "invalid API key"))
+        }
+        Err(_) => {
+            // DB error: still burn the compare cycles so timing is
+            // indistinguishable from hit/miss.
+            let _equal: bool = hash_bytes.as_slice().ct_eq(dummy.as_slice()).into();
+            Err(api_error(StatusCode::UNAUTHORIZED, "invalid API key"))
+        }
     }
 }
 

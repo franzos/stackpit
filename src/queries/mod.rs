@@ -65,6 +65,7 @@ pub(crate) mod test_helpers {
     }
 
     /// Inserts a test issue row.
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_test_issue(
         pool: &DbPool,
         fingerprint: &str,

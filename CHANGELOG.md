@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.0] - 2026-05-27
+
+### Added
+- OAuth 2.0 / OIDC single sign-on (Authorization Code + PKCE) with just-in-time user provisioning
+- API bearer auth via JWT (RS256/JWKS) and RFC 7662 token introspection
+- MCP endpoint (`/mcp`, bearer-only)
+- `external_url` / `external_ingest_url` config for deployments behind a proxy
+- Operator guide (`docs/operator-guide.md`)
+
+### Changed
+- Admin token is now a break-glass fallback that runs alongside OAuth/OIDC
+- OAuth requires a 32-byte master key; IdP tokens stored encrypted at rest
+
 ## [0.1.9] - 2026-05-26
 
 ### Added

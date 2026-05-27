@@ -1,16 +1,15 @@
 use askama::Template;
 use axum::extract::{Path, Query};
-use axum::http::StatusCode;
 
 use crate::extractors::ReadPool;
-use crate::html::render_template;
-use crate::html::utils::ListParams;
+use crate::html::utils::{render_project_detail, render_project_list, Csrf, ListParams};
 use crate::queries;
 use crate::queries::types::{Page, PagedResult, ProfileSummary};
 use crate::queries::ProjectNavCounts;
 
-use super::html_error;
+use super::HtmlError;
 
+#[allow(unused_imports)]
 use crate::html::filters;
 
 #[derive(Template)]
@@ -19,28 +18,31 @@ struct ProfileListTemplate {
     project_id: u64,
     result: PagedResult<ProfileSummary>,
     nav: ProjectNavCounts,
+    csrf_token: String,
 }
 
 pub async fn list_handler(
     ReadPool(pool): ReadPool,
+    Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
     Query(params): Query<ListParams>,
-) -> axum::response::Response {
+) -> Result<axum::response::Response, HtmlError> {
     let page = Page::new(params.offset, params.limit);
+    let result = queries::profiles::list_profiles(&pool, project_id, &page).await?;
 
-    let result = match queries::profiles::list_profiles(&pool, project_id, &page).await {
-        Ok(r) => r,
-        Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
-
-    let nav = queries::projects::get_nav_counts(&pool, project_id).await;
-
-    let tmpl = ProfileListTemplate {
+    Ok(render_project_list(
+        &pool,
         project_id,
+        csrf,
         result,
-        nav,
-    };
-    render_template(&tmpl)
+        |project_id, result, nav, csrf_token| ProfileListTemplate {
+            project_id,
+            result,
+            nav,
+            csrf_token,
+        },
+    )
+    .await)
 }
 
 #[derive(Template)]
@@ -50,26 +52,32 @@ struct ProfileDetailTemplate {
     profile: queries::types::ProfileDetail,
     raw_json: String,
     nav: ProjectNavCounts,
+    csrf_token: String,
 }
 
 pub async fn detail_handler(
     ReadPool(pool): ReadPool,
+    Csrf(csrf): Csrf,
     Path((project_id, event_id)): Path<(u64, String)>,
-) -> axum::response::Response {
-    let profile = match queries::profiles::get_profile(&pool, project_id, &event_id).await {
-        Ok(Some(p)) => p,
-        Ok(None) => return html_error(StatusCode::NOT_FOUND, "Profile not found"),
-        Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
+) -> Result<axum::response::Response, HtmlError> {
+    let profile = queries::profiles::get_profile(&pool, project_id, &event_id).await?;
 
-    let raw_json = serde_json::to_string_pretty(&profile.payload).unwrap_or_default();
-    let nav = queries::projects::get_nav_counts(&pool, project_id).await;
-
-    let tmpl = ProfileDetailTemplate {
+    render_project_detail(
+        &pool,
         project_id,
+        csrf,
         profile,
-        raw_json,
-        nav,
-    };
-    render_template(&tmpl)
+        "Profile not found",
+        |project_id, profile, nav, csrf_token| {
+            let raw_json = serde_json::to_string_pretty(&profile.payload).unwrap_or_default();
+            ProfileDetailTemplate {
+                project_id,
+                profile,
+                raw_json,
+                nav,
+                csrf_token,
+            }
+        },
+    )
+    .await
 }

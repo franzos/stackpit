@@ -1,17 +1,17 @@
 use askama::Template;
 use axum::extract::{Path, Query};
-use axum::http::StatusCode;
 use serde::Deserialize;
 
 use crate::extractors::ReadPool;
 use crate::html::render_template;
-use crate::html::utils::ListParams;
+use crate::html::utils::{render_project_list, Csrf, ListParams};
 use crate::queries;
 use crate::queries::types::{MetricBucket, MetricInfo, Page, PagedResult};
 use crate::queries::ProjectNavCounts;
 
-use super::html_error;
+use super::HtmlError;
 
+#[allow(unused_imports)]
 use crate::html::filters;
 
 #[derive(Template)]
@@ -20,27 +20,31 @@ struct MetricListTemplate {
     project_id: u64,
     result: PagedResult<MetricInfo>,
     nav: ProjectNavCounts,
+    csrf_token: String,
 }
 
 pub async fn list_handler(
     ReadPool(pool): ReadPool,
+    Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
     Query(params): Query<ListParams>,
-) -> axum::response::Response {
+) -> Result<axum::response::Response, HtmlError> {
     let page = Page::new(params.offset, params.limit);
-    let result = match queries::metrics::list_metrics(&pool, project_id, &page).await {
-        Ok(r) => r,
-        Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
+    let result = queries::metrics::list_metrics(&pool, project_id, &page).await?;
 
-    let nav = queries::projects::get_nav_counts(&pool, project_id).await;
-
-    let tmpl = MetricListTemplate {
+    Ok(render_project_list(
+        &pool,
         project_id,
+        csrf,
         result,
-        nav,
-    };
-    render_template(&tmpl)
+        |project_id, result, nav, csrf_token| MetricListTemplate {
+            project_id,
+            result,
+            nav,
+            csrf_token,
+        },
+    )
+    .await)
 }
 
 #[derive(Deserialize)]
@@ -57,25 +61,23 @@ struct MetricDetailTemplate {
     metric_type: String,
     buckets: Vec<MetricBucket>,
     nav: ProjectNavCounts,
+    csrf_token: String,
 }
 
 pub async fn detail_handler(
     ReadPool(pool): ReadPool,
+    Csrf(csrf): Csrf,
     Path((project_id, raw_mri)): Path<(u64, String)>,
     Query(params): Query<DetailParams>,
-) -> axum::response::Response {
+) -> Result<axum::response::Response, HtmlError> {
     let mri = raw_mri
         .strip_prefix('/')
         .unwrap_or(&raw_mri)
         .trim_end_matches('/')
         .to_string();
     let buckets =
-        match queries::metrics::get_metric_series(&pool, project_id, &mri, params.from, params.to)
-            .await
-        {
-            Ok(b) => b,
-            Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-        };
+        queries::metrics::get_metric_series(&pool, project_id, &mri, params.from, params.to)
+            .await?;
 
     let metric_type = queries::metrics::get_metric_type(&pool, project_id, &mri)
         .await
@@ -89,6 +91,7 @@ pub async fn detail_handler(
         metric_type,
         buckets,
         nav,
+        csrf_token: csrf,
     };
-    render_template(&tmpl)
+    Ok(render_template(&tmpl))
 }

@@ -12,6 +12,9 @@ pub mod issues;
 pub mod logs;
 pub mod metrics;
 pub mod monitors;
+pub mod parse_log;
+pub mod parse_metric;
+pub mod parse_span;
 pub mod profiles;
 pub mod projects;
 pub mod releases;
@@ -19,6 +22,7 @@ pub mod replays;
 pub mod retention;
 pub mod spans;
 pub mod types;
+pub mod users;
 
 pub use types::*;
 

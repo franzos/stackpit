@@ -6,6 +6,41 @@ use crate::db::DbPool;
 
 use super::types::{Page, PagedResult, Release, ReleaseFilter, ReleaseHealth, ReleaseSummary};
 
+/// Closed set of allowed ORDER BY clauses; the rendered ident is always
+/// `&'static str`, keeping user input out of the SQL string.
+enum ReleaseSort {
+    FirstSeen,
+    Events,
+    Issues,
+    Adoption,
+    ProjectId,
+    LastSeen,
+}
+
+impl ReleaseSort {
+    fn parse(sort: Option<&str>) -> Self {
+        match sort {
+            Some("first_seen") => Self::FirstSeen,
+            Some("events") => Self::Events,
+            Some("issues") => Self::Issues,
+            Some("adoption") => Self::Adoption,
+            Some("project_id") => Self::ProjectId,
+            _ => Self::LastSeen,
+        }
+    }
+
+    fn as_sql_ident(&self) -> &'static str {
+        match self {
+            Self::FirstSeen => "first_seen ASC",
+            Self::Events => "event_count DESC, last_seen DESC",
+            Self::Issues => "issue_count DESC, last_seen DESC",
+            Self::Adoption => "adoption DESC, last_seen DESC",
+            Self::ProjectId => "e.project_id ASC, last_seen DESC",
+            Self::LastSeen => "last_seen DESC",
+        }
+    }
+}
+
 /// Which projects have a specific release version deployed.
 pub async fn find_projects_by_version(pool: &DbPool, version: &str) -> Result<Vec<u64>> {
     let rows = sqlx::query(sql!("SELECT project_id FROM releases WHERE version = ?1"))
@@ -204,14 +239,7 @@ pub async fn list_all_releases(
 
     let total: i64 = count_qb.build().fetch_one(pool).await?.get(0);
 
-    let sort_col = match filter.sort.as_deref() {
-        Some("first_seen") => "first_seen ASC",
-        Some("events") => "event_count DESC, last_seen DESC",
-        Some("issues") => "issue_count DESC, last_seen DESC",
-        Some("adoption") => "adoption DESC, last_seen DESC",
-        Some("project_id") => "e.project_id ASC, last_seen DESC",
-        _ => "last_seen DESC",
-    };
+    let sort = ReleaseSort::parse(filter.sort.as_deref());
 
     // Main CTE query with pagination.
     let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new(
@@ -263,7 +291,7 @@ pub async fn list_all_releases(
     }
 
     qb.push(" GROUP BY e.project_id, e.release ORDER BY ");
-    qb.push(sort_col);
+    qb.push(sort.as_sql_ident());
     qb.push(" LIMIT ");
     qb.push_bind(page.limit as i64);
     qb.push(" OFFSET ");
@@ -288,10 +316,5 @@ pub async fn list_all_releases(
         })
         .collect();
 
-    Ok(PagedResult {
-        items,
-        total: total as u64,
-        offset: page.offset,
-        limit: page.limit,
-    })
+    Ok(PagedResult::from_page(items, total, page))
 }

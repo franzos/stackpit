@@ -62,7 +62,7 @@
             <summary class="frame-header{% if frame.in_app %} in-app{% else %} library{% endif %}">
                 {{ frame.filename }}{% match frame.lineno %}{% when Some with (ln) %}:{{ ln }}{% match frame.colno %}{% when Some with (cn) %}:{{ cn }}{% when None %}{% endmatch %}{% when None %}{% endmatch %} in <strong>{{ frame.function }}</strong>
                 {% if !frame.source_links.is_empty() %}
-                <span class="source-links">{% for link in frame.source_links %}<a href="{{ link.url }}" target="_blank" rel="noopener" class="source-link" onclick="event.stopPropagation()">{{ link.label }}</a>{% endfor %}</span>
+                <span class="source-links">{% for link in frame.source_links %}<a href="{{ link.url }}" target="_blank" rel="noopener" class="source-link" data-stop-propagation>{{ link.label }}</a>{% endfor %}</span>
                 {% endif %}
             </summary>
             {% if frame.context_line.is_some() || !frame.pre_context.is_empty() || !frame.post_context.is_empty() %}

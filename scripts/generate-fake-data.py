@@ -122,6 +122,34 @@ def discover_base_url(config_path):
     return f"http://{host}:{port}"
 
 
+def discover_admin(config_path):
+    """Read [server].bind + admin_token from stackpit.toml. Returns
+    (admin_base_url_or_None, admin_token_or_None). Used for the setup pass
+    that renames auto-provisioned projects and seeds releases."""
+    bind = None
+    token = None
+    if not os.path.isfile(config_path):
+        return None, None
+    try:
+        with open(config_path) as f:
+            for line in f:
+                m = re.match(r'^\s*bind\s*=\s*"([^"]+)"', line)
+                if m and bind is None:
+                    bind = m.group(1)
+                    continue
+                m = re.match(r'^\s*admin_token\s*=\s*"([^"]+)"', line)
+                if m:
+                    token = m.group(1)
+    except OSError:
+        return None, None
+    if not bind:
+        return None, token
+    host, _, port = bind.rpartition(":")
+    if host in ("0.0.0.0", "::", ""):
+        host = "localhost"
+    return f"http://{host}:{port}", token
+
+
 # ---------------------------------------------------------------------------
 # Project definitions: ~500 projects generated from prefix-suffix combos
 # ---------------------------------------------------------------------------
@@ -2699,6 +2727,142 @@ def make_attachment():
 
 
 # ---------------------------------------------------------------------------
+# Logs / spans / metrics / profiles / replays
+# Minimal but-valid payload shapes -- enough to populate the per-project tabs
+# without modelling the full SDK protocol.
+# ---------------------------------------------------------------------------
+
+_LOG_BODIES = [
+    "Request handled", "Cache miss for key user:%d",
+    "Database connection acquired", "Failed to connect to upstream %s",
+    "Background job %s completed", "Rate limit hit for tenant %s",
+    "Webhook delivered to %s", "Token refreshed", "Replaying event %s",
+]
+_LOG_LEVELS = ["debug", "info", "warn", "error", "fatal"]
+
+def make_log_payload(project):
+    """Sentry SDK structured-log items, wrapped as {"items":[...]}."""
+    count = random.randint(1, 5)
+    items = []
+    for _ in range(count):
+        body = random.choice(_LOG_BODIES)
+        if "%d" in body:
+            body = body % random.randint(100, 9999)
+        elif "%s" in body:
+            body = body % random.choice(["upstream-a", "job-123", "tenant-42", "evt-7"])
+        items.append({
+            "timestamp": rand_timestamp(),
+            "level": random.choice(_LOG_LEVELS),
+            "body": body,
+            "trace_id": rand_hex(32),
+            "span_id": rand_hex(16),
+            "attributes": {
+                "service.name": project["name"],
+                "deployment.environment": random.choice(["production", "staging", "dev"]),
+            },
+        })
+    return json.dumps({"items": items}, separators=(",", ":"))
+
+
+_SPAN_OPS = ["db.query", "http.client", "cache.get", "queue.process", "rpc.call", "fn.compute"]
+_SPAN_DESCS = [
+    "SELECT * FROM users WHERE id = ?", "GET /api/v1/users",
+    "redis.get session:abc", "POST /webhook",
+    "INSERT INTO orders ...", "compute_fingerprint",
+]
+_SPAN_STATUS = ["ok", "internal_error", "deadline_exceeded", "unavailable", "cancelled"]
+
+def make_span_payload(project):
+    start = rand_timestamp()
+    duration = random.random() * 2
+    span = {
+        "span_id": rand_hex(16),
+        "trace_id": rand_hex(32),
+        "parent_span_id": rand_hex(16),
+        "op": random.choice(_SPAN_OPS),
+        "description": random.choice(_SPAN_DESCS),
+        "status": random.choice(_SPAN_STATUS),
+        "start_timestamp": start,
+        "timestamp": start + duration,
+    }
+    return json.dumps(span, separators=(",", ":"))
+
+
+_METRIC_NAMES = [
+    ("c", "requests.total"), ("c", "errors.count"),
+    ("d", "latency.ms"), ("d", "db.query.duration"),
+    ("g", "queue.depth"), ("g", "active.connections"),
+]
+
+def make_metric_payload(project):
+    mtype, name = random.choice(_METRIC_NAMES)
+    type_name = {"c": "counter", "d": "distribution", "g": "gauge"}[mtype]
+    if mtype == "c":
+        value = random.randint(1, 100)
+    elif mtype == "d":
+        value = [random.uniform(0.5, 250.0) for _ in range(random.randint(3, 8))]
+    else:
+        value = random.uniform(1.0, 500.0)
+    metric = {
+        "mri": f"{mtype}:custom/{name}@none",
+        "type": type_name,
+        "value": value,
+        "tags": {
+            "env": random.choice(["production", "staging"]),
+            "method": random.choice(["GET", "POST", "PUT", "DELETE"]),
+        },
+        "timestamp": rand_timestamp(),
+    }
+    return json.dumps(metric, separators=(",", ":"))
+
+
+def make_profile_event(project):
+    event_id = rand_event_id()
+    profile = {
+        "event_id": event_id,
+        "version": "1",
+        "platform": project["platform"],
+        "timestamp": iso_now(),
+        "profile": {
+            "frames": [
+                {"function": "main", "in_app": True, "abs_path": "src/main.py", "lineno": 1},
+                {"function": "handle_request", "in_app": True, "abs_path": "src/server.py", "lineno": 42},
+                {"function": "query_db", "in_app": False, "abs_path": "lib/db.py", "lineno": 117},
+            ],
+            "samples": [
+                {"elapsed_since_start_ns": i * 1_000_000, "thread_id": "1", "stack_id": 0}
+                for i in range(20)
+            ],
+            "stacks": [[0, 1, 2]],
+            "thread_metadata": {"1": {"name": "main"}},
+        },
+        "transaction": {
+            "id": rand_event_id(),
+            "name": random.choice(["GET /api/v1/users", "POST /checkout", "GET /dashboard"]),
+            "trace_id": rand_hex(32),
+            "active_thread_id": "1",
+        },
+    }
+    return event_id, json.dumps(profile, separators=(",", ":"))
+
+
+def make_replay_event(project):
+    event_id = rand_event_id()
+    replay = {
+        "event_id": event_id,
+        "type": "replay_event",
+        "replay_id": rand_event_id(),
+        "segment_id": random.randint(0, 50),
+        "replay_type": "session",
+        "timestamp": time.time(),
+        "trace_ids": [rand_hex(32)],
+        "urls": ["/dashboard", "/settings"],
+        "platform": project["platform"],
+    }
+    return event_id, json.dumps(replay, separators=(",", ":"))
+
+
+# ---------------------------------------------------------------------------
 # Issue grouping: pick recurring errors per project
 # ---------------------------------------------------------------------------
 
@@ -2918,6 +3082,61 @@ def generate_item(project, kind, base, recurring_pattern=None, sent_error_ids=No
             return send(url, envelope, key)
         return kind, err_id, do_send, extra_sends
 
+    elif kind == "log":
+        payload = make_log_payload(project)
+        envelope = build_envelope(
+            make_envelope_header(None, key, pid, platform),
+            [({"type": "log"}, payload)],
+        )
+        url = f"{base}/api/{pid}/envelope/"
+        def do_send():
+            return send(url, envelope, key)
+        return kind, "log", do_send, extra_sends
+
+    elif kind == "span":
+        payload = make_span_payload(project)
+        envelope = build_envelope(
+            make_envelope_header(None, key, pid, platform),
+            [({"type": "span"}, payload)],
+        )
+        url = f"{base}/api/{pid}/envelope/"
+        def do_send():
+            return send(url, envelope, key)
+        return kind, "span", do_send, extra_sends
+
+    elif kind == "metric":
+        payload = make_metric_payload(project)
+        envelope = build_envelope(
+            make_envelope_header(None, key, pid, platform),
+            [({"type": "metric"}, payload)],
+        )
+        url = f"{base}/api/{pid}/envelope/"
+        def do_send():
+            return send(url, envelope, key)
+        return kind, "metric", do_send, extra_sends
+
+    elif kind == "profile":
+        event_id, payload = make_profile_event(project)
+        envelope = build_envelope(
+            make_envelope_header(event_id, key, pid, platform),
+            [({"type": "profile"}, payload)],
+        )
+        url = f"{base}/api/{pid}/envelope/"
+        def do_send():
+            return send(url, envelope, key)
+        return kind, event_id[:8], do_send, extra_sends
+
+    elif kind == "replay":
+        event_id, payload = make_replay_event(project)
+        envelope = build_envelope(
+            make_envelope_header(event_id, key, pid, platform),
+            [({"type": "replay_event"}, payload)],
+        )
+        url = f"{base}/api/{pid}/envelope/"
+        def do_send():
+            return send(url, envelope, key)
+        return kind, event_id[:8], do_send, extra_sends
+
     # Fallback
     def noop():
         return 200, "noop"
@@ -2928,10 +3147,134 @@ def generate_item(project, kind, base, recurring_pattern=None, sent_error_ids=No
 # Main
 # ---------------------------------------------------------------------------
 
+def admin_session(admin_base, admin_token):
+    """Login as admin, return (cookie_header, csrf_token). The synchronizer
+    CSRF token is deterministic per admin_token so one fetch is enough."""
+    body = urllib.parse.urlencode({"token": admin_token}).encode()
+    req = urllib.request.Request(f"{admin_base}/web/login", data=body, method="POST")
+    req.add_header("Content-Type", "application/x-www-form-urlencoded")
+    # Don't follow redirects -- we want the 303 + Set-Cookie response.
+    opener = urllib.request.build_opener(_NoRedirect())
+    try:
+        resp = opener.open(req, timeout=10)
+        cookies = resp.headers.get_all("Set-Cookie") or []
+    except urllib.error.HTTPError as e:
+        if e.code != 303:
+            return None, None
+        cookies = e.headers.get_all("Set-Cookie") or []
+
+    cookie_header = "; ".join(sc.split(";", 1)[0] for sc in cookies)
+    if "stackpit_token=" not in cookie_header:
+        return None, None
+
+    req = urllib.request.Request(f"{admin_base}/web/projects/")
+    req.add_header("Cookie", cookie_header)
+    try:
+        resp = urllib.request.urlopen(req, timeout=10)
+        html = resp.read().decode("utf-8", errors="replace")
+    except Exception:
+        return None, None
+    m = re.search(r'name="csrf_token"\s+value="([a-f0-9]+)"', html)
+    return (cookie_header, m.group(1)) if m else (None, None)
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _admin_post_form(admin_base, cookie, csrf, path, data):
+    form = dict(data)
+    form["csrf_token"] = csrf
+    req = urllib.request.Request(
+        f"{admin_base}{path}",
+        data=urllib.parse.urlencode(form).encode(),
+        method="POST",
+    )
+    req.add_header("Content-Type", "application/x-www-form-urlencoded")
+    req.add_header("Cookie", cookie)
+    try:
+        resp = urllib.request.urlopen(req, timeout=10)
+        return resp.status, resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8", errors="replace")
+
+
+def setup_projects_post_ingest(ingest_base, admin_base, admin_token, projects):
+    """Name auto-provisioned projects, mint sourcemap keys, seed releases.
+
+    Renames + sourcemap-key minting hit the admin UI (rate-limited at 120/min
+    per IP), so we pause between bursts. Releases go through the Sentry-compat
+    API on the **ingest** port (no admin rate limit).
+    Skipped (with a note) when admin URL or admin_token is unavailable."""
+    if not admin_base or not admin_token:
+        print("setup: admin_token or admin URL not discoverable -- skipping rename + releases")
+        return
+    cookie, csrf = admin_session(admin_base, admin_token)
+    if not cookie or not csrf:
+        print(f"setup: admin login at {admin_base} failed -- skipping rename + releases")
+        return
+
+    # Stay under ADMIN_RATE_LIMIT (120/min). Each rename + sourcemap = 2
+    # admin requests, so chunk into ~50-project groups and sleep 65s between.
+    ADMIN_REQS_PER_PROJECT = 2
+    CHUNK = 110 // ADMIN_REQS_PER_PROJECT  # = 55 projects per burst
+    versions = ["1.0.0", "1.1.0", "1.2.0", "2.0.0-rc1", "2.0.0"]
+
+    print(f"setup: renaming {len(projects)} projects + minting sourcemap keys via {admin_base}")
+    spk_by_project = {}
+    named = 0
+    for i, proj in enumerate(projects):
+        if i > 0 and i % CHUNK == 0:
+            print(f"  paused for admin rate-limit window after {i}/{len(projects)}...")
+            time.sleep(65)
+        pid = proj["id"]
+        status, _ = _admin_post_form(
+            admin_base, cookie, csrf,
+            f"/web/projects/{pid}/settings/name",
+            {"name": proj["name"]},
+        )
+        if 200 <= status < 400:
+            named += 1
+        status, html = _admin_post_form(
+            admin_base, cookie, csrf,
+            f"/web/projects/{pid}/settings/sourcemaps/generate",
+            {},
+        )
+        m = re.search(r"<code>(spk_[a-f0-9]+)</code>", html)
+        if m:
+            spk_by_project[pid] = m.group(1)
+
+    print(f"setup: seeding releases via {ingest_base} (Sentry-compat API)")
+    releases = 0
+    for proj in projects:
+        spk = spk_by_project.get(proj["id"])
+        if not spk:
+            continue
+        for ver in random.sample(versions, k=random.randint(2, 4)):
+            payload = json.dumps({"version": f"{proj['name']}@{ver}", "projects": [proj["id"]]}).encode()
+            req = urllib.request.Request(
+                f"{ingest_base}/api/0/organizations/default/releases/",
+                data=payload, method="POST",
+            )
+            req.add_header("Content-Type", "application/json")
+            req.add_header("Authorization", f"Bearer {spk}")
+            try:
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    if 200 <= r.status < 400:
+                        releases += 1
+            except urllib.error.HTTPError:
+                pass
+    print(f"setup: named {named}/{len(projects)} projects, {len(spk_by_project)} sourcemap keys, {releases} releases")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Generate fake Sentry data for stackpit")
     parser.add_argument("--config", default="stackpit.toml", help="path to stackpit.toml")
     parser.add_argument("--base-url", default=None, help="override base URL (skips config discovery)")
+    parser.add_argument("--admin-base", default=None, help="admin/UI base URL (defaults to bind in stackpit.toml)")
+    parser.add_argument("--admin-token", default=None, help="admin token (defaults to admin_token in stackpit.toml)")
+    parser.add_argument("--no-setup", action="store_true", help="skip the post-ingest rename + release seeding pass")
     parser.add_argument("--count", type=int, default=100000, help="total number of items to generate")
     parser.add_argument("--seed", type=int, default=None, help="random seed for reproducibility")
     parser.add_argument("--workers", type=int, default=32, help="number of parallel workers")
@@ -2943,11 +3286,16 @@ def main():
         random.seed(args.seed)
 
     base = (args.base_url or discover_base_url(args.config)).rstrip("/")
+    discovered_admin, discovered_token = discover_admin(args.config)
+    admin_base = (args.admin_base or discovered_admin or "").rstrip("/") or None
+    admin_token = args.admin_token or discovered_token
 
     # Init connection pool
     _init_pool_manager(base)
 
     print(f"target: {base}")
+    if admin_base:
+        print(f"admin: {admin_base}{' (token set)' if admin_token else ' (no token)'}")
     print(f"projects: {len(PROJECTS)}")
     print(f"generating: {args.count} items")
     print(f"workers: {args.workers}, batch_size: {args.batch_size}")
@@ -2971,16 +3319,21 @@ def main():
 
     # Event distribution weights
     weights = {
-        "error": 40,
-        "message": 10,
-        "transaction": 25,
-        "session": 5,
-        "sessions": 3,
-        "csp": 5,
-        "check_in": 5,
+        "error": 30,
+        "message": 8,
+        "transaction": 18,
+        "session": 4,
+        "sessions": 2,
+        "csp": 3,
+        "check_in": 4,
         "user_report": 2,
-        "client_report": 3,
+        "client_report": 2,
         "attachment": 2,
+        "log": 10,
+        "span": 6,
+        "metric": 5,
+        "profile": 2,
+        "replay": 2,
     }
     kinds = list(weights.keys())
     kind_weights = [weights[k] for k in kinds]
@@ -3042,6 +3395,11 @@ def main():
                 for idx, project, item in batch
             }
 
+            # Carriage-return progress only makes sense on a real terminal;
+            # piping or redirecting (CI, tee) turns it into ~100KB of useless
+            # line spam. Suppress it then -- the final summary still prints.
+            interactive = sys.stdout.isatty()
+
             for future in as_completed(futures):
                 idx, results = future.result()
                 completed += len(results)
@@ -3052,7 +3410,7 @@ def main():
                         label = f"[{completed}/{total_with_extras}]"
                         proj_label = f"project={proj['id']} ({proj['name']})"
                         print(f"  {label} {k_label:<14} {proj_label:<45} -> {st} {'ok' if ok else 'FAIL'}")
-                else:
+                elif interactive:
                     sys.stdout.write(f"\r  progress: {completed}/{total_with_extras}")
                     sys.stdout.flush()
 
@@ -3061,11 +3419,16 @@ def main():
     elapsed = time.monotonic() - t_start
     eps = stats.sent / elapsed if elapsed > 0 else 0
 
-    if args.quiet:
+    if args.quiet and sys.stdout.isatty():
         sys.stdout.write("\r" + " " * 60 + "\r")
 
     print(f"\nDone: {stats.ok} ok, {stats.err} failed ({stats.sent} total)")
     print(f"Time: {elapsed:.1f}s ({eps:.0f} events/sec)")
+
+    if not args.no_setup:
+        # Run after ingest so the projects we name actually exist
+        # (auto-provisioned by the writer on first event).
+        setup_projects_post_ingest(base, admin_base, admin_token, PROJECTS)
 
 
 if __name__ == "__main__":

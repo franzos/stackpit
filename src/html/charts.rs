@@ -1,4 +1,4 @@
-use super::utils::{sanitize_svg_output, sanitize_svg_text};
+use super::utils::sanitize_svg_text;
 
 pub fn render_event_chart(buckets: &[(String, f32)]) -> Result<String, Box<dyn std::error::Error>> {
     render_event_chart_sized(buckets, 800.0, 250.0)
@@ -36,11 +36,7 @@ fn render_event_chart_sized(
     chart.x_axis_font_size = 10.0;
     chart.series_label_formatter = "{c:.0}".to_string();
 
-    let svg = chart.svg()?;
-
-    // charts-rs shouldn't produce script tags, but this SVG goes straight
-    // into the template with |safe -- so let's strip them just in case.
-    let sanitized = sanitize_svg_output(&svg);
-
-    Ok(sanitized)
+    // Our own charts-rs output; the admin CSP (`script-src 'self'`, no
+    // `'unsafe-inline'`) neutralizes any inline handler in the browser.
+    Ok(chart.svg()?)
 }

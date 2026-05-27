@@ -73,17 +73,10 @@ impl FilterSnapshot {
     }
 }
 
-/// The thing that decides whether an event lives or dies.
+/// Event filter engine (tiered checks by cost/specificity).
 ///
-/// I've organized checks into tiers -- roughly by cost and specificity:
-/// - Tier 1: fingerprint discard, inbound filters (browser extensions, localhost), message patterns
-/// - Tier 2: rate limits, user-agent blocking, environment/release exclusions
-/// - Tier 3: custom filter rules, IP blocklists
-///
-/// A lock-free `arc_swap::ArcSwap<FilterSnapshot>` gives every reader a
-/// consistent snapshot without contention; writers swap a fresh `Arc` on
-/// reload. Discarded fingerprints get their own lock because they're
-/// mutated independently of full reloads.
+/// Tiers: 1=fingerprint/inbound/message, 2=rate/ua/environment, 3=rules/IP-blocks.
+/// Lock-free snapshots for readers; discarded fingerprints in separate lock.
 pub struct FilterEngine {
     snapshot: arc_swap::ArcSwap<FilterSnapshot>,
     /// Separate from snapshot -- fingerprints get added/removed on the fly.
@@ -262,7 +255,7 @@ impl FilterEngine {
     // ---
 
     /// Returns `Err(retry_after_secs)` if the key's over its limit.
-    #[allow(dead_code)] // used by tests; production callers use pre_filter_check
+    #[cfg(test)]
     pub fn check_rate_limit(&self, public_key: &str, project_id: u64) -> Result<(), u32> {
         let snap = self.snapshot();
         self.check_rate_limit_with_snap(public_key, project_id, &snap)
@@ -357,7 +350,7 @@ impl FilterEngine {
     // ---
 
     /// Drops health-check bots and any user-agents matching project or global patterns.
-    #[allow(dead_code)] // used by tests; production callers use pre_filter_check
+    #[cfg(test)]
     pub fn check_user_agent(&self, user_agent: &str, project_id: u64) -> FilterVerdict {
         let snap = self.snapshot();
         self.check_user_agent_with_snap(user_agent, project_id, &snap)
@@ -403,7 +396,7 @@ impl FilterEngine {
     // ---
 
     /// Match client IP against per-project CIDR blocklists. Unparseable IPs fail open.
-    #[allow(dead_code)] // used by tests; production callers use pre_filter_check
+    #[cfg(test)]
     pub fn check_ip(&self, ip_str: &str, project_id: u64) -> FilterVerdict {
         let snap = self.snapshot();
         self.check_ip_with_snap(ip_str, project_id, &snap)
@@ -472,7 +465,7 @@ impl FilterEngine {
     }
 
     // ---
-    // Cache mutation helpers (called from the writer thread)
+    // Cache mutation helpers
     // ---
 
     /// Mark a fingerprint as discarded -- future events with it get dropped.
@@ -483,41 +476,6 @@ impl FilterEngine {
     /// Un-discard a fingerprint, letting events through again.
     pub fn remove_discarded_fingerprint(&self, fingerprint: &str) {
         self.discarded.write().remove(fingerprint);
-    }
-
-    /// Optimistic update -- add to cache first, run the DB op, roll back if
-    /// it fails. Keeps the UI snappy.
-    pub fn persist_discarded_fingerprint<F>(
-        &self,
-        fingerprint: &str,
-        db_op: F,
-    ) -> anyhow::Result<()>
-    where
-        F: FnOnce() -> anyhow::Result<()>,
-    {
-        self.add_discarded_fingerprint(fingerprint);
-        if let Err(e) = db_op() {
-            self.remove_discarded_fingerprint(fingerprint);
-            return Err(e);
-        }
-        Ok(())
-    }
-
-    /// Same optimistic approach, but for un-discarding. Roll back on DB failure.
-    pub fn persist_undiscarded_fingerprint<F>(
-        &self,
-        fingerprint: &str,
-        db_op: F,
-    ) -> anyhow::Result<()>
-    where
-        F: FnOnce() -> anyhow::Result<()>,
-    {
-        self.remove_discarded_fingerprint(fingerprint);
-        if let Err(e) = db_op() {
-            self.add_discarded_fingerprint(fingerprint);
-            return Err(e);
-        }
-        Ok(())
     }
 }
 

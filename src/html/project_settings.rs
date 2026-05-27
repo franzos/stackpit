@@ -5,7 +5,7 @@ use serde::Deserialize;
 
 use crate::forge;
 use crate::html::render_template;
-use crate::html::utils;
+use crate::html::utils::{self, Csrf};
 use crate::queries;
 use crate::queries::types::{ProjectKey, ProjectRepo};
 use crate::queries::ProjectNavCounts;
@@ -15,9 +15,7 @@ use crate::server::AppState;
 #[allow(unused_imports)]
 use crate::html::filters;
 
-// ---------------------------------------------------------------------------
-// General settings tab
-// ---------------------------------------------------------------------------
+// — General settings tab
 
 #[derive(Template)]
 #[template(path = "project_settings.html")]
@@ -29,13 +27,15 @@ struct ProjectSettingsTemplate {
     repos: Vec<ProjectRepo>,
     message: Option<String>,
     nav: ProjectNavCounts,
+    csrf_token: String,
 }
 
 pub async fn handler(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
 ) -> axum::response::Response {
-    render_general(&state, project_id, None).await
+    render_general(&state, project_id, None, &csrf).await
 }
 
 #[derive(Deserialize)]
@@ -47,6 +47,7 @@ const MAX_FIELD_LENGTH: usize = 255;
 
 pub async fn set_name(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
     Form(form): Form<SetNameForm>,
 ) -> axum::response::Response {
@@ -58,18 +59,18 @@ pub async fn set_name(
             Some(format!(
                 "Project name exceeds max length of {MAX_FIELD_LENGTH} characters"
             )),
+            &csrf,
         )
         .await;
     }
 
-    let result = match utils::await_writer(state.writer.set_project_name(project_id, name)).await {
-        Ok(r) => r,
-        Err(resp) => return resp,
-    };
-    match result {
-        Ok(()) => render_general(&state, project_id, Some("Project name updated".into())).await,
-        Err(e) => render_general(&state, project_id, Some(format!("Error: {e}"))).await,
-    }
+    let s = state.clone();
+    utils::query_then_render(
+        queries::projects::set_project_name(&state.writer_pool, project_id, &name).await,
+        "Project name updated",
+        move |msg| async move { render_general(&s, project_id, msg, &csrf).await },
+    )
+    .await
 }
 
 #[derive(Deserialize)]
@@ -80,6 +81,7 @@ pub struct AddRepoForm {
 
 pub async fn add_repo(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
     Form(form): Form<AddRepoForm>,
 ) -> axum::response::Response {
@@ -89,6 +91,7 @@ pub async fn add_repo(
             &state,
             project_id,
             Some("Repository URL is required".into()),
+            &csrf,
         )
         .await;
     }
@@ -97,6 +100,7 @@ pub async fn add_repo(
             &state,
             project_id,
             Some("Repository URL exceeds max length of 2048 characters".into()),
+            &csrf,
         )
         .await;
     }
@@ -107,82 +111,83 @@ pub async fn add_repo(
         .filter(|s| !s.trim().is_empty())
         .map(|s| s.trim().to_string());
 
-    let result = match utils::await_writer(state.writer.upsert_project_repo(
-        project_id,
-        repo_url,
-        forge_type.as_str().to_string(),
-        url_template,
-    ))
+    let s = state.clone();
+    utils::query_then_render(
+        queries::projects::upsert_project_repo(
+            &state.writer_pool,
+            project_id,
+            &repo_url,
+            forge_type.as_str(),
+            url_template.as_deref(),
+        )
+        .await,
+        "Repository added",
+        move |msg| async move { render_general(&s, project_id, msg, &csrf).await },
+    )
     .await
-    {
-        Ok(r) => r,
-        Err(resp) => return resp,
-    };
-    match result {
-        Ok(()) => render_general(&state, project_id, Some("Repository added".into())).await,
-        Err(e) => render_general(&state, project_id, Some(format!("Error: {e}"))).await,
-    }
 }
 
 pub async fn delete_repo(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Path((project_id, repo_id)): Path<(u64, i64)>,
 ) -> axum::response::Response {
-    let result =
-        match utils::await_writer(state.writer.delete_project_repo(project_id, repo_id)).await {
-            Ok(r) => r,
-            Err(resp) => return resp,
-        };
-    match result {
-        Ok(()) => render_general(&state, project_id, Some("Repository removed".into())).await,
-        Err(e) => render_general(&state, project_id, Some(format!("Error: {e}"))).await,
-    }
+    let msg = match queries::projects::delete_project_repo(&state.writer_pool, project_id, repo_id)
+        .await
+    {
+        Ok(0) => format!("Error: not found: repo: {repo_id}"),
+        Ok(_) => "Repository removed".to_string(),
+        Err(e) => format!("Error: {e}"),
+    };
+    render_general(&state, project_id, Some(msg), &csrf).await
 }
 
 pub async fn archive_project(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
 ) -> axum::response::Response {
-    let result = match utils::await_writer(state.writer.archive_project(project_id)).await {
-        Ok(r) => r,
-        Err(resp) => return resp,
-    };
-    match result {
-        Ok(()) => {
+    match queries::projects::archive_project(&state.writer_pool, project_id).await {
+        Ok(0) => {
+            render_general(
+                &state,
+                project_id,
+                Some(format!("Error: not found: project: {project_id}")),
+                &csrf,
+            )
+            .await
+        }
+        Ok(_) => {
             // Flush the auth cache for this project -- otherwise ingestion
             // would keep working until the cache entry expires.
             crate::auth_service::invalidate_project(&state.auth_cache, project_id);
-            render_general(&state, project_id, Some("Project archived".into())).await
+            render_general(&state, project_id, Some("Project archived".into()), &csrf).await
         }
-        Err(e) => render_general(&state, project_id, Some(format!("Error: {e}"))).await,
+        Err(e) => render_general(&state, project_id, Some(format!("Error: {e}")), &csrf).await,
     }
 }
 
 pub async fn unarchive_project(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
 ) -> axum::response::Response {
-    let result = match utils::await_writer(state.writer.unarchive_project(project_id)).await {
-        Ok(r) => r,
-        Err(resp) => return resp,
+    let msg = match queries::projects::unarchive_project(&state.writer_pool, project_id).await {
+        Ok(0) => format!("Error: not found: project: {project_id}"),
+        Ok(_) => "Project unarchived".to_string(),
+        Err(e) => format!("Error: {e}"),
     };
-    match result {
-        Ok(()) => render_general(&state, project_id, Some("Project unarchived".into())).await,
-        Err(e) => render_general(&state, project_id, Some(format!("Error: {e}"))).await,
-    }
+    render_general(&state, project_id, Some(msg), &csrf).await
 }
 
 pub async fn delete_project(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
 ) -> axum::response::Response {
-    let result = match utils::await_writer(state.writer.delete_project(project_id)).await {
-        Ok(r) => r,
-        Err(resp) => return resp,
-    };
-    match result {
+    match queries::projects::delete_project(&state.writer_pool, project_id).await {
         Ok(()) => axum::response::Redirect::to("/web/projects/").into_response(),
-        Err(e) => render_general(&state, project_id, Some(format!("Error: {e}"))).await,
+        Err(e) => render_general(&state, project_id, Some(format!("Error: {e}")), &csrf).await,
     }
 }
 
@@ -190,6 +195,7 @@ async fn render_general(
     state: &AppState,
     project_id: u64,
     message: Option<String>,
+    csrf: &str,
 ) -> axum::response::Response {
     let repos = queries::projects::get_project_repos(&state.pool, project_id)
         .await
@@ -222,14 +228,13 @@ async fn render_general(
         repos,
         message,
         nav,
+        csrf_token: csrf.to_string(),
     };
 
     render_template(&tmpl)
 }
 
-// ---------------------------------------------------------------------------
-// SDK Setup tab (keys)
-// ---------------------------------------------------------------------------
+// — SDK Setup tab (keys)
 
 #[derive(Template)]
 #[template(path = "project_settings_keys.html")]
@@ -240,13 +245,15 @@ struct ProjectKeysTemplate {
     keys: Vec<ProjectKey>,
     message: Option<String>,
     nav: ProjectNavCounts,
+    csrf_token: String,
 }
 
 pub async fn keys_handler(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
 ) -> axum::response::Response {
-    render_keys(&state, project_id, None).await
+    render_keys(&state, project_id, None, &csrf).await
 }
 
 #[derive(Deserialize)]
@@ -256,6 +263,7 @@ pub struct CreateKeyForm {
 
 pub async fn create_key(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
     Form(form): Form<CreateKeyForm>,
 ) -> axum::response::Response {
@@ -264,32 +272,36 @@ pub async fn create_key(
         .filter(|s| !s.trim().is_empty())
         .map(|s| s.trim().to_string());
 
-    let result = match utils::await_writer(state.writer.create_project_key(project_id, label)).await
-    {
-        Ok(r) => r,
-        Err(resp) => return resp,
-    };
-    match result {
-        Ok(_key) => render_keys(&state, project_id, Some("Key created".into())).await,
-        Err(e) => render_keys(&state, project_id, Some(format!("Error: {e}"))).await,
-    }
+    let s = state.clone();
+    utils::query_then_render(
+        queries::projects::create_project_key(&state.writer_pool, project_id, label.as_deref())
+            .await,
+        "Key created",
+        move |msg| async move { render_keys(&s, project_id, msg, &csrf).await },
+    )
+    .await
 }
 
 pub async fn delete_key(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Path((project_id, public_key)): Path<(u64, String)>,
 ) -> axum::response::Response {
-    let result =
-        match utils::await_writer(state.writer.delete_project_key(public_key.clone())).await {
-            Ok(r) => r,
-            Err(resp) => return resp,
-        };
-    match result {
-        Ok(()) => {
-            crate::auth_service::invalidate_key(&state.auth_cache, &public_key);
-            render_keys(&state, project_id, Some("Key deleted".into())).await
+    match queries::projects::delete_project_key(&state.writer_pool, &public_key).await {
+        Ok(0) => {
+            render_keys(
+                &state,
+                project_id,
+                Some(format!("Error: not found: key: {public_key}")),
+                &csrf,
+            )
+            .await
         }
-        Err(e) => render_keys(&state, project_id, Some(format!("Error: {e}"))).await,
+        Ok(_) => {
+            crate::auth_service::invalidate_key(&state.auth_cache, &public_key);
+            render_keys(&state, project_id, Some("Key deleted".into()), &csrf).await
+        }
+        Err(e) => render_keys(&state, project_id, Some(format!("Error: {e}")), &csrf).await,
     }
 }
 
@@ -297,6 +309,7 @@ async fn render_keys(
     state: &AppState,
     project_id: u64,
     message: Option<String>,
+    csrf: &str,
 ) -> axum::response::Response {
     let project_status = queries::projects::get_project_status(&state.pool, project_id)
         .await
@@ -325,14 +338,13 @@ async fn render_keys(
         keys,
         message,
         nav,
+        csrf_token: csrf.to_string(),
     };
 
     render_template(&tmpl)
 }
 
-// ---------------------------------------------------------------------------
-// Source Maps tab
-// ---------------------------------------------------------------------------
+// — Source Maps tab
 
 #[derive(Template)]
 #[template(path = "project_settings_sourcemaps.html")]
@@ -344,24 +356,23 @@ struct SourceMapsTemplate {
     message: Option<String>,
     sentry_url: String,
     nav: ProjectNavCounts,
+    csrf_token: String,
 }
 
 pub async fn sourcemaps_handler(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
 ) -> axum::response::Response {
-    render_sourcemaps(&state, project_id, String::new(), None).await
+    render_sourcemaps(&state, project_id, String::new(), None, &csrf).await
 }
 
 pub async fn generate_sourcemap_key(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
 ) -> axum::response::Response {
-    let raw_key = {
-        let mut buf = [0u8; 16];
-        rand::fill(&mut buf);
-        format!("spk_{}", hex::encode(buf))
-    };
+    let raw_key = format!("spk_{}", crate::crypto::random_hex::<16>());
 
     let hash = {
         use sha2::{Digest, Sha256};
@@ -373,13 +384,14 @@ pub async fn generate_sourcemap_key(
     match queries::api_keys::create_api_key(&state.pool, project_id, "sourcemap", &hash, prefix)
         .await
     {
-        Ok(()) => render_sourcemaps(&state, project_id, raw_key, None).await,
+        Ok(()) => render_sourcemaps(&state, project_id, raw_key, None, &csrf).await,
         Err(e) => {
             render_sourcemaps(
                 &state,
                 project_id,
                 String::new(),
                 Some(format!("Error: {e}")),
+                &csrf,
             )
             .await
         }
@@ -391,6 +403,7 @@ async fn render_sourcemaps(
     project_id: u64,
     new_key: String,
     message: Option<String>,
+    csrf: &str,
 ) -> axum::response::Response {
     let existing = queries::api_keys::get_api_key_for_project(&state.pool, project_id, "sourcemap")
         .await
@@ -411,6 +424,7 @@ async fn render_sourcemaps(
         message,
         sentry_url,
         nav,
+        csrf_token: csrf.to_string(),
     };
 
     render_template(&tmpl)

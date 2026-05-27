@@ -16,10 +16,13 @@ mod filter;
 mod fingerprint;
 mod forge;
 mod html;
+mod mcp;
 mod middleware;
 mod models;
 mod network;
 mod notify;
+mod oauth;
+mod oidc;
 mod providers;
 mod queries;
 mod server;
@@ -30,14 +33,26 @@ mod sync;
 mod writer;
 
 use clap::{Parser, Subcommand};
+use std::future::Future;
 use std::path::PathBuf;
+
+/// Build a multi-thread runtime and drive `fut` to completion.
+fn cli_run<F, T>(fut: F) -> anyhow::Result<T>
+where
+    F: Future<Output = anyhow::Result<T>>,
+{
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(fut)
+}
 
 #[derive(Parser)]
 #[command(name = "stackpit", about = "Drop-in Sentry host replacement")]
 struct Cli {
     /// Config file path
-    #[arg(short, long, default_value = "stackpit.toml")]
-    config: PathBuf,
+    #[arg(short, long)]
+    config: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Command,
@@ -104,11 +119,18 @@ enum Command {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
+    let config_path = cli
+        .config
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(config::DEFAULT_CONFIG_PATH));
+
     if let Command::Init = cli.command {
-        return cli::init::run(&cli.config);
+        return cli::init::run(&config_path);
     }
 
-    let config = config::Config::load(&cli.config)?;
+    // An explicit --config that doesn't exist is a hard error; the default path
+    // missing falls back to built-in defaults (fresh checkout still boots).
+    let config = config::Config::load(&config_path, cli.config.is_some())?;
     config.validate()?;
 
     let database_url = config.storage.database_url();
@@ -122,58 +144,37 @@ fn main() -> anyhow::Result<()> {
                 )
                 .init();
 
-            tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()?
-                .block_on(server::run(config, ingest_only))?;
+            cli_run(server::run(config, ingest_only))?;
         }
         Command::Projects => {
-            let rt = tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()?;
-            rt.block_on(async {
+            cli_run(async {
                 let pool = db::create_pool(&database_url).await?;
                 cli::projects::run(&pool).await
             })?;
         }
         Command::Events { project, limit } => {
-            let rt = tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()?;
-            rt.block_on(async {
+            cli_run(async {
                 let pool = db::create_pool(&database_url).await?;
                 cli::events::run(&pool, project, limit).await
             })?;
         }
         Command::Event { id } => {
-            let rt = tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()?;
-            rt.block_on(async {
+            cli_run(async {
                 let pool = db::create_pool(&database_url).await?;
                 cli::event::run(&pool, &id).await
             })?;
         }
         Command::Tail => {
-            let rt = tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()?;
-            rt.block_on(async {
+            cli_run(async {
                 let pool = db::create_pool(&database_url).await?;
                 cli::tail::run(&pool).await
             })?;
         }
         Command::Status => {
-            let rt = tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()?;
-            rt.block_on(cli::status::run(&config))?;
+            cli_run(cli::status::run(&config))?;
         }
         Command::BackfillIssues => {
-            let rt = tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()?;
-            rt.block_on(async {
+            cli_run(async {
                 let pool = db::create_writer_pool(&database_url).await?;
                 db::run_migrations(&pool).await?;
                 cli::backfill::run(&pool).await
@@ -208,9 +209,7 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Integration tests: event ingestion → writer → query → response
-// ---------------------------------------------------------------------------
+// — Integration tests
 
 #[cfg(test)]
 mod integration_tests {
@@ -267,7 +266,6 @@ mod integration_tests {
         // Spin up the writer
         let (writer, _join) = writer::spawn(
             pool.clone(),
-            None,
             None,
             std::sync::Arc::new(crate::stats::IngestStats::new()),
         )
@@ -334,7 +332,6 @@ mod integration_tests {
         let (writer, _join) = writer::spawn(
             pool.clone(),
             None,
-            None,
             std::sync::Arc::new(crate::stats::IngestStats::new()),
         )
         .await
@@ -353,15 +350,14 @@ mod integration_tests {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
         // Issue should exist now -- try updating its status
-        let reply_rx = writer
-            .update_issue_status(
-                "fp-status-001".to_string(),
-                crate::queries::IssueStatus::Resolved,
-            )
-            .unwrap();
-
-        let result = reply_rx.await;
-        assert!(result.is_ok(), "should get a reply from writer");
+        let rows = crate::queries::issues::update_issue_status(
+            &pool,
+            "fp-status-001",
+            crate::queries::IssueStatus::Resolved,
+        )
+        .await
+        .unwrap();
+        assert_eq!(rows, 1, "status update should affect one row");
 
         let _ = writer.shutdown();
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;

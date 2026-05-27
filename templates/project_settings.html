@@ -1,18 +1,18 @@
 {% extends "base.html" %}
 
-{% block title %}General - Project {{ project_id }} - Stackpit{% endblock %}
+{% block title %}General - {{ nav.label }} - Stackpit{% endblock %}
 
 {% block breadcrumbs %}
 <span class="sep" aria-hidden="true">/</span>
 <a href="/web/projects/">Projects</a>
 <span class="sep" aria-hidden="true">/</span>
-<a href="/web/projects/{{ project_id }}/">Project {{ project_id }}</a>
+<a href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
 <span class="sep" aria-hidden="true">/</span>
 <span>Settings</span>
 {% endblock %}
 
 {% block content %}
-<h1>Project {{ project_id }}{% if project_status == "archived" %} <span style="color: var(--muted); font-size: 0.8rem;">(archived)</span>{% endif %}</h1>
+<h1>{{ nav.label }}{% if project_status == "archived" %} <span style="color: var(--muted); font-size: 0.8rem;">(archived)</span>{% endif %}</h1>
 <nav class="project-tabs" aria-label="Project sections">
     <a href="/web/projects/{{ project_id }}/" class="project-tab"><span class="type-icon type-icon-event"></span>Issues</a>
     {% if nav.transaction_count > 0 %}<a href="/web/projects/{{ project_id }}/transactions/" class="project-tab"><span class="type-icon type-icon-transaction"></span>Transactions <span class="tab-count">{{ nav.transaction_count }}</span></a>{% endif %}
@@ -42,6 +42,7 @@
 
 <h2>Project Name</h2>
 <form class="settings-form" method="post" action="/web/projects/{{ project_id }}/settings/name">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <label for="project_name">Display Name</label>
     <input type="text" id="project_name" name="name" placeholder="My Project" value="{{ project_name }}">
     <button type="submit" class="btn">Save Name</button>
@@ -81,7 +82,8 @@
             <td>{% match repo.url_template %}{% when Some with (t) %}<code>{{ t }}</code>{% when None %}<span class="empty" style="padding: 0;">auto</span>{% endmatch %}</td>
             <td>
                 <form method="post" action="/web/projects/{{ project_id }}/settings/repos/{{ repo.id }}/delete" style="margin: 0;">
-                    <button type="submit" class="btn btn-danger" onclick="return confirm('Remove this repository?')">Remove</button>
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button type="submit" class="btn btn-danger" data-confirm="Remove this repository?">Remove</button>
                 </form>
             </td>
         </tr>
@@ -94,6 +96,7 @@
 <h2>Add Repository</h2>
 <p style="font-size: 0.9rem; color: var(--muted);">Adds clickable source links (e.g. "View on GitHub") next to stack frames. Requires a release with a commit SHA — the forge type is auto-detected from the URL. Supported: GitHub, GitLab, Gitea/Codeberg, Bitbucket, Sourcehut, Gitee, Azure DevOps. For other forges, provide a URL template.</p>
 <form class="settings-form" method="post" action="/web/projects/{{ project_id }}/settings/repos">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <label for="repo_url">Repository URL</label>
     <input type="text" id="repo_url" name="repo_url" placeholder="https://github.com/org/repo" required>
     <label for="url_template">URL Template <span style="font-weight: 400; color: var(--muted);">(optional, for custom forges)</span></label>
@@ -105,19 +108,22 @@
 <div style="border: 1px solid var(--danger, #c0392b); border-radius: 0.5rem; padding: 1rem;">
     {% if project_status == "active" %}
     <form method="post" action="/web/projects/{{ project_id }}/settings/archive" style="margin-bottom: 1rem;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <p style="margin: 0 0 0.5rem;">Archive this project. Archived projects reject new events.</p>
-        <button type="submit" class="btn btn-danger" onclick="return confirm('Archive this project? New events will be rejected.')">Archive Project</button>
+        <button type="submit" class="btn btn-danger" data-confirm="Archive this project? New events will be rejected.">Archive Project</button>
     </form>
     {% else %}
     <form method="post" action="/web/projects/{{ project_id }}/settings/unarchive" style="margin-bottom: 1rem;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <p style="margin: 0 0 0.5rem;">Unarchive this project to resume accepting events.</p>
         <button type="submit" class="btn">Unarchive Project</button>
     </form>
     {% endif %}
 
     <form method="post" action="/web/projects/{{ project_id }}/settings/delete">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <p style="margin: 0 0 0.5rem;">Permanently delete this project and all its data. This cannot be undone.</p>
-        <button type="submit" class="btn btn-danger" onclick="return confirm('Delete this project and ALL its data? This cannot be undone.')">Delete Project</button>
+        <button type="submit" class="btn btn-danger" data-confirm="Delete this project and ALL its data? This cannot be undone.">Delete Project</button>
     </form>
 </div>
 {% endblock %}

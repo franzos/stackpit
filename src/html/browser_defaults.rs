@@ -7,7 +7,7 @@ use serde::Deserialize;
 
 use crate::extractors::BrowserDefaults;
 use crate::html::render_template;
-use crate::html::utils::{serialize_defaults_cookie, DEFAULTS_COOKIE};
+use crate::html::utils::{serialize_defaults_cookie, Csrf, DEFAULTS_COOKIE};
 use crate::server::AppState;
 
 #[derive(Template)]
@@ -17,10 +17,14 @@ struct BrowserDefaultsTemplate {
     level: String,
     period: String,
     message: Option<String>,
+    csrf_token: String,
 }
 
-pub async fn handler(BrowserDefaults(defaults): BrowserDefaults) -> axum::response::Response {
-    render_page(&defaults, None)
+pub async fn handler(
+    BrowserDefaults(defaults): BrowserDefaults,
+    Csrf(csrf): Csrf,
+) -> axum::response::Response {
+    render_page(&defaults, None, &csrf)
 }
 
 #[derive(Deserialize)]
@@ -42,6 +46,7 @@ fn validated(key: &str, val: &str) -> bool {
 
 pub async fn save_defaults(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Form(form): Form<DefaultsForm>,
 ) -> axum::response::Response {
     let mut defaults = HashMap::new();
@@ -73,31 +78,28 @@ pub async fn save_defaults(
         "Defaults saved".to_string()
     };
 
-    let mut resp = render_page(&defaults, Some(message));
+    let mut resp = render_page(&defaults, Some(message), &csrf);
     resp.headers_mut()
         .insert(header::SET_COOKIE, cookie_header.parse().unwrap());
     resp
 }
 
-pub async fn clear_defaults(State(state): State<AppState>) -> axum::response::Response {
+pub async fn clear_defaults(
+    State(state): State<AppState>,
+    Csrf(csrf): Csrf,
+) -> axum::response::Response {
     let secure = secure_flag(&state);
     let cookie_header =
         format!("{DEFAULTS_COOKIE}=; Path=/web; HttpOnly; SameSite=Strict{secure}; Max-Age=0");
     let defaults = HashMap::new();
-    let mut resp = render_page(&defaults, Some("Defaults cleared".to_string()));
+    let mut resp = render_page(&defaults, Some("Defaults cleared".to_string()), &csrf);
     resp.headers_mut()
         .insert(header::SET_COOKIE, cookie_header.parse().unwrap());
     resp
 }
 
 fn secure_flag(state: &AppState) -> &'static str {
-    if state
-        .config
-        .server
-        .external_url
-        .as_ref()
-        .is_some_and(|u| u.starts_with("https://"))
-    {
+    if state.config.server.cookies_should_be_secure() {
         "; Secure"
     } else {
         ""
@@ -107,12 +109,14 @@ fn secure_flag(state: &AppState) -> &'static str {
 fn render_page(
     defaults: &HashMap<String, String>,
     message: Option<String>,
+    csrf: &str,
 ) -> axum::response::Response {
     let tmpl = BrowserDefaultsTemplate {
         status: defaults.get("status").cloned().unwrap_or_default(),
         level: defaults.get("level").cloned().unwrap_or_default(),
         period: defaults.get("period").cloned().unwrap_or_default(),
         message,
+        csrf_token: csrf.to_string(),
     };
     render_template(&tmpl)
 }

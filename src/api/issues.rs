@@ -9,8 +9,8 @@ use crate::queries::types::{IssueFilter, Page};
 use crate::queries::IssueStatus;
 use crate::server::AppState;
 
-use super::{api_error, internal_error, json_or_404, json_or_500};
-use crate::extractors::ApiReadPool;
+use super::{internal_error, json_error, json_or_404, json_or_500};
+use crate::extractors::ReadPool;
 
 #[derive(Deserialize)]
 pub struct ListParams {
@@ -28,7 +28,7 @@ pub struct UpdateBody {
 
 /// GET /api/0/projects/{project_id}/issues/?status=&level=&query=&limit=&offset=
 pub async fn list_for_project(
-    ApiReadPool(pool): ApiReadPool,
+    ReadPool(pool): ReadPool,
     Path(project_id): Path<u64>,
     Query(params): Query<ListParams>,
 ) -> impl IntoResponse {
@@ -46,10 +46,7 @@ pub async fn list_for_project(
 }
 
 /// GET /api/0/issues/{fingerprint}/
-pub async fn get(
-    ApiReadPool(pool): ApiReadPool,
-    Path(fingerprint): Path<String>,
-) -> impl IntoResponse {
+pub async fn get(ReadPool(pool): ReadPool, Path(fingerprint): Path<String>) -> impl IntoResponse {
     json_or_404(
         queries::issues::get_issue(&pool, &fingerprint).await,
         "issue not found",
@@ -62,34 +59,13 @@ pub async fn update_status(
     Path(fingerprint): Path<String>,
     Json(body): Json<UpdateBody>,
 ) -> impl IntoResponse {
-    let reply_rx = match state
-        .writer
-        .update_issue_status(fingerprint.clone(), body.status)
+    match queries::issues::update_issue_status(&state.writer_pool, &fingerprint, body.status).await
     {
-        Ok(rx) => rx,
-        Err(e) => {
-            tracing::error!("failed to send to writer: {e}");
-            return api_error(StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
-                .into_response();
-        }
-    };
-
-    match reply_rx.await {
-        Ok(Ok(())) => json_or_404(
+        Ok(0) => json_error(StatusCode::NOT_FOUND, "issue not found"),
+        Ok(_) => json_or_404(
             queries::issues::get_issue(&state.pool, &fingerprint).await,
             "issue not found",
         ),
-        Ok(Err(err)) => {
-            if err.is_not_found() {
-                api_error(StatusCode::NOT_FOUND, "issue not found").into_response()
-            } else {
-                internal_error(err).into_response()
-            }
-        }
-        Err(_) => api_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "writer channel closed unexpectedly",
-        )
-        .into_response(),
+        Err(err) => internal_error(err).into_response(),
     }
 }

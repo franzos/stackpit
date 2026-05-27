@@ -4,7 +4,7 @@ use axum::http::StatusCode;
 use serde::Deserialize;
 
 use crate::html::render_template;
-use crate::html::utils;
+use crate::html::utils::{self, Csrf};
 use crate::queries;
 use crate::queries::types::Integration;
 use crate::server::AppState;
@@ -19,10 +19,11 @@ use crate::html::filters;
 struct IntegrationsTemplate {
     integrations: Vec<Integration>,
     message: Option<String>,
+    csrf_token: String,
 }
 
-pub async fn handler(State(state): State<AppState>) -> axum::response::Response {
-    render_list(&state, None).await
+pub async fn handler(State(state): State<AppState>, Csrf(csrf): Csrf) -> axum::response::Response {
+    render_list(&state, None, &csrf).await
 }
 
 #[derive(Deserialize)]
@@ -36,24 +37,25 @@ pub struct CreateForm {
 
 pub async fn create(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Form(form): Form<CreateForm>,
 ) -> axum::response::Response {
     let name = form.name.trim().to_string();
     if name.is_empty() {
-        return render_list(&state, Some("Name is required".into())).await;
+        return render_list(&state, Some("Name is required".into()), &csrf).await;
     }
     let kind = form.kind.trim().to_string();
     if !["webhook", "slack", "email"].contains(&kind.as_str()) {
-        return render_list(&state, Some("Invalid integration kind".into())).await;
+        return render_list(&state, Some("Invalid integration kind".into()), &csrf).await;
     }
     let url = form.url.trim().to_string();
     if url.is_empty() {
-        return render_list(&state, Some("URL is required".into())).await;
+        return render_list(&state, Some("URL is required".into()), &csrf).await;
     }
 
     // Block webhooks pointing at private/internal addresses
     if let Err(msg) = crate::ssrf::check_ssrf(&url).await {
-        return render_list(&state, Some(msg)).await;
+        return render_list(&state, Some(msg), &csrf).await;
     }
     // NOTE: We only validate here -- no HTTP request is made at creation time,
     // so there's no TOCTOU concern. The actual request happens in the dispatcher
@@ -82,56 +84,59 @@ pub async fn create(
                 return render_list(
                     &state,
                     Some("Cannot store secret: encryption is not configured. Set STACKPIT_MASTER_KEY to enable secret storage.".into()),
+                    &csrf,
                 ).await;
             }
         },
         None => (None, false),
     };
 
-    let result = match utils::await_writer(
-        state
-            .writer
-            .create_integration(name, kind, url, secret, config, encrypted),
+    let s = state.clone();
+    utils::query_then_render(
+        queries::integrations::create_integration(
+            &state.writer_pool,
+            &name,
+            &kind,
+            &url,
+            secret.as_deref(),
+            config.as_deref(),
+            encrypted,
+        )
+        .await,
+        "Integration created",
+        move |msg| async move { render_list(&s, msg, &csrf).await },
     )
     .await
-    {
-        Ok(r) => r,
-        Err(resp) => return resp,
-    };
-    match result {
-        Ok(_id) => render_list(&state, Some("Integration created".into())).await,
-        Err(e) => render_list(&state, Some(format!("Error: {e}"))).await,
-    }
 }
 
 pub async fn delete(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Path(id): Path<i64>,
 ) -> axum::response::Response {
-    let result = match utils::await_writer(state.writer.delete_integration(id)).await {
-        Ok(r) => r,
-        Err(resp) => return resp,
+    let msg = match queries::integrations::delete_integration(&state.writer_pool, id).await {
+        Ok(0) => format!("Error: not found: integration: {id}"),
+        Ok(_) => "Integration deleted".to_string(),
+        Err(e) => format!("Error: {e}"),
     };
-    match result {
-        Ok(()) => render_list(&state, Some("Integration deleted".into())).await,
-        Err(e) => render_list(&state, Some(format!("Error: {e}"))).await,
-    }
+    render_list(&state, Some(msg), &csrf).await
 }
 
 pub async fn test_integration(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Path(id): Path<i64>,
 ) -> axum::response::Response {
     let integration = match queries::integrations::get_integration(&state.pool, id).await {
         Ok(Some(i)) => i,
-        Ok(None) => return render_list(&state, Some("Integration not found".into())).await,
-        Err(e) => return render_list(&state, Some(format!("Error: {e}"))).await,
+        Ok(None) => return render_list(&state, Some("Integration not found".into()), &csrf).await,
+        Err(e) => return render_list(&state, Some(format!("Error: {e}")), &csrf).await,
     };
 
     // Resolve DNS and pin it so reqwest can't re-resolve to a different (internal) IP
     let resolved = match crate::ssrf::check_ssrf(&integration.url).await {
         Ok(r) => r,
-        Err(msg) => return render_list(&state, Some(msg)).await,
+        Err(msg) => return render_list(&state, Some(msg), &csrf).await,
     };
 
     // Decrypt the secret if it was stored encrypted
@@ -177,36 +182,46 @@ pub async fn test_integration(
     .await;
 
     match result {
-        Ok(()) => render_list(&state, Some("Test notification sent".into())).await,
-        Err(e) => render_list(&state, Some(format!("Test failed: {e}"))).await,
+        Ok(()) => render_list(&state, Some("Test notification sent".into()), &csrf).await,
+        Err(e) => render_list(&state, Some(format!("Test failed: {e}")), &csrf).await,
     }
 }
 
 #[derive(Template)]
 #[template(path = "integration_new_webhook.html")]
-struct NewWebhookTemplate;
+struct NewWebhookTemplate {
+    csrf_token: String,
+}
 
-pub async fn new_webhook() -> axum::response::Response {
-    render_template(&NewWebhookTemplate)
+pub async fn new_webhook(Csrf(csrf): Csrf) -> axum::response::Response {
+    render_template(&NewWebhookTemplate { csrf_token: csrf })
 }
 
 #[derive(Template)]
 #[template(path = "integration_new_slack.html")]
-struct NewSlackTemplate;
+struct NewSlackTemplate {
+    csrf_token: String,
+}
 
-pub async fn new_slack() -> axum::response::Response {
-    render_template(&NewSlackTemplate)
+pub async fn new_slack(Csrf(csrf): Csrf) -> axum::response::Response {
+    render_template(&NewSlackTemplate { csrf_token: csrf })
 }
 
 #[derive(Template)]
 #[template(path = "integration_new_email.html")]
-struct NewEmailTemplate;
-
-pub async fn new_email() -> axum::response::Response {
-    render_template(&NewEmailTemplate)
+struct NewEmailTemplate {
+    csrf_token: String,
 }
 
-async fn render_list(state: &AppState, message: Option<String>) -> axum::response::Response {
+pub async fn new_email(Csrf(csrf): Csrf) -> axum::response::Response {
+    render_template(&NewEmailTemplate { csrf_token: csrf })
+}
+
+async fn render_list(
+    state: &AppState,
+    message: Option<String>,
+    csrf: &str,
+) -> axum::response::Response {
     let integrations = queries::integrations::list_integrations(&state.pool)
         .await
         .unwrap_or_default();
@@ -214,6 +229,7 @@ async fn render_list(state: &AppState, message: Option<String>) -> axum::respons
     let tmpl = IntegrationsTemplate {
         integrations,
         message,
+        csrf_token: csrf.to_string(),
     };
 
     render_template(&tmpl)

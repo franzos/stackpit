@@ -7,6 +7,32 @@ use simple_hll::HyperLogLog;
 
 use super::types::{IssueFilter, IssueStatus, IssueSummary, Page, PagedResult};
 
+/// Closed set of allowed ORDER BY columns; the rendered ident is always
+/// `&'static str`, so user input can't reach the SQL string.
+enum IssueSort {
+    FirstSeen,
+    EventCount,
+    LastSeen,
+}
+
+impl IssueSort {
+    fn parse(sort: Option<&str>) -> Self {
+        match sort {
+            Some("first_seen") => Self::FirstSeen,
+            Some("event_count") => Self::EventCount,
+            _ => Self::LastSeen,
+        }
+    }
+
+    fn as_sql_ident(&self) -> &'static str {
+        match self {
+            Self::FirstSeen => "first_seen",
+            Self::EventCount => "event_count",
+            Self::LastSeen => "last_seen",
+        }
+    }
+}
+
 // --- Read queries ---
 
 /// List issues for a project with optional filters and pagination.
@@ -20,11 +46,7 @@ pub async fn list_issues(
 ) -> Result<PagedResult<IssueSummary>> {
     use sqlx::QueryBuilder;
 
-    let sort_col = match filter.sort.as_deref() {
-        Some("first_seen") => "first_seen",
-        Some("event_count") => "event_count",
-        _ => "last_seen",
-    };
+    let sort = IssueSort::parse(filter.sort.as_deref());
 
     // Build the shared WHERE clause once, then reuse for count and select.
     // We push binds inline so QueryBuilder handles the `?` placeholders itself.
@@ -42,7 +64,7 @@ pub async fn list_issues(
     select_qb.push_bind(project_id as i64);
     push_issue_filter_conditions(&mut select_qb, filter, since);
     select_qb.push(" ORDER BY ");
-    select_qb.push(sort_col);
+    select_qb.push(sort.as_sql_ident());
     select_qb.push(" DESC LIMIT ");
     select_qb.push_bind(page.limit as i64);
     select_qb.push(" OFFSET ");
@@ -51,12 +73,7 @@ pub async fn list_issues(
     let rows = select_qb.build().fetch_all(pool).await?;
     let items = rows.iter().map(map_issue_row).collect::<Result<Vec<_>>>()?;
 
-    Ok(PagedResult {
-        items,
-        total: total as u64,
-        offset: page.offset,
-        limit: page.limit,
-    })
+    Ok(PagedResult::from_page(items, total, page))
 }
 
 /// Append filter conditions and their binds to an in-progress QueryBuilder.
@@ -229,11 +246,7 @@ fn map_issue_row(row: &crate::db::DbRow) -> Result<IssueSummary> {
     })
 }
 
-/// Upsert an issue row, bumping the event count by the given delta.
-///
-/// The thing is, during backfill the live-path title is usually better than what
-/// we'd extract from old payloads -- so `prefer_existing_title` tells COALESCE
-/// to keep the existing title when it's already set.
+/// Upsert issue; `prefer_existing_title` preserves live-path titles during backfill.
 #[allow(clippy::too_many_arguments)]
 pub async fn upsert_issue(
     pool: &crate::db::DbPool,

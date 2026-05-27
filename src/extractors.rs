@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use axum::extract::FromRequestParts;
-use axum::http::StatusCode;
 
 use crate::db::DbPool;
 use crate::html::utils;
@@ -17,38 +16,23 @@ impl FromRequestParts<AppState> for BrowserDefaults {
         parts: &mut axum::http::request::Parts,
         _state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let map =
-            crate::middleware::cookie::extract_cookie_value(&parts.headers, utils::DEFAULTS_COOKIE)
-                .map(|v| utils::parse_defaults_cookie(&v))
-                .unwrap_or_default();
+        let map = crate::middleware::cookie::read_cookie(&parts.headers, utils::DEFAULTS_COOKIE)
+            .map(utils::parse_defaults_cookie)
+            .unwrap_or_default();
         Ok(BrowserDefaults(map))
     }
 }
 
-/// Axum extractor for HTML handlers -- clones the read pool from state.
+/// Clones the read pool from state. Infallible -- used by both HTML and API handlers.
 pub struct ReadPool(pub DbPool);
 
 impl FromRequestParts<AppState> for ReadPool {
-    type Rejection = axum::response::Response;
+    type Rejection = std::convert::Infallible;
 
     async fn from_request_parts(
         _parts: &mut axum::http::request::Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
         Ok(ReadPool(state.pool.clone()))
-    }
-}
-
-/// Same thing but for API routes -- just returns a status code on error, no HTML.
-pub struct ApiReadPool(pub DbPool);
-
-impl FromRequestParts<AppState> for ApiReadPool {
-    type Rejection = StatusCode;
-
-    async fn from_request_parts(
-        _parts: &mut axum::http::request::Parts,
-        state: &AppState,
-    ) -> Result<Self, Self::Rejection> {
-        Ok(ApiReadPool(state.pool.clone()))
     }
 }

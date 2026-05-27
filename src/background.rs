@@ -7,11 +7,7 @@ use tokio_util::sync::CancellationToken;
 use crate::db::DbPool;
 use crate::stats::DiscardStats;
 
-/// Spawn a background task and log a tracing::error! if it panics.
-///
-/// This only observes — it does not restart. Panics in background
-/// tasks otherwise disappear silently, which is how we lose retention
-/// or digest processing for the lifetime of the process.
+/// Log panics; do not restart (visibility over silent retry).
 pub fn supervise<F>(name: &'static str, fut: F)
 where
     F: Future<Output = ()> + Send + 'static,
@@ -76,6 +72,31 @@ pub fn spawn_discard_stats_task(
             }
             if let Err(e) = discard_stats.flush(&pool).await {
                 tracing::warn!("discard stats flush error: {e}");
+            }
+        }
+    });
+}
+
+/// Hourly purge of expired OIDC grants, revocation markers, and JTI rows.
+pub fn spawn_oidc_cleanup_task(pool: DbPool, cancel: CancellationToken) {
+    supervise("oidc_cleanup", async move {
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => return,
+                _ = tokio::time::sleep(Duration::from_secs(3600)) => {}
+            }
+            let now = chrono::Utc::now().timestamp();
+            match crate::oidc::grants::purge_expired(&pool, now).await {
+                Ok(n) if n > 0 => tracing::info!("oidc cleanup: purged {n} expired grants"),
+                Ok(_) => {}
+                Err(e) => tracing::warn!("oidc grants purge error: {e}"),
+            }
+            match crate::oidc::revocations::purge_expired(&pool, now).await {
+                Ok(n) if n > 0 => {
+                    tracing::info!("oidc cleanup: purged {n} expired revocation/jti rows")
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!("oidc revocations purge error: {e}"),
             }
         }
     });

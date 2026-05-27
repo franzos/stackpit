@@ -8,17 +8,14 @@ use crate::queries;
 use crate::server::AppState;
 
 use super::json_or_500;
-use crate::extractors::ApiReadPool;
+use crate::extractors::ReadPool;
 
 /// GET /api/0/projects/
-pub async fn list(ApiReadPool(pool): ApiReadPool) -> impl IntoResponse {
+pub async fn list(ReadPool(pool): ReadPool) -> impl IntoResponse {
     json_or_500(queries::projects::list_projects(&pool, None, None, None).await)
 }
 
-/// GET /api/0/projects/{org}/{project_id}/
-///
-/// Minimal project detail endpoint that sentry-cli calls to validate
-/// a project before creating releases or uploading sourcemaps.
+/// GET /api/0/projects/{org}/{project_id}/ — sentry-cli validation endpoint.
 pub async fn sentry_get(
     State(state): State<AppState>,
     Path((_org, project_slug)): Path<(String, String)>,

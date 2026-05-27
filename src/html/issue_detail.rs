@@ -9,6 +9,7 @@ use crate::event_data::{
 };
 use crate::extractors::ReadPool;
 use crate::html::render_template;
+use crate::html::utils::Csrf;
 use crate::queries;
 use crate::queries::types::{AttachmentInfo, EventNav, Page, PagedResult, TagFacet};
 use crate::queries::IssueStatus;
@@ -17,10 +18,9 @@ use crate::server::AppState;
 use crate::queries::event_supplements;
 
 use super::charts;
-use super::html_error;
-use super::utils;
+use super::{html_error, HtmlError};
 
-// askama needs these filters in scope for template derivation
+#[allow(unused_imports)]
 use crate::html::filters;
 
 #[derive(Deserialize)]
@@ -62,22 +62,26 @@ struct IssueDetailTemplate {
     chart_svg: String,
     first_seen_release: Option<String>,
     last_seen_release: Option<String>,
+    csrf_token: String,
 }
 
 pub async fn handler(
     State(_state): State<AppState>,
     ReadPool(pool): ReadPool,
+    Csrf(csrf): Csrf,
     Path((project_id, fingerprint)): Path<(u64, String)>,
     Query(params): Query<PageParams>,
-) -> axum::response::Response {
-    let issue = match queries::issues::get_issue(&pool, &fingerprint).await {
-        Ok(Some(i)) => i,
-        Ok(None) => return html_error(StatusCode::NOT_FOUND, "Issue not found"),
-        Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+) -> Result<axum::response::Response, HtmlError> {
+    let issue = match queries::issues::get_issue(&pool, &fingerprint).await? {
+        Some(i) => i,
+        None => return Err(HtmlError(StatusCode::NOT_FOUND, "Issue not found".into())),
     };
 
     if issue.project_id != project_id {
-        return html_error(StatusCode::NOT_FOUND, "Issue not found in this project");
+        return Err(HtmlError(
+            StatusCode::NOT_FOUND,
+            "Issue not found in this project".into(),
+        ));
     }
 
     let tab = params.tab.unwrap_or_else(|| "details".to_string());
@@ -102,11 +106,7 @@ pub async fn handler(
 
     if tab == "events" {
         let page = Page::new(params.offset, params.limit);
-        let events = match queries::events::list_events_for_issue(&pool, &fingerprint, &page).await
-        {
-            Ok(r) => r,
-            Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-        };
+        let events = queries::events::list_events_for_issue(&pool, &fingerprint, &page).await?;
 
         let tmpl = IssueDetailTemplate {
             issue,
@@ -129,8 +129,9 @@ pub async fn handler(
             chart_svg,
             first_seen_release,
             last_seen_release,
+            csrf_token: csrf,
         };
-        return render_template(&tmpl);
+        return Ok(render_template(&tmpl));
     }
 
     // Details tab -- show the latest event inline
@@ -220,8 +221,9 @@ pub async fn handler(
         chart_svg,
         first_seen_release,
         last_seen_release,
+        csrf_token: csrf,
     };
-    render_template(&tmpl)
+    Ok(render_template(&tmpl))
 }
 
 pub async fn toggle_discard(
@@ -233,20 +235,20 @@ pub async fn toggle_discard(
         .await
         .unwrap_or(false);
 
-    let send_result = if is_discarded {
-        state.writer.undiscard_fingerprint(fingerprint.clone())
+    let result = if is_discarded {
+        queries::filters::undiscard_fingerprint(&state.writer_pool, &fingerprint).await
     } else {
-        state
-            .writer
-            .discard_fingerprint(fingerprint.clone(), project_id)
-    };
-
-    let result = match utils::await_writer(send_result).await {
-        Ok(r) => r,
-        Err(resp) => return resp,
+        queries::filters::discard_fingerprint(&state.writer_pool, &fingerprint, project_id).await
     };
     if let Err(err) = result {
         return html_error(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string());
+    }
+    if is_discarded {
+        state
+            .filter_engine
+            .remove_discarded_fingerprint(&fingerprint);
+    } else {
+        state.filter_engine.add_discarded_fingerprint(&fingerprint);
     }
 
     let redirect_url = format!("/web/projects/{project_id}/issues/{fingerprint}/");
@@ -270,23 +272,15 @@ pub async fn update_status(
         }
     };
 
-    let result = match utils::await_writer(
-        state
-            .writer
-            .update_issue_status(fingerprint.clone(), status),
-    )
-    .await
-    {
-        Ok(r) => r,
-        Err(resp) => return resp,
-    };
-    if let Err(err) = result {
-        let status = if err.is_not_found() {
-            StatusCode::NOT_FOUND
-        } else {
-            StatusCode::INTERNAL_SERVER_ERROR
-        };
-        return html_error(status, &err.to_string());
+    match queries::issues::update_issue_status(&state.writer_pool, &fingerprint, status).await {
+        Ok(0) => {
+            return html_error(
+                StatusCode::NOT_FOUND,
+                &format!("not found: issue: {fingerprint}"),
+            )
+        }
+        Ok(_) => {}
+        Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 
     // 303 back to the issue page so the browser does a GET

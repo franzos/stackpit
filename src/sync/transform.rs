@@ -335,9 +335,7 @@ fn normalize_frame(frame: &mut Value) {
     obj.remove("context");
 }
 
-/// Pulls tags out of a Sentry API response. The thing is, the API returns
-/// `[{"key": "k", "value": "v"}]` while SDKs use `[["k", "v"]]` or `{"k": "v"}` —
-/// so we handle all three shapes here.
+/// Extract tags from Sentry API response (handles API + SDK tag formats).
 fn extract_tags_from_api(json: &Value) -> Vec<(String, String)> {
     let tags = match json.get("tags") {
         Some(v) => v,

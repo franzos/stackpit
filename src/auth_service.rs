@@ -1,6 +1,8 @@
 //! Handles project key validation with an in-memory cache in front of the DB.
-//! In open mode, unknown keys get auto-registered -- the HTTP-level stuff
-//! (headers, responses) lives in `endpoints::auth`.
+//! Open mode auto-provisions a **new** project (with its first key) the first
+//! time we see an unknown project_id; once a project exists, only registered
+//! keys are accepted. Closed mode requires every project_id+key to exist.
+//! HTTP-level stuff (headers, responses) lives in `endpoints::auth`.
 
 use crate::config::RegistrationMode;
 use crate::queries;
@@ -121,6 +123,19 @@ pub async fn validate_project_key(
                     );
                 }
                 Ok(None) => {
+                    // First DSN wins: only auto-provision when the project
+                    // itself doesn't exist yet. Once a project has any key,
+                    // additional keys must be minted explicitly via the
+                    // admin UI -- otherwise any client could grant themselves
+                    // a valid key by guessing project_id + sending a random hex.
+                    let project_exists = queries::projects::get_project_status(pool, project_id)
+                        .await
+                        .ok()
+                        .flatten()
+                        .is_some();
+                    if project_exists {
+                        return Err(AuthError::Denied("unknown key for existing project"));
+                    }
                     let project_count = queries::projects::count_distinct_projects(pool)
                         .await
                         .unwrap_or(0);
@@ -144,27 +159,20 @@ pub async fn validate_project_key(
     Ok(())
 }
 
-/// Sends the key to the writer thread and waits for confirmation so that the
-/// project/key row exists before any events referencing it are flushed.
+/// Commits the project/key row (on the writer's pool, so it serialises with
+/// the actor) before any events referencing it can be flushed.
 async fn auto_register_key(state: &AppState, sentry_key: &str, project_id: u64) {
-    match state
-        .writer
-        .ensure_project_key(project_id, sentry_key.to_owned())
-    {
-        Ok(rx) => match rx.await {
-            Ok(Ok(())) => {
-                state.auth_cache.insert(
-                    sentry_key.to_owned(),
-                    CacheEntry {
-                        project_id,
-                        status: ProjectStatus::Active,
-                        inserted_at: std::time::Instant::now(),
-                    },
-                );
-            }
-            Ok(Err(e)) => tracing::warn!("auto-register key failed: {e}"),
-            Err(_) => tracing::warn!("auto-register key: writer dropped reply"),
-        },
-        Err(e) => tracing::warn!("auto-register key: writer send failed: {e}"),
+    match queries::projects::ensure_project_key(&state.writer_pool, project_id, sentry_key).await {
+        Ok(()) => {
+            state.auth_cache.insert(
+                sentry_key.to_owned(),
+                CacheEntry {
+                    project_id,
+                    status: ProjectStatus::Active,
+                    inserted_at: std::time::Instant::now(),
+                },
+            );
+        }
+        Err(e) => tracing::warn!("auto-register key failed: {e}"),
     }
 }

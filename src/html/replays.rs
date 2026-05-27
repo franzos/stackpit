@@ -1,16 +1,15 @@
 use askama::Template;
 use axum::extract::{Path, Query};
-use axum::http::StatusCode;
 
 use crate::extractors::ReadPool;
-use crate::html::render_template;
-use crate::html::utils::ListParams;
+use crate::html::utils::{render_project_detail, render_project_list, Csrf, ListParams};
 use crate::queries;
 use crate::queries::types::{Page, PagedResult, ReplaySummary};
 use crate::queries::ProjectNavCounts;
 
-use super::html_error;
+use super::HtmlError;
 
+#[allow(unused_imports)]
 use crate::html::filters;
 
 #[derive(Template)]
@@ -19,28 +18,31 @@ struct ReplayListTemplate {
     project_id: u64,
     result: PagedResult<ReplaySummary>,
     nav: ProjectNavCounts,
+    csrf_token: String,
 }
 
 pub async fn list_handler(
     ReadPool(pool): ReadPool,
+    Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
     Query(params): Query<ListParams>,
-) -> axum::response::Response {
+) -> Result<axum::response::Response, HtmlError> {
     let page = Page::new(params.offset, params.limit);
+    let result = queries::replays::list_replays(&pool, project_id, &page).await?;
 
-    let result = match queries::replays::list_replays(&pool, project_id, &page).await {
-        Ok(r) => r,
-        Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
-
-    let nav = queries::projects::get_nav_counts(&pool, project_id).await;
-
-    let tmpl = ReplayListTemplate {
+    Ok(render_project_list(
+        &pool,
         project_id,
+        csrf,
         result,
-        nav,
-    };
-    render_template(&tmpl)
+        |project_id, result, nav, csrf_token| ReplayListTemplate {
+            project_id,
+            result,
+            nav,
+            csrf_token,
+        },
+    )
+    .await)
 }
 
 #[derive(Template)]
@@ -50,26 +52,32 @@ struct ReplayDetailTemplate {
     replay: queries::types::ReplayDetail,
     raw_json: String,
     nav: ProjectNavCounts,
+    csrf_token: String,
 }
 
 pub async fn detail_handler(
     ReadPool(pool): ReadPool,
+    Csrf(csrf): Csrf,
     Path((project_id, event_id)): Path<(u64, String)>,
-) -> axum::response::Response {
-    let replay = match queries::replays::get_replay(&pool, project_id, &event_id).await {
-        Ok(Some(r)) => r,
-        Ok(None) => return html_error(StatusCode::NOT_FOUND, "Replay not found"),
-        Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
+) -> Result<axum::response::Response, HtmlError> {
+    let replay = queries::replays::get_replay(&pool, project_id, &event_id).await?;
 
-    let raw_json = serde_json::to_string_pretty(&replay.payload).unwrap_or_default();
-    let nav = queries::projects::get_nav_counts(&pool, project_id).await;
-
-    let tmpl = ReplayDetailTemplate {
+    render_project_detail(
+        &pool,
         project_id,
+        csrf,
         replay,
-        raw_json,
-        nav,
-    };
-    render_template(&tmpl)
+        "Replay not found",
+        |project_id, replay, nav, csrf_token| {
+            let raw_json = serde_json::to_string_pretty(&replay.payload).unwrap_or_default();
+            ReplayDetailTemplate {
+                project_id,
+                replay,
+                raw_json,
+                nav,
+                csrf_token,
+            }
+        },
+    )
+    .await
 }

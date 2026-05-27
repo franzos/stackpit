@@ -40,6 +40,18 @@ impl NotifyTrigger {
             NotifyTrigger::Digest => "digest",
         }
     }
+
+    /// Human-facing label used in notification subjects/headers.
+    pub fn display_label(&self) -> String {
+        match self {
+            NotifyTrigger::NewIssue => "New Issue".to_string(),
+            NotifyTrigger::Regression => "Regression".to_string(),
+            NotifyTrigger::ThresholdExceeded {
+                count, window_secs, ..
+            } => format!("Threshold: {count} events in {window_secs}s"),
+            NotifyTrigger::Digest => "Digest".to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -89,13 +101,7 @@ fn passes_env_filter(event_env: Option<&str>, filter: Option<&str>) -> bool {
     }
 }
 
-/// Spawn the dispatcher under a panic-observing supervisor.
-///
-/// The dispatcher owns the mpsc Receiver, so if the future panics
-/// the channel is dropped and all senders break — supervision here
-/// logs the panic but cannot cleanly restart without rebuilding the
-/// whole channel. Treat a panic as fatal for notifications; fix the
-/// underlying bug and restart the process.
+/// Spawn dispatcher with panic supervision (logs panics; restart needed for recovery).
 pub fn spawn_dispatcher(
     rx: tokio::sync::mpsc::Receiver<NotificationEvent>,
     pool: DbPool,

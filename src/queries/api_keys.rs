@@ -5,7 +5,6 @@ use crate::db::{sql, DbPool};
 
 pub struct ApiKeyInfo {
     pub project_id: u64,
-    pub scope: String,
 }
 
 pub struct ApiKeyDisplay {
@@ -43,18 +42,25 @@ pub async fn create_api_key(
     Ok(())
 }
 
-/// Look up an API key by its SHA-256 hash. Used for auth validation.
-pub async fn get_api_key_by_hash(pool: &DbPool, key_hash: &str) -> Result<Option<ApiKeyInfo>> {
+/// Look up an API key by its SHA-256 hash + expected scope. Used for auth
+/// validation. Pushing the scope into the SQL `WHERE` means a returned row
+/// is uniquely the credential we're looking for; no Rust-side scope compare
+/// is needed (and a string-eq compare wouldn't be constant-time anyway).
+pub async fn get_api_key_by_hash(
+    pool: &DbPool,
+    key_hash: &str,
+    scope: &str,
+) -> Result<Option<ApiKeyInfo>> {
     let row = sqlx::query(sql!(
-        "SELECT project_id, scope FROM api_keys WHERE key_hash = ?1"
+        "SELECT project_id FROM api_keys WHERE key_hash = ?1 AND scope = ?2"
     ))
     .bind(key_hash)
+    .bind(scope)
     .fetch_optional(pool)
     .await?;
 
     Ok(row.map(|r| ApiKeyInfo {
         project_id: r.get::<i64, _>("project_id") as u64,
-        scope: r.get("scope"),
     }))
 }
 
@@ -94,4 +100,60 @@ pub async fn delete_api_key_for_project(
     .await?;
 
     Ok(result.rows_affected())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::queries::test_helpers::open_test_db;
+    use sha2::{Digest, Sha256};
+
+    #[tokio::test]
+    async fn lookup_matches_on_hash_and_scope() {
+        let pool = open_test_db().await;
+        let token = "sk_test_token_value";
+        let hash = hex::encode(Sha256::digest(token.as_bytes()));
+        create_api_key(&pool, 42, "events:write", &hash, "sk_test_")
+            .await
+            .unwrap();
+
+        // Right hash + right scope: hit.
+        let info = get_api_key_by_hash(&pool, &hash, "events:write")
+            .await
+            .unwrap();
+        assert!(info.is_some(), "expected a row for matching hash+scope");
+        assert_eq!(info.unwrap().project_id, 42);
+    }
+
+    #[tokio::test]
+    async fn lookup_rejects_wrong_scope() {
+        let pool = open_test_db().await;
+        let token = "sk_test_token_value";
+        let hash = hex::encode(Sha256::digest(token.as_bytes()));
+        create_api_key(&pool, 42, "events:write", &hash, "sk_test_")
+            .await
+            .unwrap();
+
+        // Right hash, wrong scope: miss (would have been a hit before the fix).
+        let info = get_api_key_by_hash(&pool, &hash, "sourcemap")
+            .await
+            .unwrap();
+        assert!(info.is_none(), "wrong scope must not return a row");
+    }
+
+    #[tokio::test]
+    async fn lookup_rejects_unknown_hash() {
+        let pool = open_test_db().await;
+        let token = "sk_test_token_value";
+        let hash = hex::encode(Sha256::digest(token.as_bytes()));
+        create_api_key(&pool, 42, "events:write", &hash, "sk_test_")
+            .await
+            .unwrap();
+
+        let bogus = hex::encode(Sha256::digest(b"some-other-token"));
+        let info = get_api_key_by_hash(&pool, &bogus, "events:write")
+            .await
+            .unwrap();
+        assert!(info.is_none(), "unknown hash must not return a row");
+    }
 }

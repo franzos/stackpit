@@ -8,70 +8,67 @@ use crate::filter::rules::{FilterAction, FilterField, FilterOperator};
 
 use super::types::RawFilterRule;
 
+// --- Generic helpers for simple (id, value) filter tables ---
+
+/// Read `(id, value_col)` pairs for a project, ordered by id.
+///
+/// `table`/`value_col` are always hardcoded `&'static str` literals at the call
+/// sites -- no injection surface -- but the SQL is built dynamically, so it goes
+/// through `translate_sql` rather than `sql!`.
+async fn list_two_col(
+    pool: &crate::db::DbPool,
+    table: &'static str,
+    value_col: &'static str,
+    project_id: u64,
+) -> Result<Vec<(i64, String)>> {
+    let query = format!("SELECT id, {value_col} FROM {table} WHERE project_id = ?1 ORDER BY id");
+    let query = crate::db::translate_sql(&query);
+    let rows = sqlx::query(&query)
+        .bind(project_id as i64)
+        .fetch_all(pool)
+        .await?;
+    Ok(rows
+        .iter()
+        .map(|r| (r.get::<i64, _>(0), r.get::<String, _>(1)))
+        .collect())
+}
+
+/// Delete a single row by id. Returns rows affected (0 if not found).
+async fn delete_by_id(pool: &crate::db::DbPool, table: &'static str, id: i64) -> Result<u64> {
+    let query = format!("DELETE FROM {table} WHERE id = ?1");
+    let query = crate::db::translate_sql(&query);
+    let result = sqlx::query(&query).bind(id).execute(pool).await?;
+    Ok(result.rows_affected())
+}
+
 // --- Read queries ---
 
 pub async fn list_message_filters(
     pool: &crate::db::DbPool,
     project_id: u64,
 ) -> Result<Vec<(i64, String)>> {
-    let rows = sqlx::query(sql!(
-        "SELECT id, pattern FROM message_filters WHERE project_id = ?1 ORDER BY id"
-    ))
-    .bind(project_id as i64)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows
-        .iter()
-        .map(|r| (r.get::<i64, _>(0), r.get::<String, _>(1)))
-        .collect())
+    list_two_col(pool, "message_filters", "pattern", project_id).await
 }
 
 pub async fn list_environment_filters(
     pool: &crate::db::DbPool,
     project_id: u64,
 ) -> Result<Vec<(i64, String)>> {
-    let rows = sqlx::query(sql!(
-        "SELECT id, environment FROM environment_filters WHERE project_id = ?1 ORDER BY id"
-    ))
-    .bind(project_id as i64)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows
-        .iter()
-        .map(|r| (r.get::<i64, _>(0), r.get::<String, _>(1)))
-        .collect())
+    list_two_col(pool, "environment_filters", "environment", project_id).await
 }
 
 pub async fn list_release_filters(
     pool: &crate::db::DbPool,
     project_id: u64,
 ) -> Result<Vec<(i64, String)>> {
-    let rows = sqlx::query(sql!(
-        "SELECT id, pattern FROM release_filters WHERE project_id = ?1 ORDER BY id"
-    ))
-    .bind(project_id as i64)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows
-        .iter()
-        .map(|r| (r.get::<i64, _>(0), r.get::<String, _>(1)))
-        .collect())
+    list_two_col(pool, "release_filters", "pattern", project_id).await
 }
 
 pub async fn list_user_agent_filters(
     pool: &crate::db::DbPool,
     project_id: u64,
 ) -> Result<Vec<(i64, String)>> {
-    let rows = sqlx::query(sql!(
-        "SELECT id, pattern FROM user_agent_filters WHERE project_id = ?1 ORDER BY id"
-    ))
-    .bind(project_id as i64)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows
-        .iter()
-        .map(|r| (r.get::<i64, _>(0), r.get::<String, _>(1)))
-        .collect())
+    list_two_col(pool, "user_agent_filters", "pattern", project_id).await
 }
 
 pub async fn list_filter_rules(
@@ -104,16 +101,7 @@ pub async fn list_ip_blocks(
     pool: &crate::db::DbPool,
     project_id: u64,
 ) -> Result<Vec<(i64, String)>> {
-    let rows = sqlx::query(sql!(
-        "SELECT id, cidr FROM ip_blocklist WHERE project_id = ?1 ORDER BY id"
-    ))
-    .bind(project_id as i64)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows
-        .iter()
-        .map(|r| (r.get::<i64, _>(0), r.get::<String, _>(1)))
-        .collect())
+    list_two_col(pool, "ip_blocklist", "cidr", project_id).await
 }
 
 /// Which inbound filters are turned on for a project.
@@ -257,11 +245,7 @@ pub async fn create_message_filter(
 
 /// Returns 0 if the filter wasn't found.
 pub async fn delete_message_filter(pool: &crate::db::DbPool, id: i64) -> Result<u64> {
-    let result = sqlx::query(sql!("DELETE FROM message_filters WHERE id = ?1"))
-        .bind(id)
-        .execute(pool)
-        .await?;
-    Ok(result.rows_affected())
+    delete_by_id(pool, "message_filters", id).await
 }
 
 // -- Rate limits -----------------------------------------------------------
@@ -307,11 +291,7 @@ pub async fn add_environment_filter(
 
 /// Returns 0 if not found.
 pub async fn delete_environment_filter(pool: &crate::db::DbPool, id: i64) -> Result<u64> {
-    let result = sqlx::query(sql!("DELETE FROM environment_filters WHERE id = ?1"))
-        .bind(id)
-        .execute(pool)
-        .await?;
-    Ok(result.rows_affected())
+    delete_by_id(pool, "environment_filters", id).await
 }
 
 // -- Release filters -------------------------------------------------------
@@ -336,11 +316,7 @@ pub async fn add_release_filter(
 
 /// Returns 0 if not found.
 pub async fn delete_release_filter(pool: &crate::db::DbPool, id: i64) -> Result<u64> {
-    let result = sqlx::query(sql!("DELETE FROM release_filters WHERE id = ?1"))
-        .bind(id)
-        .execute(pool)
-        .await?;
-    Ok(result.rows_affected())
+    delete_by_id(pool, "release_filters", id).await
 }
 
 // -- User-agent filters ----------------------------------------------------
@@ -350,23 +326,23 @@ pub async fn add_user_agent_filter(
     project_id: u64,
     pattern: &str,
 ) -> Result<()> {
-    sqlx::query(sql!(
-        "INSERT INTO user_agent_filters (project_id, pattern) VALUES (?1, ?2)"
-    ))
-    .bind(project_id as i64)
-    .bind(pattern)
-    .execute(pool)
-    .await?;
+    #[cfg(feature = "sqlite")]
+    let query =
+        sql!("INSERT OR IGNORE INTO user_agent_filters (project_id, pattern) VALUES (?1, ?2)");
+    #[cfg(not(feature = "sqlite"))]
+    let query = sql!("INSERT INTO user_agent_filters (project_id, pattern) VALUES (?1, ?2) ON CONFLICT (project_id, pattern) DO NOTHING");
+
+    sqlx::query(query)
+        .bind(project_id as i64)
+        .bind(pattern)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
 /// Returns 0 if not found.
 pub async fn delete_user_agent_filter(pool: &crate::db::DbPool, id: i64) -> Result<u64> {
-    let result = sqlx::query(sql!("DELETE FROM user_agent_filters WHERE id = ?1"))
-        .bind(id)
-        .execute(pool)
-        .await?;
-    Ok(result.rows_affected())
+    delete_by_id(pool, "user_agent_filters", id).await
 }
 
 // -- Filter rules ----------------------------------------------------------
@@ -409,11 +385,7 @@ pub async fn create_filter_rule(
 
 /// Returns 0 if not found.
 pub async fn delete_filter_rule(pool: &crate::db::DbPool, id: i64) -> Result<u64> {
-    let result = sqlx::query(sql!("DELETE FROM filter_rules WHERE id = ?1"))
-        .bind(id)
-        .execute(pool)
-        .await?;
-    Ok(result.rows_affected())
+    delete_by_id(pool, "filter_rules", id).await
 }
 
 // -- IP blocklist ----------------------------------------------------------
@@ -434,11 +406,7 @@ pub async fn add_ip_block(pool: &crate::db::DbPool, project_id: u64, cidr: &str)
 
 /// Returns 0 if not found.
 pub async fn delete_ip_block(pool: &crate::db::DbPool, id: i64) -> Result<u64> {
-    let result = sqlx::query(sql!("DELETE FROM ip_blocklist WHERE id = ?1"))
-        .bind(id)
-        .execute(pool)
-        .await?;
-    Ok(result.rows_affected())
+    delete_by_id(pool, "ip_blocklist", id).await
 }
 
 // -- Bulk filter data loading (used by FilterEngine) -----------------------

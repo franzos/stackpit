@@ -15,6 +15,7 @@
 <p><a href="/web/settings/integrations/">&larr; Back to Integrations</a></p>
 
 <form class="settings-form" method="post" action="/web/settings/integrations/create">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="kind" value="email">
 
     <label for="int_name">Name</label>

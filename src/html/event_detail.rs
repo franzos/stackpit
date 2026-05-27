@@ -6,14 +6,15 @@ use axum::response::IntoResponse;
 use crate::event_data::*;
 use crate::extractors::ReadPool;
 use crate::html::render_template;
+use crate::html::utils::Csrf;
 use crate::queries;
 use crate::queries::types::{AttachmentInfo, EventNav};
 use crate::queries::{event_supplements, ExtractedEventData};
 use crate::server::AppState;
 
-use super::html_error;
+use super::{html_error, HtmlError};
 
-// askama needs these filters in scope for template derivation
+#[allow(unused_imports)]
 use crate::html::filters;
 
 #[derive(Template)]
@@ -31,21 +32,25 @@ struct EventDetailTemplate {
     attachments: Vec<AttachmentInfo>,
     user_reports: Vec<queries::UserReportData>,
     raw_json: String,
+    csrf_token: String,
 }
 
 pub async fn handler(
     State(_state): State<AppState>,
     ReadPool(pool): ReadPool,
+    Csrf(csrf): Csrf,
     Path((project_id, event_id)): Path<(u64, String)>,
-) -> axum::response::Response {
-    let event = match queries::events::get_event_detail(&pool, &event_id).await {
-        Ok(Some(e)) => e,
-        Ok(None) => return html_error(StatusCode::NOT_FOUND, "Event not found"),
-        Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+) -> Result<axum::response::Response, HtmlError> {
+    let event = match queries::events::get_event_detail(&pool, &event_id).await? {
+        Some(e) => e,
+        None => return Err(HtmlError(StatusCode::NOT_FOUND, "Event not found".into())),
     };
 
     if event.project_id != project_id {
-        return html_error(StatusCode::NOT_FOUND, "Event not found in this project");
+        return Err(HtmlError(
+            StatusCode::NOT_FOUND,
+            "Event not found in this project".into(),
+        ));
     }
 
     let supplements = event_supplements::get_event_supplements(&pool, &event)
@@ -87,27 +92,41 @@ pub async fn handler(
         attachments,
         user_reports,
         raw_json,
+        csrf_token: csrf,
     };
 
-    render_template(&tmpl)
+    Ok(render_template(&tmpl))
 }
 
-/// Serves an attachment file -- looked up by event_id + filename.
+/// Serves an attachment; forces `application/octet-stream` to avoid stored XSS via attacker-set content_type.
 pub async fn download_attachment(
     State(_state): State<AppState>,
     ReadPool(pool): ReadPool,
-    Path((_project_id, event_id, filename)): Path<(u64, String, String)>,
+    Path((project_id, event_id, filename)): Path<(u64, String, String)>,
 ) -> axum::response::Response {
-    match queries::event_supplements::get_attachment_data(&pool, &event_id, &filename).await {
-        Ok(Some((data, content_type))) => {
-            let ct = content_type.unwrap_or_else(|| "application/octet-stream".to_string());
+    let project_id_i64 = match i64::try_from(project_id) {
+        Ok(v) => v,
+        Err(_) => return html_error(StatusCode::NOT_FOUND, "Attachment not found"),
+    };
+    match queries::event_supplements::get_attachment_data(
+        &pool,
+        project_id_i64,
+        &event_id,
+        &filename,
+    )
+    .await
+    {
+        Ok(Some((data, _content_type))) => {
             let safe_filename = filename
                 .replace('"', "_")
-                .replace(['\r', '\n', ';', '=', '\\'], "");
+                .replace(['\r', '\n', ';', '=', '\\', '/'], "");
             let disposition = format!("attachment; filename=\"{safe_filename}\"");
             (
                 [
-                    (axum::http::header::CONTENT_TYPE, ct),
+                    (
+                        axum::http::header::CONTENT_TYPE,
+                        "application/octet-stream".to_string(),
+                    ),
                     (axum::http::header::CONTENT_DISPOSITION, disposition),
                 ],
                 data,
@@ -115,6 +134,12 @@ pub async fn download_attachment(
                 .into_response()
         }
         Ok(None) => html_error(StatusCode::NOT_FOUND, "Attachment not found"),
-        Err(e) => html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => {
+            tracing::error!(
+                project_id, event_id = %event_id, filename = %filename,
+                "attachment lookup failed: {e:#}"
+            );
+            html_error(StatusCode::INTERNAL_SERVER_ERROR, "Attachment unavailable")
+        }
     }
 }

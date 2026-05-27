@@ -122,6 +122,16 @@ pub struct PagedResult<T> {
 }
 
 impl<T> PagedResult<T> {
+    /// Build from a `COUNT(*)` total (DB-native `i64`) and the request page.
+    pub fn from_page(items: Vec<T>, total: i64, page: &Page) -> Self {
+        Self {
+            items,
+            total: total as u64,
+            offset: page.offset,
+            limit: page.limit,
+        }
+    }
+
     pub fn has_next(&self) -> bool {
         self.offset + self.limit < self.total
     }
@@ -405,6 +415,10 @@ pub struct ProjectNavCounts {
     pub metric_count: u64,
     pub profile_count: u64,
     pub replay_count: u64,
+    /// Human label for the project: stored `name` if set, else `Project {id}`.
+    /// Lives on `ProjectNavCounts` because every per-project template already
+    /// renders this struct for tab badges.
+    pub label: String,
 }
 
 /// Raw row from `fetch_events_without_fingerprint` -- used during backfill.

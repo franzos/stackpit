@@ -11,16 +11,7 @@ pub async fn send(client: &reqwest::Client, url: &str, event: &NotificationEvent
         _ => ":bell:",
     };
 
-    let trigger_text = match &event.trigger {
-        crate::notify::NotifyTrigger::NewIssue => "New Issue".to_string(),
-        crate::notify::NotifyTrigger::Regression => "Regression".to_string(),
-        crate::notify::NotifyTrigger::ThresholdExceeded {
-            count, window_secs, ..
-        } => {
-            format!("Threshold: {count} events in {}s", window_secs)
-        }
-        crate::notify::NotifyTrigger::Digest => "Digest".to_string(),
-    };
+    let trigger_text = event.trigger.display_label();
 
     let title = event.title.as_deref().unwrap_or("(untitled)");
 

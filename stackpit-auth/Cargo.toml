@@ -1,0 +1,36 @@
+[package]
+name = "stackpit-auth"
+version = "0.1.0"
+edition = "2021"
+description = "Auth primitives for Stackpit: admin token, OAuth/OIDC, sessions, project keys"
+license = "MIT"
+repository = "https://github.com/franzos/stackpit"
+
+[features]
+default = []
+axum = ["dep:axum"]
+
+[dependencies]
+async-trait = "0.1"
+axum = { version = "0.8", optional = true }
+base64 = "0.22"
+hex = "0.4"
+http = "1"
+thiserror = "2"
+# RS256 JWKS validation for the MCP JWT arm + back-channel logout.
+jsonwebtoken = { version = "9", default-features = false }
+# O(1) LRU eviction for the bearer + revocation caches.
+lru = "0.12"
+parking_lot = "0.12"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+secrecy = "0.10"
+sha2 = "0.10"
+subtle = "2"
+tokio = { version = "1", features = ["sync"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }

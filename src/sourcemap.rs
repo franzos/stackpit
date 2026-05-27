@@ -5,14 +5,12 @@
 use anyhow::{Context, Result};
 use std::io::Read;
 
-// ── Bundle parsing limits ───────────────────────────────────────────
-// The ZIP central directory is attacker-controlled; never trust its
-// declared sizes without a hard cap.
+// Bundle parsing limits (ZIP directory is attacker-controlled)
 
 const MAX_BUNDLE_ENTRIES: usize = 10_000;
 const MAX_BUNDLE_ENTRY_BYTES: usize = 64 * 1024 * 1024; // 64 MiB per entry
 
-// ── Types ───────────────────────────────────────────────────────────
+// Types
 
 pub struct SourcemapEntry {
     pub debug_id: String,
@@ -30,16 +28,9 @@ pub struct ResolvedFrame {
     pub post_context: Vec<String>,
 }
 
-// ── Artifact bundle parsing ─────────────────────────────────────────
+// Artifact bundle parsing
 
-/// Extract sourcemaps from an artifact bundle ZIP.
-///
-/// The bundle is produced by `sentry-cli sourcemaps upload` and contains
-/// a manifest plus the actual `.map` files. The manifest maps debug IDs
-/// to source file paths.
-///
-/// ZIP decoding and JSON parsing are CPU-bound, so we offload to a blocking
-/// task to keep the async runtime responsive on large uploads.
+/// Parse sourcemap bundle (ZIP) offloaded to blocking task.
 pub async fn parse_artifact_bundle(zip_data: Vec<u8>) -> Result<Vec<SourcemapEntry>> {
     tokio::task::spawn_blocking(move || parse_artifact_bundle_sync(&zip_data))
         .await
@@ -156,12 +147,13 @@ fn read_zip_entry(
     archive: &mut zip::ZipArchive<std::io::Cursor<&[u8]>>,
     name: &str,
 ) -> Result<Vec<u8>> {
-    let mut file = archive.by_name(name)?;
-    // `file.size()` comes from the ZIP central directory and is attacker-controlled,
-    // so clamp the preallocation. The post-read check catches under-declared sizes too.
+    let file = archive.by_name(name)?;
+    // `file.size()` is attacker-controlled; `Read::take` bounds the decompressed read against zip bombs.
     let cap = file.size().min(MAX_BUNDLE_ENTRY_BYTES as u64) as usize;
     let mut buf = Vec::with_capacity(cap);
-    file.read_to_end(&mut buf)?;
+    let limit = MAX_BUNDLE_ENTRY_BYTES as u64 + 1;
+    let mut bounded = file.take(limit);
+    bounded.read_to_end(&mut buf)?;
     if buf.len() > MAX_BUNDLE_ENTRY_BYTES {
         anyhow::bail!(
             "bundle entry {name} exceeds size limit ({} > {MAX_BUNDLE_ENTRY_BYTES})",
@@ -210,7 +202,7 @@ fn scan_for_sourcemaps(
     Ok(entries)
 }
 
-// ── Frame resolution ────────────────────────────────────────────────
+// Frame resolution
 
 /// Context lines to show above/below the error line
 const CONTEXT_LINES: usize = 5;
@@ -270,7 +262,7 @@ fn extract_context(source: &str, line_idx: usize) -> (Option<String>, Vec<String
     (context_line, pre_context, post_context)
 }
 
-// ── DB helpers ──────────────────────────────────────────────────────
+// DB helpers
 
 use crate::db::{sql, translate_sql, DbPool};
 use sqlx::Row;

@@ -7,10 +7,7 @@ pub struct ResolvedWebhook {
     pub addr: SocketAddr,
 }
 
-/// Resolves a webhook URL and checks that none of its addresses point to
-/// private/internal IPs. Returns the hostname and first safe SocketAddr so the
-/// caller can pin reqwest via `resolve()` -- closing the TOCTOU gap where DNS
-/// could return a different IP at connection time.
+/// Validate webhook URL (check for private IPs; return hostname + pinned SocketAddr).
 pub async fn check_ssrf(url: &str) -> Result<ResolvedWebhook, String> {
     let (hostname, host_port) = extract_host_and_host_port(url)
         .ok_or_else(|| "invalid URL: cannot extract host".to_string())?;

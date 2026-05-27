@@ -3,7 +3,7 @@ use axum::extract::{Form, Path, State};
 use serde::Deserialize;
 
 use crate::html::render_template;
-use crate::html::utils;
+use crate::html::utils::{self, Csrf};
 use crate::queries;
 use crate::queries::types::{Integration, ProjectIntegration};
 use crate::queries::ProjectNavCounts;
@@ -21,13 +21,15 @@ struct ProjectIntegrationsTemplate {
     available: Vec<Integration>,
     message: Option<String>,
     nav: ProjectNavCounts,
+    csrf_token: String,
 }
 
 pub async fn handler(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
 ) -> axum::response::Response {
-    render_page(&state, project_id, None).await
+    render_page(&state, project_id, None, &csrf).await
 }
 
 #[derive(Deserialize)]
@@ -44,6 +46,7 @@ pub struct ActivateForm {
 
 pub async fn activate(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
     Form(form): Form<ActivateForm>,
 ) -> axum::response::Response {
@@ -52,26 +55,27 @@ pub async fn activate(
         .filter(|s| !s.trim().is_empty())
         .map(|s| serde_json::json!({ "to": s.trim() }).to_string());
 
-    let result = match utils::await_writer(state.writer.activate_project_integration(
-        project_id,
-        form.integration_id,
-        form.notify_new_issues.is_some(),
-        form.notify_regressions.is_some(),
-        form.min_level.filter(|s| !s.is_empty()),
-        form.environment_filter.filter(|s| !s.trim().is_empty()),
-        config,
-        form.notify_threshold.is_some(),
-        form.notify_digests.is_some(),
-    ))
+    let s = state.clone();
+    utils::query_then_render(
+        queries::integrations::activate_project_integration(
+            &state.writer_pool,
+            project_id,
+            form.integration_id,
+            form.notify_new_issues.is_some(),
+            form.notify_regressions.is_some(),
+            form.min_level.filter(|s| !s.is_empty()).as_deref(),
+            form.environment_filter
+                .filter(|s| !s.trim().is_empty())
+                .as_deref(),
+            config.as_deref(),
+            form.notify_threshold.is_some(),
+            form.notify_digests.is_some(),
+        )
+        .await,
+        "Integration activated",
+        move |msg| async move { render_page(&s, project_id, msg, &csrf).await },
+    )
     .await
-    {
-        Ok(r) => r,
-        Err(resp) => return resp,
-    };
-    match result {
-        Ok(()) => render_page(&state, project_id, Some("Integration activated".into())).await,
-        Err(e) => render_page(&state, project_id, Some(format!("Error: {e}"))).await,
-    }
 }
 
 #[derive(Deserialize)]
@@ -87,6 +91,7 @@ pub struct UpdateForm {
 
 pub async fn update(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Path((project_id, id)): Path<(u64, i64)>,
     Form(form): Form<UpdateForm>,
 ) -> axum::response::Response {
@@ -95,45 +100,47 @@ pub async fn update(
         .filter(|s| !s.trim().is_empty())
         .map(|s| serde_json::json!({ "to": s.trim() }).to_string());
 
-    let result = match utils::await_writer(state.writer.update_project_integration(
+    let msg = match queries::integrations::update_project_integration(
+        &state.writer_pool,
         id,
         form.notify_new_issues.is_some(),
         form.notify_regressions.is_some(),
-        form.min_level.filter(|s| !s.is_empty()),
-        form.environment_filter.filter(|s| !s.trim().is_empty()),
-        config,
+        form.min_level.filter(|s| !s.is_empty()).as_deref(),
+        form.environment_filter
+            .filter(|s| !s.trim().is_empty())
+            .as_deref(),
+        config.as_deref(),
         form.notify_threshold.is_some(),
         form.notify_digests.is_some(),
-    ))
+    )
     .await
     {
-        Ok(r) => r,
-        Err(resp) => return resp,
+        Ok(0) => format!("Error: not found: project integration: {id}"),
+        Ok(_) => "Integration updated".to_string(),
+        Err(e) => format!("Error: {e}"),
     };
-    match result {
-        Ok(()) => render_page(&state, project_id, Some("Integration updated".into())).await,
-        Err(e) => render_page(&state, project_id, Some(format!("Error: {e}"))).await,
-    }
+    render_page(&state, project_id, Some(msg), &csrf).await
 }
 
 pub async fn deactivate(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Path((project_id, id)): Path<(u64, i64)>,
 ) -> axum::response::Response {
-    let result = match utils::await_writer(state.writer.deactivate_project_integration(id)).await {
-        Ok(r) => r,
-        Err(resp) => return resp,
-    };
-    match result {
-        Ok(()) => render_page(&state, project_id, Some("Integration deactivated".into())).await,
-        Err(e) => render_page(&state, project_id, Some(format!("Error: {e}"))).await,
-    }
+    let msg =
+        match queries::integrations::deactivate_project_integration(&state.writer_pool, id).await {
+            Ok(0) => format!("Error: not found: project integration: {id}"),
+            Ok(_) => "Integration deactivated".to_string(),
+            Err(e) => format!("Error: {e}"),
+        };
+    render_page(&state, project_id, Some(msg), &csrf).await
 }
 
 async fn render_page(
     state: &AppState,
     project_id: u64,
     message: Option<String>,
+    csrf: &str,
 ) -> axum::response::Response {
     let project_status = queries::projects::get_project_status(&state.pool, project_id)
         .await
@@ -156,6 +163,7 @@ async fn render_page(
         available,
         message,
         nav,
+        csrf_token: csrf.to_string(),
     };
 
     render_template(&tmpl)

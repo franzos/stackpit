@@ -26,7 +26,7 @@ impl ForgeType {
         }
     }
 
-    pub fn from_str(s: &str) -> Self {
+    pub fn from_tag(s: &str) -> Self {
         match s {
             "github" => Self::GitHub,
             "gitlab" => Self::GitLab,
@@ -75,9 +75,7 @@ pub fn label_from_hostname(hostname: &str) -> String {
     }
 }
 
-/// Builds a link to a specific file+line in a commit. A user-provided template
-/// takes precedence -- otherwise we construct forge-specific URLs.
-/// Returns `None` for unknown forges without a template.
+/// Build source link (user template or forge-specific URL; None if unknown).
 pub fn source_url(
     forge_type: &ForgeType,
     repo_url: &str,
@@ -373,7 +371,7 @@ mod tests {
             ForgeType::Azure,
             ForgeType::Unknown,
         ] {
-            assert_eq!(ForgeType::from_str(ft.as_str()), ft);
+            assert_eq!(ForgeType::from_tag(ft.as_str()), ft);
         }
     }
 }

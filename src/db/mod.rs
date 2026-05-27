@@ -7,10 +7,7 @@ use anyhow::Result;
 
 pub use pool::{run_migrations, Db, DbPool, DbRow};
 
-// ---------------------------------------------------------------------------
-// SQL dialect helpers -- write queries with SQLite-style ?N placeholders;
-// they're translated to PostgreSQL $N when compiled with the postgres feature.
-// ---------------------------------------------------------------------------
+// — SQL dialect helpers (?N → $N for PostgreSQL)
 
 /// Translate a static SQL string's ?N placeholders to $N for PostgreSQL.
 /// For SQLite this is a zero-cost pass-through.
@@ -87,6 +84,13 @@ pub async fn create_pool(url: &str) -> Result<DbPool> {
 /// Does NOT run migrations.
 pub async fn create_writer_pool(url: &str) -> Result<DbPool> {
     pool::create_write_pool(url).await
+}
+
+/// Create the background-writer pool (low max_connections). Postgres-only;
+/// SQLite uses a dedicated single-connection writer pool per subsystem instead.
+#[cfg(feature = "postgres")]
+pub async fn create_bg_pool(url: &str) -> Result<DbPool> {
+    pool::create_bg_pool(url).await
 }
 
 /// Run a PRAGMA on a SQLite pool. No-op for PostgreSQL.
@@ -183,7 +187,7 @@ pub(crate) async fn open_test_pool() -> DbPool {
              discard_stats, discarded_fingerprints, inbound_filters, \
              message_filters, rate_limits, environment_filters, \
              release_filters, user_agent_filters, filter_rules, \
-             ip_blocklist, project_repos, sync_state \
+             ip_blocklist, project_repos, sync_state, api_keys \
              CASCADE",
         )
         .execute(&pool)

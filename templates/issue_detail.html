@@ -55,7 +55,7 @@
                 <summary class="frame-header{% if frame.in_app %} in-app{% else %} library{% endif %}">
                     {{ frame.filename }}{% match frame.lineno %}{% when Some with (ln) %}:{{ ln }}{% match frame.colno %}{% when Some with (cn) %}:{{ cn }}{% when None %}{% endmatch %}{% when None %}{% endmatch %} in <strong>{{ frame.function }}</strong>
                     {% if !frame.source_links.is_empty() %}
-                    <span class="source-links">{% for link in frame.source_links %}<a href="{{ link.url }}" target="_blank" rel="noopener" class="source-link" onclick="event.stopPropagation()">{{ link.label }}</a>{% endfor %}</span>
+                    <span class="source-links">{% for link in frame.source_links %}<a href="{{ link.url }}" target="_blank" rel="noopener" class="source-link" data-stop-propagation>{{ link.label }}</a>{% endfor %}</span>
                     {% endif %}
                 </summary>
                 {% if frame.context_line.is_some() || !frame.pre_context.is_empty() || !frame.post_context.is_empty() %}
@@ -323,6 +323,7 @@
         </dl>
 
         <form class="status-form" method="post" action="/web/projects/{{ issue.project_id }}/issues/{{ issue.fingerprint }}/status">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <select name="status" aria-label="Issue status">
                 <option value="unresolved"{% if issue.status == "unresolved" %} selected{% endif %}>unresolved</option>
                 <option value="resolved"{% if issue.status == "resolved" %} selected{% endif %}>resolved</option>
@@ -332,10 +333,11 @@
         </form>
 
         <form method="post" action="/web/projects/{{ issue.project_id }}/issues/{{ issue.fingerprint }}/discard" style="margin-top: 0.5rem;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             {% if is_discarded %}
             <button type="submit" class="btn" title="Resume accepting future events with this fingerprint">Undo Discard</button>
             {% else %}
-            <button type="submit" class="btn btn-danger" onclick="return confirm('Discard all future events with this fingerprint?')" title="Silently drop future events matching this fingerprint">Discard Future Events</button>
+            <button type="submit" class="btn btn-danger" data-confirm="Discard all future events with this fingerprint?" title="Silently drop future events matching this fingerprint">Discard Future Events</button>
             {% endif %}
         </form>
 

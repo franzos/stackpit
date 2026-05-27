@@ -19,7 +19,7 @@ pub async fn list_metrics(
         .bind(project_id as i64)
         .fetch_one(pool)
         .await?;
-    let total = count_row.get::<i64, _>(0) as u64;
+    let total = count_row.get::<i64, _>(0);
 
     let rows = sqlx::query(sql!(
         "SELECT mri, metric_type, COUNT(*) AS data_points, MIN(timestamp) AS first_seen, MAX(timestamp) AS last_seen
@@ -45,12 +45,7 @@ pub async fn list_metrics(
         })
         .collect();
 
-    Ok(PagedResult {
-        items,
-        total,
-        offset: page.offset,
-        limit: page.limit,
-    })
+    Ok(PagedResult::from_page(items, total, page))
 }
 
 pub async fn get_metric_type(pool: &DbPool, project_id: u64, mri: &str) -> Option<String> {

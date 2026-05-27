@@ -161,15 +161,18 @@ pub async fn list_attachments_for_event(
         .collect())
 }
 
-/// Fetch the raw attachment blob by event_id + filename.
+/// Fetch the raw attachment blob, scoped by `project_id` to block cross-project IDOR.
 pub async fn get_attachment_data(
     pool: &DbPool,
+    project_id: i64,
     event_id: &str,
     filename: &str,
 ) -> Result<Option<(Vec<u8>, Option<String>)>> {
     let row = sqlx::query(sql!(
-        "SELECT data, content_type FROM attachments WHERE event_id = ?1 AND filename = ?2"
+        "SELECT data, content_type FROM attachments \
+         WHERE project_id = ?1 AND event_id = ?2 AND filename = ?3"
     ))
+    .bind(project_id)
     .bind(event_id)
     .bind(filename)
     .fetch_optional(pool)
@@ -178,11 +181,7 @@ pub async fn get_attachment_data(
     Ok(row.map(|r| (r.get("data"), r.get("content_type"))))
 }
 
-/// Pull together everything the event detail page needs -- DB supplements
-/// plus parsed payload data -- so the template gets one clean struct.
-/// The supplements must be fetched separately via `get_event_supplements`.
-/// Preload all sourcemaps referenced by this event's `debug_meta.images`.
-/// Returns a HashMap of debug_id → parsed SourceMap for sync resolution.
+/// Preload sourcemaps referenced by debug_meta.images (returns debug_id → SourceMap map).
 pub async fn preload_sourcemaps(
     pool: &DbPool,
     payload: &serde_json::Value,

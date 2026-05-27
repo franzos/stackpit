@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 
-{% block title %}SDK Setup - Project {{ project_id }} - Stackpit{% endblock %}
+{% block title %}SDK Setup - {{ nav.label }} - Stackpit{% endblock %}
 
 {% block breadcrumbs %}
 <span class="sep" aria-hidden="true">/</span>
 <a href="/web/projects/">Projects</a>
 <span class="sep" aria-hidden="true">/</span>
-<a href="/web/projects/{{ project_id }}/">Project {{ project_id }}</a>
+<a href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
 <span class="sep" aria-hidden="true">/</span>
 <a href="/web/projects/{{ project_id }}/settings/">Settings</a>
 <span class="sep" aria-hidden="true">/</span>
@@ -14,7 +14,7 @@
 {% endblock %}
 
 {% block content %}
-<h1>Project {{ project_id }}{% if project_status == "archived" %} <span style="color: var(--muted); font-size: 0.8rem;">(archived)</span>{% endif %}</h1>
+<h1>{{ nav.label }}{% if project_status == "archived" %} <span style="color: var(--muted); font-size: 0.8rem;">(archived)</span>{% endif %}</h1>
 <nav class="project-tabs" aria-label="Project sections">
     <a href="/web/projects/{{ project_id }}/" class="project-tab"><span class="type-icon type-icon-event"></span>Issues</a>
     {% if nav.transaction_count > 0 %}<a href="/web/projects/{{ project_id }}/transactions/" class="project-tab"><span class="type-icon type-icon-transaction"></span>Transactions <span class="tab-count">{{ nav.transaction_count }}</span></a>{% endif %}
@@ -73,7 +73,8 @@
             <td><time datetime="{{ key.created_at|format_ts }}" title="{{ key.created_at|format_ts }}">{{ key.created_at|format_relative }}</time></td>
             <td>
                 <form method="post" action="/web/projects/{{ project_id }}/settings/keys/{{ key.public_key }}/delete" style="margin: 0;">
-                    <button type="submit" class="btn btn-danger" onclick="return confirm('Delete this key? SDKs using it will stop working.')">Delete</button>
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button type="submit" class="btn btn-danger" data-confirm="Delete this key? SDKs using it will stop working.">Delete</button>
                 </form>
             </td>
         </tr>
@@ -85,6 +86,7 @@
 
 <h2>Create Key</h2>
 <form class="settings-form" method="post" action="/web/projects/{{ project_id }}/settings/keys/create">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <label for="key_label">Label <span style="font-weight: 400; color: var(--muted);">(optional)</span></label>
     <input type="text" id="key_label" name="label" placeholder="e.g. production, staging">
     <button type="submit" class="btn">Create Key</button>

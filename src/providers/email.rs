@@ -1,22 +1,6 @@
+use crate::encoding::escape_html;
 use crate::notify::NotificationEvent;
 use anyhow::Result;
-
-/// Escape characters that have special meaning in HTML to prevent XSS
-/// when interpolating user-controlled values into HTML email bodies.
-fn html_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#x27;"),
-            _ => out.push(c),
-        }
-    }
-    out
-}
 
 pub async fn send(
     client: &reqwest::Client,
@@ -40,16 +24,7 @@ pub async fn send(
             anyhow::anyhow!("to address not configured in project integration config")
         })?;
 
-    let trigger_text = match &event.trigger {
-        crate::notify::NotifyTrigger::NewIssue => "New Issue".to_string(),
-        crate::notify::NotifyTrigger::Regression => "Regression".to_string(),
-        crate::notify::NotifyTrigger::ThresholdExceeded {
-            count, window_secs, ..
-        } => {
-            format!("Threshold: {} events in {}s", count, window_secs)
-        }
-        crate::notify::NotifyTrigger::Digest => "Digest".to_string(),
-    };
+    let trigger_text = event.trigger.display_label();
 
     let title = event.title.as_deref().unwrap_or("(untitled)");
     let level = event.level.as_deref().unwrap_or("-");
@@ -61,7 +36,7 @@ pub async fn send(
         let mut html = format!(
             r#"<div style="font-family: -apple-system, system-ui, sans-serif; max-width: 600px;">
 <h2 style="color: #333;">{}</h2>"#,
-            html_escape(&trigger_text)
+            escape_html(&trigger_text)
         );
 
         if let Some(ref digest) = event.digest {
@@ -80,7 +55,7 @@ pub async fn send(
 <p>{} new issues | {} active issues | {} total events</p>
 <table style="border-collapse: collapse; width: 100%;">
 <tr><th style="padding: 8px; border-bottom: 2px solid #ddd; text-align: left;">Title</th><th style="padding: 8px; border-bottom: 2px solid #ddd; text-align: left;">Level</th><th style="padding: 8px; border-bottom: 2px solid #ddd; text-align: right;">Events</th></tr>"#,
-                    html_escape(name), html_escape(&project.project_id.to_string()),
+                    escape_html(name), escape_html(&project.project_id.to_string()),
                     project.new_issues.len(), project.active_issues_count, project.total_events
                 ));
 
@@ -93,7 +68,7 @@ pub async fn send(
                     ));
                     html.push_str(&format!(
                         r#"<tr><td style="padding: 8px; border-bottom: 1px solid #eee;">{}</td><td style="padding: 8px; border-bottom: 1px solid #eee;">{}</td><td style="padding: 8px; border-bottom: 1px solid #eee; text-align: right;">{}</td></tr>"#,
-                        html_escape(t), html_escape(l), issue.event_count
+                        escape_html(t), escape_html(l), issue.event_count
                     ));
                 }
                 html.push_str("</table>");
@@ -118,12 +93,12 @@ pub async fn send(
 <tr><td style="padding: 8px; font-weight: bold;">Event ID</td><td style="padding: 8px;">{}</td></tr>
 </table>
 </div>"#,
-            html_escape(&trigger_text),
-            html_escape(title),
-            html_escape(level),
-            html_escape(&event.project_id.to_string()),
-            html_escape(env),
-            html_escape(&event.event_id.to_string()),
+            escape_html(&trigger_text),
+            escape_html(title),
+            escape_html(level),
+            escape_html(&event.project_id.to_string()),
+            escape_html(env),
+            escape_html(&event.event_id.to_string()),
         );
         (text, html)
     };

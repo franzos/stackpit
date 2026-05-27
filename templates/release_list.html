@@ -23,7 +23,7 @@
 </form>
 
 {% if result.items.is_empty() %}
-<p class="empty">No releases found.</p>
+<p class="empty">No releases yet. Set a <code>release</code> on your Sentry SDK (e.g. <code>Sentry.init({ release: "myapp@1.2.3" })</code>) and they'll appear here as soon as events with that release are ingested. Useful for tracking which build introduced a regression.</p>
 {% else %}
 <div class="table-wrap">
 <table>

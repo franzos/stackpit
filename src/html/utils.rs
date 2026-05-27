@@ -1,72 +1,97 @@
 use std::collections::HashMap;
 
+use askama::Template;
+use axum::http::StatusCode;
 use serde::Deserialize;
 
-use crate::writer::msg::WriteMsg;
-use crate::writer::types::{WriteError, WriteReply};
-use tokio::sync::mpsc::error::TrySendError;
+use crate::db::DbPool;
+use crate::html::{render_template, HtmlError};
+use crate::middleware::CsrfToken;
+use crate::queries;
+use crate::queries::ProjectNavCounts;
 
-/// Waits for the writer thread to reply. If the channel dies on us,
-/// we turn that into an error page instead of panicking.
-pub async fn await_writer<T>(
-    send_result: Result<WriteReply<T>, Box<TrySendError<WriteMsg>>>,
-) -> Result<Result<T, WriteError>, axum::response::Response> {
-    let rx = match send_result {
-        Ok(rx) => rx,
-        Err(_) => {
-            return Err(super::html_error(
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "writer unavailable",
-            ))
-        }
-    };
-    match rx.await {
-        Ok(result) => Ok(result),
-        Err(_) => Err(super::html_error(
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            "writer dropped reply",
-        )),
+/// Pulls the per-session CSRF token from request extensions. Infallible:
+/// when web_auth_middleware skipped insertion (a no-auth pass-through
+/// edge case), falls back to an empty string -- the middleware exempts
+/// the same paths that don't have a token, so mutating /web/ POSTs from
+/// non-authed contexts already 403 there.
+pub struct Csrf(pub String);
+
+impl<S> axum::extract::FromRequestParts<S> for Csrf
+where
+    S: Send + Sync,
+{
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        Ok(Csrf(
+            parts
+                .extensions
+                .get::<CsrfToken>()
+                .map(|t| t.0.clone())
+                .unwrap_or_default(),
+        ))
     }
 }
 
-/// Sends a writer command, waits for the result, and renders a page with a
-/// success or error message. Cuts out the boilerplate that every POST handler
-/// was duplicating.
-pub async fn writer_then_render(
-    send_result: Result<WriteReply<()>, Box<TrySendError<WriteMsg>>>,
+/// Runs an admin DB write and renders a success/error response (reusable POST pattern).
+/// Generic over the payload -- success renders the message and drops the value,
+/// so handlers that ignore the returned id can still use this.
+pub async fn query_then_render<T, F, Fut>(
+    result: anyhow::Result<T>,
     success_msg: &str,
-    render: impl AsyncRenderFn,
-) -> axum::response::Response {
-    let result = match await_writer(send_result).await {
-        Ok(r) => r,
-        Err(resp) => return resp,
-    };
-    match result {
-        Ok(()) => render.call(Some(success_msg.to_string())).await,
-        Err(e) => render.call(Some(format!("Error: {e}"))).await,
-    }
-}
-
-/// Trait for the render callback so we can pass async closures ergonomically.
-pub trait AsyncRenderFn {
-    fn call(
-        self,
-        message: Option<String>,
-    ) -> impl std::future::Future<Output = axum::response::Response> + Send;
-}
-
-/// Blanket impl for any closure that takes Option<String> and returns a future of Response.
-impl<F, Fut> AsyncRenderFn for F
+    render: F,
+) -> axum::response::Response
 where
     F: FnOnce(Option<String>) -> Fut,
-    Fut: std::future::Future<Output = axum::response::Response> + Send,
+    Fut: std::future::Future<Output = axum::response::Response>,
 {
-    fn call(
-        self,
-        message: Option<String>,
-    ) -> impl std::future::Future<Output = axum::response::Response> + Send {
-        self(message)
+    match result {
+        Ok(_) => render(Some(success_msg.to_string())).await,
+        Err(e) => render(Some(format!("Error: {e}"))).await,
     }
+}
+
+/// Fetches the project nav counts and renders a per-project list page.
+/// `build` keeps each page's distinct template type while this owns the
+/// shared nav-counts + render boilerplate.
+pub async fn render_project_list<T, F, Tmpl>(
+    pool: &DbPool,
+    project_id: u64,
+    csrf: String,
+    result: T,
+    build: F,
+) -> axum::response::Response
+where
+    F: FnOnce(u64, T, ProjectNavCounts, String) -> Tmpl,
+    Tmpl: Template,
+{
+    let nav = queries::projects::get_nav_counts(pool, project_id).await;
+    render_template(&build(project_id, result, nav, csrf))
+}
+
+/// Like [`render_project_list`] for detail pages: resolves an `Option` row,
+/// 404s with `not_found` when absent, then renders via `build`.
+pub async fn render_project_detail<T, F, Tmpl>(
+    pool: &DbPool,
+    project_id: u64,
+    csrf: String,
+    item: Option<T>,
+    not_found: &str,
+    build: F,
+) -> Result<axum::response::Response, HtmlError>
+where
+    F: FnOnce(u64, T, ProjectNavCounts, String) -> Tmpl,
+    Tmpl: Template,
+{
+    let Some(item) = item else {
+        return Err(HtmlError(StatusCode::NOT_FOUND, not_found.into()));
+    };
+    let nav = queries::projects::get_nav_counts(pool, project_id).await;
+    Ok(render_template(&build(project_id, item, nav, csrf)))
 }
 
 /// Shared query params for all the list pages. Serde drops unknown fields,
@@ -85,6 +110,46 @@ pub struct ListParams {
     pub item_type: Option<String>,
     pub limit: Option<u64>,
     pub offset: Option<u64>,
+}
+
+/// Empty-string-to-`None` filtering shared by the list-page filter builders.
+fn non_empty(s: Option<String>) -> Option<String> {
+    s.filter(|s| !s.is_empty())
+}
+
+/// Builds an [`EventFilter`] from the shared list params, treating blank
+/// fields as absent.
+pub fn event_filter_from_params(params: &ListParams) -> queries::types::EventFilter {
+    queries::types::EventFilter {
+        level: non_empty(params.level.clone()),
+        project_id: params.project_id,
+        query: non_empty(params.query.clone()),
+        sort: non_empty(params.sort.clone()),
+        item_type: non_empty(params.item_type.clone()),
+    }
+}
+
+/// Builds an [`IssueFilter`] from the shared list params for the given item
+/// type. `tag` is parsed `key=value` (both sides non-empty) or dropped.
+pub fn issue_filter_from_params(
+    params: &ListParams,
+    item_type: &str,
+) -> queries::types::IssueFilter {
+    let tag = params
+        .tag
+        .as_deref()
+        .and_then(|t| t.split_once('='))
+        .filter(|(k, v)| !k.is_empty() && !v.is_empty())
+        .map(|(k, v)| (k.to_string(), v.to_string()));
+    queries::types::IssueFilter {
+        level: non_empty(params.level.clone()),
+        status: non_empty(params.status.clone()),
+        query: non_empty(params.query.clone()),
+        sort: non_empty(params.sort.clone()),
+        item_type: Some(item_type.to_string()),
+        release: non_empty(params.release.clone()),
+        tag,
+    }
 }
 
 /// Treats empty strings as `None` for numeric query params -- browsers love sending those.
@@ -216,83 +281,4 @@ pub fn sanitize_svg_text(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
-}
-
-/// Strips `<script>` tags and on* event handlers from SVG output. Defense in depth.
-pub fn sanitize_svg_output(svg: &str) -> String {
-    // Nuke any <script>...</script> blocks (case-insensitive).
-    // We lowercase once and walk byte offsets so this is O(n) not O(n²).
-    let lower = svg.to_lowercase();
-    let mut kept: Vec<&str> = Vec::new();
-    let mut cursor = 0;
-
-    while let Some(rel) = lower[cursor..].find("<script") {
-        let start = cursor + rel;
-        if let Some(end_rel) = lower[start..].find("</script>") {
-            kept.push(&svg[cursor..start]);
-            cursor = start + end_rel + 9; // skip past </script>
-        } else {
-            // Malformed script tag -- keep everything before it, drop the rest
-            kept.push(&svg[cursor..start]);
-            cursor = svg.len();
-            break;
-        }
-    }
-    kept.push(&svg[cursor..]);
-
-    let result = kept.concat();
-
-    // Also strip on* event handlers (onclick, onload, etc.)
-    regex_lite_on_handler(&result)
-}
-
-/// Hand-rolled on* attribute stripper -- avoids pulling in a regex crate just for this.
-fn regex_lite_on_handler(svg: &str) -> String {
-    let mut result = String::with_capacity(svg.len());
-    let mut chars = svg.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        if ch == ' ' || ch == '\t' || ch == '\n' {
-            // Peek ahead to see if this is an on* event handler attribute
-            let rest: String = chars.clone().take(40).collect();
-            if rest.starts_with("on") && rest.contains('=') {
-                // Walk past the attribute value
-                let eq_pos = match rest.find('=') {
-                    Some(p) => p,
-                    None => continue,
-                };
-                // Skip past "on...="
-                for _ in 0..eq_pos + 1 {
-                    chars.next();
-                }
-                // Eat whitespace
-                while chars.peek() == Some(&' ') {
-                    chars.next();
-                }
-                // Consume the attribute value (quoted or unquoted)
-                if let Some(&quote) = chars.peek() {
-                    if quote == '"' || quote == '\'' {
-                        chars.next(); // opening quote
-                        for c in chars.by_ref() {
-                            if c == quote {
-                                break;
-                            }
-                        }
-                    } else {
-                        // Unquoted value -- consume until whitespace or tag end
-                        while let Some(&c) = chars.peek() {
-                            if c == ' ' || c == '\t' || c == '\n' || c == '>' || c == '/' {
-                                break;
-                            }
-                            chars.next();
-                        }
-                    }
-                }
-                continue;
-            }
-        }
-        result.push(ch);
-    }
-
-    result
 }

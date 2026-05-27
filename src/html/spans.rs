@@ -1,16 +1,16 @@
 use askama::Template;
 use axum::extract::{Path, Query};
-use axum::http::StatusCode;
 
 use crate::extractors::ReadPool;
 use crate::html::render_template;
-use crate::html::utils::ListParams;
+use crate::html::utils::{Csrf, ListParams};
 use crate::queries;
 use crate::queries::types::{Page, PagedResult, SpanSummary, TraceSpan, TraceSummary};
 use crate::queries::ProjectNavCounts;
 
-use super::html_error;
+use super::HtmlError;
 
+#[allow(unused_imports)]
 use crate::html::filters;
 
 #[derive(Template)]
@@ -20,6 +20,7 @@ struct SpanListTemplate {
     result: PagedResult<SpanSummary>,
     traces: PagedResult<TraceSummary>,
     nav: ProjectNavCounts,
+    csrf_token: String,
 }
 
 #[derive(Template)]
@@ -29,13 +30,15 @@ struct TraceDetailTemplate {
     trace_id: String,
     spans: Vec<TraceSpan>,
     nav: ProjectNavCounts,
+    csrf_token: String,
 }
 
 pub async fn list_handler(
     ReadPool(pool): ReadPool,
+    Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
     Query(params): Query<ListParams>,
-) -> axum::response::Response {
+) -> Result<axum::response::Response, HtmlError> {
     let page = Page::new(params.offset, params.limit);
     let trace_page = Page::new(Some(0), Some(25));
 
@@ -44,14 +47,8 @@ pub async fn list_handler(
         queries::spans::list_traces(&pool, project_id, &trace_page),
     );
 
-    let result = match span_result {
-        Ok(r) => r,
-        Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
-    let traces = match trace_result {
-        Ok(r) => r,
-        Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
+    let result = span_result?;
+    let traces = trace_result?;
 
     let nav = queries::projects::get_nav_counts(&pool, project_id).await;
 
@@ -60,18 +57,17 @@ pub async fn list_handler(
         result,
         traces,
         nav,
+        csrf_token: csrf,
     };
-    render_template(&tmpl)
+    Ok(render_template(&tmpl))
 }
 
 pub async fn trace_detail_handler(
     ReadPool(pool): ReadPool,
+    Csrf(csrf): Csrf,
     Path((project_id, trace_id)): Path<(u64, String)>,
-) -> axum::response::Response {
-    let spans = match queries::spans::get_trace_spans(&pool, &trace_id).await {
-        Ok(s) => s,
-        Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
+) -> Result<axum::response::Response, HtmlError> {
+    let spans = queries::spans::get_trace_spans(&pool, &trace_id).await?;
 
     let nav = queries::projects::get_nav_counts(&pool, project_id).await;
 
@@ -80,6 +76,7 @@ pub async fn trace_detail_handler(
         trace_id,
         spans,
         nav,
+        csrf_token: csrf,
     };
-    render_template(&tmpl)
+    Ok(render_template(&tmpl))
 }

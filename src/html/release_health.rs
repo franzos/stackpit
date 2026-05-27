@@ -1,15 +1,15 @@
 use askama::Template;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
 
 use crate::extractors::ReadPool;
 use crate::html::render_template;
+use crate::html::utils::Csrf;
 use crate::queries;
 use crate::queries::types::ReleaseHealth;
 use crate::queries::ProjectNavCounts;
 use crate::server::AppState;
 
-use super::html_error;
+use super::HtmlError;
 
 // askama needs these filters in scope for template derivation
 #[allow(unused_imports)]
@@ -21,17 +21,16 @@ struct ReleaseHealthTemplate {
     project_id: u64,
     releases: Vec<ReleaseHealth>,
     nav: ProjectNavCounts,
+    csrf_token: String,
 }
 
 pub async fn handler(
     State(_state): State<AppState>,
     ReadPool(pool): ReadPool,
+    Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
-) -> axum::response::Response {
-    let releases = match queries::releases::get_release_health(&pool, project_id).await {
-        Ok(r) => r,
-        Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
+) -> Result<axum::response::Response, HtmlError> {
+    let releases = queries::releases::get_release_health(&pool, project_id).await?;
 
     let nav = queries::projects::get_nav_counts(&pool, project_id).await;
 
@@ -39,6 +38,7 @@ pub async fn handler(
         project_id,
         releases,
         nav,
+        csrf_token: csrf,
     };
-    render_template(&tmpl)
+    Ok(render_template(&tmpl))
 }

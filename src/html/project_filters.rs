@@ -1,14 +1,85 @@
 use askama::Template;
 use axum::extract::{Form, Path, State};
-use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use serde::Deserialize;
 
+use crate::db::DbPool;
+use crate::filter::FilterEngine;
 use crate::html::render_template;
-use crate::html::utils;
+use crate::html::utils::Csrf;
 use crate::queries;
+use crate::queries::filters::load_filter_data;
 use crate::server::AppState;
 
-use super::html_error;
+use super::HtmlError;
+
+/// Tracks consecutive filter reload failures so we can escalate logging.
+static FILTER_RELOAD_FAILURES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+async fn reload_filter(pool: &DbPool, filter_engine: &FilterEngine) {
+    match load_filter_data(pool).await {
+        Ok(data) => {
+            let prev = FILTER_RELOAD_FAILURES.swap(0, std::sync::atomic::Ordering::Relaxed);
+            if prev > 0 {
+                tracing::info!("filter engine recovered after {prev} consecutive reload failures");
+            }
+            filter_engine.apply_data(data);
+        }
+        Err(e) => {
+            let count =
+                FILTER_RELOAD_FAILURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            tracing::error!(
+                consecutive_failures = count,
+                "filter engine reload failed: {e} — filter rules may be stale"
+            );
+        }
+    }
+}
+
+/// Runs a filter write, reloads the engine on success, then renders.
+async fn write_then_render(
+    state: &AppState,
+    project_id: u64,
+    csrf: &str,
+    result: anyhow::Result<()>,
+    success_msg: &str,
+) -> axum::response::Response {
+    match result {
+        Ok(()) => {
+            reload_filter(&state.writer_pool, &state.filter_engine).await;
+            render_filters(state, project_id, Some(success_msg.into()), csrf).await
+        }
+        Err(e) => render_filters(state, project_id, Some(format!("Error: {e}")), csrf).await,
+    }
+}
+
+/// Like `write_then_render`, but the query reports rows affected so a zero
+/// count surfaces as a not-found message instead of a spurious success.
+async fn delete_then_render(
+    state: &AppState,
+    project_id: u64,
+    csrf: &str,
+    result: anyhow::Result<u64>,
+    label: &str,
+    success_msg: &str,
+) -> axum::response::Response {
+    match result {
+        Ok(0) => {
+            render_filters(
+                state,
+                project_id,
+                Some(format!("Error: not found: {label}")),
+                csrf,
+            )
+            .await
+        }
+        Ok(_) => {
+            reload_filter(&state.writer_pool, &state.filter_engine).await;
+            render_filters(state, project_id, Some(success_msg.into()), csrf).await
+        }
+        Err(e) => render_filters(state, project_id, Some(format!("Error: {e}")), csrf).await,
+    }
+}
 
 #[allow(unused_imports)]
 use crate::html::filters;
@@ -32,75 +103,54 @@ struct ProjectFiltersTemplate {
     filter_rules: Vec<queries::RawFilterRule>,
     ip_blocks: Vec<(i64, String)>,
     discard_stats: Vec<(String, String, u64)>,
+    csrf_token: String,
 }
 
-// ---------------------------------------------------------------------------
-// GET handler
-// ---------------------------------------------------------------------------
+// — GET handler
 
 pub async fn handler(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
 ) -> axum::response::Response {
-    render_filters(&state, project_id, None).await
+    render_filters(&state, project_id, None, &csrf).await
 }
 
 async fn render_filters(
     state: &AppState,
     project_id: u64,
     message: Option<String>,
+    csrf: &str,
 ) -> axum::response::Response {
-    // Tier 1
-    let inbound = match queries::filters::get_inbound_filters(&state.pool, project_id).await {
-        Ok(v) => v,
-        Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
+    match build_filters_template(state, project_id, message, csrf).await {
+        Ok(tmpl) => render_template(&tmpl),
+        Err(e) => e.into_response(),
+    }
+}
+
+async fn build_filters_template(
+    state: &AppState,
+    project_id: u64,
+    message: Option<String>,
+    csrf: &str,
+) -> Result<ProjectFiltersTemplate, HtmlError> {
+    let inbound = queries::filters::get_inbound_filters(&state.pool, project_id).await?;
     let browser_extensions_enabled = inbound.contains("browser_extensions");
     let localhost_enabled = inbound.contains("localhost");
 
-    // Tier 1 (cont.)
-    let message_filters =
-        match queries::filters::list_message_filters(&state.pool, project_id).await {
-            Ok(v) => v,
-            Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-        };
-
-    let rate_limit = match queries::filters::get_rate_limit(&state.pool, project_id).await {
-        Ok(v) => v,
-        Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
+    let message_filters = queries::filters::list_message_filters(&state.pool, project_id).await?;
+    let rate_limit = queries::filters::get_rate_limit(&state.pool, project_id).await?;
     let environment_filters =
-        match queries::filters::list_environment_filters(&state.pool, project_id).await {
-            Ok(v) => v,
-            Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-        };
-    let release_filters =
-        match queries::filters::list_release_filters(&state.pool, project_id).await {
-            Ok(v) => v,
-            Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-        };
-    let ua_filters = match queries::filters::list_user_agent_filters(&state.pool, project_id).await
-    {
-        Ok(v) => v,
-        Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
-
-    let filter_rules = match queries::filters::list_filter_rules(&state.pool, project_id).await {
-        Ok(v) => v,
-        Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
-    let ip_blocks = match queries::filters::list_ip_blocks(&state.pool, project_id).await {
-        Ok(v) => v,
-        Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
-    let discard_stats = match queries::filters::list_discard_stats(&state.pool, project_id).await {
-        Ok(v) => v,
-        Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
+        queries::filters::list_environment_filters(&state.pool, project_id).await?;
+    let release_filters = queries::filters::list_release_filters(&state.pool, project_id).await?;
+    let ua_filters = queries::filters::list_user_agent_filters(&state.pool, project_id).await?;
+    let filter_rules = queries::filters::list_filter_rules(&state.pool, project_id).await?;
+    let ip_blocks = queries::filters::list_ip_blocks(&state.pool, project_id).await?;
+    let discard_stats = queries::filters::list_discard_stats(&state.pool, project_id).await?;
 
     let nav = queries::projects::get_nav_counts(&state.pool, project_id).await;
 
-    let tmpl = ProjectFiltersTemplate {
+    Ok(ProjectFiltersTemplate {
         project_id,
         nav,
         message,
@@ -114,14 +164,11 @@ async fn render_filters(
         filter_rules,
         ip_blocks,
         discard_stats,
-    };
-
-    render_template(&tmpl)
+        csrf_token: csrf.to_string(),
+    })
 }
 
-// ---------------------------------------------------------------------------
-// Form structs
-// ---------------------------------------------------------------------------
+// — Form structs
 
 #[derive(Deserialize)]
 pub struct InboundFilterForm {
@@ -162,12 +209,11 @@ pub struct RuleForm {
     pub priority: i32,
 }
 
-// ---------------------------------------------------------------------------
-// POST handlers
-// ---------------------------------------------------------------------------
+// — POST handlers
 
 pub async fn set_inbound_filters(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
     Form(form): Form<InboundFilterForm>,
 ) -> axum::response::Response {
@@ -175,166 +221,195 @@ pub async fn set_inbound_filters(
     let localhost = form.localhost.is_some();
 
     for (filter_id, enabled) in [("browser_extensions", browser), ("localhost", localhost)] {
-        let result = match utils::await_writer(state.writer.set_inbound_filter(
-            project_id,
-            filter_id.to_string(),
-            enabled,
-        ))
-        .await
+        if let Err(e) =
+            queries::filters::set_inbound_filter(&state.writer_pool, project_id, filter_id, enabled)
+                .await
         {
-            Ok(r) => r,
-            Err(resp) => return resp,
-        };
-        if let Err(e) = result {
-            return render_filters(&state, project_id, Some(format!("Error: {e}"))).await;
+            return render_filters(&state, project_id, Some(format!("Error: {e}")), &csrf).await;
         }
     }
+    reload_filter(&state.writer_pool, &state.filter_engine).await;
 
-    render_filters(&state, project_id, Some("Inbound filters updated".into())).await
+    render_filters(
+        &state,
+        project_id,
+        Some("Inbound filters updated".into()),
+        &csrf,
+    )
+    .await
 }
 
 pub async fn add_message_filter(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
     Form(form): Form<PatternForm>,
 ) -> axum::response::Response {
     let pattern = form.pattern.trim().to_string();
     if pattern.is_empty() {
-        return render_filters(&state, project_id, Some("Pattern is required".into())).await;
+        return render_filters(
+            &state,
+            project_id,
+            Some("Pattern is required".into()),
+            &csrf,
+        )
+        .await;
     }
-    let s = state.clone();
-    utils::writer_then_render(
-        state.writer.create_message_filter(project_id, pattern),
-        "Message filter added",
-        |msg| render_filters(&s, project_id, msg),
-    )
-    .await
+    let result =
+        queries::filters::create_message_filter(&state.writer_pool, project_id, &pattern).await;
+    write_then_render(&state, project_id, &csrf, result, "Message filter added").await
 }
 
 pub async fn delete_message_filter(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Path((project_id, id)): Path<(u64, i64)>,
 ) -> axum::response::Response {
-    let s = state.clone();
-    utils::writer_then_render(
-        state.writer.delete_message_filter(id),
+    let result = queries::filters::delete_message_filter(&state.writer_pool, id).await;
+    delete_then_render(
+        &state,
+        project_id,
+        &csrf,
+        result,
+        "message filter",
         "Message filter removed",
-        |msg| render_filters(&s, project_id, msg),
     )
     .await
 }
 
 pub async fn set_rate_limit(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
     Form(form): Form<RateLimitForm>,
 ) -> axum::response::Response {
-    let s = state.clone();
-    utils::writer_then_render(
-        state
-            .writer
-            .set_rate_limit(project_id, None, form.max_events_per_minute),
-        "Rate limit updated",
-        |msg| render_filters(&s, project_id, msg),
+    let result = queries::filters::set_rate_limit(
+        &state.writer_pool,
+        project_id,
+        None,
+        form.max_events_per_minute,
     )
-    .await
+    .await;
+    write_then_render(&state, project_id, &csrf, result, "Rate limit updated").await
 }
 
 pub async fn add_environment_filter(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
     Form(form): Form<EnvironmentForm>,
 ) -> axum::response::Response {
     let env = form.environment.trim().to_string();
     if env.is_empty() {
-        return render_filters(&state, project_id, Some("Environment is required".into())).await;
+        return render_filters(
+            &state,
+            project_id,
+            Some("Environment is required".into()),
+            &csrf,
+        )
+        .await;
     }
-    let s = state.clone();
-    utils::writer_then_render(
-        state.writer.add_environment_filter(project_id, env),
-        "Environment excluded",
-        |msg| render_filters(&s, project_id, msg),
-    )
-    .await
+    let result =
+        queries::filters::add_environment_filter(&state.writer_pool, project_id, &env).await;
+    write_then_render(&state, project_id, &csrf, result, "Environment excluded").await
 }
 
 pub async fn delete_environment_filter(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Path((project_id, id)): Path<(u64, i64)>,
 ) -> axum::response::Response {
-    let s = state.clone();
-    utils::writer_then_render(
-        state.writer.delete_environment_filter(id),
+    let result = queries::filters::delete_environment_filter(&state.writer_pool, id).await;
+    delete_then_render(
+        &state,
+        project_id,
+        &csrf,
+        result,
+        "environment filter",
         "Environment filter removed",
-        |msg| render_filters(&s, project_id, msg),
     )
     .await
 }
 
 pub async fn add_release_filter(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
     Form(form): Form<PatternForm>,
 ) -> axum::response::Response {
     let pattern = form.pattern.trim().to_string();
     if pattern.is_empty() {
-        return render_filters(&state, project_id, Some("Pattern is required".into())).await;
+        return render_filters(
+            &state,
+            project_id,
+            Some("Pattern is required".into()),
+            &csrf,
+        )
+        .await;
     }
-    let s = state.clone();
-    utils::writer_then_render(
-        state.writer.add_release_filter(project_id, pattern),
-        "Release filter added",
-        |msg| render_filters(&s, project_id, msg),
-    )
-    .await
+    let result =
+        queries::filters::add_release_filter(&state.writer_pool, project_id, &pattern).await;
+    write_then_render(&state, project_id, &csrf, result, "Release filter added").await
 }
 
 pub async fn delete_release_filter(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Path((project_id, id)): Path<(u64, i64)>,
 ) -> axum::response::Response {
-    let s = state.clone();
-    utils::writer_then_render(
-        state.writer.delete_release_filter(id),
+    let result = queries::filters::delete_release_filter(&state.writer_pool, id).await;
+    delete_then_render(
+        &state,
+        project_id,
+        &csrf,
+        result,
+        "release filter",
         "Release filter removed",
-        |msg| render_filters(&s, project_id, msg),
     )
     .await
 }
 
 pub async fn add_ua_filter(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
     Form(form): Form<PatternForm>,
 ) -> axum::response::Response {
     let pattern = form.pattern.trim().to_string();
     if pattern.is_empty() {
-        return render_filters(&state, project_id, Some("Pattern is required".into())).await;
+        return render_filters(
+            &state,
+            project_id,
+            Some("Pattern is required".into()),
+            &csrf,
+        )
+        .await;
     }
-    let s = state.clone();
-    utils::writer_then_render(
-        state.writer.add_user_agent_filter(project_id, pattern),
-        "User-agent filter added",
-        |msg| render_filters(&s, project_id, msg),
-    )
-    .await
+    let result =
+        queries::filters::add_user_agent_filter(&state.writer_pool, project_id, &pattern).await;
+    write_then_render(&state, project_id, &csrf, result, "User-agent filter added").await
 }
 
 pub async fn delete_ua_filter(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Path((project_id, id)): Path<(u64, i64)>,
 ) -> axum::response::Response {
-    let s = state.clone();
-    utils::writer_then_render(
-        state.writer.delete_user_agent_filter(id),
+    let result = queries::filters::delete_user_agent_filter(&state.writer_pool, id).await;
+    delete_then_render(
+        &state,
+        project_id,
+        &csrf,
+        result,
+        "user-agent filter",
         "User-agent filter removed",
-        |msg| render_filters(&s, project_id, msg),
     )
     .await
 }
 
 pub async fn add_filter_rule(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
     Form(form): Form<RuleForm>,
 ) -> axum::response::Response {
@@ -345,6 +420,7 @@ pub async fn add_filter_rule(
             &state,
             project_id,
             Some(format!("Unrecognized field '{}'", form.field)),
+            &csrf,
         )
         .await;
     }
@@ -353,6 +429,7 @@ pub async fn add_filter_rule(
             &state,
             project_id,
             Some(format!("Unrecognized operator '{}'", form.operator)),
+            &csrf,
         )
         .await;
     }
@@ -361,68 +438,78 @@ pub async fn add_filter_rule(
             &state,
             project_id,
             Some(format!("Unrecognized action '{}'", form.action)),
+            &csrf,
         )
         .await;
     }
 
-    let s = state.clone();
-    utils::writer_then_render(
-        state.writer.create_filter_rule(
-            project_id,
-            form.field,
-            form.operator,
-            form.value,
-            form.action,
-            form.sample_rate,
-            form.priority,
-        ),
-        "Rule added",
-        |msg| render_filters(&s, project_id, msg),
+    let result = queries::filters::create_filter_rule(
+        &state.writer_pool,
+        project_id,
+        &form.field,
+        &form.operator,
+        &form.value,
+        &form.action,
+        form.sample_rate,
+        form.priority,
     )
-    .await
+    .await;
+    write_then_render(&state, project_id, &csrf, result, "Rule added").await
 }
 
 pub async fn delete_filter_rule(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Path((project_id, id)): Path<(u64, i64)>,
 ) -> axum::response::Response {
-    let s = state.clone();
-    utils::writer_then_render(state.writer.delete_filter_rule(id), "Rule removed", |msg| {
-        render_filters(&s, project_id, msg)
-    })
+    let result = queries::filters::delete_filter_rule(&state.writer_pool, id).await;
+    delete_then_render(
+        &state,
+        project_id,
+        &csrf,
+        result,
+        "filter rule",
+        "Rule removed",
+    )
     .await
 }
 
 pub async fn add_ip_block(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
     Form(form): Form<CidrForm>,
 ) -> axum::response::Response {
     let cidr = form.cidr.trim().to_string();
     if cidr.is_empty() {
-        return render_filters(&state, project_id, Some("CIDR is required".into())).await;
+        return render_filters(&state, project_id, Some("CIDR is required".into()), &csrf).await;
     }
     if crate::filter::cidr::CidrBlock::parse(&cidr).is_none() {
-        return render_filters(&state, project_id, Some("Invalid CIDR format".into())).await;
+        return render_filters(
+            &state,
+            project_id,
+            Some("Invalid CIDR format".into()),
+            &csrf,
+        )
+        .await;
     }
-    let s = state.clone();
-    utils::writer_then_render(
-        state.writer.add_ip_block(project_id, cidr),
-        "IP block added",
-        |msg| render_filters(&s, project_id, msg),
-    )
-    .await
+    let result = queries::filters::add_ip_block(&state.writer_pool, project_id, &cidr).await;
+    write_then_render(&state, project_id, &csrf, result, "IP block added").await
 }
 
 pub async fn delete_ip_block(
     State(state): State<AppState>,
+    Csrf(csrf): Csrf,
     Path((project_id, id)): Path<(u64, i64)>,
 ) -> axum::response::Response {
-    let s = state.clone();
-    utils::writer_then_render(
-        state.writer.delete_ip_block(id),
+    let result = queries::filters::delete_ip_block(&state.writer_pool, id).await;
+    delete_then_render(
+        &state,
+        project_id,
+        &csrf,
+        result,
+        "IP block",
         "IP block removed",
-        |msg| render_filters(&s, project_id, msg),
     )
     .await
 }

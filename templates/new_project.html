@@ -17,6 +17,7 @@
 {% when None %}{% endmatch %}
 
 <form class="settings-form" method="post" action="/web/projects/new">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <label for="project_name">Project Name</label>
     <input type="text" id="project_name" name="name" placeholder="My Project" required>
 

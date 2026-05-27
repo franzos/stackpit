@@ -56,12 +56,7 @@ pub async fn list_logs(
     let rows = select_qb.build().fetch_all(pool).await?;
     let items: Vec<LogEntry> = rows.iter().map(map_log_row).collect();
 
-    Ok(PagedResult {
-        items,
-        total: total as u64,
-        offset: page.offset,
-        limit: page.limit,
-    })
+    Ok(PagedResult::from_page(items, total, page))
 }
 
 fn map_log_row(row: &crate::db::DbRow) -> LogEntry {

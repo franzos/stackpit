@@ -6,7 +6,7 @@ use crate::queries;
 use crate::queries::types::Page;
 
 use super::{json_or_404, json_or_500};
-use crate::extractors::ApiReadPool;
+use crate::extractors::ReadPool;
 
 #[derive(Deserialize)]
 pub struct PageParams {
@@ -16,7 +16,7 @@ pub struct PageParams {
 
 /// GET /api/0/projects/{project_id}/events/?limit=&offset=
 pub async fn list_for_project(
-    ApiReadPool(pool): ApiReadPool,
+    ReadPool(pool): ReadPool,
     Path(project_id): Path<u64>,
     Query(params): Query<PageParams>,
 ) -> impl IntoResponse {
@@ -26,7 +26,7 @@ pub async fn list_for_project(
 
 /// GET /api/0/issues/{fingerprint}/events/?limit=&offset=
 pub async fn list_for_issue(
-    ApiReadPool(pool): ApiReadPool,
+    ReadPool(pool): ReadPool,
     Path(fingerprint): Path<String>,
     Query(params): Query<PageParams>,
 ) -> impl IntoResponse {
@@ -36,7 +36,7 @@ pub async fn list_for_issue(
 
 /// GET /api/0/issues/{fingerprint}/events/latest/
 pub async fn latest_for_issue(
-    ApiReadPool(pool): ApiReadPool,
+    ReadPool(pool): ReadPool,
     Path(fingerprint): Path<String>,
 ) -> impl IntoResponse {
     json_or_404(
@@ -46,10 +46,7 @@ pub async fn latest_for_issue(
 }
 
 /// GET /api/0/events/{event_id}/
-pub async fn get(
-    ApiReadPool(pool): ApiReadPool,
-    Path(event_id): Path<String>,
-) -> impl IntoResponse {
+pub async fn get(ReadPool(pool): ReadPool, Path(event_id): Path<String>) -> impl IntoResponse {
     json_or_404(
         queries::events::get_event_detail(&pool, &event_id).await,
         "event not found",

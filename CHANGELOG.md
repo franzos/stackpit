@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.9] - 2026-05-26
+
+### Added
+- Rust integration test suite (`tests/integration/`) driving a running server
+- Playwright admin-UI smoke suite (`tests/e2e/`)
+- `Makefile` runner: check/clippy/test, serve/seed lifecycle, `test-integration`, `e2e`
+
 ## [0.1.8] - 2026-04-23
 
 ### Security

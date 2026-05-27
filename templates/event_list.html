@@ -42,6 +42,7 @@
 {% else %}
 
 <form method="post" action="/web/events/bulk">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 <input type="hidden" name="action" value="delete">
 <input type="hidden" name="mode" value="selected">
 <div class="bulk-bar">
@@ -86,6 +87,7 @@
 
 {% if result.total > 0 %}
 <form class="bulk-all-form" method="post" action="/web/events/bulk">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="action" value="delete">
     <input type="hidden" name="mode" value="all_matching">
     {% if !query.is_empty() %}<input type="hidden" name="query" value="{{ query }}">{% endif %}

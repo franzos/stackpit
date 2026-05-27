@@ -60,7 +60,7 @@ pub async fn list_checkins_for_monitor(
     .bind(slug)
     .fetch_one(pool)
     .await?;
-    let total: u64 = total_row.get::<i64, _>(0) as u64;
+    let total: i64 = total_row.get::<i64, _>(0);
 
     let rows = sqlx::query(sql!(
         "SELECT event_id, item_type, project_id, fingerprint, timestamp, level, title, platform, release, environment
@@ -94,10 +94,5 @@ pub async fn list_checkins_for_monitor(
         })
         .collect();
 
-    Ok(PagedResult {
-        items,
-        total,
-        offset: page.offset,
-        limit: page.limit,
-    })
+    Ok(PagedResult::from_page(items, total, page))
 }

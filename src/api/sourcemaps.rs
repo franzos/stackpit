@@ -8,15 +8,11 @@ use serde_json::json;
 use crate::server::AppState;
 use crate::sourcemap;
 
-// ── Request limits ──────────────────────────────────────────────────
-// Keep in sync with `maxRequestSize` advertised in `chunk_upload_config`.
+// Request limits (sync with chunk_upload_config maxRequestSize)
 const MAX_CHUNK_FIELDS: usize = 128;
 const MAX_CHUNK_TOTAL_BYTES: usize = 32 * 1024 * 1024;
 
-/// `GET /api/0/organizations/{org}/chunk-upload/`
-///
-/// Returns upload configuration. `sentry-cli` calls this first to learn
-/// chunk size, hash algorithm, and where to POST chunks.
+/// GET /api/0/organizations/{org}/chunk-upload/ — return upload config.
 pub async fn chunk_upload_config(
     State(state): State<AppState>,
     Path(org): Path<String>,

@@ -1,17 +1,16 @@
 use askama::Template;
 use axum::extract::{Query, State};
-use axum::http::StatusCode;
 
 use crate::extractors::ReadPool;
 use crate::html::render_template;
-use crate::html::utils::{build_filter_qs, period_to_timestamp, ListParams};
+use crate::html::utils::{build_filter_qs, period_to_timestamp, Csrf, ListParams};
 use crate::queries;
 use crate::queries::types::{Page, PagedResult, ReleaseFilter};
 use crate::server::AppState;
 
-use super::html_error;
+use super::HtmlError;
 
-// askama needs these filters in scope for template derivation
+#[allow(unused_imports)]
 use crate::html::filters;
 
 #[derive(Template)]
@@ -24,13 +23,15 @@ struct ReleaseListTemplate {
     period: String,
     filter_qs: String,
     base_qs: String,
+    csrf_token: String,
 }
 
 pub async fn handler(
     State(_state): State<AppState>,
     ReadPool(pool): ReadPool,
+    Csrf(csrf): Csrf,
     Query(params): Query<ListParams>,
-) -> axum::response::Response {
+) -> Result<axum::response::Response, HtmlError> {
     let query_str = params.query.clone().unwrap_or_default();
     let project_id_str = params.project_id.map(|p| p.to_string()).unwrap_or_default();
     let sort_str = params.sort.clone().unwrap_or_default();
@@ -46,10 +47,7 @@ pub async fn handler(
     let page = Page::new(params.offset, params.limit);
 
     let result =
-        match queries::releases::list_all_releases(&pool, &filter, &page, adoption_since).await {
-            Ok(r) => r,
-            Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-        };
+        queries::releases::list_all_releases(&pool, &filter, &page, adoption_since).await?;
 
     let (base_qs, filter_qs) = build_filter_qs(
         &[
@@ -68,7 +66,8 @@ pub async fn handler(
         period: period_str,
         filter_qs,
         base_qs,
+        csrf_token: csrf,
     };
 
-    render_template(&tmpl)
+    Ok(render_template(&tmpl))
 }

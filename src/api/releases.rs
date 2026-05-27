@@ -7,7 +7,7 @@ use serde_json::json;
 use crate::server::AppState;
 
 use super::{api_error, internal_error};
-use crate::extractors::ApiReadPool;
+use crate::extractors::ReadPool;
 
 #[derive(Deserialize)]
 pub struct CreateReleaseRequest {
@@ -90,13 +90,16 @@ async fn create_inner(
             ));
         }
 
-        let rx = state
-            .writer
-            .upsert_release(project_id, body.version.clone(), None)
-            .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "writer unavailable"))?;
-
-        rx.await
-            .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "writer dropped reply"))?
+        let info = crate::queries::releases::ReleaseUpsert {
+            version: &body.version,
+            commit_sha: None,
+            date_released: None,
+            first_event: None,
+            last_event: None,
+            new_groups: 0,
+        };
+        crate::queries::releases::upsert_release(&state.writer_pool, project_id, &info)
+            .await
             .map_err(internal_error)?;
     }
 
@@ -113,7 +116,7 @@ async fn create_inner(
 /// PUT /api/0/projects/{org}/{project_slug}/releases/{version}/
 pub async fn update_project_scoped(
     State(state): State<AppState>,
-    ApiReadPool(pool): ApiReadPool,
+    ReadPool(pool): ReadPool,
     Path((_org, _project, version)): Path<(String, String, String)>,
     headers: HeaderMap,
     Json(body): Json<UpdateReleaseRequest>,
@@ -124,7 +127,7 @@ pub async fn update_project_scoped(
 /// PUT /api/0/organizations/{org}/releases/{version}/
 pub async fn update(
     State(state): State<AppState>,
-    ApiReadPool(pool): ApiReadPool,
+    ReadPool(pool): ReadPool,
     Path((_org, version)): Path<(String, String)>,
     headers: HeaderMap,
     Json(body): Json<UpdateReleaseRequest>,
@@ -149,17 +152,16 @@ async fn update_inner(
                 .map_err(internal_error)?;
 
             for project_id in project_ids.into_iter().filter(|&id| id == key_project_id) {
-                let rx = state
-                    .writer
-                    .upsert_release(project_id, version.clone(), Some(ref_info.commit.clone()))
-                    .map_err(|_| {
-                        api_error(StatusCode::INTERNAL_SERVER_ERROR, "writer unavailable")
-                    })?;
-
-                rx.await
-                    .map_err(|_| {
-                        api_error(StatusCode::INTERNAL_SERVER_ERROR, "writer dropped reply")
-                    })?
+                let info = crate::queries::releases::ReleaseUpsert {
+                    version: &version,
+                    commit_sha: Some(&ref_info.commit),
+                    date_released: None,
+                    first_event: None,
+                    last_event: None,
+                    new_groups: 0,
+                };
+                crate::queries::releases::upsert_release(&state.writer_pool, project_id, &info)
+                    .await
                     .map_err(internal_error)?;
             }
         }

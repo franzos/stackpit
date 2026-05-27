@@ -34,7 +34,11 @@ pub async fn authenticate(
             Err(error_response(StatusCode::FORBIDDEN, "project is archived").into_response())
         }
         Err(AuthError::Denied(msg)) => {
-            Err(error_response(StatusCode::FORBIDDEN, msg).into_response())
+            // 401 because a Sentry SDK with a wrong/unknown key is, per the
+            // protocol, unauthenticated rather than authenticated-but-forbidden.
+            // Archived projects stay on 403: the credential is valid, the
+            // resource is just temporarily refusing writes.
+            Err(error_response(StatusCode::UNAUTHORIZED, msg).into_response())
         }
         Err(AuthError::MaxProjects) => {
             Err(error_response(StatusCode::FORBIDDEN, "max projects reached").into_response())

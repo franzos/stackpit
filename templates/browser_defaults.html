@@ -18,6 +18,7 @@
 {% when None %}{% endmatch %}
 
 <form class="settings-form" method="post" action="/web/settings/defaults/">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <label for="default_status">Default Status (issues)</label>
     <select id="default_status" name="status">
         <option value="">No default</option>
@@ -52,6 +53,7 @@
 </form>
 
 <form method="post" action="/web/settings/defaults/clear" style="margin-top: 1rem;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <button type="submit" class="btn btn-danger">Clear All Defaults</button>
 </form>
 {% endblock %}

@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 
-{% block title %}Source Maps - Project {{ project_id }} - Stackpit{% endblock %}
+{% block title %}Source Maps - {{ nav.label }} - Stackpit{% endblock %}
 
 {% block breadcrumbs %}
 <span class="sep" aria-hidden="true">/</span>
 <a href="/web/projects/">Projects</a>
 <span class="sep" aria-hidden="true">/</span>
-<a href="/web/projects/{{ project_id }}/">Project {{ project_id }}</a>
+<a href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
 <span class="sep" aria-hidden="true">/</span>
 <a href="/web/projects/{{ project_id }}/settings/">Settings</a>
 <span class="sep" aria-hidden="true">/</span>
@@ -14,7 +14,7 @@
 {% endblock %}
 
 {% block content %}
-<h1>Project {{ project_id }}</h1>
+<h1>{{ nav.label }}</h1>
 <nav class="project-tabs" aria-label="Project sections">
     <a href="/web/projects/{{ project_id }}/" class="project-tab"><span class="type-icon type-icon-event"></span>Issues</a>
     {% if nav.transaction_count > 0 %}<a href="/web/projects/{{ project_id }}/transactions/" class="project-tab"><span class="type-icon type-icon-transaction"></span>Transactions <span class="tab-count">{{ nav.transaction_count }}</span></a>{% endif %}
@@ -69,7 +69,8 @@
             <td><time datetime="{{ key_created_at|format_ts }}" title="{{ key_created_at|format_ts }}">{{ key_created_at|format_relative }}</time></td>
             <td>
                 <form method="post" action="/web/projects/{{ project_id }}/settings/sourcemaps/generate" style="margin: 0;">
-                    <button type="submit" class="btn" onclick="return confirm('Regenerate key? The current key will stop working.')">Regenerate</button>
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button type="submit" class="btn" data-confirm="Regenerate key? The current key will stop working.">Regenerate</button>
                 </form>
             </td>
         </tr>
@@ -80,6 +81,7 @@
 {% if new_key.is_empty() %}
 <p class="empty">No source map API key for this project.</p>
 <form method="post" action="/web/projects/{{ project_id }}/settings/sourcemaps/generate">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <button type="submit" class="btn">Generate Key</button>
 </form>
 {% endif %}

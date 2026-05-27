@@ -1,8 +1,6 @@
 use anyhow::Result;
 
-// ---------------------------------------------------------------------------
-// Pool type aliases -- the concrete type depends on which backend is compiled.
-// ---------------------------------------------------------------------------
+// — Pool type aliases (backend-dependent)
 
 #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
 pub type DbPool = sqlx::SqlitePool;
@@ -18,9 +16,7 @@ pub type Db = sqlx::Postgres;
 #[cfg(all(feature = "postgres", not(feature = "sqlite")))]
 pub type DbRow = sqlx::postgres::PgRow;
 
-// ---------------------------------------------------------------------------
-// Pool creation
-// ---------------------------------------------------------------------------
+// — Pool creation
 
 /// Create a reader pool from a database URL.
 ///
@@ -34,6 +30,14 @@ pub async fn create_read_pool(url: &str) -> Result<DbPool> {
 /// PRAGMAs are applied. For PostgreSQL, a standard pool is returned.
 pub async fn create_write_pool(url: &str) -> Result<DbPool> {
     create_pool_inner(url, Some(1), true).await
+}
+
+/// Create a small background-writer pool for PostgreSQL (low connection ceiling
+/// since background tasks are infrequent). SQLite uses per-subsystem writer
+/// pools instead, so this is Postgres-only.
+#[cfg(feature = "postgres")]
+pub async fn create_bg_pool(url: &str) -> Result<DbPool> {
+    create_pool_inner(url, Some(2), true).await
 }
 
 async fn create_pool_inner(
@@ -101,9 +105,7 @@ async fn create_pg_pool(url: &str, max_connections: Option<u32>) -> Result<sqlx:
     Ok(pool)
 }
 
-// ---------------------------------------------------------------------------
-// Convenience: run migrations against a pool
-// ---------------------------------------------------------------------------
+// — Run migrations
 
 /// Run embedded migrations. For SQLite, runs the sqlite migrations directory.
 /// For PostgreSQL, runs the postgres migrations directory.
@@ -121,9 +123,7 @@ pub async fn run_migrations(pool: &DbPool) -> Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Database URL resolution
-// ---------------------------------------------------------------------------
+// — Database URL resolution
 
 /// Resolve a database URL from config. If `database_url` is set, use it.
 /// Otherwise, convert a SQLite file path to a `sqlite:` URL.

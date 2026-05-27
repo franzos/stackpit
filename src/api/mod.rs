@@ -15,9 +15,7 @@ pub mod projects;
 pub mod releases;
 pub mod sourcemaps;
 
-/// Sentry-compatible API routes (releases, sourcemaps) that authenticate
-/// via per-project API keys. Served on the ingest port since sentry-cli
-/// sends requests to the DSN host (SENTRY_URL).
+/// Sentry-compatible API routes (releases, sourcemaps) with per-project API key auth.
 pub fn sentry_api_routes() -> Router<AppState> {
     Router::new()
         .route(
@@ -156,24 +154,19 @@ pub async fn validate_api_key(
     // skip the ct_eq and leak a third timing profile.
     let dummy = Sha256::digest(b"stackpit-dummy-api-key-for-timing");
 
-    let row = crate::queries::api_keys::get_api_key_by_hash(pool, &hash_hex).await;
+    let row = crate::queries::api_keys::get_api_key_by_hash(pool, &hash_hex, scope).await;
 
     match row {
         Ok(Some(info)) => {
-            // The SQL WHERE already narrowed to an exact match, but run a
-            // constant-time compare on the raw 32-byte digest to match the
-            // CPU profile of the miss/error paths below.
-            let matches: bool = hash_bytes.as_slice().ct_eq(hash_bytes.as_slice()).into();
-            if matches && info.scope == scope {
-                Ok(info.project_id)
-            } else {
-                Err(api_error(StatusCode::UNAUTHORIZED, "invalid API key"))
-            }
+            // SQL `WHERE key_hash = ? AND scope = ?` already narrowed to the
+            // unique credential; no Rust-side recheck needed.
+            Ok(info.project_id)
         }
         Ok(None) => {
-            // DB miss: burn the same compare cycles so the response time
-            // doesn't leak "key prefix matches nothing" vs "key exists but
-            // scope wrong".
+            // DB miss (wrong hash or wrong scope): burn the same compare cycles
+            // against the dummy so response time doesn't leak "no row" vs the
+            // hit path. The miss path covers both "unknown key" and "key exists
+            // but for a different scope" because the SQL filter rejects both.
             let _equal: bool = hash_bytes.as_slice().ct_eq(dummy.as_slice()).into();
             Err(api_error(StatusCode::UNAUTHORIZED, "invalid API key"))
         }
@@ -186,8 +179,16 @@ pub async fn validate_api_key(
     }
 }
 
+/// Build the canonical `{"detail": ...}` error tuple. Tuple form so it can be
+/// used directly in `Result<_, (StatusCode, Json)>` returns and `.map_err`.
 pub fn api_error(status: StatusCode, detail: &str) -> (StatusCode, Json<serde_json::Value>) {
     (status, Json(json!({ "detail": detail })))
+}
+
+/// Same shape as `api_error`, already converted to a `Response`.
+pub fn json_error(status: StatusCode, detail: &str) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    api_error(status, detail).into_response()
 }
 
 /// Return a generic 500 error to the client while logging the real cause.
@@ -196,7 +197,7 @@ pub fn internal_error(e: impl std::fmt::Display) -> (StatusCode, Json<serde_json
     api_error(StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
 }
 
-/// Convert a query result into a JSON response, mapping errors to 500.
+/// Convert a query result into a JSON response, mapping errors to a logged 500.
 pub fn json_or_500<T: serde::Serialize>(result: anyhow::Result<T>) -> axum::response::Response {
     use axum::response::IntoResponse;
     match result {
@@ -205,16 +206,15 @@ pub fn json_or_500<T: serde::Serialize>(result: anyhow::Result<T>) -> axum::resp
     }
 }
 
-/// Convert a query result that returns `Option<T>` into a JSON response.
-/// Returns 404 with the provided message if `None`.
+/// Convert an `Option`-returning query result into a JSON response,
+/// mapping `None` to a 404 with `not_found_msg` and errors to a 500.
 pub fn json_or_404<T: serde::Serialize>(
     result: anyhow::Result<Option<T>>,
     not_found_msg: &str,
 ) -> axum::response::Response {
-    use axum::response::IntoResponse;
     match result {
-        Ok(Some(value)) => Json(value).into_response(),
-        Ok(None) => api_error(StatusCode::NOT_FOUND, not_found_msg).into_response(),
-        Err(e) => internal_error(e).into_response(),
+        Ok(Some(value)) => json_or_500(Ok(value)),
+        Ok(None) => json_error(StatusCode::NOT_FOUND, not_found_msg),
+        Err(e) => json_or_500::<()>(Err(e)),
     }
 }

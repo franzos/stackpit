@@ -44,11 +44,7 @@ fn compress_batch(batch: &mut [WriteMsg]) {
     });
 }
 
-/// Flushes a batch of events -- and if the accumulators are ready, the
-/// aggregated issue/tag data too. All in one transaction.
-///
-/// Returns `true` on success, `false` if the batch failed after one retry.
-/// On failure the batch contents are left intact so the caller can retry.
+/// Flush batch of events + aggregated data in one transaction (retry-safe on failure).
 pub(super) async fn flush_batch(
     pool: &DbPool,
     batch: &mut [WriteMsg],

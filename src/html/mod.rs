@@ -8,6 +8,7 @@ use axum::Router;
 use crate::server::AppState;
 
 pub mod alerts;
+pub mod auth;
 pub mod browser_defaults;
 pub mod bulk;
 pub mod charts;
@@ -329,12 +330,26 @@ pub fn routes() -> Router<AppState> {
         .route("/web/releases/", get(release_list::handler))
         .route("/web/_assets/style.css", get(serve_css))
         .route("/web/_assets/icon.svg", get(serve_icon))
+        .route("/web/_assets/bulk.js", get(serve_bulk_js))
+        .route("/web/_assets/confirm.js", get(serve_confirm_js))
+        .route(
+            "/web/_assets/stop-propagation.js",
+            get(serve_stop_propagation_js),
+        )
         // -- login --
         .route(
             "/web/login",
             get(login::login_form).post(login::handle_login),
         )
         .route("/web/logout", post(login::handle_logout))
+        // -- SSO (OAuth/OIDC) --
+        .route("/web/auth/login", get(auth::login))
+        .route("/web/auth/callback", get(auth::callback))
+        .route("/web/auth/logout", post(auth::logout_handler))
+        .route(
+            "/web/auth/backchannel-logout",
+            post(auth::backchannel_logout),
+        )
         // -- legacy redirects --
         .route(
             "/web/",
@@ -367,9 +382,64 @@ async fn serve_icon() -> impl IntoResponse {
     )
 }
 
-/// Renders a minimal styled error page -- nothing fancy, just enough to not look broken.
+async fn serve_bulk_js() -> impl IntoResponse {
+    (
+        [
+            (
+                header::CONTENT_TYPE,
+                "application/javascript; charset=utf-8",
+            ),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        include_str!("../../static/bulk.js"),
+    )
+}
+
+async fn serve_confirm_js() -> impl IntoResponse {
+    (
+        [
+            (
+                header::CONTENT_TYPE,
+                "application/javascript; charset=utf-8",
+            ),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        include_str!("../../static/confirm.js"),
+    )
+}
+
+async fn serve_stop_propagation_js() -> impl IntoResponse {
+    (
+        [
+            (
+                header::CONTENT_TYPE,
+                "application/javascript; charset=utf-8",
+            ),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        include_str!("../../static/stop-propagation.js"),
+    )
+}
+
+/// Error type for HTML handlers. Renders through `html_error` so the page
+/// looks identical. `From<anyhow::Error>` maps to 500 so query calls can use `?`.
+pub struct HtmlError(pub axum::http::StatusCode, pub String);
+
+impl IntoResponse for HtmlError {
+    fn into_response(self) -> axum::response::Response {
+        html_error(self.0, &self.1)
+    }
+}
+
+impl From<anyhow::Error> for HtmlError {
+    fn from(e: anyhow::Error) -> Self {
+        HtmlError(axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+    }
+}
+
+/// Minimal styled error page.
 pub fn html_error(status: axum::http::StatusCode, detail: &str) -> axum::response::Response {
-    let escaped_detail = html_escape(detail);
+    let escaped_detail = crate::encoding::escape_html(detail);
     let body = format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -386,16 +456,7 @@ pub fn html_error(status: axum::http::StatusCode, detail: &str) -> axum::respons
     (status, axum::response::Html(body)).into_response()
 }
 
-/// Quick-and-dirty HTML escaping for error messages. Nothing fancy, just the usual suspects.
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#x27;")
-}
-
-/// Tries to render an askama template -- falls back to an error page if it blows up.
+/// Renders an askama template; falls back to an error page on failure.
 pub fn render_template(tmpl: &impl Template) -> axum::response::Response {
     match tmpl.render() {
         Ok(body) => axum::response::Html(body).into_response(),

@@ -1,6 +1,6 @@
 use dashmap::DashMap;
+use parking_lot::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
 
 /// A sliding window over 60 one-second buckets.
 struct SlidingWindow {
@@ -48,10 +48,7 @@ impl SlidingWindow {
     }
 }
 
-/// In-memory rate limiter for outbound notifications.
-///
-/// Two tiers: per-project and global, both using 60-second sliding windows.
-/// A limit of 0 means unlimited.
+/// In-memory rate limiter (per-project + global tiers, 60s windows; 0 = unlimited).
 pub struct NotifyRateLimiter {
     project_windows: DashMap<u64, SlidingWindow>,
     global_window: Mutex<SlidingWindow>,
@@ -100,7 +97,7 @@ impl NotifyRateLimiter {
 
         // Check global limit
         if self.global_limit > 0 {
-            let mut global = self.global_window.lock().unwrap_or_else(|e| e.into_inner());
+            let mut global = self.global_window.lock();
             global.advance(now_secs);
             if global.count() >= self.global_limit {
                 return false;

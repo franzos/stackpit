@@ -1,9 +1,4 @@
-//! Fingerprinting for issue grouping.
-//!
-//! The thing is, Sentry groups events into issues by fingerprint — and the
-//! priority chain matters: SDK-provided fingerprint > exception type+value >
-//! log message template > transaction name > random UUID. Each fingerprint
-//! is scoped by project_id so projects don't bleed into each other.
+//! Fingerprinting for issue grouping (priority: SDK > exception > message > transaction > UUID).
 
 use crate::models::ItemType;
 use serde_json::Value;

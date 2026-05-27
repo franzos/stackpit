@@ -6,7 +6,7 @@ use crate::forge;
 use crate::queries::types::ProjectRepo;
 use crate::sourcemap::ResolvedFrame;
 
-// ── Structs ──────────────────────────────────────────────────────────
+// Structs
 
 #[derive(Debug)]
 pub struct SummaryTag {
@@ -107,7 +107,7 @@ impl UserInfo {
     }
 }
 
-// ── Extraction functions ─────────────────────────────────────────────
+// Extraction functions
 
 /// Callback that resolves a minified frame using a sourcemap.
 /// Takes (debug_id, line, col) and returns a resolved frame if possible.
@@ -253,7 +253,7 @@ pub fn extract_exceptions(
                         (Some(sha), Some(ln)) => repos
                             .iter()
                             .filter_map(|repo| {
-                                let ft = forge::ForgeType::from_str(&repo.forge_type);
+                                let ft = forge::ForgeType::from_tag(&repo.forge_type);
                                 let (_, hostname) = forge::detect_forge(&repo.repo_url);
                                 let url = forge::source_url(
                                     &ft,
@@ -557,7 +557,7 @@ pub fn extract_summary_tags(tags: &[Tag], _contexts: &[ContextGroup]) -> Vec<Sum
         .collect()
 }
 
-// ── Sourcemap resolution helpers ────────────────────────────────────
+// Sourcemap resolution helpers
 
 /// Build a debug_id lookup from the event's `debug_meta.images` array.
 /// Maps code_file (abs URL) → debug_id.

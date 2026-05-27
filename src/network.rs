@@ -1,8 +1,6 @@
 use std::net::IpAddr;
 
-/// Figures out the real client IP. The thing is -- we only trust XFF/X-Real-IP
-/// when the peer is loopback, i.e. there's a local reverse proxy in front of us.
-/// Otherwise a remote client could just spoof those headers.
+/// Extract real client IP; only trust XFF/X-Real-IP from loopback (reverse proxy).
 pub fn extract_client_ip(
     headers: &axum::http::HeaderMap,
     peer_addr: Option<std::net::SocketAddr>,

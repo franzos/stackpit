@@ -43,12 +43,7 @@ pub async fn list_profiles(
         })
         .collect();
 
-    Ok(PagedResult {
-        items,
-        total: total as u64,
-        offset: page.offset,
-        limit: page.limit,
-    })
+    Ok(PagedResult::from_page(items, total, page))
 }
 
 pub async fn get_profile(

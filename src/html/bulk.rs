@@ -5,6 +5,7 @@ use axum::response::{IntoResponse, Redirect};
 
 use crate::html::html_error;
 use crate::html::utils::period_to_timestamp;
+use crate::queries;
 use crate::queries::types::{EventFilter, IssueFilter};
 use crate::queries::IssueStatus;
 use crate::server::AppState;
@@ -71,6 +72,31 @@ fn opt(s: &Option<String>) -> Option<String> {
     s.as_ref().filter(|s| !s.is_empty()).cloned()
 }
 
+/// Splits a bulk form into either explicit ids or an all-matching filter.
+/// `build_filter` is only evaluated in the all-matching arm.
+fn resolve_targets<T>(
+    form: BulkForm,
+    build_filter: impl FnOnce(&BulkForm) -> T,
+) -> (Option<Vec<String>>, Option<T>) {
+    if form.mode == "all_matching" {
+        let filter = build_filter(&form);
+        (None, Some(filter))
+    } else {
+        (Some(form.ids), None)
+    }
+}
+
+/// Shared Ok→redirect / Err→500 tail for the bulk query calls.
+fn bulk_result_redirect(
+    result: anyhow::Result<impl Sized>,
+    redirect_to: &str,
+) -> axum::response::Response {
+    match result {
+        Ok(_) => Redirect::to(redirect_to).into_response(),
+        Err(err) => html_error(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+    }
+}
+
 /// Bulk delete for the global events view.
 pub async fn events_bulk(State(state): State<AppState>, body: Bytes) -> axum::response::Response {
     let form = match BulkForm::parse(&body) {
@@ -82,34 +108,22 @@ pub async fn events_bulk(State(state): State<AppState>, body: Bytes) -> axum::re
         return html_error(StatusCode::BAD_REQUEST, "Invalid action");
     }
 
-    let (ids, filter, project_id) = if form.mode == "all_matching" {
-        let f = EventFilter {
-            level: opt(&form.level),
-            project_id: None,
-            query: opt(&form.query),
-            sort: None,
-            item_type: opt(&form.item_type),
-        };
-        (None, Some(f), None)
-    } else {
-        (Some(form.ids), None, None)
-    };
+    let (ids, filter) = resolve_targets(form, |form| EventFilter {
+        level: opt(&form.level),
+        project_id: None,
+        query: opt(&form.query),
+        sort: None,
+        item_type: opt(&form.item_type),
+    });
 
-    let reply_rx = match state.writer.bulk_delete_events(ids, filter, project_id) {
-        Ok(rx) => rx,
-        Err(e) => {
-            return html_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("Writer send failed: {e}"),
-            )
-        }
-    };
-
-    match reply_rx.await {
-        Ok(Ok(_)) => Redirect::to("/web/events/").into_response(),
-        Ok(Err(err)) => html_error(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
-        Err(_) => html_error(StatusCode::INTERNAL_SERVER_ERROR, "Writer channel closed"),
-    }
+    let result = queries::bulk::bulk_delete_events(
+        &state.writer_pool,
+        ids.as_deref(),
+        filter.as_ref(),
+        None,
+    )
+    .await;
+    bulk_result_redirect(result, "/web/events/")
 }
 
 /// Bulk actions on issues -- delete, resolve, or ignore.
@@ -165,92 +179,51 @@ async fn handle_issue_bulk(
         .map(period_to_timestamp)
         .unwrap_or(None);
 
-    match form.action.as_str() {
-        "delete" => {
-            let (fingerprints, filter) = if form.mode == "all_matching" {
-                let f = IssueFilter {
-                    level: opt(&form.level),
-                    status: opt(&form.status),
-                    query: opt(&form.query),
-                    sort: None,
-                    item_type: Some(item_type.to_string()),
-                    release: opt(&form.release),
-                    tag: None,
-                };
-                (None, Some(f))
-            } else {
-                (Some(form.ids), None)
-            };
-
-            let reply_rx =
-                match state
-                    .writer
-                    .bulk_delete_issues(fingerprints, filter, project_id, since)
-                {
-                    Ok(rx) => rx,
-                    Err(e) => {
-                        return html_error(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            &format!("Writer send failed: {e}"),
-                        )
-                    }
-                };
-
-            match reply_rx.await {
-                Ok(Ok(_)) => Redirect::to(redirect_to).into_response(),
-                Ok(Err(err)) => html_error(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
-                Err(_) => html_error(StatusCode::INTERNAL_SERVER_ERROR, "Writer channel closed"),
-            }
+    let status = match form.action.as_str() {
+        "delete" => None,
+        "resolve" => Some(IssueStatus::Resolved),
+        "ignore" => Some(IssueStatus::Ignored),
+        _ => {
+            return html_error(
+                StatusCode::BAD_REQUEST,
+                &format!("Invalid action '{}'", form.action),
+            )
         }
-        "resolve" | "ignore" => {
-            let status = if form.action == "resolve" {
-                IssueStatus::Resolved
-            } else {
-                IssueStatus::Ignored
-            };
+    };
 
-            let (fingerprints, filter) = if form.mode == "all_matching" {
-                let f = IssueFilter {
-                    level: opt(&form.level),
-                    status: opt(&form.status),
-                    query: opt(&form.query),
-                    sort: None,
-                    item_type: Some(item_type.to_string()),
-                    release: opt(&form.release),
-                    tag: None,
-                };
-                (None, Some(f))
-            } else {
-                (Some(form.ids), None)
-            };
+    let (fingerprints, filter) = resolve_targets(form, |form| IssueFilter {
+        level: opt(&form.level),
+        status: opt(&form.status),
+        query: opt(&form.query),
+        sort: None,
+        item_type: Some(item_type.to_string()),
+        release: opt(&form.release),
+        tag: None,
+    });
 
-            let reply_rx = match state.writer.bulk_update_issue_status(
-                fingerprints,
-                filter,
-                project_id,
-                since,
-                status,
-            ) {
-                Ok(rx) => rx,
-                Err(e) => {
-                    return html_error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        &format!("Writer send failed: {e}"),
-                    )
-                }
-            };
-
-            match reply_rx.await {
-                Ok(Ok(_)) => Redirect::to(redirect_to).into_response(),
-                Ok(Err(err)) => html_error(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
-                Err(_) => html_error(StatusCode::INTERNAL_SERVER_ERROR, "Writer channel closed"),
-            }
-        }
-        _ => html_error(
-            StatusCode::BAD_REQUEST,
-            &format!("Invalid action '{}'", form.action),
-        ),
-    }
+    let result = if let Some(status) = status {
+        queries::bulk::bulk_update_issue_status(
+            &state.writer_pool,
+            fingerprints.as_deref(),
+            filter.as_ref(),
+            project_id,
+            since,
+            status,
+        )
+        .await
+        .map(|_| ())
+    } else {
+        queries::bulk::bulk_delete_issues(
+            &state.writer_pool,
+            fingerprints.as_deref(),
+            filter.as_ref(),
+            project_id,
+            since,
+        )
+        .await
+        .map(|_| ())
+    };
+    bulk_result_redirect(result, redirect_to)
 }
 
 /// Bulk delete for user reports.
@@ -304,37 +277,22 @@ async fn handle_event_type_bulk(
         return html_error(StatusCode::BAD_REQUEST, "Invalid action");
     }
 
-    let (ids, filter) = if form.mode == "all_matching" {
-        let f = EventFilter {
-            level: None,
-            project_id: Some(project_id),
-            query: None,
-            sort: None,
-            item_type: Some(item_type.to_string()),
-        };
-        (None, Some(f))
-    } else {
-        (Some(form.ids), None)
-    };
+    let (ids, filter) = resolve_targets(form, |_| EventFilter {
+        level: None,
+        project_id: Some(project_id),
+        query: None,
+        sort: None,
+        item_type: Some(item_type.to_string()),
+    });
 
-    let reply_rx = match state
-        .writer
-        .bulk_delete_events(ids, filter, Some(project_id))
-    {
-        Ok(rx) => rx,
-        Err(e) => {
-            return html_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("Writer send failed: {e}"),
-            )
-        }
-    };
-
-    match reply_rx.await {
-        Ok(Ok(_)) => Redirect::to(redirect_to).into_response(),
-        Ok(Err(err)) => html_error(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
-        Err(_) => html_error(StatusCode::INTERNAL_SERVER_ERROR, "Writer channel closed"),
-    }
+    let result = queries::bulk::bulk_delete_events(
+        &state.writer_pool,
+        ids.as_deref(),
+        filter.as_ref(),
+        Some(project_id),
+    )
+    .await;
+    bulk_result_redirect(result, redirect_to)
 }
 
 /// Bulk delete for monitor check-ins.
@@ -352,38 +310,21 @@ pub async fn monitor_checkins_bulk(
         return html_error(StatusCode::BAD_REQUEST, "Invalid action");
     }
 
-    let (ids, filter) = if form.mode == "all_matching" {
-        (
-            None,
-            Some(EventFilter {
-                level: None,
-                project_id: Some(project_id),
-                query: None,
-                sort: None,
-                item_type: Some("check_in".to_string()),
-            }),
-        )
-    } else {
-        (Some(form.ids), None)
-    };
-
-    let reply_rx = match state
-        .writer
-        .bulk_delete_events(ids, filter, Some(project_id))
-    {
-        Ok(rx) => rx,
-        Err(e) => {
-            return html_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("Writer send failed: {e}"),
-            )
-        }
-    };
+    let (ids, filter) = resolve_targets(form, |_| EventFilter {
+        level: None,
+        project_id: Some(project_id),
+        query: None,
+        sort: None,
+        item_type: Some("check_in".to_string()),
+    });
 
     let redirect = format!("/web/projects/{project_id}/monitors/{slug}/");
-    match reply_rx.await {
-        Ok(Ok(_)) => Redirect::to(&redirect).into_response(),
-        Ok(Err(err)) => html_error(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
-        Err(_) => html_error(StatusCode::INTERNAL_SERVER_ERROR, "Writer channel closed"),
-    }
+    let result = queries::bulk::bulk_delete_events(
+        &state.writer_pool,
+        ids.as_deref(),
+        filter.as_ref(),
+        Some(project_id),
+    )
+    .await;
+    bulk_result_redirect(result, &redirect)
 }

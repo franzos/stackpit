@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 
-{% block title %}Integrations - Project {{ project_id }} - Stackpit{% endblock %}
+{% block title %}Integrations - {{ nav.label }} - Stackpit{% endblock %}
 
 {% block breadcrumbs %}
 <span class="sep" aria-hidden="true">/</span>
 <a href="/web/projects/">Projects</a>
 <span class="sep" aria-hidden="true">/</span>
-<a href="/web/projects/{{ project_id }}/">Project {{ project_id }}</a>
+<a href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
 <span class="sep" aria-hidden="true">/</span>
 <a href="/web/projects/{{ project_id }}/settings/">Settings</a>
 <span class="sep" aria-hidden="true">/</span>
@@ -14,7 +14,7 @@
 {% endblock %}
 
 {% block content %}
-<h1>Project {{ project_id }}{% if project_status == "archived" %} <span style="color: var(--muted); font-size: 0.8rem;">(archived)</span>{% endif %}</h1>
+<h1>{{ nav.label }}{% if project_status == "archived" %} <span style="color: var(--muted); font-size: 0.8rem;">(archived)</span>{% endif %}</h1>
 <nav class="project-tabs" aria-label="Project sections">
     <a href="/web/projects/{{ project_id }}/" class="project-tab"><span class="type-icon type-icon-event"></span>Issues</a>
     {% if nav.transaction_count > 0 %}<a href="/web/projects/{{ project_id }}/transactions/" class="project-tab"><span class="type-icon type-icon-transaction"></span>Transactions <span class="tab-count">{{ nav.transaction_count }}</span></a>{% endif %}
@@ -45,12 +45,13 @@
 <h2>Active Integrations</h2>
 
 {% if active.is_empty() %}
-<p class="empty">No integrations activated for this project.</p>
+<p class="empty">No integrations activated for this project. Add a global integration (Webhook, Slack, or Email) on the <a href="/web/settings/integrations/">Integrations</a> page first, then enable it here. You can scope each one by minimum level and environment so dev-noise stays out of prod channels.</p>
 {% else %}
 {% for pi in active %}
 <div style="border: 1px solid var(--border); border-radius: 0.5rem; padding: 1rem; margin-bottom: 1rem;">
     <h3 style="margin-top: 0;">{{ pi.integration_name }} <span style="color: var(--muted); font-weight: 400; font-size: 0.85rem;">({{ pi.integration_kind }})</span></h3>
     <form class="settings-form" method="post" action="/web/projects/{{ project_id }}/settings/integrations/{{ pi.id }}/update">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label style="display: inline; margin-right: 1rem;">
             <input type="checkbox" name="notify_new_issues" value="1" {% if pi.notify_new_issues %}checked{% endif %}> New issues
         </label>
@@ -84,6 +85,7 @@
         </div>
     </form>
     <form method="post" action="/web/projects/{{ project_id }}/settings/integrations/{{ pi.id }}/delete" style="display: inline; margin: 0;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="btn btn-danger">Deactivate</button>
     </form>
 </div>
@@ -93,6 +95,7 @@
 {% if !available.is_empty() %}
 <h2>Activate Integration</h2>
 <form class="settings-form" method="post" action="/web/projects/{{ project_id }}/settings/integrations/activate">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <label for="pi_integration_id">Integration</label>
     <select id="pi_integration_id" name="integration_id">
     {% for i in available %}

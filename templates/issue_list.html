@@ -1,16 +1,16 @@
 {% extends "base.html" %}
 
-{% block title %}Project {{ project_id }} - Stackpit{% endblock %}
+{% block title %}{{ nav.label }} - Stackpit{% endblock %}
 
 {% block breadcrumbs %}
 <span class="sep" aria-hidden="true">/</span>
 <a href="/web/projects/">Projects</a>
 <span class="sep" aria-hidden="true">/</span>
-<span>Project {{ project_id }}</span>
+<span>{{ nav.label }}</span>
 {% endblock %}
 
 {% block content %}
-<h1>Project {{ project_id }}</h1>
+<h1>{{ nav.label }}</h1>
 <nav class="project-tabs" aria-label="Project sections">
     <a href="/web/projects/{{ project_id }}/" class="project-tab active"><span class="type-icon type-icon-event"></span>Issues</a>
     {% if nav.transaction_count > 0 %}<a href="/web/projects/{{ project_id }}/transactions/" class="project-tab"><span class="type-icon type-icon-transaction"></span>Transactions <span class="tab-count">{{ nav.transaction_count }}</span></a>{% endif %}
@@ -79,6 +79,7 @@
 
 {% if result.total > 0 %}
 <form class="bulk-all-form" method="post" action="/web/projects/{{ project_id }}/bulk">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="mode" value="all_matching">
     {% if !query.is_empty() %}<input type="hidden" name="query" value="{{ query }}">{% endif %}
     {% if !level.is_empty() %}<input type="hidden" name="level" value="{{ level }}">{% endif %}
@@ -93,6 +94,7 @@
 {% endif %}
 
 <form method="post" action="/web/projects/{{ project_id }}/bulk">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 <input type="hidden" name="mode" value="selected">
 {% if !period.is_empty() %}<input type="hidden" name="period" value="{{ period }}">{% endif %}
 <div class="bulk-bar">

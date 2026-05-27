@@ -7,6 +7,19 @@
 
 I got tired of paying for Sentry on smaller projects and self-hosting the official thing is... a lot. The thing is, most of what I need is ingestion, grouping, and a way to browse errors. So I built this — point your existing Sentry SDKs at it, browse errors in the web UI, or query via the JSON API.
 
+## Features
+
+- **Drop-in Sentry protocol** — envelope and legacy store endpoints, all auth methods. Any Sentry SDK works, no code changes.
+- **Single binary, no dependencies** — one process, one SQLite file. PostgreSQL optional.
+- **Issue grouping** — fingerprint-based grouping with regressions and resolution tracking.
+- **Server-rendered web UI** — browse issues, events, transactions, logs, traces, replays, monitors, and more.
+- **JSON API** — query everything the UI shows.
+- **Notifications & alerts** — email, Slack, and webhooks, with digests and threshold rules.
+- **Source maps** — upload via `sentry-cli` so minified traces resolve to original source.
+- **Monitors** — cron check-in tracking via Sentry's protocol.
+- **Auth your way** — a shared admin token for solo use, or OAuth/OIDC SSO for teams.
+- **Migrate in** — pull historical events, issues, and releases from an existing Sentry instance.
+
 ## Install
 
 | Method | Command |
@@ -17,15 +30,17 @@ I got tired of paying for Sentry on smaller projects and self-hosting the offici
 | Fedora/RHEL | Download [`.rpm`](https://github.com/franzos/stackpit/releases) — `sudo rpm -i stackpit-*.x86_64.rpm` |
 | Guix | `guix install -L <panther> stackpit` ([Panther channel](https://github.com/franzos/panther)) |
 
-Pre-built binaries for Linux (x86_64), macOS (Apple Silicon, Intel) on [GitHub Releases](https://github.com/franzos/stackpit/releases).
+Pre-built binaries for Linux (x86_64) and macOS (Apple Silicon, Intel) on [GitHub Releases](https://github.com/franzos/stackpit/releases).
 
 ## Running
 
 ```bash
-stackpit init            # create default stackpit.toml
+stackpit init            # writes stackpit.toml with a fresh admin_token
 stackpit serve           # start both ingestion + admin UI
 stackpit serve --ingest-only  # ingestion only, no admin UI/API
 ```
+
+`stackpit init` generates a random 32-byte admin token and writes it into the config, so the admin UI is usable on first boot without any extra steps.
 
 ### Ports
 
@@ -40,165 +55,15 @@ The admin port serves the browsing UI and API. The ingestion port is where your 
 
 `--ingest-only` skips the admin listener entirely, useful if you want dedicated ingestion nodes.
 
-## Configuration
+## Documentation
 
-Config lives in `stackpit.toml` (override with `-c /path/to/config.toml`).
+Everything past first boot — the full `stackpit.toml` reference, PostgreSQL, authentication and OIDC/SSO setup, connecting SDKs, notifications, source maps, monitors, syncing from Sentry, and the CLI — lives in the **[Operator Guide](docs/operator-guide.md)**:
 
-```toml
-[server]
-bind = "127.0.0.1:3000"       # admin UI/API address
-ingest_bind = "0.0.0.0:3001"  # SDK ingestion address
-external_url = ""              # external URL for DSN generation (optional)
-admin_token = ""               # shared bearer token for admin auth (optional)
-max_body_size = 10485760       # max decompressed body in bytes (default 10MB)
-max_compressed_body_size = 0   # max compressed body in bytes (default max_body_size / 5)
-
-[storage]
-path = "stackpit.db"           # SQLite database path
-database_url = ""              # full URL, e.g. "postgres://user:pass@host/stackpit" (overrides path)
-retention_days = 90            # auto-delete events older than this (0 = keep forever)
-
-[filter]
-mode = "open"                  # "open" = allow all, "closed" = deny all
-rate_limit = 0                 # global max events per minute (0 = unlimited)
-max_projects = 1000            # max auto-registered projects in open mode
-excluded_environments = []     # environment names to reject globally
-blocked_user_agents = []       # user-agent glob patterns to block globally
-
-[notifications]
-rate_limit_per_project = 30    # max notifications per project per 60s (0 = unlimited)
-rate_limit_global = 100        # max total notifications per 60s (0 = unlimited)
-```
-
-**Filter modes:** `open` accepts everything unless it matches a deny rule. `closed` rejects everything unless it matches an allow rule.
-
-Per-project filter rules are managed in the web UI under **Filters**. Available rule types include message patterns (glob/regex), CIDR/IP blocks, release and environment exclusions, and fingerprint discards. Filtering runs in three tiers — fingerprint discard and inbound filters first, then rate limits and user-agent blocks, then IP rules — so cheap checks happen before expensive ones.
-
-All fields have sane defaults. An empty config file works fine.
-
-### PostgreSQL
-
-SQLite is the default, but you can point stackpit at a PostgreSQL database instead:
-
-```toml
-[storage]
-database_url = "postgres://user:pass@localhost/stackpit"
-```
-
-When `database_url` is set it takes precedence over `path`. Migrations run automatically on startup for both backends.
-
-### Authentication
-
-Set `admin_token` in the config to require a bearer token for the admin UI and API. When set, requests need either an `Authorization: Bearer <token>` header or a `stackpit_token` cookie (set via the login page at `/web/login`).
-
-### Secret encryption
-
-Integration credentials (Slack tokens, webhook URLs, etc.) can be encrypted at rest. Set a 32-byte hex key:
-
-```bash
-export STACKPIT_MASTER_KEY=$(openssl rand -hex 32)
-```
-
-Without this, secrets are stored in plaintext. stackpit warns on startup when the key is missing.
-
-## Notifications & Alerts
-
-stackpit can notify you when things go wrong. Integrations (email via Postmark, Slack, webhooks) are configured in the web UI under **Settings → Integrations**, and each project can enable or disable specific triggers.
-
-**Immediate notifications** fire during event ingestion:
-
-- **New issue** — a fingerprint appears for the first time
-- **Regression** — a previously resolved issue reappears
-- **Threshold exceeded** — a custom alert rule fires (e.g. 100 events in 5 minutes)
-
-**Digest emails** summarize activity over a configurable interval — new issues, active issue counts, and total events per project. Digest schedules can be per-project or global.
-
-Each project integration can filter notifications by trigger type, minimum severity level, and environment. Rate limiting (configurable in `[notifications]`) prevents notification storms.
-
-Alert rules and digest schedules are managed via the web UI under **Alerts**, or through the JSON API (`/api/v1/alerts/rules`, `/api/v1/digests`).
-
-## Source Maps
-
-stackpit supports source map uploads so minified stack traces resolve to original source locations.
-
-Generate a project API key in **Settings → Source Maps** for the project you want to upload to. Then configure `sentry-cli` or your bundler plugin with the ingest URL (the same host as your DSN):
-
-```bash
-export SENTRY_URL=https://errors.example.com   # ingest host
-export SENTRY_AUTH_TOKEN=spk_...                # project API key
-export SENTRY_ORG=default                       # any value works
-export SENTRY_PROJECT=1                         # project ID
-
-sentry-cli sourcemaps upload ./dist
-```
-
-Bundler plugins (`@sentry/vite-plugin`, `@sentry/webpack-plugin`, etc.) accept the same environment variables, or you can pass them as options. Source maps are matched by debug ID and applied automatically when rendering stack traces in the web UI.
-
-Stale upload chunks older than 24 hours are cleaned up by a background task.
-
-## Monitors
-
-Cron job monitoring is supported via Sentry's check-in protocol. SDKs send check-in envelopes with a monitor slug, and stackpit tracks their status (OK, error, in-progress) over time.
-
-Browse monitors per-project at `/web/projects/{id}/monitors/` to see check-in history and current state.
-
-## Supported SDKs
-
-Any Sentry SDK works. The ingestion server speaks the standard Sentry protocol — envelope and legacy store endpoints, all auth methods (header, query param, DSN).
-
-I've tested with the official SDKs for **JavaScript**, **Python**, **Rust**, **Go**, **Ruby**, **Java**, **C#/.NET**, **PHP**, and others. If it sends Sentry envelopes, it works.
-
-### DSN format
-
-```
-https://<key>@<ingest-host>:<port>/<project-id>
-```
-
-For example, with the default ingestion port:
-
-```
-https://mykey@errors.example.com:3001/1
-```
-
-## Syncing from Sentry
-
-If you've got historical data in an existing Sentry instance, you can pull it in with the `sync` command. It fetches events, issue statuses, attachments, and releases.
-
-```bash
-export SENTRY_AUTH_TOKEN=<your-api-token>
-
-stackpit sync \
-  --org my-org \
-  --url https://sentry.io \
-  --projects web-frontend,api-server
-```
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--org` | required | Sentry organization slug |
-| `--url` | `https://sentry.io` | Sentry API base URL (for self-hosted) |
-| `--projects` | all | Comma-separated project slugs to sync |
-| `--max-pages` | unlimited | Limit pages fetched per project |
-
-Sync is resumable — it tracks watermarks and cursors, so you can re-run it to pick up new events without starting over.
-
-## CLI tools
-
-```bash
-stackpit status                 # show environment & config overview
-stackpit projects               # list known projects
-stackpit events                 # list recent events
-stackpit events -p 1 -l 50     # filter by project, set limit
-stackpit event <event-id>       # show full event JSON
-stackpit tail                   # stream new events in real-time
-stackpit backfill-issues        # regenerate fingerprints & issue grouping
-```
-
-## Edge cases
-
-**Issue grouping after sync:** stackpit uses its own fingerprinting (exception type+value, message template, SDK-provided fingerprint) which covers most cases but isn't identical to Sentry's server-side grouping — Sentry has additional heuristics like stack trace similarity. After syncing, new locally-received events will generally group into the correct existing issues, but exceptions where Sentry would split or merge based on stack frames may end up grouped slightly differently.
-
-**Issue status sync requires events first:** When syncing issue statuses, stackpit matches by Sentry's group ID — which is only populated after events have been synced. If you sync statuses before events, status updates for unmatched issues are silently skipped. Always sync events first.
+- [Configuration](docs/operator-guide.md#configuration) — the full config reference, filter modes, [PostgreSQL](docs/operator-guide.md#postgresql)
+- [Authentication](docs/operator-guide.md#authentication) — admin token, OAuth/SSO (OIDC), [secret encryption](docs/operator-guide.md#secret-encryption)
+- [Connecting SDKs](docs/operator-guide.md#connecting-sdks) — supported SDKs and DSN format
+- [Notifications & Alerts](docs/operator-guide.md#notifications--alerts), [Source Maps](docs/operator-guide.md#source-maps), [Monitors](docs/operator-guide.md#monitors), [Web UI](docs/operator-guide.md#web-ui)
+- [Syncing from Sentry](docs/operator-guide.md#syncing-from-sentry), [CLI tools](docs/operator-guide.md#cli-tools)
 
 ## Acknowledgements
 

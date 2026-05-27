@@ -22,6 +22,16 @@ pub fn percent_decode(s: &str) -> String {
     String::from_utf8(result).unwrap_or_else(|_| s.to_string())
 }
 
+/// Escape the five HTML-significant characters. Shared by the admin UI error
+/// pages and HTML email bodies so neither carries its own copy.
+pub fn escape_html(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#x27;")
+}
+
 fn hex_val(b: u8) -> Option<u8> {
     match b {
         b'0'..=b'9' => Some(b - b'0'),

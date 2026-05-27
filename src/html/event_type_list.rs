@@ -1,17 +1,17 @@
 use askama::Template;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
 
 use crate::extractors::ReadPool;
 use crate::html::render_template;
-use crate::html::utils::ListParams;
+use crate::html::utils::{Csrf, ListParams};
 use crate::queries;
 use crate::queries::types::{EventFilter, EventSummary, Page, PagedResult};
 use crate::queries::ProjectNavCounts;
 use crate::server::AppState;
 
-use super::html_error;
+use super::HtmlError;
 
+#[allow(unused_imports)]
 use crate::html::filters;
 
 #[derive(Template)]
@@ -20,6 +20,7 @@ struct UserReportListTemplate {
     project_id: u64,
     result: PagedResult<EventSummary>,
     nav: ProjectNavCounts,
+    csrf_token: String,
 }
 
 #[derive(Template)]
@@ -28,14 +29,16 @@ struct ClientReportListTemplate {
     project_id: u64,
     result: PagedResult<EventSummary>,
     nav: ProjectNavCounts,
+    csrf_token: String,
 }
 
 pub async fn user_reports_handler(
     State(_state): State<AppState>,
     ReadPool(pool): ReadPool,
+    Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
     Query(params): Query<ListParams>,
-) -> axum::response::Response {
+) -> Result<axum::response::Response, HtmlError> {
     let filter = EventFilter {
         project_id: Some(project_id),
         item_type: Some("user_report".to_string()),
@@ -43,10 +46,7 @@ pub async fn user_reports_handler(
     };
     let page = Page::new(params.offset, params.limit);
 
-    let result = match queries::events::list_all_events(&pool, &filter, &page).await {
-        Ok(r) => r,
-        Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
+    let result = queries::events::list_all_events(&pool, &filter, &page).await?;
 
     let nav = queries::projects::get_nav_counts(&pool, project_id).await;
 
@@ -54,16 +54,18 @@ pub async fn user_reports_handler(
         project_id,
         result,
         nav,
+        csrf_token: csrf,
     };
-    render_template(&tmpl)
+    Ok(render_template(&tmpl))
 }
 
 pub async fn client_reports_handler(
     State(_state): State<AppState>,
     ReadPool(pool): ReadPool,
+    Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
     Query(params): Query<ListParams>,
-) -> axum::response::Response {
+) -> Result<axum::response::Response, HtmlError> {
     let filter = EventFilter {
         project_id: Some(project_id),
         item_type: Some("client_report".to_string()),
@@ -71,10 +73,7 @@ pub async fn client_reports_handler(
     };
     let page = Page::new(params.offset, params.limit);
 
-    let result = match queries::events::list_all_events(&pool, &filter, &page).await {
-        Ok(r) => r,
-        Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
+    let result = queries::events::list_all_events(&pool, &filter, &page).await?;
 
     let nav = queries::projects::get_nav_counts(&pool, project_id).await;
 
@@ -82,6 +81,7 @@ pub async fn client_reports_handler(
         project_id,
         result,
         nav,
+        csrf_token: csrf,
     };
-    render_template(&tmpl)
+    Ok(render_template(&tmpl))
 }

@@ -137,24 +137,27 @@ pub fn parse(body: &[u8], project_id: u64, auth: &SentryAuth) -> Result<ParsedEn
             break;
         };
 
-        // Payload — either length-prefixed or newline-delimited
-        let payload_bytes = if let Some(len) = declared_length {
-            let len = len as usize;
-            if pos + len > body.len() {
-                tracing::warn!(
-                    "envelope item declared length {len} exceeds remaining body ({} bytes), truncating",
-                    body.len() - pos
-                );
-                let slice = &body[pos..];
-                pos = body.len();
-                slice
-            } else {
-                let slice = &body[pos..pos + len];
-                pos += len;
+        // `len_u64` is attacker-declared; checked_add guards against overflow past the bounds check.
+        let payload_bytes = if let Some(len_u64) = declared_length {
+            let end = usize::try_from(len_u64)
+                .ok()
+                .and_then(|len| pos.checked_add(len))
+                .filter(|&e| e <= body.len());
+            if let Some(end) = end {
+                let slice = &body[pos..end];
+                pos = end;
                 // Trailing newline after length-prefixed payload
                 if pos < body.len() && body[pos] == b'\n' {
                     pos += 1;
                 }
+                slice
+            } else {
+                tracing::warn!(
+                    "envelope item declared length {len_u64} exceeds remaining body ({} bytes), truncating",
+                    body.len() - pos
+                );
+                let slice = &body[pos..];
+                pos = body.len();
                 slice
             }
         } else {

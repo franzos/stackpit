@@ -1,19 +1,19 @@
 use askama::Template;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
 use serde::Deserialize;
 
 use crate::extractors::ReadPool;
 use crate::html::render_template;
+use crate::html::utils::Csrf;
 use crate::queries;
 use crate::queries::types::{Page, PagedResult};
 use crate::queries::MonitorSummary;
 use crate::queries::ProjectNavCounts;
 use crate::server::AppState;
 
-use super::html_error;
+use super::HtmlError;
 
-// askama needs these filters in scope for template derivation
+#[allow(unused_imports)]
 use crate::html::filters;
 
 #[derive(Template)]
@@ -22,17 +22,16 @@ struct MonitorListTemplate {
     project_id: u64,
     monitors: Vec<MonitorSummary>,
     nav: ProjectNavCounts,
+    csrf_token: String,
 }
 
 pub async fn list_handler(
     State(_state): State<AppState>,
     ReadPool(pool): ReadPool,
+    Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
-) -> axum::response::Response {
-    let monitors = match queries::monitors::list_monitors(&pool, project_id).await {
-        Ok(m) => m,
-        Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
+) -> Result<axum::response::Response, HtmlError> {
+    let monitors = queries::monitors::list_monitors(&pool, project_id).await?;
 
     let nav = queries::projects::get_nav_counts(&pool, project_id).await;
 
@@ -40,8 +39,9 @@ pub async fn list_handler(
         project_id,
         monitors,
         nav,
+        csrf_token: csrf,
     };
-    render_template(&tmpl)
+    Ok(render_template(&tmpl))
 }
 
 #[derive(Deserialize)]
@@ -57,20 +57,19 @@ struct MonitorDetailTemplate {
     slug: String,
     checkins: PagedResult<queries::EventSummary>,
     nav: queries::ProjectNavCounts,
+    csrf_token: String,
 }
 
 pub async fn detail_handler(
     State(_state): State<AppState>,
     ReadPool(pool): ReadPool,
+    Csrf(csrf): Csrf,
     Path((project_id, slug)): Path<(u64, String)>,
     Query(params): Query<PageParams>,
-) -> axum::response::Response {
+) -> Result<axum::response::Response, HtmlError> {
     let page = Page::new(params.offset, params.limit);
     let checkins =
-        match queries::monitors::list_checkins_for_monitor(&pool, project_id, &slug, &page).await {
-            Ok(r) => r,
-            Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-        };
+        queries::monitors::list_checkins_for_monitor(&pool, project_id, &slug, &page).await?;
 
     let nav = queries::projects::get_nav_counts(&pool, project_id).await;
 
@@ -79,6 +78,7 @@ pub async fn detail_handler(
         slug,
         checkins,
         nav,
+        csrf_token: csrf,
     };
-    render_template(&tmpl)
+    Ok(render_template(&tmpl))
 }

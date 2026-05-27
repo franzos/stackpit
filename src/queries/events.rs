@@ -7,6 +7,35 @@ use super::types::{
     EventDetail, EventFilter, EventSummary, Page, PagedResult, TagFacet, TagFacetValue, TailEvent,
 };
 
+/// Closed set of allowed ORDER BY clauses, so the value reaching
+/// `QueryBuilder::push` is provably a `&'static str` chosen here.
+enum EventSort {
+    ProjectId,
+    Level,
+    Platform,
+    Timestamp,
+}
+
+impl EventSort {
+    fn parse(sort: Option<&str>) -> Self {
+        match sort {
+            Some("project_id") => Self::ProjectId,
+            Some("level") => Self::Level,
+            Some("platform") => Self::Platform,
+            _ => Self::Timestamp,
+        }
+    }
+
+    fn as_sql_ident(&self) -> &'static str {
+        match self {
+            Self::ProjectId => "project_id DESC, timestamp DESC",
+            Self::Level => "level ASC, timestamp DESC",
+            Self::Platform => "platform ASC, timestamp DESC",
+            Self::Timestamp => "timestamp DESC",
+        }
+    }
+}
+
 /// Append event filter conditions and their binds to an in-progress QueryBuilder.
 /// Caller must have already pushed the base query (e.g. `SELECT ... FROM events`).
 /// If any filters are active, a `WHERE` keyword is emitted first.
@@ -59,12 +88,7 @@ pub async fn list_all_events(
 ) -> Result<PagedResult<EventSummary>> {
     use sqlx::QueryBuilder;
 
-    let sort_col = match filter.sort.as_deref() {
-        Some("project_id") => "project_id DESC, timestamp DESC",
-        Some("level") => "level ASC, timestamp DESC",
-        Some("platform") => "platform ASC, timestamp DESC",
-        _ => "timestamp DESC",
-    };
+    let sort = EventSort::parse(filter.sort.as_deref());
 
     // COUNT query
     let mut count_qb: QueryBuilder<'_, crate::db::Db> =
@@ -79,7 +103,7 @@ pub async fn list_all_events(
     );
     push_event_filter_conditions(&mut select_qb, filter);
     select_qb.push(" ORDER BY ");
-    select_qb.push(sort_col);
+    select_qb.push(sort.as_sql_ident());
     select_qb.push(" LIMIT ");
     select_qb.push_bind(page.limit as i64);
     select_qb.push(" OFFSET ");
@@ -91,12 +115,7 @@ pub async fn list_all_events(
         .map(map_event_summary)
         .collect::<Result<Vec<_>>>()?;
 
-    Ok(PagedResult {
-        items,
-        total: total as u64,
-        offset: page.offset,
-        limit: page.limit,
-    })
+    Ok(PagedResult::from_page(items, total, page))
 }
 
 /// List events for a single project, paginated.
@@ -128,12 +147,7 @@ pub async fn list_events(
         .map(map_event_summary)
         .collect::<Result<Vec<_>>>()?;
 
-    Ok(PagedResult {
-        items,
-        total: total as u64,
-        offset: page.offset,
-        limit: page.limit,
-    })
+    Ok(PagedResult::from_page(items, total, page))
 }
 
 /// All events for a given issue fingerprint, paginated.
@@ -165,12 +179,7 @@ pub async fn list_events_for_issue(
         .map(map_event_summary)
         .collect::<Result<Vec<_>>>()?;
 
-    Ok(PagedResult {
-        items,
-        total: total as u64,
-        offset: page.offset,
-        limit: page.limit,
-    })
+    Ok(PagedResult::from_page(items, total, page))
 }
 
 /// Bucket event counts by day for an issue's histogram.

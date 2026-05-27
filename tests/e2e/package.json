@@ -1,0 +1,13 @@
+{
+  "name": "stackpit-e2e",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Playwright smoke tests for stackpit's admin UI. Runs inside Microsoft's Playwright Docker image; reaches the host-run server via --network host.",
+  "scripts": {
+    "test": "playwright test",
+    "show-trace": "playwright show-trace"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.60.0"
+  }
+}

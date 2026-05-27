@@ -1,30 +1,49 @@
-use aes_gcm::aead::{Aead, KeyInit, OsRng};
+use aes_gcm::aead::{Aead, KeyInit, OsRng, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
+use zeroize::Zeroizing;
+
+/// AES-GCM standard nonce length, prepended to every ciphertext.
+pub const NONCE_LEN: usize = 12;
+
+/// `N` random bytes from the OS RNG, hex-encoded (yields `2*N` chars).
+pub fn random_hex<const N: usize>() -> String {
+    let mut buf = [0u8; N];
+    getrandom::fill(&mut buf).expect("OS RNG must be available");
+    hex::encode(buf)
+}
 
 pub struct SecretEncryptor {
     cipher: Aes256Gcm,
 }
 
 impl SecretEncryptor {
-    /// Grabs `STACKPIT_MASTER_KEY` from the environment. Expects 64 hex chars (32 bytes).
-    /// Returns None if unset or malformed -- we don't crash, just warn and move on.
-    pub fn from_env() -> Option<Self> {
-        let hex_key = std::env::var("STACKPIT_MASTER_KEY").ok()?;
-        let key_bytes = match hex::decode(hex_key.trim()) {
-            Ok(b) => b,
-            Err(e) => {
-                tracing::warn!("STACKPIT_MASTER_KEY: invalid hex encoding: {e}");
-                return None;
+    /// Read `STACKPIT_MASTER_KEY` (64 hex chars = 32 bytes).
+    ///
+    /// - unset → `Ok(None)` (no at-rest encryption)
+    /// - set but malformed → `Err(_)` so startup fails fast. Silently
+    ///   disabling encryption on a typo'd key would be a footgun for OAuth.
+    pub fn from_env() -> Result<Option<Self>, &'static str> {
+        let Ok(raw) = std::env::var("STACKPIT_MASTER_KEY") else {
+            return Ok(None);
+        };
+        // Zeroize the heap-allocated String so the key doesn't linger.
+        let hex_key = Zeroizing::new(raw);
+        let key_bytes: Zeroizing<Vec<u8>> = match hex::decode(hex_key.trim()) {
+            Ok(b) => Zeroizing::new(b),
+            Err(_) => {
+                return Err(
+                    "STACKPIT_MASTER_KEY is set but is not valid hex; expected 64 hex chars",
+                );
             }
         };
         if key_bytes.len() != 32 {
-            tracing::warn!("STACKPIT_MASTER_KEY must be 64 hex chars (32 bytes), ignoring");
-            return None;
+            return Err("STACKPIT_MASTER_KEY is set but is not 32 bytes (64 hex chars)");
         }
-        let cipher = Aes256Gcm::new_from_slice(&key_bytes).ok()?;
-        Some(Self { cipher })
+        let cipher = Aes256Gcm::new_from_slice(&key_bytes)
+            .map_err(|_| "STACKPIT_MASTER_KEY: AES-256-GCM cipher init failed")?;
+        Ok(Some(Self { cipher }))
     }
 
     /// AES-256-GCM encrypt. Output is base64(nonce || ciphertext).
@@ -53,11 +72,54 @@ impl SecretEncryptor {
         let plaintext = self.cipher.decrypt(nonce, ciphertext).ok()?;
         String::from_utf8(plaintext).ok()
     }
+
+    /// AES-256-GCM encrypt with AAD. Output is `nonce || ciphertext || tag`
+    /// (raw bytes, BLOB-friendly). Bind `aad` to the row's PK so blob-swap
+    /// attacks across rows surface as decryption failures.
+    pub fn encrypt_bytes_with_aad(&self, plaintext: &[u8], aad: &[u8]) -> Option<Vec<u8>> {
+        use aes_gcm::aead::rand_core::RngCore;
+        let mut nonce_bytes = [0u8; NONCE_LEN];
+        OsRng.fill_bytes(&mut nonce_bytes);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+
+        let ciphertext = self
+            .cipher
+            .encrypt(
+                nonce,
+                Payload {
+                    msg: plaintext,
+                    aad,
+                },
+            )
+            .ok()?;
+
+        let mut combined = Vec::with_capacity(NONCE_LEN + ciphertext.len());
+        combined.extend_from_slice(&nonce_bytes);
+        combined.extend_from_slice(&ciphertext);
+        Some(combined)
+    }
+
+    /// Reverses [`Self::encrypt_bytes_with_aad`]. `aad` mismatch fails
+    /// decryption (it's covered by the GCM tag).
+    pub fn decrypt_bytes_with_aad(&self, blob: &[u8], aad: &[u8]) -> Option<Vec<u8>> {
+        if blob.len() < NONCE_LEN {
+            return None;
+        }
+        let (nonce_bytes, ciphertext) = blob.split_at(NONCE_LEN);
+        let nonce = Nonce::from_slice(nonce_bytes);
+        self.cipher
+            .decrypt(
+                nonce,
+                Payload {
+                    msg: ciphertext,
+                    aad,
+                },
+            )
+            .ok()
+    }
 }
 
-/// Encrypts a secret for storage. Returns an error if no encryptor is
-/// configured or if encryption fails -- callers must decide whether to
-/// proceed without encryption.
+/// Encrypt secret for storage (error if unconfigured or encryption fails).
 pub fn encrypt_secret(
     raw: &str,
     encryptor: Option<&SecretEncryptor>,

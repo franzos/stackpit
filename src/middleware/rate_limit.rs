@@ -1,8 +1,9 @@
 use axum::extract::State;
 use axum::middleware::Next;
 use axum::response::IntoResponse;
+use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 const ADMIN_RATE_LIMIT: u32 = 120;
 const LOGIN_RATE_LIMIT: u32 = 10;
@@ -46,13 +47,8 @@ fn check_rate_limit(
     let ip = crate::network::extract_client_ip(req.headers(), peer_addr)
         .unwrap_or_else(|| "unknown".to_string());
 
-    let mut inner = match limiter.0.lock() {
-        Ok(m) => m,
-        Err(_) => {
-            tracing::error!("rate limiter mutex poisoned, failing closed");
-            return false;
-        }
-    };
+    // `parking_lot::Mutex` doesn't poison -- a panic inside can't fail-closed the admin surface.
+    let mut inner = limiter.0.lock();
 
     // Periodic cleanup: evict stale entries once per window
     if now.saturating_sub(inner.last_cleanup) >= ADMIN_RATE_WINDOW_SECS {

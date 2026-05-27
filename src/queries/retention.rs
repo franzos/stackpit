@@ -3,10 +3,7 @@ use sqlx::Row;
 
 use crate::db::{sql, DbPool};
 
-/// Delete old events in bounded chunks so no single transaction holds the
-/// write lock for more than ~1 second.  Each chunk deletes up to
-/// `CHUNK_LIMIT` rows, reconciles the affected issues, then commits --
-/// giving the main writer a chance to acquire the lock between rounds.
+/// Delete old events in chunks (preserves write-lock granularity for concurrent access).
 const CHUNK_LIMIT: i64 = 5000;
 
 pub async fn delete_old_events(pool: &DbPool, retention_days: u32) -> Result<usize> {
@@ -31,15 +28,19 @@ pub async fn delete_old_events(pool: &DbPool, retention_days: u32) -> Result<usi
 
         // Collect distinct fingerprints from the rows about to be deleted.
         #[cfg(feature = "sqlite")]
-        let fp_sql = "SELECT DISTINCT fingerprint FROM events \
+        let fp_sql = sql!(
+            "SELECT DISTINCT fingerprint FROM events \
              WHERE fingerprint IS NOT NULL AND rowid IN (\
                  SELECT rowid FROM events WHERE received_at < ?1 LIMIT ?2\
-             )";
+             )"
+        );
         #[cfg(not(feature = "sqlite"))]
-        let fp_sql = "SELECT DISTINCT fingerprint FROM events \
+        let fp_sql = sql!(
+            "SELECT DISTINCT fingerprint FROM events \
              WHERE fingerprint IS NOT NULL AND ctid IN (\
                  SELECT ctid FROM events WHERE received_at < ?1 LIMIT ?2\
-             )";
+             )"
+        );
 
         let affected_fingerprints: Vec<String> = sqlx::query(fp_sql)
             .bind(cutoff)

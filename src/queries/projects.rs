@@ -144,8 +144,9 @@ pub async fn get_project_info(
         let status_str: Option<String> = row.get("status");
         super::types::ProjectInfo {
             name: row.get("name"),
+            // Unknown status strings default rather than panicking the handler.
             status: status_str
-                .map(|s| s.parse().unwrap())
+                .and_then(|s| s.parse().ok())
                 .unwrap_or(super::types::ProjectStatus::Active),
             source: row.get("source"),
         }
@@ -196,6 +197,7 @@ pub async fn get_project_repos(
 pub async fn get_nav_counts(pool: &crate::db::DbPool, project_id: u64) -> ProjectNavCounts {
     // Transactions live in the issues table; everything else comes from events
     let transaction_count = count_transactions(pool, project_id).await.unwrap_or(0);
+    let label = project_label(pool, project_id).await;
 
     // Single scan of the events table for all event-based flags, plus
     // one EXISTS each for the separate logs/spans/metrics tables.
@@ -229,12 +231,29 @@ pub async fn get_nav_counts(pool: &crate::db::DbPool, project_id: u64) -> Projec
             metric_count: row.get::<i64, _>(6) as u64,
             profile_count: row.get::<i64, _>(7) as u64,
             replay_count: row.get::<i64, _>(8) as u64,
+            label,
         },
         _ => ProjectNavCounts {
             transaction_count,
+            label,
             ..Default::default()
         },
     }
+}
+
+/// Resolve the display label for a project: stored `name` if set,
+/// else `Project {id}`. Never errors -- falls back to the id-based label
+/// on any DB hiccup so the heading still renders.
+pub async fn project_label(pool: &crate::db::DbPool, project_id: u64) -> String {
+    let stored = sqlx::query(sql!("SELECT name FROM projects WHERE project_id = ?1"))
+        .bind(project_id as i64)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|row| row.get::<Option<String>, _>(0))
+        .filter(|n| !n.trim().is_empty());
+    stored.unwrap_or_else(|| format!("Project {}", project_id))
 }
 
 /// Count transaction issues for a project's nav badge.
@@ -320,7 +339,9 @@ pub async fn get_project_status(
 
     Ok(row.map(|row| {
         let s: String = row.get("status");
-        s.parse().unwrap()
+        // Match `list_projects` / `get_project_key`: an unrecognised value
+        // (manual DB edit, mid-rollout migration) defaults rather than panics.
+        s.parse().unwrap_or_default()
     }))
 }
 
@@ -347,11 +368,7 @@ pub async fn create_project(
     let max: Option<i64> = row.get(0);
     let project_id = max.unwrap_or(0) as u64 + 1;
 
-    let public_key = {
-        let mut buf = [0u8; 16];
-        rand::fill(&mut buf);
-        hex::encode(buf)
-    };
+    let public_key = crate::crypto::random_hex::<16>();
     let name_val: Option<&str> = if name.is_empty() { None } else { Some(name) };
     sqlx::query(sql!(
         "INSERT INTO projects (project_id, name, status, source) VALUES (?1, ?2, 'active', 'manual')"
@@ -441,11 +458,7 @@ pub async fn create_project_key(
     project_id: u64,
     label: Option<&str>,
 ) -> Result<String> {
-    let public_key = {
-        let mut buf = [0u8; 16];
-        rand::fill(&mut buf);
-        hex::encode(buf)
-    };
+    let public_key = crate::crypto::random_hex::<16>();
     sqlx::query(sql!(
         "INSERT INTO project_keys (public_key, project_id, status, label) VALUES (?1, ?2, 'active', ?3)"
     ))
@@ -583,11 +596,43 @@ pub async fn upsert_synced_key(
     Ok(())
 }
 
+/// Project-scoped tables deleted by a plain `WHERE project_id = ?1`. Excludes
+/// `projects` itself and the child tables reached via subquery (attachments,
+/// issue_tag_values, alert_state). The guard test below fails if a new
+/// `project_id`-bearing table is added without being listed here.
+const PROJECT_SCOPED_TABLES: &[&str] = &[
+    "events",
+    "logs",
+    "spans",
+    "metrics",
+    "issues",
+    "project_keys",
+    "project_repos",
+    "releases",
+    "discarded_fingerprints",
+    "inbound_filters",
+    "message_filters",
+    "rate_limits",
+    "environment_filters",
+    "release_filters",
+    "user_agent_filters",
+    "filter_rules",
+    "ip_blocklist",
+    "discard_stats",
+    "project_integrations",
+    "alert_rules",
+    "digest_schedules",
+    "api_keys",
+    "sourcemaps",
+    "upload_chunks",
+];
+
 /// Nuke a project and everything it owns -- events, issues, keys, repos, releases.
 pub async fn delete_project(pool: &crate::db::DbPool, project_id: u64) -> Result<()> {
     let mut tx = pool.begin().await?;
     let pid = project_id as i64;
 
+    // Child tables reached via subquery -- must run before their parents.
     sqlx::query(sql!(
         "DELETE FROM attachments WHERE event_id IN (
             SELECT event_id FROM events WHERE project_id = ?1
@@ -606,107 +651,6 @@ pub async fn delete_project(pool: &crate::db::DbPool, project_id: u64) -> Result
     .execute(&mut *tx)
     .await?;
 
-    sqlx::query(sql!("DELETE FROM events WHERE project_id = ?1"))
-        .bind(pid)
-        .execute(&mut *tx)
-        .await?;
-
-    sqlx::query(sql!("DELETE FROM logs WHERE project_id = ?1"))
-        .bind(pid)
-        .execute(&mut *tx)
-        .await?;
-
-    sqlx::query(sql!("DELETE FROM spans WHERE project_id = ?1"))
-        .bind(pid)
-        .execute(&mut *tx)
-        .await?;
-
-    sqlx::query(sql!("DELETE FROM metrics WHERE project_id = ?1"))
-        .bind(pid)
-        .execute(&mut *tx)
-        .await?;
-
-    sqlx::query(sql!("DELETE FROM issues WHERE project_id = ?1"))
-        .bind(pid)
-        .execute(&mut *tx)
-        .await?;
-
-    sqlx::query(sql!("DELETE FROM project_keys WHERE project_id = ?1"))
-        .bind(pid)
-        .execute(&mut *tx)
-        .await?;
-
-    sqlx::query(sql!("DELETE FROM project_repos WHERE project_id = ?1"))
-        .bind(pid)
-        .execute(&mut *tx)
-        .await?;
-
-    sqlx::query(sql!("DELETE FROM releases WHERE project_id = ?1"))
-        .bind(pid)
-        .execute(&mut *tx)
-        .await?;
-
-    sqlx::query(sql!(
-        "DELETE FROM discarded_fingerprints WHERE project_id = ?1"
-    ))
-    .bind(pid)
-    .execute(&mut *tx)
-    .await?;
-
-    sqlx::query(sql!("DELETE FROM inbound_filters WHERE project_id = ?1"))
-        .bind(pid)
-        .execute(&mut *tx)
-        .await?;
-
-    sqlx::query(sql!("DELETE FROM message_filters WHERE project_id = ?1"))
-        .bind(pid)
-        .execute(&mut *tx)
-        .await?;
-
-    sqlx::query(sql!("DELETE FROM rate_limits WHERE project_id = ?1"))
-        .bind(pid)
-        .execute(&mut *tx)
-        .await?;
-
-    sqlx::query(sql!(
-        "DELETE FROM environment_filters WHERE project_id = ?1"
-    ))
-    .bind(pid)
-    .execute(&mut *tx)
-    .await?;
-
-    sqlx::query(sql!("DELETE FROM release_filters WHERE project_id = ?1"))
-        .bind(pid)
-        .execute(&mut *tx)
-        .await?;
-
-    sqlx::query(sql!("DELETE FROM user_agent_filters WHERE project_id = ?1"))
-        .bind(pid)
-        .execute(&mut *tx)
-        .await?;
-
-    sqlx::query(sql!("DELETE FROM filter_rules WHERE project_id = ?1"))
-        .bind(pid)
-        .execute(&mut *tx)
-        .await?;
-
-    sqlx::query(sql!("DELETE FROM ip_blocklist WHERE project_id = ?1"))
-        .bind(pid)
-        .execute(&mut *tx)
-        .await?;
-
-    sqlx::query(sql!("DELETE FROM discard_stats WHERE project_id = ?1"))
-        .bind(pid)
-        .execute(&mut *tx)
-        .await?;
-
-    sqlx::query(sql!(
-        "DELETE FROM project_integrations WHERE project_id = ?1"
-    ))
-    .bind(pid)
-    .execute(&mut *tx)
-    .await?;
-
     sqlx::query(sql!(
         "DELETE FROM alert_state WHERE alert_rule_id IN (
             SELECT id FROM alert_rules WHERE project_id = ?1
@@ -716,20 +660,11 @@ pub async fn delete_project(pool: &crate::db::DbPool, project_id: u64) -> Result
     .execute(&mut *tx)
     .await?;
 
-    sqlx::query(sql!("DELETE FROM alert_rules WHERE project_id = ?1"))
-        .bind(pid)
-        .execute(&mut *tx)
-        .await?;
-
-    sqlx::query(sql!("DELETE FROM digest_schedules WHERE project_id = ?1"))
-        .bind(pid)
-        .execute(&mut *tx)
-        .await?;
-
-    sqlx::query(sql!("DELETE FROM api_keys WHERE project_id = ?1"))
-        .bind(pid)
-        .execute(&mut *tx)
-        .await?;
+    for table in PROJECT_SCOPED_TABLES {
+        let raw = format!("DELETE FROM {table} WHERE project_id = ?1");
+        let stmt = crate::db::translate_sql(&raw);
+        sqlx::query(&stmt).bind(pid).execute(&mut *tx).await?;
+    }
 
     sqlx::query(sql!("DELETE FROM projects WHERE project_id = ?1"))
         .bind(pid)
@@ -835,5 +770,31 @@ mod tests {
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].issue_count, 0);
         assert_eq!(projects[0].event_count, 1);
+    }
+
+    /// Fails if a new `project_id`-bearing table is added without being wired
+    /// into `delete_project` (via `PROJECT_SCOPED_TABLES`), which would orphan
+    /// its rows on project deletion.
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn delete_project_covers_all_project_scoped_tables() {
+        use sqlx::Row;
+        let pool = open_test_db().await;
+        let rows = sqlx::query(
+            "SELECT DISTINCT m.name FROM sqlite_master m, pragma_table_info(m.name) p \
+             WHERE m.type='table' AND p.name='project_id'",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+
+        for row in &rows {
+            let table: String = row.get(0);
+            assert!(
+                table == "projects" || PROJECT_SCOPED_TABLES.contains(&table.as_str()),
+                "table `{table}` has a project_id column but is not in PROJECT_SCOPED_TABLES; \
+                 add it (and a delete_project case) or it will orphan rows"
+            );
+        }
     }
 }

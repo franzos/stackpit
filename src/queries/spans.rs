@@ -14,7 +14,7 @@ pub async fn list_spans(
         .bind(project_id as i64)
         .fetch_one(pool)
         .await?;
-    let total = count_row.get::<i64, _>(0) as u64;
+    let total = count_row.get::<i64, _>(0);
 
     let rows = sqlx::query(sql!(
         "SELECT span_id, trace_id, parent_span_id, timestamp, op, description, status, duration_ms
@@ -42,12 +42,7 @@ pub async fn list_spans(
         })
         .collect();
 
-    Ok(PagedResult {
-        items,
-        total,
-        offset: page.offset,
-        limit: page.limit,
-    })
+    Ok(PagedResult::from_page(items, total, page))
 }
 
 pub async fn get_trace_spans(pool: &crate::db::DbPool, trace_id: &str) -> Result<Vec<TraceSpan>> {
@@ -87,7 +82,7 @@ pub async fn list_traces(
     .bind(project_id as i64)
     .fetch_one(pool)
     .await?;
-    let total = count_row.get::<i64, _>(0) as u64;
+    let total = count_row.get::<i64, _>(0);
 
     let rows = sqlx::query(sql!(
         "SELECT trace_id,
@@ -149,10 +144,5 @@ pub async fn list_traces(
         }
     }
 
-    Ok(PagedResult {
-        items,
-        total,
-        offset: page.offset,
-        limit: page.limit,
-    })
+    Ok(PagedResult::from_page(items, total, page))
 }

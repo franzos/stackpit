@@ -1,16 +1,17 @@
 use askama::Template;
 use axum::extract::{Path, Query};
-use axum::http::StatusCode;
 use serde::Deserialize;
 
 use crate::extractors::ReadPool;
 use crate::html::render_template;
+use crate::html::utils::{build_filter_qs, Csrf};
 use crate::queries;
 use crate::queries::types::{LogEntry, LogFilter, Page, PagedResult};
 use crate::queries::ProjectNavCounts;
 
-use super::html_error;
+use super::HtmlError;
 
+#[allow(unused_imports)]
 use crate::html::filters;
 
 #[derive(Deserialize)]
@@ -30,13 +31,15 @@ struct LogListTemplate {
     level: String,
     filter_qs: String,
     nav: ProjectNavCounts,
+    csrf_token: String,
 }
 
 pub async fn list_handler(
     ReadPool(pool): ReadPool,
+    Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
     Query(params): Query<LogListParams>,
-) -> axum::response::Response {
+) -> Result<axum::response::Response, HtmlError> {
     let query_str = params.query.clone().unwrap_or_default();
     let level_str = params.level.clone().unwrap_or_default();
 
@@ -47,34 +50,19 @@ pub async fn list_handler(
     };
     let page = Page::new(params.offset, params.limit);
 
-    let result = match queries::logs::list_logs(&pool, project_id, &filter, &page).await {
-        Ok(r) => r,
-        Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
+    let result = queries::logs::list_logs(&pool, project_id, &filter, &page).await?;
 
     let nav = queries::projects::get_nav_counts(&pool, project_id).await;
 
-    let mut filter_parts = Vec::new();
-    if !query_str.is_empty() {
-        filter_parts.push(format!(
-            "&query={}",
-            crate::html::utils::urlencoded(&query_str)
-        ));
-    }
-    if !level_str.is_empty() {
-        filter_parts.push(format!(
-            "&level={}",
-            crate::html::utils::urlencoded(&level_str)
-        ));
-    }
-    let filter_qs = filter_parts.join("");
+    let (filter_qs, _) = build_filter_qs(&[("query", &query_str), ("level", &level_str)], "");
 
-    render_template(&LogListTemplate {
+    Ok(render_template(&LogListTemplate {
         project_id,
         result,
         query: query_str,
         level: level_str,
         filter_qs,
         nav,
-    })
+        csrf_token: csrf,
+    }))
 }

@@ -1,8 +1,4 @@
-//! Post-parse enrichment — fingerprinting and title extraction.
-//!
-//! It turns out there's a decent amount of business logic that doesn't
-//! belong in the parser: computing the issue fingerprint and picking a
-//! human-readable title. That's what this module handles.
+//! Post-parse enrichment: fingerprinting and title extraction (business logic separate from parser).
 
 use crate::fingerprint;
 use crate::models::{ItemType, StorableEvent};

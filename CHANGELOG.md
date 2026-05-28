@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.1] - 2026-05-28
+
+### Added
+- Email alerts via Lettermint and SendGrid in addition to Postmark
+- Global `[email]` config with optional `lock` to fix provider and sender across integrations
+
 ## [0.2.0] - 2026-05-27
 
 ### Added

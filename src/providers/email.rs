@@ -1,21 +1,82 @@
 use crate::encoding::escape_html;
 use crate::notify::NotificationEvent;
 use anyhow::Result;
+use polymail::{Address, Body, Email, Mailer};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EmailProvider {
+    #[default]
+    Lettermint,
+    Postmark,
+    Sendgrid,
+}
+
+impl EmailProvider {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "lettermint" => Some(Self::Lettermint),
+            "postmark" => Some(Self::Postmark),
+            "sendgrid" => Some(Self::Sendgrid),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Lettermint => "lettermint",
+            Self::Postmark => "postmark",
+            Self::Sendgrid => "sendgrid",
+        }
+    }
+
+    fn mailer(self, token: &str) -> Box<dyn Mailer> {
+        match self {
+            Self::Lettermint => {
+                Box::new(polymail::provider::lettermint::LettermintMailer::new(token))
+            }
+            Self::Postmark => Box::new(polymail::provider::postmark::PostmarkMailer::new(token)),
+            Self::Sendgrid => Box::new(polymail::provider::sendgrid::SendgridMailer::new(token)),
+        }
+    }
+}
 
 pub async fn send(
-    client: &reqwest::Client,
-    url: &str,
+    email_cfg: &crate::config::EmailConfig,
     secret: Option<&str>,
     integration_config: Option<&str>,
     project_config: Option<&str>,
     event: &NotificationEvent,
 ) -> Result<()> {
-    let token = secret.ok_or_else(|| anyhow::anyhow!("Postmark server token not configured"))?;
+    let int_cfg =
+        integration_config.and_then(|c| serde_json::from_str::<serde_json::Value>(c).ok());
+    let int_str = |key: &str| {
+        int_cfg
+            .as_ref()
+            .and_then(|v| v.get(key).and_then(|f| f.as_str()).map(String::from))
+    };
 
-    let from = integration_config
-        .and_then(|c| serde_json::from_str::<serde_json::Value>(c).ok())
-        .and_then(|v| v.get("from").and_then(|f| f.as_str()).map(String::from))
-        .ok_or_else(|| anyhow::anyhow!("from address not configured in integration config"))?;
+    let (provider, token, from, name) = if email_cfg.lock {
+        (
+            email_cfg.provider,
+            email_cfg.token.clone(),
+            email_cfg.from_address.clone(),
+            email_cfg.from_name.clone(),
+        )
+    } else {
+        // Absent `provider` means a row predating provider selection -- those are Postmark.
+        let provider = int_str("provider")
+            .and_then(|p| EmailProvider::parse(&p))
+            .unwrap_or(EmailProvider::Postmark);
+        let token = secret.map(String::from).or_else(|| email_cfg.token.clone());
+        let from = int_str("from").or_else(|| email_cfg.from_address.clone());
+        let name = int_str("from_name").or_else(|| email_cfg.from_name.clone());
+        (provider, token, from, name)
+    };
+
+    let token = token.ok_or_else(|| anyhow::anyhow!("email provider token not configured"))?;
+    let from = from.ok_or_else(|| anyhow::anyhow!("from address not configured"))?;
 
     let to = project_config
         .and_then(|c| serde_json::from_str::<serde_json::Value>(c).ok())
@@ -103,26 +164,27 @@ pub async fn send(
         (text, html)
     };
 
-    let payload = serde_json::json!({
-        "From": from,
-        "To": to,
-        "Subject": subject,
-        "TextBody": text_body,
-        "HtmlBody": html_body,
-    });
+    let from_addr = match name {
+        Some(n) if !n.trim().is_empty() => Address::with_name(from, n),
+        _ => Address::new(from),
+    };
 
-    let resp = client
-        .post(url)
-        .header("X-Postmark-Server-Token", token)
-        .header("Content-Type", "application/json")
-        .json(&payload)
-        .send()
-        .await?;
+    let email = Email::builder(
+        from_addr,
+        subject,
+        Body::Both {
+            html: html_body,
+            text: text_body,
+        },
+    )
+    .to(to)
+    .build()
+    .map_err(|e| anyhow::anyhow!("failed to build email: {e}"))?;
 
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Postmark returned {status}: {body}");
-    }
+    provider
+        .mailer(&token)
+        .send(&email)
+        .await
+        .map_err(|e| anyhow::anyhow!("{} send failed: {e}", provider.as_str()))?;
     Ok(())
 }

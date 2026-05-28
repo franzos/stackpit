@@ -14,7 +14,7 @@ I got tired of paying for Sentry on smaller projects and self-hosting the offici
 - **Issue grouping** — fingerprint-based grouping with regressions and resolution tracking.
 - **Server-rendered web UI** — browse issues, events, transactions, logs, traces, replays, monitors, and more.
 - **JSON API** — query everything the UI shows.
-- **Notifications & alerts** — email, Slack, and webhooks, with digests and threshold rules.
+- **Notifications & alerts** — email (Lettermint, Postmark, or SendGrid), Slack, and webhooks, with digests and threshold rules.
 - **Source maps** — upload via `sentry-cli` so minified traces resolve to original source.
 - **Monitors** — cron check-in tracking via Sentry's protocol.
 - **Auth your way** — a shared admin token for solo use, or OAuth/OIDC SSO for teams.

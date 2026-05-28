@@ -17,7 +17,7 @@
 {% when None %}{% endmatch %}
 
 {% if integrations.is_empty() %}
-<p class="empty">No integrations yet. Add a Webhook, Slack incoming-webhook, or Postmark email integration below to receive notifications when issues fire. After adding one here, enable it per-project under <strong>Project Settings → Integrations</strong>.</p>
+<p class="empty">No integrations yet. Add a Webhook, Slack incoming-webhook, or email integration below to receive notifications when issues fire. After adding one here, enable it per-project under <strong>Project Settings → Integrations</strong>.</p>
 {% else %}
 <div class="table-wrap">
 <table>
@@ -25,7 +25,7 @@
         <tr>
             <th scope="col">Name</th>
             <th scope="col">Type</th>
-            <th scope="col">URL</th>
+            <th scope="col">Endpoint</th>
             <th scope="col">Created</th>
             <th scope="col"></th>
         </tr>
@@ -35,7 +35,13 @@
         <tr>
             <td>{{ i.name }}</td>
             <td>{{ i.kind }}</td>
-            <td><code title="{{ i.url }}">{{ i.url|truncate_url }}</code></td>
+            <td>
+                {% if i.kind == "email" %}
+                    {% match i.provider_label() %}{% when Some with (label) %}{{ label }}{% when None %}-{% endmatch %}
+                {% else %}
+                    {% match i.url.as_deref() %}{% when Some with (u) %}<code title="{{ u }}">{{ u|truncate_url }}</code>{% when None %}-{% endmatch %}
+                {% endif %}
+            </td>
             <td><time datetime="{{ i.created_at|format_ts }}" title="{{ i.created_at|format_ts }}">{{ i.created_at|format_relative }}</time></td>
             <td style="white-space: nowrap;">
                 <form method="post" action="/web/settings/integrations/{{ i.id }}/test" style="display: inline; margin: 0;">
@@ -58,6 +64,6 @@
 <p>
     <a href="/web/settings/integrations/new/webhook" class="btn">Add Webhook</a>
     <a href="/web/settings/integrations/new/slack" class="btn" style="margin-left: 0.5rem;">Add Slack</a>
-    <a href="/web/settings/integrations/new/email" class="btn" style="margin-left: 0.5rem;">Add Postmark Email</a>
+    <a href="/web/settings/integrations/new/email" class="btn" style="margin-left: 0.5rem;">Add Email</a>
 </p>
 {% endblock %}

@@ -190,6 +190,7 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
     let encryptor = SecretEncryptor::from_env()
         .map_err(anyhow::Error::msg)?
         .map(Arc::new);
+
     if encryptor.is_none() {
         let (count,): (i64,) = sqlx::query_as(db::sql!(
             "SELECT COUNT(*) FROM integrations WHERE encrypted = TRUE"
@@ -262,6 +263,7 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
     {
         let notify_pool = pool.clone();
         let notify_encryptor = encryptor.clone();
+        let notify_config = config.clone();
         let notify_rate_limiter = Arc::new(crate::notify::rate_limit::NotifyRateLimiter::new(
             config.notifications.rate_limit_per_project,
             config.notifications.rate_limit_global,
@@ -270,6 +272,7 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
             notify_rx,
             notify_pool,
             notify_encryptor,
+            notify_config,
             notify_rate_limiter,
         );
     }

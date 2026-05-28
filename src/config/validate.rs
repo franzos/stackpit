@@ -170,6 +170,22 @@ impl Config {
             );
         }
 
+        // A locked mailer with no sender or no token can never send.
+        if self.email.lock {
+            if self.email.from_address.is_none() {
+                anyhow::bail!(
+                    "email.lock = true but email.from_address is unset. A locked mailer needs \
+                     a sender; set email.from_address or unset email.lock."
+                );
+            }
+            if self.email.token.is_none() {
+                anyhow::bail!(
+                    "email.lock = true but email.token is unset. A locked mailer needs \
+                     a provider token; set email.token or unset email.lock."
+                );
+            }
+        }
+
         // Zero retention means data piles up forever -- probably not intended
         if self.storage.retention_days == 0 {
             tracing::warn!("storage.retention_days is 0 -- data will never be cleaned up");

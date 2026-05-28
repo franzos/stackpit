@@ -131,7 +131,7 @@ pub async fn create_integration(
     pool: &DbPool,
     name: &str,
     kind: &str,
-    url: &str,
+    url: Option<&str>,
     secret: Option<&str>,
     config: Option<&str>,
     encrypted: bool,

@@ -8,6 +8,15 @@ mod validate;
 
 pub const DEFAULT_CONFIG_PATH: &str = "stackpit.toml";
 
+/// Treat a blank/whitespace TOML string as absent so `from_address = ""` reads
+/// the same as omitting it (otherwise `lock` validation would accept an empty sender).
+fn empty_string_as_none<'de, D>(de: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(de)?.filter(|s| !s.trim().is_empty()))
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -18,6 +27,8 @@ pub struct Config {
     pub filter: FilterConfig,
     #[serde(default)]
     pub notifications: NotificationsConfig,
+    #[serde(default)]
+    pub email: EmailConfig,
     #[serde(default)]
     pub auth: AuthConfig,
 }
@@ -100,6 +111,26 @@ pub struct NotificationsConfig {
     /// Max total notifications per 60-second window. 0 = unlimited.
     #[serde(default)]
     pub rate_limit_global: u32,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct EmailConfig {
+    /// Pre-selects the provider for new integrations; when `lock` is set this
+    /// is the only provider used (the token comes from `STACKPIT_EMAIL_TOKEN`).
+    #[serde(default)]
+    pub provider: crate::providers::email::EmailProvider,
+    #[serde(default, deserialize_with = "empty_string_as_none")]
+    pub from_address: Option<String>,
+    #[serde(default, deserialize_with = "empty_string_as_none")]
+    pub from_name: Option<String>,
+    /// Global provider API token. Same posture as `[server] admin_token` and
+    /// `[auth.oauth] client_secret` — kept in config rather than DB-encrypted
+    /// because it's a single instance-wide secret.
+    #[serde(default, deserialize_with = "empty_string_as_none")]
+    pub token: Option<String>,
+    /// Lock sender + provider to this config: integrations only pick recipients.
+    #[serde(default)]
+    pub lock: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -370,6 +401,7 @@ impl Config {
                 storage: StorageConfig::default(),
                 filter: FilterConfig::default(),
                 notifications: NotificationsConfig::default(),
+                email: EmailConfig::default(),
                 auth: AuthConfig::default(),
             })
         }
@@ -390,6 +422,7 @@ mod tests {
             storage: StorageConfig::default(),
             filter: FilterConfig::default(),
             notifications: NotificationsConfig::default(),
+            email: EmailConfig::default(),
             auth: AuthConfig {
                 oauth: OAuthConfig {
                     issuer_url: Some("https://idp.example.com".to_string()),
@@ -446,6 +479,7 @@ mod tests {
             storage: StorageConfig::default(),
             filter: FilterConfig::default(),
             notifications: NotificationsConfig::default(),
+            email: EmailConfig::default(),
             auth: AuthConfig::default(),
         }
     }

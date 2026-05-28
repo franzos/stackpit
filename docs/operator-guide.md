@@ -49,6 +49,13 @@ blocked_user_agents = []          # user-agent glob patterns to block globally
 [notifications]
 rate_limit_per_project = 0        # max notifications per project per 60s (0 = unlimited)
 rate_limit_global = 0             # max total notifications per 60s (0 = unlimited)
+
+[email]
+provider = "lettermint"           # "lettermint", "postmark", or "sendgrid" — default for new integrations, and the only provider used when lock = true
+token = ""                        # global provider API token; integrations inherit it when they leave Token blank (required when lock = true)
+from_address = ""                 # default sender; integrations inherit it when they leave From blank (required when lock = true)
+from_name = ""                    # optional default display name
+lock = false                      # true = sender + provider come from this config; integrations only pick the recipient
 ```
 
 All fields have sane defaults. An empty config file works fine — though for any non-loopback deployment you'll want `external_url` set and `force_secure_cookies = true` so session cookies get the `Secure` flag.
@@ -160,7 +167,11 @@ The host:port in the DSN comes from `external_ingest_url`, falling back to `exte
 
 ## Notifications & Alerts
 
-stackpit can notify you when things go wrong. Integrations (email via Postmark, Slack, webhooks) are configured in the web UI under **Settings → Integrations**, and each project can enable or disable specific triggers.
+stackpit can notify you when things go wrong. Integrations (email, Slack, webhooks) are configured in the web UI under **Settings → Integrations**, and each project can enable or disable specific triggers.
+
+Email goes through [polymail](https://github.com/franzos/polymail-rs) and supports **Lettermint**, **Postmark**, and **SendGrid**. By default you pick the provider per integration when you add it, then drop in that provider's API token and a from address; `[email] provider`/`from_address`/`from_name` set the defaults, and an integration that leaves a field blank inherits them. Per-integration tokens are stored encrypted (see [Secret encryption](#secret-encryption)).
+
+For a single shared mailer, set `[email] lock = true`: the provider, token, and sender all come from `[email]`, and integrations then only choose the recipient — no per-integration token or sender. A locked mailer with no `token` or `from_address` refuses to start.
 
 **Immediate notifications** fire during event ingestion:
 

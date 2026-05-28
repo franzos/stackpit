@@ -1,16 +1,16 @@
 {% extends "base.html" %}
 
-{% block title %}Add Postmark Email - Stackpit{% endblock %}
+{% block title %}Add Email - Stackpit{% endblock %}
 
 {% block breadcrumbs %}
 <span class="sep" aria-hidden="true">/</span>
 <a href="/web/settings/integrations/">Settings</a>
 <span class="sep" aria-hidden="true">/</span>
-<span>Add Postmark Email</span>
+<span>Add Email</span>
 {% endblock %}
 
 {% block content %}
-<h1>Add Postmark Email Integration</h1>
+<h1>Add Email Integration</h1>
 
 <p><a href="/web/settings/integrations/">&larr; Back to Integrations</a></p>
 
@@ -21,14 +21,25 @@
     <label for="int_name">Name</label>
     <input type="text" id="int_name" name="name" placeholder="e.g. Team Email Alerts" required>
 
-    <label for="int_url">Postmark API URL</label>
-    <input type="url" id="int_url" name="url" value="https://api.postmarkapp.com/email" required>
+    {% if lock %}
+    <p class="hint">Provider and sender come from the server's <code>[email]</code> config; this integration only picks the recipient.</p>
+    {% else %}
+    <label for="int_provider">Provider</label>
+    <select id="int_provider" name="provider" required>
+        <option value="lettermint"{% if default_provider == "lettermint" %} selected{% endif %}>Lettermint</option>
+        <option value="postmark"{% if default_provider == "postmark" %} selected{% endif %}>Postmark</option>
+        <option value="sendgrid"{% if default_provider == "sendgrid" %} selected{% endif %}>SendGrid</option>
+    </select>
 
-    <label for="int_secret">Postmark Server Token</label>
-    <input type="password" id="int_secret" name="secret" placeholder="Server token" required>
+    <label for="int_secret">API Token</label>
+    <input type="password" id="int_secret" name="secret" placeholder="Leave blank to use the server default">
 
     <label for="int_from">From Address</label>
-    <input type="email" id="int_from" name="from_address" placeholder="alerts@example.com" required>
+    <input type="email" id="int_from" name="from_address" placeholder="{{ from_placeholder }}">
+
+    <label for="int_from_name">From Name</label>
+    <input type="text" id="int_from_name" name="from_name" placeholder="{{ from_name_placeholder }}">
+    {% endif %}
 
     <button type="submit" class="btn">Create Integration</button>
 </form>

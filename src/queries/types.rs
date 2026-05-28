@@ -325,11 +325,31 @@ pub struct Integration {
     pub id: i64,
     pub name: String,
     pub kind: String,
-    pub url: String,
+    pub url: Option<String>,
     pub secret: Option<String>,
     pub encrypted: bool,
     pub config: Option<String>,
     pub created_at: i64,
+}
+
+impl Integration {
+    /// Pretty provider label for email rows; `None` for non-email kinds.
+    pub fn provider_label(&self) -> Option<&'static str> {
+        if self.kind != "email" {
+            return None;
+        }
+        let provider = self
+            .config
+            .as_deref()
+            .and_then(|c| serde_json::from_str::<serde_json::Value>(c).ok())
+            .and_then(|v| v.get("provider").and_then(|p| p.as_str()).map(String::from));
+        Some(match provider.as_deref() {
+            Some("lettermint") => "Lettermint",
+            Some("sendgrid") => "SendGrid",
+            // Legacy rows predate provider selection -- those are Postmark.
+            _ => "Postmark",
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -340,7 +360,7 @@ pub struct ProjectIntegration {
     pub integration_id: i64,
     pub integration_name: String,
     pub integration_kind: String,
-    pub integration_url: String,
+    pub integration_url: Option<String>,
     pub integration_secret: Option<String>,
     pub integration_encrypted: bool,
     pub integration_config: Option<String>,

@@ -1,6 +1,6 @@
 [package]
 name = "stackpit"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "Lightweight, self-hosted error tracking and event monitoring"
 authors = ["Franz Geffke <mail@gofranz.com>"]
@@ -48,6 +48,7 @@ arc-swap = "1"
 simple_hll = "0.0.4"
 charts-rs = "0.3"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+polymail = { version = "0.1", features = ["lettermint", "postmark", "sendgrid"] }
 aes-gcm = "0.10"
 base64 = "0.22"
 rand = "0.10"

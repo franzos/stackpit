@@ -1,5 +1,6 @@
 pub mod rate_limit;
 
+use crate::config::Config;
 use crate::crypto::SecretEncryptor;
 use crate::db::DbPool;
 use crate::providers;
@@ -106,11 +107,12 @@ pub fn spawn_dispatcher(
     rx: tokio::sync::mpsc::Receiver<NotificationEvent>,
     pool: DbPool,
     encryptor: Option<Arc<SecretEncryptor>>,
+    config: Arc<Config>,
     rate_limiter: Arc<NotifyRateLimiter>,
 ) {
     crate::background::supervise(
         "notify_dispatcher",
-        run_dispatcher(rx, pool, encryptor, rate_limiter),
+        run_dispatcher(rx, pool, encryptor, config, rate_limiter),
     );
 }
 
@@ -118,6 +120,7 @@ pub async fn run_dispatcher(
     mut rx: tokio::sync::mpsc::Receiver<NotificationEvent>,
     pool: DbPool,
     encryptor: Option<Arc<SecretEncryptor>>,
+    config: Arc<Config>,
     rate_limiter: Arc<NotifyRateLimiter>,
 ) {
     tracing::info!("notification dispatcher started");
@@ -188,8 +191,45 @@ pub async fn run_dispatcher(
             let pi_config = pi.config.clone();
             let name = pi.integration_name.clone();
             let event = event.clone();
+            let config = config.clone();
 
             tokio::spawn(async move {
+                // Email has no client/url/SSRF surface -- polymail owns the endpoint.
+                if kind == "email" {
+                    let result = providers::email::send(
+                        &config.email,
+                        secret.as_deref(),
+                        int_config.as_deref(),
+                        pi_config.as_deref(),
+                        &event,
+                    )
+                    .await;
+                    if let Err(e) = result {
+                        tracing::warn!("notify: {name} (email) failed, retrying: {e}");
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                        if let Err(e2) = providers::email::send(
+                            &config.email,
+                            secret.as_deref(),
+                            int_config.as_deref(),
+                            pi_config.as_deref(),
+                            &event,
+                        )
+                        .await
+                        {
+                            tracing::error!("notify: {name} (email) retry failed, dropping: {e2}");
+                        }
+                    }
+                    return;
+                }
+
+                let url = match url {
+                    Some(u) => u,
+                    None => {
+                        tracing::warn!("notify: {name} ({kind}) has no url; skipping");
+                        return;
+                    }
+                };
+
                 // Resolve DNS and block webhooks pointing at private/internal addresses.
                 let resolved = match crate::ssrf::check_ssrf(&url).await {
                     Ok(r) => r,
@@ -212,30 +252,16 @@ pub async fn run_dispatcher(
                     }
                 };
 
-                let result = providers::dispatch(
-                    &pinned_client,
-                    &kind,
-                    &url,
-                    secret.as_deref(),
-                    int_config.as_deref(),
-                    pi_config.as_deref(),
-                    &event,
-                )
-                .await;
+                let result =
+                    providers::dispatch(&pinned_client, &kind, &url, secret.as_deref(), &event)
+                        .await;
 
                 if let Err(e) = result {
                     tracing::warn!("notify: {name} ({kind}) failed, retrying: {e}");
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                    if let Err(e2) = providers::dispatch(
-                        &pinned_client,
-                        &kind,
-                        &url,
-                        secret.as_deref(),
-                        int_config.as_deref(),
-                        pi_config.as_deref(),
-                        &event,
-                    )
-                    .await
+                    if let Err(e2) =
+                        providers::dispatch(&pinned_client, &kind, &url, secret.as_deref(), &event)
+                            .await
                     {
                         tracing::error!("notify: {name} ({kind}) retry failed, dropping: {e2}");
                     }

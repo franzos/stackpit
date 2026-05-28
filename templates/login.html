@@ -1,24 +1,73 @@
 <!DOCTYPE html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><title>Login - Stackpit</title>
-<link rel="stylesheet" href="/web/_assets/style.css"></head>
-<body>
-<header><nav><a href="/web/projects/" class="nav-logo"><img src="/web/_assets/icon.svg" alt="Stackpit" width="24" height="24"> Stackpit</a></nav></header>
-<main>
-<h1>Login</h1>
-{% if let Some(error) = error %}<p style="color: var(--red, #c00);">{{ error }}</p>
-<p style="font-size:0.85rem;opacity:0.7;margin-top:-0.5rem;">The admin token comes from <code>admin_token</code> in <code>stackpit.toml</code>. Edit the file and restart <code>stackpit serve</code> to pick up changes.</p>{% endif %}
-{% if let Some(info) = info %}<p style="color: var(--accent, #06c);">{{ info }}</p>{% endif %}
-{% if oauth_enabled %}
-<p><a href="/web/auth/login" style="display:inline-block;padding:0.5rem 1rem;border:1px solid #888;border-radius:4px;text-decoration:none;">Sign in with SSO</a></p>
-<hr style="margin:1.5rem 0;opacity:0.4;">
-<p style="font-size:0.85rem;opacity:0.7;">Or, sign in with the admin token (break-glass):</p>
-{% endif %}
-<form method="POST" action="/web/login">
-<label for="token">Admin Token</label>
-<input type="password" id="token" name="token" required{% if !oauth_enabled %} autofocus{% endif %}>
-<button type="submit">Login</button>
-</form>
-</main>
-<footer><small>Stackpit</small></footer>
-</body></html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Sign in — Stackpit</title>
+  <link rel="stylesheet" href="/web/_assets/style.css">
+  <link rel="icon" type="image/svg+xml" href="/web/_assets/icon.svg">
+</head>
+<body class="min-h-screen flex items-center justify-center px-4">
+  <div class="w-full max-w-md">
+    <div class="flex flex-col items-center mb-6">
+      <div class="flex items-center gap-2 mb-4">
+        <img src="/web/_assets/icon.svg" alt="" width="28" height="28">
+        <span class="text-xl font-semibold tracking-tight">Stackpit</span>
+      </div>
+      <h1 class="page-h1">Welcome back</h1>
+      <p class="text-muted mt-1 text-[13px]">Sign in to manage your error tracking</p>
+    </div>
+
+    <div class="card card-pad space-y-4">
+      {% if let Some(error) = error %}
+      <div class="badge badge-error w-full justify-start h-auto py-1.5 normal-case tracking-normal text-[12px]">
+        {{ error }}
+      </div>
+      {% endif %}
+      {% if let Some(info) = info %}
+      <div class="badge badge-info w-full justify-start h-auto py-1.5 normal-case tracking-normal text-[12px]">
+        {{ info }}
+      </div>
+      {% endif %}
+
+      {% if oauth_enabled %}
+      <a href="/web/auth/login" class="btn btn-primary w-full justify-center uppercase tracking-wider text-[11px] h-10">
+        Sign in with SSO
+      </a>
+      <div class="flex items-center gap-3 text-[10px] text-muted uppercase tracking-widest">
+        <div class="flex-1 h-px bg-outline-variant"></div>
+        <span>or</span>
+        <div class="flex-1 h-px bg-outline-variant"></div>
+      </div>
+      {% endif %}
+
+      <form method="POST" action="/web/login" class="space-y-3">
+        <div>
+          <label for="token" class="field-label">Admin Token</label>
+          <input class="input text-mono" type="password" id="token" name="token"
+                 placeholder="Enter your master token…" required
+                 {% if !oauth_enabled %}autofocus{% endif %}>
+        </div>
+        <button type="submit" class="btn btn-secondary w-full justify-center h-10">
+          Sign in
+        </button>
+      </form>
+
+      {% if let Some(_) = error %}
+      <p class="text-muted text-[12px]">
+        The admin token comes from <code class="text-mono">admin_token</code> in
+        <code class="text-mono">stackpit.toml</code>. Edit the file and restart
+        <code class="text-mono">stackpit serve</code> to pick up changes.
+      </p>
+      {% endif %}
+    </div>
+
+    <div class="mt-6 flex items-center justify-center gap-4 text-[12px] text-muted">
+      <a class="hover:text-on-surface" href="https://github.com/iotaledger/stackpit">Documentation</a>
+      <span>·</span>
+      <a class="hover:text-on-surface" href="https://github.com/iotaledger/stackpit#self-hosting">Self-hosting guide</a>
+    </div>
+  </div>
+</body>
+</html>

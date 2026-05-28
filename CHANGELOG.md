@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.0] - 2026-05-28
+
+### Changed
+- Web UI redesigned around the "Stackpit Precision Tooling" design system:
+  240px fixed sidebar, dark cockpit canvas with a matching light variant,
+  Inter + JetBrains Mono, dense tables, semantic status pills, tonal layers
+  without shadows
+- Per-project navigation moved from a horizontal tab strip into the sidebar
+- CSS is now pre-built from Tailwind v4 via the standalone CLI (`make css`);
+  runtime stays single-binary — no Node or `node_modules` at runtime
+- Fonts are vendored as woff2 under `assets/fonts/` and served from `_assets/`
+  (no external CDN)
+
 ## [0.2.1] - 2026-05-28
 
 ### Added

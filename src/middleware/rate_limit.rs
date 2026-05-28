@@ -5,7 +5,9 @@ use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-const ADMIN_RATE_LIMIT: u32 = 120;
+// 600 req/min comfortably covers a human browsing the UI (a single page load
+// fans out into several asset requests) while still catching scripted abuse.
+const ADMIN_RATE_LIMIT: u32 = 600;
 const LOGIN_RATE_LIMIT: u32 = 10;
 const ADMIN_RATE_WINDOW_SECS: u64 = 60;
 
@@ -34,6 +36,13 @@ fn check_rate_limit(
     limiter: &SharedRateLimiter,
     req: &axum::http::Request<axum::body::Body>,
 ) -> bool {
+    // Static assets (CSS, JS, fonts, icon) are embedded in the binary and
+    // cheap; a normal page load fans out into 5–6 of them. Counting each one
+    // against the human-facing bucket exhausts it after a handful of clicks.
+    if req.uri().path().starts_with("/web/_assets/") {
+        return true;
+    }
+
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()

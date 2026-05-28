@@ -21,6 +21,7 @@ use crate::html::filters;
 #[template(path = "event_detail.html")]
 struct EventDetailTemplate {
     event: queries::EventDetail,
+    nav: queries::ProjectNavCounts,
     summary_tags: Vec<SummaryTag>,
     exceptions: Vec<ExceptionData>,
     breadcrumbs: Vec<Breadcrumb>,
@@ -53,6 +54,8 @@ pub async fn handler(
         ));
     }
 
+    let nav = queries::projects::get_nav_counts(&pool, project_id).await;
+
     let supplements = event_supplements::get_event_supplements(&pool, &event)
         .await
         .unwrap_or_default();
@@ -81,6 +84,7 @@ pub async fn handler(
 
     let tmpl = EventDetailTemplate {
         event,
+        nav,
         summary_tags,
         exceptions,
         breadcrumbs,

@@ -1,108 +1,95 @@
 {% extends "base.html" %}
+{% import "_macros.html" as m %}
 
-{% block title %}Spans - {{ nav.label }} - Stackpit{% endblock %}
+{% block title %}Spans — {{ nav.label }} — Stackpit{% endblock %}
+
+{% block sidebar_nav %}{% call m::project_sidebar(project_id, nav, "spans") %}{% endcall %}{% endblock %}
 
 {% block breadcrumbs %}
-<span class="sep" aria-hidden="true">/</span>
-<a href="/web/projects/">Projects</a>
-<span class="sep" aria-hidden="true">/</span>
-<a href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
-<span class="sep" aria-hidden="true">/</span>
-<span>Spans</span>
+<span class="breadcrumb-sep">/</span>
+<a class="breadcrumb-link" href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
+<span class="breadcrumb-sep">/</span>
+<span class="breadcrumb-current">Spans</span>
 {% endblock %}
 
 {% block content %}
-<h1>{{ nav.label }}</h1>
-<nav class="project-tabs" aria-label="Project sections">
-    <a href="/web/projects/{{ project_id }}/" class="project-tab"><span class="type-icon type-icon-event"></span>Issues</a>
-    {% if nav.transaction_count > 0 %}<a href="/web/projects/{{ project_id }}/transactions/" class="project-tab"><span class="type-icon type-icon-transaction"></span>Transactions <span class="tab-count">{{ nav.transaction_count }}</span></a>{% endif %}
-    <a href="/web/projects/{{ project_id }}/spans/" class="project-tab active"><span class="type-icon type-icon-span"></span>Spans</a>
-    {% if nav.log_count > 0 %}<a href="/web/projects/{{ project_id }}/logs/" class="project-tab"><span class="type-icon type-icon-log"></span>Logs <span class="tab-count">{{ nav.log_count }}</span></a>{% endif %}
-    {% if nav.metric_count > 0 %}<a href="/web/projects/{{ project_id }}/metrics/" class="project-tab"><span class="type-icon type-icon-metric"></span>Metrics <span class="tab-count">{{ nav.metric_count }}</span></a>{% endif %}
-    {% if nav.monitor_count > 0 %}<a href="/web/projects/{{ project_id }}/monitors/" class="project-tab"><span class="type-icon type-icon-check_in"></span>Monitors <span class="tab-count">{{ nav.monitor_count }}</span></a>{% endif %}
-    {% if nav.profile_count > 0 %}<a href="/web/projects/{{ project_id }}/profiles/" class="project-tab"><span class="type-icon type-icon-profile"></span>Profiles <span class="tab-count">{{ nav.profile_count }}</span></a>{% endif %}
-    {% if nav.replay_count > 0 %}<a href="/web/projects/{{ project_id }}/replays/" class="project-tab"><span class="type-icon type-icon-replay"></span>Replays <span class="tab-count">{{ nav.replay_count }}</span></a>{% endif %}
-    {% if nav.session_count > 0 %}<a href="/web/projects/{{ project_id }}/health/" class="project-tab"><span class="type-icon type-icon-session"></span>Health <span class="tab-count">{{ nav.session_count }}</span></a>{% endif %}
-    {% if nav.user_report_count > 0 %}<a href="/web/projects/{{ project_id }}/user-reports/" class="project-tab"><span class="type-icon type-icon-user_report"></span>User Reports <span class="tab-count">{{ nav.user_report_count }}</span></a>{% endif %}
-    {% if nav.client_report_count > 0 %}<a href="/web/projects/{{ project_id }}/client-reports/" class="project-tab"><span class="type-icon type-icon-client_report"></span>Client Reports <span class="tab-count">{{ nav.client_report_count }}</span></a>{% endif %}
-    <a href="/web/projects/{{ project_id }}/settings/" class="project-tab"><span class="type-icon type-icon-settings"></span>Settings</a>
-</nav>
+<div class="page-header"><h1>Spans</h1></div>
 
 {% if !traces.items.is_empty() %}
-<h2>Traces</h2>
-<div class="table-wrap">
-<table>
-    <thead>
+<h2 class="page-h2 mb-3">Traces</h2>
+<div class="card overflow-hidden mb-6">
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
         <tr>
-            <th scope="col">Trace ID</th>
-            <th scope="col">Root Op</th>
-            <th scope="col">Root Description</th>
-            <th scope="col">Spans</th>
-            <th scope="col">Duration</th>
-            <th scope="col">First Seen</th>
-            <th scope="col">Last Seen</th>
+          <th>Trace ID</th>
+          <th>Root op</th>
+          <th>Root description</th>
+          <th>Spans</th>
+          <th>Duration</th>
+          <th>First seen</th>
+          <th>Last seen</th>
         </tr>
-    </thead>
-    <tbody>
+      </thead>
+      <tbody>
         {% for trace in traces.items %}
         <tr>
-            <td><a href="/web/projects/{{ project_id }}/traces/{{ trace.trace_id }}/">{{ trace.trace_id|truncate_id }}</a></td>
-            <td>{% match trace.root_op %}{% when Some with (op) %}{{ op }}{% when None %}{% endmatch %}</td>
-            <td class="truncate">{% match trace.root_description %}{% when Some with (d) %}{{ d }}{% when None %}{% endmatch %}</td>
-            <td>{{ trace.span_count }}</td>
-            <td>{% match trace.total_duration_ms %}{% when Some with (ms) %}{{ ms }}ms{% when None %}{% endmatch %}</td>
-            <td><time datetime="{{ trace.first_timestamp|format_ts }}" title="{{ trace.first_timestamp|format_ts }}">{{ trace.first_timestamp|format_relative }}</time></td>
-            <td><time datetime="{{ trace.last_timestamp|format_ts }}" title="{{ trace.last_timestamp|format_ts }}">{{ trace.last_timestamp|format_relative }}</time></td>
+          <td><a class="text-mono" href="/web/projects/{{ project_id }}/traces/{{ trace.trace_id }}/">{{ trace.trace_id|truncate_id }}</a></td>
+          <td class="text-mono">{% match trace.root_op %}{% when Some with (op) %}{{ op }}{% when None %}<span class="text-muted">—</span>{% endmatch %}</td>
+          <td class="truncate-cell text-mono">{% match trace.root_description %}{% when Some with (d) %}{{ d }}{% when None %}<span class="text-muted">—</span>{% endmatch %}</td>
+          <td class="text-tabular">{{ trace.span_count }}</td>
+          <td class="text-tabular">{% match trace.total_duration_ms %}{% when Some with (ms) %}{{ ms }}ms{% when None %}<span class="text-muted">—</span>{% endmatch %}</td>
+          <td class="text-muted"><time datetime="{{ trace.first_timestamp|format_ts }}" title="{{ trace.first_timestamp|format_ts }}">{{ trace.first_timestamp|format_relative }}</time></td>
+          <td class="text-muted"><time datetime="{{ trace.last_timestamp|format_ts }}" title="{{ trace.last_timestamp|format_ts }}">{{ trace.last_timestamp|format_relative }}</time></td>
         </tr>
         {% endfor %}
-    </tbody>
-</table>
+      </tbody>
+    </table>
+  </div>
 </div>
 {% endif %}
 
 {% if result.items.is_empty() && traces.items.is_empty() %}
-<p class="empty">No spans found for this project.</p>
+<div class="card"><p class="empty">No spans found for this project.</p></div>
 {% endif %}
 
 {% if !result.items.is_empty() %}
-<h2>All Spans</h2>
-<div class="table-wrap">
-<table>
-    <thead>
+<h2 class="page-h2 mb-3">All spans</h2>
+<div class="card overflow-hidden">
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
         <tr>
-            <th scope="col">Span ID</th>
-            <th scope="col">Trace ID</th>
-            <th scope="col">Op</th>
-            <th scope="col">Description</th>
-            <th scope="col">Duration</th>
-            <th scope="col">Timestamp</th>
+          <th>Span ID</th>
+          <th>Trace ID</th>
+          <th>Op</th>
+          <th>Description</th>
+          <th>Duration</th>
+          <th>Timestamp</th>
         </tr>
-    </thead>
-    <tbody>
+      </thead>
+      <tbody>
         {% for span in result.items %}
         <tr>
-            <td><a href="/web/projects/{{ project_id }}/traces/{{ span.trace_id }}/">{{ span.span_id|truncate_id }}</a></td>
-            <td><a href="/web/projects/{{ project_id }}/traces/{{ span.trace_id }}/">{{ span.trace_id|truncate_id }}</a></td>
-            <td>{% match span.op %}{% when Some with (op) %}{{ op }}{% when None %}{% endmatch %}</td>
-            <td class="truncate">{% match span.description %}{% when Some with (d) %}{{ d }}{% when None %}{% endmatch %}</td>
-            <td>{% match span.duration_ms %}{% when Some with (ms) %}{{ ms }}ms{% when None %}{% endmatch %}</td>
-            <td><time datetime="{{ span.timestamp|format_ts }}" title="{{ span.timestamp|format_ts }}">{{ span.timestamp|format_relative }}</time></td>
+          <td><a class="text-mono" href="/web/projects/{{ project_id }}/traces/{{ span.trace_id }}/">{{ span.span_id|truncate_id }}</a></td>
+          <td><a class="text-mono" href="/web/projects/{{ project_id }}/traces/{{ span.trace_id }}/">{{ span.trace_id|truncate_id }}</a></td>
+          <td class="text-mono">{% match span.op %}{% when Some with (op) %}{{ op }}{% when None %}<span class="text-muted">—</span>{% endmatch %}</td>
+          <td class="truncate-cell text-mono">{% match span.description %}{% when Some with (d) %}{{ d }}{% when None %}<span class="text-muted">—</span>{% endmatch %}</td>
+          <td class="text-tabular">{% match span.duration_ms %}{% when Some with (ms) %}{{ ms }}ms{% when None %}<span class="text-muted">—</span>{% endmatch %}</td>
+          <td class="text-muted"><time datetime="{{ span.timestamp|format_ts }}" title="{{ span.timestamp|format_ts }}">{{ span.timestamp|format_relative }}</time></td>
         </tr>
         {% endfor %}
-    </tbody>
-</table>
+      </tbody>
+    </table>
+  </div>
 </div>
 
 <nav class="pagination" aria-label="Pagination">
-    <span>{{ result.total }} span{% if result.total != 1 %}s{% endif %}</span>
-    <span>
-        {% if result.has_prev() %}
-        <a href="/web/projects/{{ project_id }}/spans/?offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}">&laquo; Previous</a>
-        {% endif %}
-        {% if result.has_next() %}
-        <a href="/web/projects/{{ project_id }}/spans/?offset={{ result.next_offset() }}&amp;limit={{ result.limit }}">Next &raquo;</a>
-        {% endif %}
-    </span>
+  <span>{{ result.total }} span{% if result.total != 1 %}s{% endif %}</span>
+  <span class="flex gap-2">
+    {% if result.has_prev() %}<a class="btn btn-ghost" href="/web/projects/{{ project_id }}/spans/?offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}">« Previous</a>{% endif %}
+    {% if result.has_next() %}<a class="btn btn-ghost" href="/web/projects/{{ project_id }}/spans/?offset={{ result.next_offset() }}&amp;limit={{ result.limit }}">Next »</a>{% endif %}
+  </span>
 </nav>
 {% endif %}
 {% endblock %}

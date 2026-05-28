@@ -3241,7 +3241,7 @@ def setup_projects_post_ingest(ingest_base, admin_base, admin_token, projects):
             f"/web/projects/{pid}/settings/sourcemaps/generate",
             {},
         )
-        m = re.search(r"<code>(spk_[a-f0-9]+)</code>", html)
+        m = re.search(r"<code[^>]*>(spk_[a-f0-9]+)</code>", html)
         if m:
             spk_by_project[pid] = m.group(1)
 

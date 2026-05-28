@@ -1,310 +1,237 @@
 {% extends "base.html" %}
+{% import "_macros.html" as m %}
 
-{% block title %}Event {{ event.event_id|truncate_id }} - Stackpit{% endblock %}
+{% block title %}Event {{ event.event_id|truncate_id }} — Stackpit{% endblock %}
+
+{% block sidebar_nav %}{% call m::project_sidebar(event.project_id, nav, "issues") %}{% endcall %}{% endblock %}
 
 {% block breadcrumbs %}
-<span class="sep" aria-hidden="true">/</span>
-<a href="/web/projects/">Projects</a>
-<span class="sep" aria-hidden="true">/</span>
-<a href="/web/projects/{{ event.project_id }}/">Project {{ event.project_id }}</a>
+<span class="breadcrumb-sep">/</span>
+<a class="breadcrumb-link" href="/web/projects/{{ event.project_id }}/">{{ nav.label }}</a>
 {% match event.fingerprint %}{% when Some with (fp) %}
-<span class="sep" aria-hidden="true">/</span>
-<a href="/web/projects/{{ event.project_id }}/issues/{{ fp }}/">{{ fp|truncate_id }}</a>
+<span class="breadcrumb-sep">/</span>
+<a class="breadcrumb-link" href="/web/projects/{{ event.project_id }}/issues/{{ fp }}/">{{ fp|truncate_id }}</a>
 {% when None %}{% endmatch %}
-<span class="sep" aria-hidden="true">/</span>
-<span>{{ event.event_id|truncate_id }}</span>
+<span class="breadcrumb-sep">/</span>
+<span class="breadcrumb-current text-mono">{{ event.event_id|truncate_id }}</span>
 {% endblock %}
 
 {% block content %}
-<h1>{% match event.title %}{% when Some with (t) %}{{ t }}{% when None %}Event{% endmatch %}</h1>
+<div class="issue-header">
+  <div class="min-w-0">
+    <h1 class="page-h1 break-words">{% match event.title %}{% when Some with (t) %}{{ t }}{% when None %}Event{% endmatch %}</h1>
+    <p class="issue-title-msg text-mono break-all">event_id: {{ event.event_id }}</p>
+  </div>
+</div>
 
 {% if !summary_tags.is_empty() %}
-<div class="summary-tags">
-    {% for st in summary_tags %}
-    <span class="summary-tag"><span class="summary-tag-label">{{ st.label }}</span><span class="summary-tag-value">{{ st.value }}</span></span>
-    {% endfor %}
+<div class="flex flex-wrap gap-2 mb-4">
+  {% for st in summary_tags %}
+  <span class="pill-stat">
+    <span class="text-on-surface-variant">{{ st.label }}</span>
+    <span class="text-on-surface">{{ st.value }}</span>
+  </span>
+  {% endfor %}
 </div>
 {% endif %}
 
 <div class="issue-layout">
-    <div class="issue-main">
+  <div class="issue-main space-y-4">
 
-{% if event_nav.prev_event_id.is_some() || event_nav.next_event_id.is_some() %}
-{% match event.fingerprint %}{% when Some with (fp) %}
-<nav class="event-nav" aria-label="Event navigation">
+  {% if event_nav.prev_event_id.is_some() || event_nav.next_event_id.is_some() %}
+  {% match event.fingerprint %}{% when Some with (fp) %}
+  <nav class="event-nav text-[12px] text-muted" aria-label="Event navigation">
     {% match event_nav.prev_event_id %}{% when Some with (prev_id) %}
-    <a href="/web/projects/{{ event.project_id }}/events/{{ prev_id }}/">&laquo; Newer</a>
-    {% when None %}<span class="placeholder">&laquo; Newer</span>{% endmatch %}
+    <a class="btn btn-ghost" href="/web/projects/{{ event.project_id }}/events/{{ prev_id }}/">« Newer</a>
+    {% when None %}<span class="btn btn-ghost opacity-50 pointer-events-none">« Newer</span>{% endmatch %}
     <span>{{ event_nav.total }} event{% if event_nav.total != 1 %}s{% endif %} in issue</span>
     {% match event_nav.next_event_id %}{% when Some with (next_id) %}
-    <a href="/web/projects/{{ event.project_id }}/events/{{ next_id }}/">Older &raquo;</a>
-    {% when None %}<span class="placeholder">Older &raquo;</span>{% endmatch %}
-</nav>
-{% when None %}{% endmatch %}
-{% endif %}
+    <a class="btn btn-ghost" href="/web/projects/{{ event.project_id }}/events/{{ next_id }}/">Older »</a>
+    {% when None %}<span class="btn btn-ghost opacity-50 pointer-events-none">Older »</span>{% endmatch %}
+  </nav>
+  {% when None %}{% endmatch %}
+  {% endif %}
 
-{% if !exceptions.is_empty() %}
-<details open>
-    <summary>Exception &amp; Stacktrace</summary>
-    <div class="detail-body">
-        {% for exc in exceptions %}
-        <div style="margin-bottom: 1rem;">
-            <strong>{{ exc.exc_type }}</strong>: {{ exc.exc_value }}
-            {% match exc.mechanism_type %}{% when Some with (mt) %}
-            <span class="badge badge-debug">{{ mt }}</span>
-            {% when None %}{% endmatch %}
-            {% match exc.mechanism_handled %}{% when Some with (h) %}
-            {% if h %}<span class="badge badge-info">handled</span>{% else %}<span class="badge badge-error">unhandled</span>{% endif %}
-            {% when None %}{% endmatch %}
-        </div>
+  {% if !exceptions.is_empty() %}
+  <details open class="card">
+    <summary class="card-header cursor-pointer select-none">Exception &amp; Stacktrace</summary>
+    <div class="p-4 space-y-4">
+      {% for exc in exceptions %}
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="font-semibold text-mono">{{ exc.exc_type }}</span>
+        <span class="text-muted text-mono">{{ exc.exc_value }}</span>
+        {% match exc.mechanism_type %}{% when Some with (mt) %}<span class="badge badge-debug">{{ mt }}</span>{% when None %}{% endmatch %}
+        {% match exc.mechanism_handled %}{% when Some with (h) %}{% if h %}<span class="badge badge-info">handled</span>{% else %}<span class="badge badge-error">unhandled</span>{% endif %}{% when None %}{% endmatch %}
+      </div>
+      <div class="border border-outline-variant rounded overflow-hidden">
         {% for frame in exc.frames %}
-        <details class="frame"{% if frame.in_app && frame.has_detail() %} open{% endif %}>
-            <summary class="frame-header{% if frame.in_app %} in-app{% else %} library{% endif %}">
-                {{ frame.filename }}{% match frame.lineno %}{% when Some with (ln) %}:{{ ln }}{% match frame.colno %}{% when Some with (cn) %}:{{ cn }}{% when None %}{% endmatch %}{% when None %}{% endmatch %} in <strong>{{ frame.function }}</strong>
-                {% if !frame.source_links.is_empty() %}
-                <span class="source-links">{% for link in frame.source_links %}<a href="{{ link.url }}" target="_blank" rel="noopener" class="source-link" data-stop-propagation>{{ link.label }}</a>{% endfor %}</span>
-                {% endif %}
-            </summary>
-            {% if frame.context_line.is_some() || !frame.pre_context.is_empty() || !frame.post_context.is_empty() %}
-            <div class="frame-context">
-                <ol start="{{ frame.context_start_line() }}">
-                {% for line in frame.pre_context %}
-                    <li>{{ line }}</li>
-                {% endfor %}
-                {% match frame.context_line %}{% when Some with (cl) %}
-                    <li class="context-current">{{ cl }}</li>
-                {% when None %}{% endmatch %}
-                {% for line in frame.post_context %}
-                    <li>{{ line }}</li>
-                {% endfor %}
-                </ol>
-            </div>
-            {% endif %}
-            {% if !frame.vars.is_empty() %}
-            <div class="frame-vars">
-                <table>
-                    <thead><tr><th scope="col">Variable</th><th scope="col">Value</th></tr></thead>
-                    <tbody>
-                    {% for var in frame.vars %}
-                        <tr><td><code>{{ var.0 }}</code></td><td><code>{{ var.1 }}</code></td></tr>
-                    {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-            {% endif %}
-            {% if !frame.has_detail() %}
-            <div class="detail-body"><span class="empty" style="padding: 0.5rem;">No source context available</span></div>
-            {% endif %}
+        <details class="frame {% if frame.in_app %}in-app{% else %}library{% endif %}"{% if frame.in_app && frame.has_detail() %} open{% endif %}>
+          <summary class="frame-header">
+            <span class="truncate">
+              <span class="text-on-surface-variant">{{ frame.filename }}{% match frame.lineno %}{% when Some with (ln) %}:{{ ln }}{% match frame.colno %}{% when Some with (cn) %}:{{ cn }}{% when None %}{% endmatch %}{% when None %}{% endmatch %}</span>
+              in <strong class="text-on-surface">{{ frame.function }}</strong>
+            </span>
+            {% if !frame.source_links.is_empty() %}<span class="ml-auto flex gap-2">{% for link in frame.source_links %}<a href="{{ link.url }}" target="_blank" rel="noopener" class="source-link" data-stop-propagation>{{ link.label }}</a>{% endfor %}</span>{% endif %}
+          </summary>
+          {% if frame.context_line.is_some() || !frame.pre_context.is_empty() || !frame.post_context.is_empty() %}
+          <div class="frame-context">
+            <ol start="{{ frame.context_start_line() }}">
+              {% for line in frame.pre_context %}<li>{{ line }}</li>{% endfor %}
+              {% match frame.context_line %}{% when Some with (cl) %}<li class="current-line">{{ cl }}</li>{% when None %}{% endmatch %}
+              {% for line in frame.post_context %}<li>{{ line }}</li>{% endfor %}
+            </ol>
+          </div>
+          {% endif %}
+          {% if !frame.vars.is_empty() %}
+          <div class="frame-vars">
+            <table class="w-full text-[11px]">
+              <thead><tr><th class="text-left text-on-surface-variant pb-1">Variable</th><th class="text-left text-on-surface-variant pb-1">Value</th></tr></thead>
+              <tbody>{% for var in frame.vars %}<tr><td class="pr-3 align-top"><code class="text-mono">{{ var.0 }}</code></td><td class="align-top"><code class="text-mono text-on-surface-variant break-all">{{ var.1 }}</code></td></tr>{% endfor %}</tbody>
+            </table>
+          </div>
+          {% endif %}
+          {% if !frame.has_detail() %}<div class="px-3 py-2 text-muted text-[11px]">No source context available</div>{% endif %}
         </details>
         {% endfor %}
-        {% endfor %}
+      </div>
+      {% endfor %}
     </div>
-</details>
-{% endif %}
+  </details>
+  {% endif %}
 
-{% if !breadcrumbs.is_empty() %}
-<details>
-    <summary>Breadcrumbs ({{ breadcrumbs.len() }})</summary>
-    <div class="detail-body">
-        <div class="table-wrap">
-        <table class="breadcrumb-table">
-            <thead>
-                <tr>
-                    <th scope="col">Time</th>
-                    <th scope="col">Level</th>
-                    <th scope="col">Category</th>
-                    <th scope="col">Message</th>
-                </tr>
-            </thead>
-            <tbody>
-            {% for crumb in breadcrumbs %}
-                <tr>
-                    <td class="ts">{{ crumb.timestamp }}</td>
-                    <td>{% if !crumb.level.is_empty() %}<span class="badge badge-{{ crumb.level }}">{{ crumb.level }}</span>{% endif %}</td>
-                    <td>{{ crumb.category }}</td>
-                    <td>{{ crumb.message }}</td>
-                </tr>
-            {% endfor %}
-            </tbody>
-        </table>
-        </div>
+  {% if !breadcrumbs.is_empty() %}
+  <details class="card">
+    <summary class="card-header cursor-pointer select-none">Breadcrumbs <span class="text-muted text-[11px] ml-1">({{ breadcrumbs.len() }})</span></summary>
+    <div class="table-wrap">
+      <table class="breadcrumb-table">
+        <thead><tr><th>Time</th><th>Level</th><th>Category</th><th>Message</th></tr></thead>
+        <tbody>
+          {% for crumb in breadcrumbs %}
+          <tr>
+            <td class="text-muted nowrap">{{ crumb.timestamp }}</td>
+            <td>{% if !crumb.level.is_empty() %}<span class="badge badge-{{ crumb.level }}">{{ crumb.level }}</span>{% endif %}</td>
+            <td class="text-muted">{{ crumb.category }}</td>
+            <td>{{ crumb.message }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
     </div>
-</details>
-{% endif %}
+  </details>
+  {% endif %}
 
-{% if !tags.is_empty() %}
-<details>
-    <summary>Tags ({{ tags.len() }})</summary>
-    <div class="detail-body">
-        <dl class="tag-grid">
-        {% for tag in tags %}
-            <dt>{{ tag.key }}</dt>
-            <dd>{{ tag.value }}</dd>
-        {% endfor %}
-        </dl>
+  {% if !tags.is_empty() %}
+  <details class="card">
+    <summary class="card-header cursor-pointer select-none">Tags <span class="text-muted text-[11px] ml-1">({{ tags.len() }})</span></summary>
+    <dl class="meta-grid p-4">{% for tag in tags %}<dt>{{ tag.key }}</dt><dd>{{ tag.value }}</dd>{% endfor %}</dl>
+  </details>
+  {% endif %}
+
+  {% if !contexts.is_empty() %}
+  <details class="card">
+    <summary class="card-header cursor-pointer select-none">Contexts</summary>
+    <div class="p-4 space-y-4">
+      {% for group in contexts %}
+      <div>
+        <h3 class="text-[13px] font-semibold mb-2">{{ group.name }}</h3>
+        <dl class="meta-grid">{% for entry in group.entries %}<dt>{{ entry.0 }}</dt><dd>{{ entry.1 }}</dd>{% endfor %}</dl>
+      </div>
+      {% endfor %}
     </div>
-</details>
-{% endif %}
+  </details>
+  {% endif %}
 
-{% if !contexts.is_empty() %}
-<details>
-    <summary>Contexts</summary>
-    <div class="detail-body">
-        {% for group in contexts %}
-        <div class="context-group">
-            <h3>{{ group.name }}</h3>
-            <dl class="meta-grid">
-            {% for entry in group.entries %}
-                <dt>{{ entry.0 }}</dt>
-                <dd><code>{{ entry.1 }}</code></dd>
-            {% endfor %}
-            </dl>
-        </div>
-        {% endfor %}
+  {% match request %}{% when Some with (req) %}
+  <details class="card">
+    <summary class="card-header cursor-pointer select-none">Request</summary>
+    <div class="p-4 space-y-3">
+      {% if !req.method.is_empty() || !req.url.is_empty() %}<p><span class="badge badge-info">{{ req.method }}</span> <code class="text-mono ml-2 break-all">{{ req.url }}</code></p>{% endif %}
+      {% if !req.headers.is_empty() %}
+      <h3 class="text-[13px] font-semibold mt-2">Headers</h3>
+      <div class="table-wrap"><table class="table"><thead><tr><th>Header</th><th>Value</th></tr></thead><tbody>{% for h in req.headers %}<tr><td class="text-mono">{{ h.0 }}</td><td class="text-mono break-all">{{ h.1 }}</td></tr>{% endfor %}</tbody></table></div>
+      {% endif %}
+      {% if !req.query_string.is_empty() %}<h3 class="text-[13px] font-semibold">Query string</h3><pre class="codeblock">{{ req.query_string }}</pre>{% endif %}
+      {% if !req.body.is_empty() %}<h3 class="text-[13px] font-semibold">Body</h3><pre class="codeblock">{{ req.body }}</pre>{% endif %}
+      {% if !req.env.is_empty() %}<h3 class="text-[13px] font-semibold">Environment</h3><dl class="meta-grid">{% for e in req.env %}<dt>{{ e.0 }}</dt><dd>{{ e.1 }}</dd>{% endfor %}</dl>{% endif %}
     </div>
-</details>
-{% endif %}
+  </details>
+  {% when None %}{% endmatch %}
 
-{% match request %}{% when Some with (req) %}
-<details>
-    <summary>Request</summary>
-    <div class="detail-body">
-        {% if !req.method.is_empty() || !req.url.is_empty() %}
-        <p class="request-method"><code>{{ req.method }} {{ req.url }}</code></p>
-        {% endif %}
-        {% if !req.headers.is_empty() %}
-        <h3>Headers</h3>
-        <div class="table-wrap">
-        <table class="request-headers">
-            <thead><tr><th scope="col">Header</th><th scope="col">Value</th></tr></thead>
-            <tbody>
-            {% for h in req.headers %}
-                <tr><td><strong>{{ h.0 }}</strong></td><td>{{ h.1 }}</td></tr>
-            {% endfor %}
-            </tbody>
-        </table>
-        </div>
-        {% endif %}
-        {% if !req.query_string.is_empty() %}
-        <h3>Query String</h3>
-        <pre>{{ req.query_string }}</pre>
-        {% endif %}
-        {% if !req.body.is_empty() %}
-        <h3>Body</h3>
-        <pre>{{ req.body }}</pre>
-        {% endif %}
-        {% if !req.env.is_empty() %}
-        <h3>Environment</h3>
-        <dl class="meta-grid">
-        {% for e in req.env %}
-            <dt>{{ e.0 }}</dt>
-            <dd>{{ e.1 }}</dd>
-        {% endfor %}
-        </dl>
-        {% endif %}
+  {% if !user_reports.is_empty() %}
+  <details open class="card">
+    <summary class="card-header cursor-pointer select-none">User reports <span class="text-muted text-[11px] ml-1">({{ user_reports.len() }})</span></summary>
+    <div class="p-4 space-y-3">
+      {% for report in user_reports %}
+      <div>
+        <p class="text-[13px]">
+          <strong>{% match report.name %}{% when Some with (n) %}{{ n }}{% when None %}Anonymous{% endmatch %}</strong>
+          {% match report.email %}{% when Some with (e) %} <span class="text-muted">&lt;{{ e }}&gt;</span>{% when None %}{% endmatch %}
+          <span class="text-muted">— <time datetime="{{ report.timestamp|format_ts }}" title="{{ report.timestamp|format_ts }}">{{ report.timestamp|format_relative }}</time></span>
+        </p>
+        {% match report.comments %}{% when Some with (c) %}<blockquote class="mt-1 pl-3 border-l-2 border-outline-variant text-muted">{{ c }}</blockquote>{% when None %}{% endmatch %}
+      </div>
+      {% endfor %}
     </div>
-</details>
-{% when None %}{% endmatch %}
+  </details>
+  {% endif %}
 
-{% if !user_reports.is_empty() %}
-<details open>
-    <summary>User Reports ({{ user_reports.len() }})</summary>
-    <div class="detail-body">
-        {% for report in user_reports %}
-        <div class="user-report">
-            <p>
-                <strong>{% match report.name %}{% when Some with (n) %}{{ n }}{% when None %}Anonymous{% endmatch %}</strong>
-                {% match report.email %}{% when Some with (e) %}&lt;{{ e }}&gt;{% when None %}{% endmatch %}
-                <span class="muted">&mdash; <time datetime="{{ report.timestamp|format_ts }}" title="{{ report.timestamp|format_ts }}">{{ report.timestamp|format_relative }}</time></span>
-            </p>
-            {% match report.comments %}{% when Some with (c) %}<blockquote>{{ c }}</blockquote>{% when None %}{% endmatch %}
-        </div>
-        {% endfor %}
+  {% if !attachments.is_empty() %}
+  <details class="card">
+    <summary class="card-header cursor-pointer select-none">Attachments <span class="text-muted text-[11px] ml-1">({{ attachments.len() }})</span></summary>
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>Filename</th><th>Type</th><th>Size</th><th></th></tr></thead>
+        <tbody>
+          {% for att in attachments %}
+          <tr>
+            <td class="text-mono">{{ att.filename }}</td>
+            <td class="text-muted">{% match att.content_type %}{% when Some with (ct) %}{{ ct }}{% when None %}—{% endmatch %}</td>
+            <td class="text-tabular">{{ att.size|filesizeformat }}</td>
+            <td><a class="btn btn-ghost" href="/web/projects/{{ event.project_id }}/events/{{ event.event_id }}/attachments/{{ att.filename }}">Download</a></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
     </div>
-</details>
-{% endif %}
+  </details>
+  {% endif %}
 
-{% if !attachments.is_empty() %}
-<details>
-    <summary>Attachments ({{ attachments.len() }})</summary>
-    <div class="detail-body">
-        <div class="table-wrap">
-        <table>
-            <thead><tr><th scope="col">Filename</th><th scope="col">Type</th><th scope="col">Size</th><th scope="col"></th></tr></thead>
-            <tbody>
-            {% for att in attachments %}
-            <tr>
-                <td>{{ att.filename }}</td>
-                <td>{% match att.content_type %}{% when Some with (ct) %}{{ ct }}{% when None %}&mdash;{% endmatch %}</td>
-                <td>{{ att.size|filesizeformat }}</td>
-                <td><a href="/web/projects/{{ event.project_id }}/events/{{ event.event_id }}/attachments/{{ att.filename }}">Download</a></td>
-            </tr>
-            {% endfor %}
-            </tbody>
-        </table>
-        </div>
+  <details class="card">
+    <summary class="card-header cursor-pointer select-none">Raw JSON</summary>
+    <pre class="codeblock m-4">{{ raw_json }}</pre>
+  </details>
+
+  </div>{# .issue-main #}
+
+  <aside class="issue-sidebar">
+    <div class="card card-pad">
+      <div class="label-caps mb-2">Event properties</div>
+      <dl class="meta-grid">
+        <dt>Event ID</dt><dd class="text-mono text-[11px] break-all">{{ event.event_id }}</dd>
+        <dt>Type</dt><dd class="flex items-center gap-1.5"><span class="type-icon type-icon-{{ event.item_type }}"></span>{{ event.item_type }}</dd>
+        <dt>Timestamp</dt><dd><time datetime="{{ event.timestamp|format_ts }}" title="{{ event.timestamp|format_ts }}">{{ event.timestamp|format_relative }}</time></dd>
+        <dt>Level</dt><dd>{% match event.level %}{% when Some with (lvl) %}<span class="badge badge-{{ lvl }}">{{ lvl }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}</dd>
+        <dt>Platform</dt><dd>{% match event.platform %}{% when Some with (v) %}<span class="badge badge-platform">{{ v }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}</dd>
+        {% match event.transaction_name %}{% when Some with (txn) %}<dt>Transaction</dt><dd class="break-all">{{ txn }}</dd>{% when None %}{% endmatch %}
+        <dt>Release</dt><dd>{% match event.release %}{% when Some with (v) %}{{ v }}{% when None %}<span class="text-muted">—</span>{% endmatch %}</dd>
+        <dt>Environment</dt><dd>{% match event.environment %}{% when Some with (v) %}{{ v }}{% when None %}<span class="text-muted">—</span>{% endmatch %}</dd>
+        <dt>Server</dt><dd>{% match event.server_name %}{% when Some with (v) %}{{ v }}{% when None %}<span class="text-muted">—</span>{% endmatch %}</dd>
+        {% match event.sdk_name %}{% when Some with (sdk) %}<dt>SDK</dt><dd>{{ sdk }}{% match event.sdk_version %}{% when Some with (ver) %} {{ ver }}{% when None %}{% endmatch %}</dd>{% when None %}{% endmatch %}
+        <dt>Received</dt><dd><time datetime="{{ event.received_at|format_ts }}" title="{{ event.received_at|format_ts }}">{{ event.received_at|format_relative }}</time></dd>
+      </dl>
     </div>
-</details>
-{% endif %}
 
-<details>
-    <summary>Raw JSON</summary>
-    <div class="detail-body">
-        <pre>{{ raw_json }}</pre>
+    {% if user.has_any() %}
+    <div class="card card-pad">
+      <div class="label-caps mb-2">User</div>
+      <dl class="meta-grid">
+        {% match user.id %}{% when Some with (v) %}<dt>ID</dt><dd>{{ v }}</dd>{% when None %}{% endmatch %}
+        {% match user.email %}{% when Some with (v) %}<dt>Email</dt><dd>{{ v }}</dd>{% when None %}{% endmatch %}
+        {% match user.username %}{% when Some with (v) %}<dt>Username</dt><dd>{{ v }}</dd>{% when None %}{% endmatch %}
+        {% match user.ip_address %}{% when Some with (v) %}<dt>IP address</dt><dd>{{ v }}</dd>{% when None %}{% endmatch %}
+      </dl>
     </div>
-</details>
-
-    </div>{# .issue-main #}
-
-    <aside class="issue-sidebar">
-        <dl class="meta-grid">
-            <dt>Event ID</dt>
-            <dd><code>{{ event.event_id }}</code></dd>
-            <dt>Type</dt>
-            <dd><span class="type-icon type-icon-{{ event.item_type }}"></span>{{ event.item_type }}</dd>
-            <dt>Timestamp</dt>
-            <dd><time datetime="{{ event.timestamp|format_ts }}" title="{{ event.timestamp|format_ts }}">{{ event.timestamp|format_relative }}</time></dd>
-            <dt>Level</dt>
-            <dd>
-                {% match event.level %}{% when Some with (lvl) %}<span class="badge badge-{{ lvl }}">{{ lvl }}</span>{% when None %}&mdash;{% endmatch %}
-            </dd>
-            <dt>Platform</dt>
-            <dd>{% match event.platform %}{% when Some with (v) %}{{ v }}{% when None %}&mdash;{% endmatch %}</dd>
-            {% match event.transaction_name %}{% when Some with (txn) %}
-            <dt>Transaction</dt>
-            <dd>{{ txn }}</dd>
-            {% when None %}{% endmatch %}
-            <dt>Release</dt>
-            <dd>{% match event.release %}{% when Some with (v) %}{{ v }}{% when None %}&mdash;{% endmatch %}</dd>
-            <dt>Environment</dt>
-            <dd>{% match event.environment %}{% when Some with (v) %}{{ v }}{% when None %}&mdash;{% endmatch %}</dd>
-            <dt>Server</dt>
-            <dd>{% match event.server_name %}{% when Some with (v) %}{{ v }}{% when None %}&mdash;{% endmatch %}</dd>
-            {% match event.sdk_name %}{% when Some with (sdk) %}
-            <dt>SDK</dt>
-            <dd>{{ sdk }}{% match event.sdk_version %}{% when Some with (ver) %} {{ ver }}{% when None %}{% endmatch %}</dd>
-            {% when None %}{% endmatch %}
-            <dt>Received</dt>
-            <dd><time datetime="{{ event.received_at|format_ts }}" title="{{ event.received_at|format_ts }}">{{ event.received_at|format_relative }}</time></dd>
-        </dl>
-
-        {% if user.has_any() %}
-        <h3>User</h3>
-        <dl class="meta-grid user-info">
-            {% match user.id %}{% when Some with (v) %}
-            <dt>ID</dt><dd>{{ v }}</dd>
-            {% when None %}{% endmatch %}
-            {% match user.email %}{% when Some with (v) %}
-            <dt>Email</dt><dd>{{ v }}</dd>
-            {% when None %}{% endmatch %}
-            {% match user.username %}{% when Some with (v) %}
-            <dt>Username</dt><dd>{{ v }}</dd>
-            {% when None %}{% endmatch %}
-            {% match user.ip_address %}{% when Some with (v) %}
-            <dt>IP Address</dt><dd>{{ v }}</dd>
-            {% when None %}{% endmatch %}
-        </dl>
-        {% endif %}
-    </aside>
-</div>{# .issue-layout #}
+    {% endif %}
+  </aside>
+</div>
 {% endblock %}

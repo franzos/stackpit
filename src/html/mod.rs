@@ -336,6 +336,30 @@ pub fn routes() -> Router<AppState> {
             "/web/_assets/stop-propagation.js",
             get(serve_stop_propagation_js),
         )
+        .route(
+            "/web/_assets/fonts/Inter-Regular.woff2",
+            get(serve_font_inter_regular),
+        )
+        .route(
+            "/web/_assets/fonts/Inter-Medium.woff2",
+            get(serve_font_inter_medium),
+        )
+        .route(
+            "/web/_assets/fonts/Inter-SemiBold.woff2",
+            get(serve_font_inter_semibold),
+        )
+        .route(
+            "/web/_assets/fonts/Inter-Bold.woff2",
+            get(serve_font_inter_bold),
+        )
+        .route(
+            "/web/_assets/fonts/JetBrainsMono-Regular.woff2",
+            get(serve_font_jbm_regular),
+        )
+        .route(
+            "/web/_assets/fonts/JetBrainsMono-Medium.woff2",
+            get(serve_font_jbm_medium),
+        )
         // -- login --
         .route(
             "/web/login",
@@ -421,6 +445,39 @@ async fn serve_stop_propagation_js() -> impl IntoResponse {
     )
 }
 
+fn font_response(bytes: &'static [u8]) -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "font/woff2"),
+            (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+        ],
+        bytes,
+    )
+}
+
+async fn serve_font_inter_regular() -> impl IntoResponse {
+    font_response(include_bytes!("../../assets/fonts/Inter-Regular.woff2"))
+}
+async fn serve_font_inter_medium() -> impl IntoResponse {
+    font_response(include_bytes!("../../assets/fonts/Inter-Medium.woff2"))
+}
+async fn serve_font_inter_semibold() -> impl IntoResponse {
+    font_response(include_bytes!("../../assets/fonts/Inter-SemiBold.woff2"))
+}
+async fn serve_font_inter_bold() -> impl IntoResponse {
+    font_response(include_bytes!("../../assets/fonts/Inter-Bold.woff2"))
+}
+async fn serve_font_jbm_regular() -> impl IntoResponse {
+    font_response(include_bytes!(
+        "../../assets/fonts/JetBrainsMono-Regular.woff2"
+    ))
+}
+async fn serve_font_jbm_medium() -> impl IntoResponse {
+    font_response(include_bytes!(
+        "../../assets/fonts/JetBrainsMono-Medium.woff2"
+    ))
+}
+
 /// Error type for HTML handlers. Renders through `html_error` so the page
 /// looks identical. `From<anyhow::Error>` maps to 500 so query calls can use `?`.
 pub struct HtmlError(pub axum::http::StatusCode, pub String);
@@ -437,18 +494,25 @@ impl From<anyhow::Error> for HtmlError {
     }
 }
 
-/// Minimal styled error page.
+/// Minimal styled error page. Uses the same shell language as base.html but
+/// without a sidebar so the page renders standalone.
 pub fn html_error(status: axum::http::StatusCode, detail: &str) -> axum::response::Response {
     let escaped_detail = crate::encoding::escape_html(detail);
     let body = format!(
         r#"<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><title>Error - Stackpit</title>
-<link rel="stylesheet" href="/web/_assets/style.css"></head>
+<link rel="stylesheet" href="/web/_assets/style.css">
+<link rel="icon" type="image/svg+xml" href="/web/_assets/icon.svg"></head>
 <body>
-<header><nav><a href="/web/projects/" class="nav-logo"><img src="/web/_assets/icon.svg" alt="Stackpit" width="24" height="24"> Stackpit</a></nav></header>
-<main><h1>Error {}</h1><p>{}</p></main>
-<footer><small>Stackpit</small></footer>
+<div class="min-h-screen flex items-center justify-center px-6">
+<div class="card card-pad max-w-lg w-full">
+<div class="flex items-center gap-2 mb-4"><img src="/web/_assets/icon.svg" alt="" width="22" height="22"><span class="font-semibold">Stackpit</span></div>
+<div class="page-h1 mb-2">Error {}</div>
+<p class="text-muted">{}</p>
+<div class="mt-6"><a href="/web/projects/" class="btn btn-secondary">Back to projects</a></div>
+</div>
+</div>
 </body></html>"#,
         status.as_u16(),
         escaped_detail,

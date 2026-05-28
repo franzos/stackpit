@@ -1,4 +1,5 @@
 target
+.bin/
 *.db
 *.db-*
 stackpit.toml

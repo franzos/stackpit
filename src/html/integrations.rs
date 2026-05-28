@@ -68,6 +68,26 @@ pub async fn create(
                     return render_list(&state, Some("Invalid email provider".into()), &csrf).await
                 }
             };
+            // Reject up front when neither the form nor the server config
+            // supplies the values needed to actually send mail. Creating a
+            // half-configured integration only surfaces the failure later, at
+            // dispatch time, when it's much harder to diagnose.
+            let has_form_secret = form
+                .secret
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|s| !s.is_empty());
+            if !has_form_secret && email_cfg.token.is_none() {
+                return render_list(&state, Some("API token is required.".into()), &csrf).await;
+            }
+            let has_form_from = form
+                .from_address
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|s| !s.is_empty());
+            if !has_form_from && email_cfg.from_address.is_none() {
+                return render_list(&state, Some("From address is required.".into()), &csrf).await;
+            }
             let mut cfg = serde_json::json!({ "provider": provider.as_str() });
             if let Some(from) = form
                 .from_address
@@ -265,6 +285,13 @@ struct NewEmailTemplate {
     default_provider: &'static str,
     from_placeholder: String,
     from_name_placeholder: String,
+    /// Whether `[email] token` is set in the server config. Drives whether the
+    /// API-token field is required (no server default) or optional.
+    has_default_token: bool,
+    /// Whether `[email] from_address` is set. Same idea — when set, leaving
+    /// the form field blank falls back to this. When not set, the user must
+    /// supply one (else outbound mail has no From address).
+    has_default_from: bool,
 }
 
 pub async fn new_email(
@@ -284,6 +311,8 @@ pub async fn new_email(
             .from_name
             .clone()
             .unwrap_or_else(|| "Stackpit Alerts".to_string()),
+        has_default_token: email.token.is_some(),
+        has_default_from: email.from_address.is_some(),
     })
 }
 

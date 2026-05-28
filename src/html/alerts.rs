@@ -11,11 +11,17 @@ use crate::server::AppState;
 #[allow(unused_imports)]
 use crate::html::filters;
 
+/// `(project_id, display_label)` rendered into the project selectors. We pass
+/// it as a tuple so the template can read `.0` / `.1` directly without a
+/// dedicated struct.
+type ProjectOption = (u64, String);
+
 #[derive(Template)]
 #[template(path = "alerts.html")]
 struct AlertsTemplate {
     alert_rules: Vec<AlertRule>,
     digest_schedules: Vec<DigestSchedule>,
+    projects: Vec<ProjectOption>,
     message: Option<String>,
     csrf_token: String,
 }
@@ -135,9 +141,26 @@ async fn render_page(
         .await
         .unwrap_or_default();
 
+    // Project selector: name when set, else `Project {id}`. Sorted by label so
+    // the dropdown stays scannable as project count grows.
+    let mut projects: Vec<ProjectOption> =
+        queries::projects::list_projects(&state.pool, None, None, None)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|p| {
+                let label = p
+                    .name
+                    .unwrap_or_else(|| format!("Project {}", p.project_id));
+                (p.project_id, label)
+            })
+            .collect();
+    projects.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
+
     let tmpl = AlertsTemplate {
         alert_rules,
         digest_schedules,
+        projects,
         message,
         csrf_token: csrf.to_string(),
     };

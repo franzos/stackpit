@@ -35,6 +35,9 @@ fn render_event_chart_sized(
     chart.x_axis_name_rotate = -45.0;
     chart.x_axis_font_size = 10.0;
     chart.series_label_formatter = "{c:.0}".to_string();
+    // Transparent chart background lets the surrounding card supply the color,
+    // so the chart works in both light and dark UI modes.
+    chart.background_color = charts_rs::Color::transparent();
 
     // Our own charts-rs output; the admin CSP (`script-src 'self'`, no
     // `'unsafe-inline'`) neutralizes any inline handler in the browser.

@@ -1,44 +1,53 @@
 {% extends "base.html" %}
+{% import "_macros.html" as m %}
 
-{% block title %}Browser Defaults - Stackpit{% endblock %}
+{% block title %}Browser defaults — Stackpit{% endblock %}
+
+{% block sidebar_nav %}{% call m::settings_sidebar("defaults") %}{% endcall %}{% endblock %}
 
 {% block breadcrumbs %}
-<span class="sep" aria-hidden="true">/</span>
-<span>Settings</span>
-<span class="sep" aria-hidden="true">/</span>
-<span>Browser Defaults</span>
+<span class="breadcrumb-sep">/</span>
+<span class="breadcrumb-link">Settings</span>
+<span class="breadcrumb-sep">/</span>
+<span class="breadcrumb-current">Browser defaults</span>
 {% endblock %}
 
 {% block content %}
-<h1>Browser Defaults</h1>
-<p style="color: var(--muted); font-size: 0.9rem;">Set default filter values for list pages. When you navigate to a page without explicit filters, these defaults are applied automatically. Stored as a browser cookie.</p>
+<div class="page-header">
+  <div>
+    <h1>Browser defaults</h1>
+    <p class="text-muted text-[13px] mt-1">Set default filter values for list pages. Stored as a browser cookie.</p>
+  </div>
+</div>
 
-{% match message %}{% when Some with (msg) %}
-<p class="settings-message">{{ msg }}</p>
-{% when None %}{% endmatch %}
+{% match message %}{% when Some with (msg) %}<div class="settings-message mb-4">{{ msg }}</div>{% when None %}{% endmatch %}
 
-<form class="settings-form" method="post" action="/web/settings/defaults/">
+<div class="card card-pad max-w-2xl">
+  <form class="settings-form" method="post" action="/web/settings/defaults/">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <label for="default_status">Default Status (issues)</label>
-    <select id="default_status" name="status">
+    <div>
+      <label class="field-label" for="default_status">Default status (issues)</label>
+      <select class="select" id="default_status" name="status">
         <option value="">No default</option>
         <option value="unresolved"{% if status == "unresolved" %} selected{% endif %}>Unresolved</option>
         <option value="resolved"{% if status == "resolved" %} selected{% endif %}>Resolved</option>
         <option value="ignored"{% if status == "ignored" %} selected{% endif %}>Ignored</option>
-    </select>
-
-    <label for="default_level">Default Level</label>
-    <select id="default_level" name="level">
+      </select>
+    </div>
+    <div>
+      <label class="field-label" for="default_level">Default level</label>
+      <select class="select" id="default_level" name="level">
         <option value="">No default</option>
         <option value="fatal"{% if level == "fatal" %} selected{% endif %}>fatal</option>
         <option value="error"{% if level == "error" %} selected{% endif %}>error</option>
         <option value="warning"{% if level == "warning" %} selected{% endif %}>warning</option>
         <option value="info"{% if level == "info" %} selected{% endif %}>info</option>
         <option value="debug"{% if level == "debug" %} selected{% endif %}>debug</option>
-    </select>
-
-    <label for="default_period">Default Time Range</label>
-    <select id="default_period" name="period">
+      </select>
+    </div>
+    <div>
+      <label class="field-label" for="default_period">Default time range</label>
+      <select class="select" id="default_period" name="period">
         <option value="">No default</option>
         <option value="1h"{% if period == "1h" %} selected{% endif %}>Last hour</option>
         <option value="24h"{% if period == "24h" %} selected{% endif %}>Last 24h</option>
@@ -47,13 +56,16 @@
         <option value="30d"{% if period == "30d" %} selected{% endif %}>Last 30 days</option>
         <option value="90d"{% if period == "90d" %} selected{% endif %}>Last 90 days</option>
         <option value="365d"{% if period == "365d" %} selected{% endif %}>Last 365 days</option>
-    </select>
+      </select>
+    </div>
+    <div class="flex gap-2"><button type="submit" class="btn btn-primary">Save defaults</button></div>
+  </form>
 
-    <button type="submit" class="btn">Save Defaults</button>
-</form>
+  <hr>
 
-<form method="post" action="/web/settings/defaults/clear" style="margin-top: 1rem;">
+  <form method="post" action="/web/settings/defaults/clear">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <button type="submit" class="btn btn-danger">Clear All Defaults</button>
-</form>
+    <button type="submit" class="btn btn-danger" data-confirm="Clear all browser defaults?">Clear all defaults</button>
+  </form>
+</div>
 {% endblock %}

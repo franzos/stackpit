@@ -6,26 +6,48 @@
     <meta name="color-scheme" content="light dark">
     <title>{% block title %}Stackpit{% endblock %}</title>
     <link rel="stylesheet" href="/web/_assets/style.css">
+    <link rel="icon" type="image/svg+xml" href="/web/_assets/icon.svg">
     <script src="/web/_assets/bulk.js" defer></script>
     <script src="/web/_assets/confirm.js" defer></script>
     <script src="/web/_assets/stop-propagation.js" defer></script>
 </head>
-<body>
-    <header>
-        <nav aria-label="Breadcrumb">
-            <a href="/web/projects/" class="nav-logo"><img src="/web/_assets/icon.svg" alt="Stackpit" width="24" height="24"> Stackpit</a>
-            {% block breadcrumbs %}{% endblock %}
-            <a href="/web/settings/integrations/" class="nav-settings" style="margin-left: auto; font-size: 0.85rem;">Settings</a>
-            <a href="/web/settings/defaults/" style="font-size: 0.85rem; margin-left: 0.5rem;">Defaults</a>
-            <form method="post" action="/web/logout" style="display:inline;margin-left:0.75rem"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" style="background:none;border:none;cursor:pointer;color:inherit;font-size:0.85rem;padding:0;opacity:0.7">Logout</button></form>
+<body class="min-h-screen">
+{% block layout %}
+<div class="flex min-h-screen">
+    <aside class="w-[var(--spacing-sidebar)] shrink-0 border-r border-outline-variant flex flex-col"
+           style="background: var(--color-surface-container-low);">
+        <a href="/web/projects/" class="flex items-center gap-2 px-4 h-14 border-b border-outline-variant">
+            <img src="/web/_assets/icon.svg" alt="" width="22" height="22">
+            <span class="font-semibold">Stackpit</span>
+        </a>
+        <nav class="flex-1 py-3 overflow-y-auto" aria-label="Primary">
+            {% block sidebar_nav %}
+            <div class="px-2 space-y-0.5">
+                <a href="/web/projects/" class="sidebar-link"><span>Projects</span></a>
+            </div>
+            {% endblock %}
         </nav>
-    </header>
-    <main>
-        {% block content %}{% endblock %}
-    </main>
-    <footer>
-        <small>Stackpit</small>
-    </footer>
-    {% block scripts %}{% endblock %}
+        <div class="border-t border-outline-variant py-2 px-2 space-y-0.5">
+            <a href="/web/settings/integrations/" class="sidebar-link"><span>Settings</span></a>
+            <a href="/web/settings/defaults/" class="sidebar-link"><span>Defaults</span></a>
+            <form method="post" action="/web/logout" class="contents">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit" class="sidebar-link"><span>Logout</span></button>
+            </form>
+        </div>
+    </aside>
+    <div class="flex-1 min-w-0 flex flex-col">
+        <header class="h-14 border-b border-outline-variant px-6 flex items-center"
+                style="background: var(--color-surface);">
+            <nav class="text-[13px] flex items-center gap-1.5" aria-label="Breadcrumb">
+                <a href="/web/projects/" class="breadcrumb-link">Projects</a>
+                {% block breadcrumbs %}{% endblock %}
+            </nav>
+        </header>
+        <main class="flex-1 px-6 py-6 min-w-0">{% block content %}{% endblock %}</main>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}{% endblock %}
 </body>
 </html>

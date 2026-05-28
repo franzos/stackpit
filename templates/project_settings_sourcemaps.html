@@ -1,98 +1,82 @@
 {% extends "base.html" %}
+{% import "_macros.html" as m %}
 
-{% block title %}Source Maps - {{ nav.label }} - Stackpit{% endblock %}
+{% block title %}Source Maps — {{ nav.label }} — Stackpit{% endblock %}
+
+{% block sidebar_nav %}{% call m::project_sidebar(project_id, nav, "settings") %}{% endcall %}{% endblock %}
 
 {% block breadcrumbs %}
-<span class="sep" aria-hidden="true">/</span>
-<a href="/web/projects/">Projects</a>
-<span class="sep" aria-hidden="true">/</span>
-<a href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
-<span class="sep" aria-hidden="true">/</span>
-<a href="/web/projects/{{ project_id }}/settings/">Settings</a>
-<span class="sep" aria-hidden="true">/</span>
-<span>Source Maps</span>
+<span class="breadcrumb-sep">/</span>
+<a class="breadcrumb-link" href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
+<span class="breadcrumb-sep">/</span>
+<a class="breadcrumb-link" href="/web/projects/{{ project_id }}/settings/">Settings</a>
+<span class="breadcrumb-sep">/</span>
+<span class="breadcrumb-current">Source maps</span>
 {% endblock %}
 
 {% block content %}
-<h1>{{ nav.label }}</h1>
-<nav class="project-tabs" aria-label="Project sections">
-    <a href="/web/projects/{{ project_id }}/" class="project-tab"><span class="type-icon type-icon-event"></span>Issues</a>
-    {% if nav.transaction_count > 0 %}<a href="/web/projects/{{ project_id }}/transactions/" class="project-tab"><span class="type-icon type-icon-transaction"></span>Transactions <span class="tab-count">{{ nav.transaction_count }}</span></a>{% endif %}
-    {% if nav.span_count > 0 %}<a href="/web/projects/{{ project_id }}/spans/" class="project-tab"><span class="type-icon type-icon-span"></span>Spans <span class="tab-count">{{ nav.span_count }}</span></a>{% endif %}
-    {% if nav.log_count > 0 %}<a href="/web/projects/{{ project_id }}/logs/" class="project-tab"><span class="type-icon type-icon-log"></span>Logs <span class="tab-count">{{ nav.log_count }}</span></a>{% endif %}
-    {% if nav.metric_count > 0 %}<a href="/web/projects/{{ project_id }}/metrics/" class="project-tab"><span class="type-icon type-icon-metric"></span>Metrics <span class="tab-count">{{ nav.metric_count }}</span></a>{% endif %}
-    {% if nav.monitor_count > 0 %}<a href="/web/projects/{{ project_id }}/monitors/" class="project-tab"><span class="type-icon type-icon-check_in"></span>Monitors <span class="tab-count">{{ nav.monitor_count }}</span></a>{% endif %}
-    {% if nav.profile_count > 0 %}<a href="/web/projects/{{ project_id }}/profiles/" class="project-tab"><span class="type-icon type-icon-profile"></span>Profiles <span class="tab-count">{{ nav.profile_count }}</span></a>{% endif %}
-    {% if nav.replay_count > 0 %}<a href="/web/projects/{{ project_id }}/replays/" class="project-tab"><span class="type-icon type-icon-replay"></span>Replays <span class="tab-count">{{ nav.replay_count }}</span></a>{% endif %}
-    {% if nav.session_count > 0 %}<a href="/web/projects/{{ project_id }}/health/" class="project-tab"><span class="type-icon type-icon-session"></span>Health <span class="tab-count">{{ nav.session_count }}</span></a>{% endif %}
-    {% if nav.user_report_count > 0 %}<a href="/web/projects/{{ project_id }}/user-reports/" class="project-tab"><span class="type-icon type-icon-user_report"></span>User Reports <span class="tab-count">{{ nav.user_report_count }}</span></a>{% endif %}
-    {% if nav.client_report_count > 0 %}<a href="/web/projects/{{ project_id }}/client-reports/" class="project-tab"><span class="type-icon type-icon-client_report"></span>Client Reports <span class="tab-count">{{ nav.client_report_count }}</span></a>{% endif %}
-    <a href="/web/projects/{{ project_id }}/settings/" class="project-tab active"><span class="type-icon type-icon-settings"></span>Settings</a>
+<div class="page-header"><h1>Source maps</h1></div>
+
+<nav class="flex gap-1 mb-6 border-b border-outline-variant -mx-6 px-6" aria-label="Settings sections">
+  <a href="/web/projects/{{ project_id }}/settings/" class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-transparent text-muted hover:text-on-surface">General</a>
+  <a href="/web/projects/{{ project_id }}/settings/keys/" class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-transparent text-muted hover:text-on-surface">SDK setup</a>
+  <a href="/web/projects/{{ project_id }}/settings/sourcemaps/" class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-primary text-on-surface">Source maps</a>
+  <a href="/web/projects/{{ project_id }}/settings/filters/" class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-transparent text-muted hover:text-on-surface">Filters</a>
+  <a href="/web/projects/{{ project_id }}/settings/integrations/" class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-transparent text-muted hover:text-on-surface">Integrations</a>
 </nav>
 
-<nav class="project-tabs" aria-label="Settings sections">
-    <a href="/web/projects/{{ project_id }}/settings/" class="project-tab">General</a>
-    <a href="/web/projects/{{ project_id }}/settings/keys/" class="project-tab">SDK Setup</a>
-    <a href="/web/projects/{{ project_id }}/settings/sourcemaps/" class="project-tab active">Source Maps</a>
-    <a href="/web/projects/{{ project_id }}/settings/filters/" class="project-tab">Filters</a>
-    <a href="/web/projects/{{ project_id }}/settings/integrations/" class="project-tab">Integrations</a>
-</nav>
+{% match message %}{% when Some with (msg) %}<div class="settings-message mb-4">{{ msg }}</div>{% when None %}{% endmatch %}
 
-<h2>API Key</h2>
+<div class="space-y-6 max-w-3xl">
+  <div class="card card-pad">
+    <h2 class="page-h2 mb-2">API key</h2>
+    <p class="text-muted text-[13px] mb-4">Source map uploads require an API key. Specific to this project and only usable for source map operations.</p>
 
-{% match message %}{% when Some with (msg) %}
-<p class="settings-message">{{ msg }}</p>
-{% when None %}{% endmatch %}
+    {% if !new_key.is_empty() %}
+    <div class="settings-message mb-4 break-all">
+      Key generated: <code class="text-mono">{{ new_key }}</code><br>
+      <strong>Copy this key now — it will not be shown again.</strong>
+    </div>
+    {% endif %}
 
-<p>Source map uploads require an API key. This key is specific to this project and can only be used for source map operations.</p>
-
-{% if !new_key.is_empty() %}
-<div class="settings-message" style="word-break: break-all;">
-    Key generated: <code>{{ new_key }}</code><br>
-    <strong>Copy this key now — it will not be shown again.</strong>
-</div>
-{% endif %}
-
-{% if !key_prefix.is_empty() %}
-<div class="table-wrap">
-<table>
-    <thead>
-        <tr>
-            <th scope="col">Key</th>
-            <th scope="col">Created</th>
-            <th scope="col"></th>
-        </tr>
-    </thead>
-    <tbody>
-        <tr>
-            <td><code>{{ key_prefix }}...</code></td>
-            <td><time datetime="{{ key_created_at|format_ts }}" title="{{ key_created_at|format_ts }}">{{ key_created_at|format_relative }}</time></td>
+    {% if !key_prefix.is_empty() %}
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>Key</th><th>Created</th><th></th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code class="text-mono">{{ key_prefix }}…</code></td>
+            <td class="text-muted"><time datetime="{{ key_created_at|format_ts }}" title="{{ key_created_at|format_ts }}">{{ key_created_at|format_relative }}</time></td>
             <td>
-                <form method="post" action="/web/projects/{{ project_id }}/settings/sourcemaps/generate" style="margin: 0;">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                    <button type="submit" class="btn" data-confirm="Regenerate key? The current key will stop working.">Regenerate</button>
-                </form>
+              <form method="post" action="/web/projects/{{ project_id }}/settings/sourcemaps/generate">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit" class="btn btn-secondary" data-confirm="Regenerate key? The current key will stop working.">Regenerate</button>
+              </form>
             </td>
-        </tr>
-    </tbody>
-</table>
-</div>
-{% else %}
-{% if new_key.is_empty() %}
-<p class="empty">No source map API key for this project.</p>
-<form method="post" action="/web/projects/{{ project_id }}/settings/sourcemaps/generate">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <button type="submit" class="btn">Generate Key</button>
-</form>
-{% endif %}
-{% endif %}
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    {% if new_key.is_empty() %}
+    <p class="empty">No source map API key for this project.</p>
+    <form method="post" action="/web/projects/{{ project_id }}/settings/sourcemaps/generate">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="btn btn-primary">Generate key</button>
+    </form>
+    {% endif %}
+    {% endif %}
+  </div>
 
-<h2>Setup</h2>
-<p>Use <a href="https://docs.sentry.io/cli/" rel="noopener noreferrer">sentry-cli</a> to upload source maps. Set these environment variables:</p>
-<pre><code>export SENTRY_URL={{ sentry_url }}
+  <div class="card card-pad">
+    <h2 class="page-h2 mb-2">Setup</h2>
+    <p class="text-muted text-[13px] mb-3">Use <a class="text-primary" href="https://docs.sentry.io/cli/" rel="noopener noreferrer">sentry-cli</a> to upload source maps. Set these environment variables:</p>
+    <pre class="codeblock">export SENTRY_URL={{ sentry_url }}
 export SENTRY_AUTH_TOKEN=&lt;your API key&gt;
 export SENTRY_ORG=default
-export SENTRY_PROJECT={{ project_id }}</code></pre>
-<p>Then upload:</p>
-<pre><code>sentry-cli sourcemaps upload --release=&lt;version&gt; ./dist</code></pre>
+export SENTRY_PROJECT={{ project_id }}</pre>
+    <p class="text-muted text-[13px] mt-4 mb-2">Then upload:</p>
+    <pre class="codeblock">sentry-cli sourcemaps upload --release=&lt;version&gt; ./dist</pre>
+  </div>
+</div>
 {% endblock %}

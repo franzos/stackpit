@@ -13,8 +13,25 @@ SEED_WORKERS ?= 8
 DB          := stackpit.db
 LOG         := /tmp/stackpit.log
 
-.PHONY: check clippy test check-pg clippy-pg test-pg fmt build \
+.PHONY: check clippy test check-pg clippy-pg test-pg fmt build css css-watch \
         serve-bg kill seed test-integration e2e e2e-trace help
+
+# Tailwind v4 standalone CLI. The binary is dynamically linked against glibc +
+# libgcc_s; wrap each invocation in `guix shell` on GUIX so the dynamic linker
+# can find them. Outside GUIX (e.g. CI), invoke the binary directly.
+TAILWIND     := ./.bin/tailwindcss
+TAILWIND_IN  := templates/tailwind.css
+TAILWIND_OUT := templates/style.css
+
+ifeq ($(shell command -v guix 2>/dev/null),)
+TAILWIND_RUN := $(TAILWIND)
+else
+# guix shell loads libc + libgcc_s; we then re-exec the binary with all argv
+# preserved. Using `--` as $0 collides with tailwindcss's argument parsing, so
+# the binary path itself is $0 instead.
+TAILWIND_RUN := guix shell glibc gcc-toolchain -- bash -c \
+  'export LD_LIBRARY_PATH=$$LIBRARY_PATH:$$LD_LIBRARY_PATH; exec "$$0" "$$@"' $(TAILWIND)
+endif
 
 # Cargo wrapper. On GUIX, supply rust + gcc + OpenSSL; bare cargo otherwise.
 # The trailing `cargo` token is $0 for `bash -c`; real args arrive as "$@".
@@ -59,8 +76,14 @@ fmt: ## rustfmt via podman (never the host toolchain)
 	podman run --rm -v $(CURDIR):/work -w /work rust:latest \
 	  sh -c "rustup component add rustfmt && cargo fmt"
 
-build: ## Debug build (sqlite)
+build: css ## Debug build (sqlite). Builds CSS first so the embedded asset is fresh.
 	$(CARGO) build --no-default-features --features sqlite
+
+css: ## Build templates/style.css from tailwind.css (minified)
+	$(TAILWIND_RUN) -i $(TAILWIND_IN) -o $(TAILWIND_OUT) --minify
+
+css-watch: ## Rebuild templates/style.css on template changes
+	$(TAILWIND_RUN) -i $(TAILWIND_IN) -o $(TAILWIND_OUT) --watch
 
 serve-bg: build ## Wipe the DB, launch `stackpit serve` in the background, wait for health
 	@rm -f $(DB) $(DB)-wal $(DB)-shm

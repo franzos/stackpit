@@ -1,0 +1,124 @@
+{# Shared Askama macros. Imported by templates that need them via
+   `{% import "_macros.html" as m %}` and invoked with `{% call m::name(...) %}`. #}
+
+{# Project-scoped sidebar nav. The `active` string marks the current section
+   so its link gets `sidebar-link-active`. Sections without recorded events
+   are omitted, mirroring the legacy horizontal tab-strip behavior. #}
+{% macro project_sidebar(project_id, nav, active) %}
+<div class="px-3 pt-3 pb-2">
+  <div class="text-on-surface text-sm font-semibold truncate">{{ nav.label }}</div>
+  <div class="text-on-surface-variant text-[11px] uppercase tracking-wider mt-0.5">Project</div>
+</div>
+<div class="px-2 space-y-0.5">
+  <a href="/web/projects/{{ project_id }}/"
+     class="sidebar-link{% if active == "issues" %} sidebar-link-active{% endif %}">
+    <span>Issues</span>
+  </a>
+  {% if nav.transaction_count > 0 %}
+  <a href="/web/projects/{{ project_id }}/transactions/"
+     class="sidebar-link{% if active == "transactions" %} sidebar-link-active{% endif %}">
+    <span>Transactions</span><span class="sidebar-count">{{ nav.transaction_count }}</span>
+  </a>
+  {% endif %}
+  {% if nav.span_count > 0 %}
+  <a href="/web/projects/{{ project_id }}/spans/"
+     class="sidebar-link{% if active == "spans" %} sidebar-link-active{% endif %}">
+    <span>Spans</span><span class="sidebar-count">{{ nav.span_count }}</span>
+  </a>
+  {% endif %}
+  {% if nav.log_count > 0 %}
+  <a href="/web/projects/{{ project_id }}/logs/"
+     class="sidebar-link{% if active == "logs" %} sidebar-link-active{% endif %}">
+    <span>Logs</span><span class="sidebar-count">{{ nav.log_count }}</span>
+  </a>
+  {% endif %}
+  {% if nav.metric_count > 0 %}
+  <a href="/web/projects/{{ project_id }}/metrics/"
+     class="sidebar-link{% if active == "metrics" %} sidebar-link-active{% endif %}">
+    <span>Metrics</span><span class="sidebar-count">{{ nav.metric_count }}</span>
+  </a>
+  {% endif %}
+  {% if nav.monitor_count > 0 %}
+  <a href="/web/projects/{{ project_id }}/monitors/"
+     class="sidebar-link{% if active == "monitors" %} sidebar-link-active{% endif %}">
+    <span>Monitors</span><span class="sidebar-count">{{ nav.monitor_count }}</span>
+  </a>
+  {% endif %}
+  {% if nav.profile_count > 0 %}
+  <a href="/web/projects/{{ project_id }}/profiles/"
+     class="sidebar-link{% if active == "profiles" %} sidebar-link-active{% endif %}">
+    <span>Profiles</span><span class="sidebar-count">{{ nav.profile_count }}</span>
+  </a>
+  {% endif %}
+  {% if nav.replay_count > 0 %}
+  <a href="/web/projects/{{ project_id }}/replays/"
+     class="sidebar-link{% if active == "replays" %} sidebar-link-active{% endif %}">
+    <span>Replays</span><span class="sidebar-count">{{ nav.replay_count }}</span>
+  </a>
+  {% endif %}
+  {% if nav.session_count > 0 %}
+  <a href="/web/projects/{{ project_id }}/health/"
+     class="sidebar-link{% if active == "health" %} sidebar-link-active{% endif %}">
+    <span>Health</span><span class="sidebar-count">{{ nav.session_count }}</span>
+  </a>
+  {% endif %}
+  {% if nav.user_report_count > 0 %}
+  <a href="/web/projects/{{ project_id }}/user-reports/"
+     class="sidebar-link{% if active == "user_reports" %} sidebar-link-active{% endif %}">
+    <span>User Reports</span><span class="sidebar-count">{{ nav.user_report_count }}</span>
+  </a>
+  {% endif %}
+  {% if nav.client_report_count > 0 %}
+  <a href="/web/projects/{{ project_id }}/client-reports/"
+     class="sidebar-link{% if active == "client_reports" %} sidebar-link-active{% endif %}">
+    <span>Client Reports</span><span class="sidebar-count">{{ nav.client_report_count }}</span>
+  </a>
+  {% endif %}
+  <a href="/web/projects/{{ project_id }}/settings/"
+     class="sidebar-link{% if active == "settings" %} sidebar-link-active{% endif %}">
+    <span>Settings</span>
+  </a>
+</div>
+<div class="px-3 pt-4 pb-1 label-caps">Across projects</div>
+<div class="px-2 space-y-0.5">
+  <a href="/web/releases/?project_id={{ project_id }}" class="sidebar-link">
+    <span>Releases</span>
+  </a>
+  <a href="/web/settings/alerts/" class="sidebar-link">
+    <span>Alerts &amp; digests</span>
+  </a>
+</div>
+{% endmacro %}
+
+{# Top-level sidebar nav for non-project pages (project list, global settings). #}
+{% macro top_sidebar(active) %}
+<div class="px-2 space-y-0.5">
+  <a href="/web/projects/" class="sidebar-link{% if active == "projects" %} sidebar-link-active{% endif %}">
+    <span>Projects</span>
+  </a>
+</div>
+{% endmacro %}
+
+{# Settings sidebar nav. #}
+{% macro settings_sidebar(active) %}
+<div class="px-3 pt-3 pb-2">
+  <div class="text-on-surface text-sm font-semibold">Settings</div>
+</div>
+<div class="px-2 space-y-0.5">
+  <a href="/web/settings/integrations/"
+     class="sidebar-link{% if active == "integrations" %} sidebar-link-active{% endif %}">
+    <span>Integrations</span>
+  </a>
+  <a href="/web/settings/alerts/"
+     class="sidebar-link{% if active == "alerts" %} sidebar-link-active{% endif %}">
+    <span>Alerts &amp; digests</span>
+  </a>
+  <a href="/web/settings/defaults/"
+     class="sidebar-link{% if active == "defaults" %} sidebar-link-active{% endif %}">
+    <span>Defaults</span>
+  </a>
+  <a href="/web/projects/" class="sidebar-link">
+    <span>← Projects</span>
+  </a>
+</div>
+{% endmacro %}

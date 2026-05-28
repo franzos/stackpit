@@ -40,6 +40,7 @@ pub struct StatusForm {
 #[allow(dead_code)]
 struct IssueDetailTemplate {
     issue: queries::IssueSummary,
+    nav: queries::ProjectNavCounts,
     tab: String,
     is_discarded: bool,
     // -- details tab --
@@ -86,6 +87,8 @@ pub async fn handler(
 
     let tab = params.tab.unwrap_or_else(|| "details".to_string());
 
+    let nav = queries::projects::get_nav_counts(&pool, project_id).await;
+
     let is_discarded = queries::filters::is_fingerprint_discarded(&pool, &fingerprint)
         .await
         .unwrap_or(false);
@@ -110,6 +113,7 @@ pub async fn handler(
 
         let tmpl = IssueDetailTemplate {
             issue,
+            nav: nav.clone(),
             tab,
             is_discarded,
             event: None,
@@ -202,6 +206,7 @@ pub async fn handler(
 
     let tmpl = IssueDetailTemplate {
         issue,
+        nav,
         tab,
         is_discarded,
         event: latest,

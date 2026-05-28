@@ -1,29 +1,37 @@
 {% extends "base.html" %}
+{% import "_macros.html" as m %}
 
-{% block title %}New Project - Stackpit{% endblock %}
+{% block title %}New project — Stackpit{% endblock %}
+
+{% block sidebar_nav %}{% call m::top_sidebar("projects") %}{% endcall %}{% endblock %}
 
 {% block breadcrumbs %}
-<span class="sep" aria-hidden="true">/</span>
-<a href="/web/projects/">Projects</a>
-<span class="sep" aria-hidden="true">/</span>
-<span>New Project</span>
+<span class="breadcrumb-sep">/</span>
+<span class="breadcrumb-current">New project</span>
 {% endblock %}
 
 {% block content %}
-<h1>New Project</h1>
+<div class="page-header">
+  <h1>New project</h1>
+</div>
 
 {% match message %}{% when Some with (msg) %}
-<p class="settings-message">{{ msg }}</p>
+<div class="settings-message mb-4">{{ msg }}</div>
 {% when None %}{% endmatch %}
 
-<form class="settings-form" method="post" action="/web/projects/new">
+<div class="card card-pad max-w-2xl">
+  <form class="settings-form" method="post" action="/web/projects/new">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <label for="project_name">Project Name</label>
-    <input type="text" id="project_name" name="name" placeholder="My Project" required>
 
-    <label for="platform">Platform <span style="font-weight: 400; color: var(--muted);">(optional)</span></label>
-    <select id="platform" name="platform">
-        <option value="">Select a platform...</option>
+    <div>
+      <label class="field-label" for="project_name">Project name</label>
+      <input class="input" type="text" id="project_name" name="name" placeholder="My Project" required>
+    </div>
+
+    <div>
+      <label class="field-label" for="platform">Platform <span class="text-muted normal-case tracking-normal font-normal">(optional)</span></label>
+      <select class="select" id="platform" name="platform">
+        <option value="">Select a platform…</option>
         <option value="javascript">JavaScript</option>
         <option value="python">Python</option>
         <option value="rust">Rust</option>
@@ -38,8 +46,13 @@
         <option value="kotlin">Kotlin</option>
         <option value="native">Native (C/C++)</option>
         <option value="other">Other</option>
-    </select>
+      </select>
+    </div>
 
-    <button type="submit" class="btn">Create Project</button>
-</form>
+    <div class="flex gap-2">
+      <button type="submit" class="btn btn-primary">Create project</button>
+      <a href="/web/projects/" class="btn btn-secondary">Cancel</a>
+    </div>
+  </form>
+</div>
 {% endblock %}

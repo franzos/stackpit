@@ -1,65 +1,57 @@
 {% extends "base.html" %}
+{% import "_macros.html" as m %}
 
-{% block title %}{{ mri }} - Metrics - {{ nav.label }} - Stackpit{% endblock %}
+{% block title %}{{ mri }} — Metrics — {{ nav.label }} — Stackpit{% endblock %}
+
+{% block sidebar_nav %}{% call m::project_sidebar(project_id, nav, "metrics") %}{% endcall %}{% endblock %}
 
 {% block breadcrumbs %}
-<span class="sep" aria-hidden="true">/</span>
-<a href="/web/projects/">Projects</a>
-<span class="sep" aria-hidden="true">/</span>
-<a href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
-<span class="sep" aria-hidden="true">/</span>
-<a href="/web/projects/{{ project_id }}/metrics/">Metrics</a>
-<span class="sep" aria-hidden="true">/</span>
-<span>{{ mri }}</span>
+<span class="breadcrumb-sep">/</span>
+<a class="breadcrumb-link" href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
+<span class="breadcrumb-sep">/</span>
+<a class="breadcrumb-link" href="/web/projects/{{ project_id }}/metrics/">Metrics</a>
+<span class="breadcrumb-sep">/</span>
+<span class="breadcrumb-current text-mono">{{ mri }}</span>
 {% endblock %}
 
 {% block content %}
-<h1>{{ mri }}</h1>
-<p>Type: <span class="badge">{{ metric_type }}</span></p>
-
-<nav class="project-tabs" aria-label="Project sections">
-    <a href="/web/projects/{{ project_id }}/" class="project-tab"><span class="type-icon type-icon-event"></span>Issues</a>
-    {% if nav.transaction_count > 0 %}<a href="/web/projects/{{ project_id }}/transactions/" class="project-tab"><span class="type-icon type-icon-transaction"></span>Transactions <span class="tab-count">{{ nav.transaction_count }}</span></a>{% endif %}
-    {% if nav.span_count > 0 %}<a href="/web/projects/{{ project_id }}/spans/" class="project-tab"><span class="type-icon type-icon-span"></span>Spans <span class="tab-count">{{ nav.span_count }}</span></a>{% endif %}
-    {% if nav.log_count > 0 %}<a href="/web/projects/{{ project_id }}/logs/" class="project-tab"><span class="type-icon type-icon-log"></span>Logs <span class="tab-count">{{ nav.log_count }}</span></a>{% endif %}
-    <a href="/web/projects/{{ project_id }}/metrics/" class="project-tab active"><span class="type-icon type-icon-metric"></span>Metrics</a>
-    {% if nav.monitor_count > 0 %}<a href="/web/projects/{{ project_id }}/monitors/" class="project-tab"><span class="type-icon type-icon-check_in"></span>Monitors <span class="tab-count">{{ nav.monitor_count }}</span></a>{% endif %}
-    {% if nav.profile_count > 0 %}<a href="/web/projects/{{ project_id }}/profiles/" class="project-tab"><span class="type-icon type-icon-profile"></span>Profiles <span class="tab-count">{{ nav.profile_count }}</span></a>{% endif %}
-    {% if nav.replay_count > 0 %}<a href="/web/projects/{{ project_id }}/replays/" class="project-tab"><span class="type-icon type-icon-replay"></span>Replays <span class="tab-count">{{ nav.replay_count }}</span></a>{% endif %}
-    {% if nav.session_count > 0 %}<a href="/web/projects/{{ project_id }}/health/" class="project-tab"><span class="type-icon type-icon-session"></span>Health <span class="tab-count">{{ nav.session_count }}</span></a>{% endif %}
-    {% if nav.user_report_count > 0 %}<a href="/web/projects/{{ project_id }}/user-reports/" class="project-tab"><span class="type-icon type-icon-user_report"></span>User Reports <span class="tab-count">{{ nav.user_report_count }}</span></a>{% endif %}
-    {% if nav.client_report_count > 0 %}<a href="/web/projects/{{ project_id }}/client-reports/" class="project-tab"><span class="type-icon type-icon-client_report"></span>Client Reports <span class="tab-count">{{ nav.client_report_count }}</span></a>{% endif %}
-    <a href="/web/projects/{{ project_id }}/settings/" class="project-tab"><span class="type-icon type-icon-settings"></span>Settings</a>
-</nav>
+<div class="page-header">
+  <div>
+    <h1 class="text-mono break-all">{{ mri }}</h1>
+    <p class="mt-2"><span class="badge badge-neutral">{{ metric_type }}</span></p>
+  </div>
+</div>
 
 {% if buckets.is_empty() %}
-<p class="empty">No data points in the selected time range.</p>
+<div class="card"><p class="empty">No data points in the selected time range.</p></div>
 {% else %}
-<div class="table-wrap">
-<table>
-    <thead>
+<div class="card overflow-hidden">
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
         <tr>
-            <th scope="col">Time (hourly bucket)</th>
-            <th scope="col">Count</th>
-            <th scope="col">Sum</th>
-            <th scope="col">Min</th>
-            <th scope="col">Max</th>
-            <th scope="col">Avg</th>
+          <th>Time (hourly bucket)</th>
+          <th>Count</th>
+          <th>Sum</th>
+          <th>Min</th>
+          <th>Max</th>
+          <th>Avg</th>
         </tr>
-    </thead>
-    <tbody>
+      </thead>
+      <tbody>
         {% for b in buckets %}
         <tr>
-            <td><time datetime="{{ b.timestamp|format_ts }}" title="{{ b.timestamp|format_ts }}">{{ b.timestamp|format_ts }}</time></td>
-            <td>{{ b.count }}</td>
-            <td>{{ b.sum }}</td>
-            <td>{{ b.min }}</td>
-            <td>{{ b.max }}</td>
-            <td>{{ b.avg }}</td>
+          <td class="text-mono text-[12px] text-muted"><time datetime="{{ b.timestamp|format_ts }}" title="{{ b.timestamp|format_ts }}">{{ b.timestamp|format_ts }}</time></td>
+          <td class="text-tabular">{{ b.count }}</td>
+          <td class="text-tabular">{{ b.sum }}</td>
+          <td class="text-tabular">{{ b.min }}</td>
+          <td class="text-tabular">{{ b.max }}</td>
+          <td class="text-tabular">{{ b.avg }}</td>
         </tr>
         {% endfor %}
-    </tbody>
-</table>
+      </tbody>
+    </table>
+  </div>
 </div>
 {% endif %}
 {% endblock %}

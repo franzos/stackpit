@@ -16,7 +16,6 @@ use crate::html::filters;
 #[template(path = "project_integrations.html")]
 struct ProjectIntegrationsTemplate {
     project_id: u64,
-    project_status: String,
     active: Vec<ProjectIntegration>,
     available: Vec<Integration>,
     message: Option<String>,
@@ -142,11 +141,6 @@ async fn render_page(
     message: Option<String>,
     csrf: &str,
 ) -> axum::response::Response {
-    let project_status = queries::projects::get_project_status(&state.pool, project_id)
-        .await
-        .unwrap_or(None)
-        .unwrap_or(crate::queries::types::ProjectStatus::Active)
-        .to_string();
     let active = queries::integrations::list_project_integrations(&state.pool, project_id)
         .await
         .unwrap_or_default();
@@ -158,7 +152,6 @@ async fn render_page(
 
     let tmpl = ProjectIntegrationsTemplate {
         project_id,
-        project_status,
         active,
         available,
         message,

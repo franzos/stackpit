@@ -50,8 +50,6 @@ mode = "open"
 # # web_audience              = "stackpit-web"  # audience the web BFF expects on access tokens;
 #                                       # bind this to the IdP audience for the web client to
 #                                       # block confused-deputy attacks across resource servers.
-# # allow_empty_web_audience  = false   # DEPRECATED -- accepted for one release, removed next;
-#                                       # set web_audience instead.
 # # access_token_max_ttl_secs = 86400   # ceiling for back-channel revocation TTL
 # # refresh_token_max_ttl_secs = 1209600  # 14d default; ceiling for marker TTL when
 #                                       # a refresh token might outlast the access token.

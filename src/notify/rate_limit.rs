@@ -1,52 +1,7 @@
+use crate::sliding_window::SlidingWindow;
+use crate::throttle::Throttle;
 use dashmap::DashMap;
 use parking_lot::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-/// A sliding window over 60 one-second buckets.
-struct SlidingWindow {
-    counts: [u32; 60],
-    current_second: u64,
-}
-
-impl SlidingWindow {
-    fn new() -> Self {
-        Self {
-            counts: [0; 60],
-            current_second: 0,
-        }
-    }
-
-    fn advance(&mut self, now_secs: u64) {
-        if self.current_second == 0 {
-            self.current_second = now_secs;
-            return;
-        }
-
-        let elapsed = now_secs.saturating_sub(self.current_second);
-        if elapsed == 0 {
-            return;
-        }
-
-        if elapsed >= 60 {
-            self.counts = [0; 60];
-        } else {
-            for i in 0..elapsed.min(60) {
-                let idx = ((self.current_second + i + 1) % 60) as usize;
-                self.counts[idx] = 0;
-            }
-        }
-        self.current_second = now_secs;
-    }
-
-    fn count(&self) -> u32 {
-        self.counts.iter().sum()
-    }
-
-    fn increment(&mut self, now_secs: u64) {
-        let idx = (now_secs % 60) as usize;
-        self.counts[idx] = self.counts[idx].saturating_add(1);
-    }
-}
 
 /// In-memory rate limiter (per-project + global tiers, 60s windows; 0 = unlimited).
 pub struct NotifyRateLimiter {
@@ -54,7 +9,7 @@ pub struct NotifyRateLimiter {
     global_window: Mutex<SlidingWindow>,
     project_limit: u32,
     global_limit: u32,
-    last_cleanup: AtomicU64,
+    cleanup_throttle: Throttle,
 }
 
 impl NotifyRateLimiter {
@@ -64,20 +19,14 @@ impl NotifyRateLimiter {
             global_window: Mutex::new(SlidingWindow::new()),
             project_limit,
             global_limit,
-            last_cleanup: AtomicU64::new(0),
+            cleanup_throttle: Throttle::new(),
         }
     }
 
     /// Returns `true` if the notification is allowed, `false` if rate-limited.
     pub fn check_and_record(&self, project_id: u64, now_secs: u64) -> bool {
         // Periodic cleanup: evict stale project entries every 2 minutes
-        let last = self.last_cleanup.load(Ordering::Relaxed);
-        if now_secs.saturating_sub(last) >= 120
-            && self
-                .last_cleanup
-                .compare_exchange(last, now_secs, Ordering::Relaxed, Ordering::Relaxed)
-                .is_ok()
-        {
+        if self.cleanup_throttle.allow(now_secs, 120) {
             self.project_windows
                 .retain(|_, w| now_secs.saturating_sub(w.current_second) < 120);
         }

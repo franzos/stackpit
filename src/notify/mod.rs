@@ -5,8 +5,14 @@ use crate::crypto::SecretEncryptor;
 use crate::db::DbPool;
 use crate::providers;
 use crate::queries;
+use dashmap::DashMap;
 use rate_limit::NotifyRateLimiter;
+use std::net::SocketAddr;
 use std::sync::Arc;
+
+/// Reqwest clients keyed by (host, SSRF-resolved addr). Each client pins its
+/// connections to exactly that addr; repeated deliveries reuse the pool + TLS.
+type ClientCache = Arc<DashMap<(String, SocketAddr), reqwest::Client>>;
 
 #[derive(Debug, Clone)]
 pub struct NotificationEvent {
@@ -80,6 +86,48 @@ pub struct DigestIssue {
     pub first_seen: i64,
 }
 
+/// Cap on concurrent in-flight webhook/email deliveries. An alert burst can
+/// match many integrations at once; each task holds a client and up to ~22s of
+/// retry/timeout, so we queue past this rather than spawn unbounded tasks.
+const MAX_CONCURRENT_DISPATCH: usize = 32;
+
+/// Run `send`, and on error warn, wait 2s, then try once more (error+drop on
+/// second failure). `name`/`kind` are only used for log context.
+async fn send_with_one_retry<F, Fut, E>(name: &str, kind: &str, send: F)
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = Result<(), E>>,
+    E: std::fmt::Display,
+{
+    if let Err(e) = send().await {
+        tracing::warn!("notify: {name} ({kind}) failed, retrying: {e}");
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        if let Err(e2) = send().await {
+            tracing::error!("notify: {name} ({kind}) retry failed, dropping: {e2}");
+        }
+    }
+}
+
+/// Fetch a cached client pinned to `resolved`, building (and caching) one on
+/// first use. The pin stays exact: a client for a given (host, addr) only ever
+/// resolves that host to that addr.
+fn pinned_client(
+    cache: &ClientCache,
+    resolved: &crate::ssrf::ResolvedWebhook,
+) -> Result<reqwest::Client, reqwest::Error> {
+    let key = (resolved.hostname.clone(), resolved.addr);
+    if let Some(client) = cache.get(&key) {
+        return Ok(client.clone());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none())
+        .resolve(&resolved.hostname, resolved.addr)
+        .build()?;
+    cache.insert(key, client.clone());
+    Ok(client)
+}
+
 fn passes_min_level(event_level: Option<&str>, min_level: Option<&str>) -> bool {
     match (event_level, min_level) {
         (_, None) => true,
@@ -125,6 +173,13 @@ pub async fn run_dispatcher(
 ) {
     tracing::info!("notification dispatcher started");
 
+    // Shared across every spawned delivery task to bound concurrent in-flight sends.
+    let dispatch_limit = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_DISPATCH));
+
+    // Reused across notifications so repeat deliveries to the same webhook
+    // keep their connection pool and pinned-addr resolution.
+    let client_cache: ClientCache = Arc::new(DashMap::new());
+
     while let Some(event) = rx.recv().await {
         // Digest notifications bypass rate limiting -- they're already interval-controlled
         if !matches!(event.trigger, NotifyTrigger::Digest) {
@@ -151,6 +206,10 @@ pub async fn run_dispatcher(
                     continue;
                 }
             };
+
+        // Share one event across all matching integrations rather than deep-cloning
+        // the (potentially large) digest tree per task.
+        let event = Arc::new(event);
 
         // Dispatch to all matching integrations concurrently.
         // Tasks are fire-and-forget so a slow webhook never blocks the
@@ -185,47 +244,45 @@ pub async fn run_dispatcher(
                 _ => None,
             };
 
-            let kind = pi.integration_kind.clone();
+            let kind = pi.integration_kind;
             let url = pi.integration_url.clone();
             let int_config = pi.integration_config.clone();
             let pi_config = pi.config.clone();
             let name = pi.integration_name.clone();
-            let event = event.clone();
+            let event = Arc::clone(&event);
             let config = config.clone();
+            let dispatch_limit = dispatch_limit.clone();
+            let client_cache = client_cache.clone();
 
             tokio::spawn(async move {
+                // Hold a permit for the task's lifetime so a burst queues rather
+                // than spawning unbounded concurrent sends. Closes only on shutdown.
+                let _permit = match dispatch_limit.acquire_owned().await {
+                    Ok(p) => p,
+                    Err(_) => return,
+                };
+
+                let kind_label = kind.as_str();
+
                 // Email has no client/url/SSRF surface -- polymail owns the endpoint.
-                if kind == "email" {
-                    let result = providers::email::send(
-                        &config.email,
-                        secret.as_deref(),
-                        int_config.as_deref(),
-                        pi_config.as_deref(),
-                        &event,
-                    )
-                    .await;
-                    if let Err(e) = result {
-                        tracing::warn!("notify: {name} (email) failed, retrying: {e}");
-                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                        if let Err(e2) = providers::email::send(
+                if let crate::queries::types::IntegrationKind::Email = kind {
+                    send_with_one_retry(&name, kind_label, || {
+                        providers::email::send(
                             &config.email,
                             secret.as_deref(),
                             int_config.as_deref(),
                             pi_config.as_deref(),
                             &event,
                         )
-                        .await
-                        {
-                            tracing::error!("notify: {name} (email) retry failed, dropping: {e2}");
-                        }
-                    }
+                    })
+                    .await;
                     return;
                 }
 
                 let url = match url {
                     Some(u) => u,
                     None => {
-                        tracing::warn!("notify: {name} ({kind}) has no url; skipping");
+                        tracing::warn!("notify: {name} ({kind_label}) has no url; skipping");
                         return;
                     }
                 };
@@ -239,12 +296,7 @@ pub async fn run_dispatcher(
                     }
                 };
 
-                let pinned_client = match reqwest::Client::builder()
-                    .timeout(std::time::Duration::from_secs(10))
-                    .redirect(reqwest::redirect::Policy::none())
-                    .resolve(&resolved.hostname, resolved.addr)
-                    .build()
-                {
+                let client = match pinned_client(&client_cache, &resolved) {
                     Ok(c) => c,
                     Err(e) => {
                         tracing::warn!("notify: failed to build pinned client: {e}");
@@ -252,20 +304,10 @@ pub async fn run_dispatcher(
                     }
                 };
 
-                let result =
-                    providers::dispatch(&pinned_client, &kind, &url, secret.as_deref(), &event)
-                        .await;
-
-                if let Err(e) = result {
-                    tracing::warn!("notify: {name} ({kind}) failed, retrying: {e}");
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                    if let Err(e2) =
-                        providers::dispatch(&pinned_client, &kind, &url, secret.as_deref(), &event)
-                            .await
-                    {
-                        tracing::error!("notify: {name} ({kind}) retry failed, dropping: {e2}");
-                    }
-                }
+                send_with_one_retry(&name, kind_label, || {
+                    providers::dispatch(&client, &kind, &url, secret.as_deref(), &event)
+                })
+                .await;
             });
         }
     }

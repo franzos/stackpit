@@ -2,7 +2,6 @@ pub mod cidr;
 pub mod data;
 mod engine;
 mod glob;
-mod rate_limit;
 pub mod rules;
 mod verdict;
 

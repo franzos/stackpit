@@ -16,59 +16,33 @@ pub mod releases;
 pub mod sourcemaps;
 
 /// Sentry-compatible API routes (releases, sourcemaps) with per-project API key auth.
+/// Registered without trailing slashes; `NormalizePathLayer` (see `server.rs`) trims
+/// the trailing slash Sentry SDKs send so both forms match.
 pub fn sentry_api_routes() -> Router<AppState> {
     Router::new()
         .route(
-            "/api/0/projects/{org}/{project_slug}/",
-            get(projects::sentry_get),
-        )
-        .route(
             "/api/0/projects/{org}/{project_slug}",
             get(projects::sentry_get),
-        )
-        .route(
-            "/api/0/organizations/{org}/releases/",
-            post(releases::create),
         )
         .route(
             "/api/0/organizations/{org}/releases",
             post(releases::create),
         )
         .route(
-            "/api/0/projects/{org}/{project_slug}/releases/",
-            post(releases::create_project_scoped),
-        )
-        .route(
             "/api/0/projects/{org}/{project_slug}/releases",
             post(releases::create_project_scoped),
-        )
-        .route(
-            "/api/0/organizations/{org}/releases/{version}/",
-            put(releases::update),
         )
         .route(
             "/api/0/organizations/{org}/releases/{version}",
             put(releases::update),
         )
         .route(
-            "/api/0/projects/{org}/{project_slug}/releases/{version}/",
-            put(releases::update_project_scoped),
-        )
-        .route(
             "/api/0/projects/{org}/{project_slug}/releases/{version}",
             put(releases::update_project_scoped),
         )
         .route(
-            "/api/0/organizations/{org}/chunk-upload/",
-            get(sourcemaps::chunk_upload_config).post(sourcemaps::chunk_upload),
-        )
-        .route(
             "/api/0/organizations/{org}/chunk-upload",
             get(sourcemaps::chunk_upload_config).post(sourcemaps::chunk_upload),
-        )
-        .route(
-            "/api/0/organizations/{org}/artifactbundle/assemble/",
-            post(sourcemaps::assemble),
         )
         .route(
             "/api/0/organizations/{org}/artifactbundle/assemble",
@@ -130,7 +104,11 @@ pub async fn validate_api_key(
     let token = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
+        // RFC 7235: the auth scheme is case-insensitive ("Bearer"/"bearer"/...).
+        .and_then(|s| {
+            let (scheme, token) = s.split_at_checked(7)?;
+            scheme.eq_ignore_ascii_case("Bearer ").then_some(token)
+        })
         .map(|s| s.trim())
         .filter(|s| !s.is_empty());
 
@@ -149,9 +127,10 @@ pub async fn validate_api_key(
     let hash_bytes = Sha256::digest(token.as_bytes());
     let hash_hex = hex::encode(hash_bytes);
 
-    // Compute the dummy digest unconditionally so hit, miss, and DB-error
-    // paths all pay the same CPU cost. Without this the Err(_) arm would
-    // skip the ct_eq and leak a third timing profile.
+    // Equalizes only the in-process compare across hit/miss/error so the error
+    // arm doesn't present a third timing profile. Does NOT mask the DB lookup,
+    // which dominates and isn't constant-time; keys are 256-bit `sk_` randoms,
+    // so a compare-timing oracle isn't practically exploitable regardless.
     let dummy = Sha256::digest(b"stackpit-dummy-api-key-for-timing");
 
     let row = crate::queries::api_keys::get_api_key_by_hash(pool, &hash_hex, scope).await;
@@ -163,16 +142,12 @@ pub async fn validate_api_key(
             Ok(info.project_id)
         }
         Ok(None) => {
-            // DB miss (wrong hash or wrong scope): burn the same compare cycles
-            // against the dummy so response time doesn't leak "no row" vs the
-            // hit path. The miss path covers both "unknown key" and "key exists
-            // but for a different scope" because the SQL filter rejects both.
+            // Wrong hash or wrong scope: the SQL filter rejects both. Match the
+            // hit path's compare cost.
             let _equal: bool = hash_bytes.as_slice().ct_eq(dummy.as_slice()).into();
             Err(api_error(StatusCode::UNAUTHORIZED, "invalid API key"))
         }
         Err(_) => {
-            // DB error: still burn the compare cycles so timing is
-            // indistinguishable from hit/miss.
             let _equal: bool = hash_bytes.as_slice().ct_eq(dummy.as_slice()).into();
             Err(api_error(StatusCode::UNAUTHORIZED, "invalid API key"))
         }

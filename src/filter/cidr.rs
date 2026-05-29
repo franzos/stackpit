@@ -1,68 +1,34 @@
+use ipnet::IpNet;
 use std::net::IpAddr;
+use std::str::FromStr;
 
-/// CIDR block for IP-based filtering. Handles both v4 and v6 -- stores
-/// everything as u128 internally so the math stays uniform.
+/// CIDR block for IP-based filtering. Handles both v4 and v6.
 #[derive(Clone)]
 pub struct CidrBlock {
-    network: u128,
-    mask: u128,
-    is_v4: bool,
+    net: IpNet,
 }
 
 impl CidrBlock {
-    /// Parse CIDR notation or a plain address (plain = /32 or /128).
+    /// Parse CIDR notation or a plain address (plain = /32 or /128 host route).
     pub fn parse(s: &str) -> Option<Self> {
-        let (addr_str, prefix_len) = if let Some((addr, prefix)) = s.split_once('/') {
-            let prefix: u32 = prefix.parse().ok()?;
-            (addr, prefix)
+        let net = if s.contains('/') {
+            IpNet::from_str(s).ok()?
         } else {
-            let addr: IpAddr = s.parse().ok()?;
-            let max_prefix = if addr.is_ipv4() { 32 } else { 128 };
-            (s, max_prefix)
+            // Bare address -> host route (/32 or /128).
+            IpNet::from(IpAddr::from_str(s).ok()?)
         };
-
-        let addr: IpAddr = addr_str.parse().ok()?;
-        let is_v4 = addr.is_ipv4();
-        let max_prefix = if is_v4 { 32 } else { 128 };
-        if prefix_len > max_prefix {
-            return None;
-        }
-
-        let bits = match addr {
-            IpAddr::V4(v4) => u32::from(v4) as u128,
-            IpAddr::V6(v6) => u128::from(v6),
-        };
-
-        let mask = if prefix_len == 0 {
-            0u128
-        } else if is_v4 {
-            ((!0u32) << (32 - prefix_len)) as u128
-        } else {
-            (!0u128) << (128 - prefix_len)
-        };
-
-        Some(Self {
-            network: bits & mask,
-            mask,
-            is_v4,
-        })
+        Some(Self { net })
     }
 
     pub fn contains_addr(&self, ip: IpAddr) -> bool {
-        let bits = match (ip, self.is_v4) {
-            (IpAddr::V4(v4), true) => u32::from(v4) as u128,
-            (IpAddr::V6(v6), false) => u128::from(v6),
-            // IPv4-mapped IPv6 (::ffff:a.b.c.d) -- unwrap to v4 and check.
-            (IpAddr::V6(v6), true) => {
-                if let Some(v4) = v6.to_ipv4_mapped() {
-                    u32::from(v4) as u128
-                } else {
-                    return false;
-                }
-            }
-            _ => return false,
-        };
-        (bits & self.mask) == self.network
+        match (ip, &self.net) {
+            // IPv4-mapped IPv6 (::ffff:a.b.c.d) against a v4 network -- unwrap first.
+            (IpAddr::V6(v6), IpNet::V4(_)) => match v6.to_ipv4_mapped() {
+                Some(v4) => self.net.contains(&IpAddr::V4(v4)),
+                None => false,
+            },
+            _ => self.net.contains(&ip),
+        }
     }
 }
 

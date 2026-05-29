@@ -404,7 +404,7 @@ async fn render_sourcemaps(
 
     let nav = queries::projects::get_nav_counts(&state.pool, project_id).await;
 
-    let sentry_url = format!("http://{}", state.config.server.bind);
+    let sentry_url = state.config.server.dsn_base();
 
     let tmpl = SourceMapsTemplate {
         project_id,

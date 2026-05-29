@@ -1,10 +1,11 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::Sender;
 
 use crate::models::{StorableAttachment, StorableEvent};
 use crate::stats::IngestStats;
+use crate::throttle::Throttle;
 
 use super::msg::WriteMsg;
 
@@ -17,7 +18,7 @@ type SendError = Box<tokio::sync::mpsc::error::TrySendError<WriteMsg>>;
 pub struct WriterHandle {
     tx: Sender<WriteMsg>,
     ingest_stats: Arc<IngestStats>,
-    backpressure_last_warn_secs: Arc<AtomicU64>,
+    backpressure_warn_throttle: Arc<Throttle>,
 }
 
 impl WriterHandle {
@@ -25,7 +26,7 @@ impl WriterHandle {
         Self {
             tx,
             ingest_stats,
-            backpressure_last_warn_secs: Arc::new(AtomicU64::new(0)),
+            backpressure_warn_throttle: Arc::new(Throttle::new()),
         }
     }
 
@@ -67,13 +68,7 @@ impl WriterHandle {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let last = self.backpressure_last_warn_secs.load(Ordering::Relaxed);
-        if now > last
-            && self
-                .backpressure_last_warn_secs
-                .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
-                .is_ok()
-        {
+        if self.backpressure_warn_throttle.allow(now, 1) {
             tracing::warn!(
                 "writer channel at {pct}% capacity ({used}/{max}) — ingestion may be backing up"
             );

@@ -5,8 +5,6 @@ use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
-use crate::encoding::percent_decode;
-
 /// Per-request CSRF token, populated by `web_auth_middleware` once the
 /// requester's identity is resolved. Compared in constant time against the
 /// `csrf_token` form field for every mutating /web/ POST.
@@ -22,24 +20,38 @@ pub struct CsrfConfig {
     pub max_body_size: usize,
 }
 
-/// Deterministic CSRF token for admin_token sessions. Avoids a server-side
-/// store; the admin_token is already the session secret, so deriving from
-/// it is information-preserving.
-pub fn derive_admin_csrf_token(admin_token: &str) -> String {
+/// CSRF token for admin_token sessions: `HMAC(admin_token, label || salt)`.
+/// The salt is a per-login random value carried in a client cookie, so the
+/// token is not a forever-valid function of admin_token alone -- knowing the
+/// admin_token is not enough to precompute it.
+pub fn derive_admin_csrf_token(admin_token: &str, salt: &str) -> String {
     let mut mac = Hmac::<Sha256>::new_from_slice(admin_token.as_bytes())
         .expect("HMAC accepts any key length");
     mac.update(ADMIN_CSRF_DERIVATION_LABEL);
+    mac.update(salt.as_bytes());
     hex::encode(mac.finalize().into_bytes())
 }
 
+/// True when the Cookie header carries a stackpit session cookie (admin token
+/// or OIDC grant, with or without the `__Host-` prefix). Bearer API clients
+/// carry no such cookie and stay out of CSRF scope.
+fn request_carries_session_cookie(cookie_header: &str) -> bool {
+    use crate::html::login::{ADMIN_COOKIE, ADMIN_COOKIE_HOST};
+    use crate::oidc::cookies::{GRANT_COOKIE, GRANT_COOKIE_HOST};
+
+    cookie_header.split(';').any(|pair| {
+        let name = pair.split('=').next().unwrap_or("").trim();
+        matches!(
+            name,
+            GRANT_COOKIE | GRANT_COOKIE_HOST | ADMIN_COOKIE | ADMIN_COOKIE_HOST
+        )
+    })
+}
+
 fn extract_csrf_field(body: &[u8]) -> Option<String> {
-    let body_str = std::str::from_utf8(body).ok()?;
-    for pair in body_str.split('&') {
-        if let Some(val) = pair.strip_prefix("csrf_token=") {
-            return Some(percent_decode(val.trim()));
-        }
-    }
-    None
+    form_urlencoded::parse(body)
+        .find(|(k, _)| k == "csrf_token")
+        .map(|(_, v)| v.into_owned())
 }
 
 pub async fn csrf_middleware(
@@ -65,16 +77,15 @@ pub async fn csrf_middleware(
         || path == "/web/auth/callback"
         || path == "/web/auth/backchannel-logout";
 
-    // Bearer-authed callers carry no cookie, so CSRF doesn't apply to them; we
-    // only guard cookie (browser) sessions on the JSON API.
-    let has_bearer = req
+    // Gate on a session cookie, not any cookie or an unvalidated Authorization
+    // header: genuine bearer API clients carry no session cookie, so only
+    // browser (cookie) sessions are guarded.
+    let has_session_cookie = req
         .headers()
-        .get(axum::http::header::AUTHORIZATION)
+        .get(axum::http::header::COOKIE)
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.trim_start().to_ascii_lowercase().starts_with("bearer "))
-        .unwrap_or(false);
-    let has_cookie = req.headers().contains_key(axum::http::header::COOKIE);
-    let is_cookie_api = path.starts_with("/api/") && has_cookie && !has_bearer;
+        .is_some_and(request_carries_session_cookie);
+    let is_cookie_api = path.starts_with("/api/") && has_session_cookie;
 
     let in_scope = (is_web && !is_login && !is_oauth_endpoint) || is_cookie_api;
 
@@ -117,17 +128,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn admin_csrf_is_deterministic_per_token() {
-        let a = derive_admin_csrf_token("secret-1");
-        let b = derive_admin_csrf_token("secret-1");
+    fn admin_csrf_is_deterministic_per_token_and_salt() {
+        let a = derive_admin_csrf_token("secret-1", "salt-a");
+        let b = derive_admin_csrf_token("secret-1", "salt-a");
         assert_eq!(a, b);
-        let c = derive_admin_csrf_token("secret-2");
+        let c = derive_admin_csrf_token("secret-2", "salt-a");
         assert_ne!(a, c);
+    }
+
+    #[test]
+    fn admin_csrf_differs_across_salts() {
+        let a = derive_admin_csrf_token("secret-1", "salt-a");
+        let b = derive_admin_csrf_token("secret-1", "salt-b");
+        assert_ne!(a, b, "distinct salts must yield distinct tokens");
     }
 
     #[test]
     fn admin_csrf_is_hex_sha256_wide() {
         // 32 bytes hex-encoded = 64 chars.
-        assert_eq!(derive_admin_csrf_token("anything").len(), 64);
+        assert_eq!(derive_admin_csrf_token("anything", "salt").len(), 64);
     }
 }

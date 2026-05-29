@@ -5,12 +5,13 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::models::StorableEvent;
+use crate::sliding_window::SlidingWindow;
+use crate::throttle::Throttle;
 
 use super::cidr::CidrBlock;
 
 use super::data::FilterData;
 use super::glob::glob_match_any;
-use super::rate_limit::SlidingWindow;
 use super::rules::{FilterAction, FilterRule};
 use super::verdict::{DropReason, FilterVerdict};
 use super::{contains_ignore_ascii_case, starts_with_ignore_ascii_case};
@@ -51,22 +52,15 @@ impl FilterSnapshot {
             }
         }
 
-        // load_filter_data lowercases patterns, but tests might not --
-        // so we do it here too, just to be safe.
-        let lowercase_patterns = |m: HashMap<u64, Vec<String>>| -> HashMap<u64, Vec<String>> {
-            m.into_iter()
-                .map(|(k, v)| (k, v.into_iter().map(|s| s.to_lowercase()).collect()))
-                .collect()
-        };
-
+        // Message/release/UA patterns arrive pre-lowercased from load_filter_data.
         Self {
             inbound_filters: data.inbound_filters,
-            message_filters: lowercase_patterns(data.message_filters),
+            message_filters: data.message_filters,
             rate_limits_by_key: by_key,
             rate_limits_by_project: by_project,
             excluded_environments: data.excluded_environments,
-            release_filters: lowercase_patterns(data.release_filters),
-            ua_filters: lowercase_patterns(data.ua_filters),
+            release_filters: data.release_filters,
+            ua_filters: data.ua_filters,
             filter_rules: data.filter_rules,
             ip_blocklist: data.ip_blocklist,
         }
@@ -82,13 +76,13 @@ pub struct FilterEngine {
     /// Separate from snapshot -- fingerprints get added/removed on the fly.
     discarded: RwLock<HashSet<String>>,
     /// Per-key sliding windows. DashMap gives us lock-free concurrent access.
-    rate_windows: dashmap::DashMap<String, SlidingWindow>,
+    rate_windows: dashmap::DashMap<Box<str>, SlidingWindow>,
     global_rate_limit: u32,
     global_excluded_environments: Vec<String>,
     /// Pre-lowercased for case-insensitive glob matching.
     global_blocked_user_agents: Vec<String>,
-    /// Epoch seconds -- tracks when we last cleaned up stale rate windows.
-    last_eviction: std::sync::atomic::AtomicU64,
+    /// Throttles cleanup of stale rate windows.
+    eviction_throttle: Throttle,
 }
 
 impl FilterEngine {
@@ -113,7 +107,7 @@ impl FilterEngine {
                 .into_iter()
                 .map(|s| s.to_lowercase())
                 .collect(),
-            last_eviction: std::sync::atomic::AtomicU64::new(now_secs),
+            eviction_throttle: Throttle::with_last(now_secs),
         }
     }
 
@@ -287,12 +281,9 @@ impl FilterEngine {
             return Ok(());
         }
 
-        // The "key:" prefix avoids collisions between public_key strings and
-        // project_id strings in the same DashMap.
-        let window_key = format!("key:{public_key}");
         let mut window = self
             .rate_windows
-            .entry(window_key)
+            .entry(Box::from(public_key))
             .or_insert_with(SlidingWindow::new);
         window.advance(now_secs);
 
@@ -312,22 +303,7 @@ impl FilterEngine {
     /// Cleans up stale rate windows every ~60s. It turns out rotating keys can
     /// cause unbounded growth, so we also hard-cap at 100k entries.
     fn evict_stale_rate_windows(&self, now_secs: u64) {
-        let last = self
-            .last_eviction
-            .load(std::sync::atomic::Ordering::Relaxed);
-        if now_secs.saturating_sub(last) < 60 {
-            return;
-        }
-        if self
-            .last_eviction
-            .compare_exchange(
-                last,
-                now_secs,
-                std::sync::atomic::Ordering::Relaxed,
-                std::sync::atomic::Ordering::Relaxed,
-            )
-            .is_err()
-        {
+        if !self.eviction_throttle.allow(now_secs, 60) {
             return;
         }
 
@@ -700,7 +676,7 @@ mod tests {
         data.ua_filters
             .entry(1)
             .or_default()
-            .push("*Scrapy*".to_string());
+            .push("*scrapy*".to_string());
         let engine = FilterEngine::new(data, 0, vec![], vec![]);
 
         assert!(engine.check_user_agent("Scrapy/2.5", 1).is_drop());

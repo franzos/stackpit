@@ -320,11 +320,62 @@ pub struct ProjectKey {
     pub created_at: i64,
 }
 
+/// Integration transport -- parsed once at the DB boundary so the dispatcher
+/// can match exhaustively instead of comparing raw strings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IntegrationKind {
+    Webhook,
+    Slack,
+    Email,
+}
+
+impl std::str::FromStr for IntegrationKind {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "webhook" => Ok(Self::Webhook),
+            "slack" => Ok(Self::Slack),
+            "email" => Ok(Self::Email),
+            other => anyhow::bail!("unknown integration kind: {other}"),
+        }
+    }
+}
+
+impl IntegrationKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Webhook => "webhook",
+            Self::Slack => "slack",
+            Self::Email => "email",
+        }
+    }
+}
+
+impl std::fmt::Display for IntegrationKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl PartialEq<str> for IntegrationKind {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl PartialEq<&str> for IntegrationKind {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Integration {
     pub id: i64,
     pub name: String,
-    pub kind: String,
+    pub kind: IntegrationKind,
     pub url: Option<String>,
     pub secret: Option<String>,
     pub encrypted: bool,
@@ -335,7 +386,7 @@ pub struct Integration {
 impl Integration {
     /// Pretty provider label for email rows; `None` for non-email kinds.
     pub fn provider_label(&self) -> Option<&'static str> {
-        if self.kind != "email" {
+        if self.kind != IntegrationKind::Email {
             return None;
         }
         let provider = self
@@ -359,7 +410,7 @@ pub struct ProjectIntegration {
     pub project_id: u64,
     pub integration_id: i64,
     pub integration_name: String,
-    pub integration_kind: String,
+    pub integration_kind: IntegrationKind,
     pub integration_url: Option<String>,
     pub integration_secret: Option<String>,
     pub integration_encrypted: bool,

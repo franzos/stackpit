@@ -26,10 +26,12 @@ mod oidc;
 mod providers;
 mod queries;
 mod server;
+mod sliding_window;
 mod sourcemap;
 mod ssrf;
 mod stats;
 mod sync;
+mod throttle;
 mod writer;
 
 use clap::{Parser, Subcommand};

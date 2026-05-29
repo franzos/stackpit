@@ -65,9 +65,12 @@ pub async fn validate_project_key(
             }
             return Ok(());
         }
-        // Expired -- drop the ref before we remove it
+        // Expired -- drop the ref, then evict only if still expired so a fresh
+        // concurrent insert isn't race-clobbered.
         drop(entry);
-        state.auth_cache.remove(sentry_key);
+        state
+            .auth_cache
+            .remove_if(sentry_key, |_, e| e.inserted_at.elapsed() >= AUTH_CACHE_TTL);
     }
 
     // Cache miss -- query the pool

@@ -36,12 +36,13 @@ serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7"
 toml = "1"
-tower-http = { version = "0.6", features = ["cors", "decompression-gzip", "decompression-zstd", "limit", "timeout"] }
+tower-http = { version = "0.6", features = ["cors", "decompression-gzip", "decompression-zstd", "limit", "normalize-path", "timeout"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 zstd = "0.13"
 dashmap = "6"
+ipnet = "2"
 lru = "0.12"
 parking_lot = "0.12"
 arc-swap = "1"

@@ -3,6 +3,7 @@ compile_error!("At least one database backend feature must be enabled: `sqlite` 
 
 pub mod pool;
 
+#[cfg(any(feature = "sqlite", test))]
 use anyhow::Result;
 
 pub use pool::{run_migrations, Db, DbPool, DbRow};
@@ -23,26 +24,32 @@ macro_rules! sql {
 #[cfg(not(feature = "sqlite"))]
 macro_rules! sql {
     ($s:literal $(,)?) => {{
-        static __SQL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-            let mut result = String::with_capacity(($s).len());
-            let bytes = ($s).as_bytes();
-            let mut i = 0;
-            while i < bytes.len() {
-                if bytes[i] == b'?' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_digit() {
-                    result.push('$');
-                    i += 1;
-                } else {
-                    result.push(bytes[i] as char);
-                    i += 1;
-                }
-            }
-            result
-        });
+        // Rewritten once per call site; subsequent calls reuse the cached string.
+        static __SQL: std::sync::LazyLock<String> =
+            std::sync::LazyLock::new(|| $crate::db::rewrite_placeholders($s));
         __SQL.as_str()
     }};
 }
 
 pub(crate) use sql;
+
+/// Shared `?N → $N` rewrite. Single source of truth for both `sql!` and
+/// `translate_sql`. Only called on the PostgreSQL build.
+#[cfg(not(feature = "sqlite"))]
+pub(crate) fn rewrite_placeholders(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut result = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'?' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_digit() {
+            result.push('$');
+        } else {
+            result.push(bytes[i] as char);
+        }
+        i += 1;
+    }
+    result
+}
 
 /// Runtime variant of `sql!` for dynamically built SQL strings (e.g. from format!).
 #[cfg(feature = "sqlite")]
@@ -53,45 +60,21 @@ pub fn translate_sql(s: &str) -> std::borrow::Cow<'_, str> {
 
 #[cfg(not(feature = "sqlite"))]
 pub fn translate_sql(s: &str) -> std::borrow::Cow<'_, str> {
-    let bytes = s.as_bytes();
-    let needs_translate = bytes
+    let needs_translate = s
+        .as_bytes()
         .windows(2)
         .any(|w| w[0] == b'?' && w[1].is_ascii_digit());
     if needs_translate {
-        let mut result = String::with_capacity(s.len());
-        let mut i = 0;
-        while i < bytes.len() {
-            if bytes[i] == b'?' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_digit() {
-                result.push('$');
-                i += 1;
-            } else {
-                result.push(bytes[i] as char);
-                i += 1;
-            }
-        }
-        std::borrow::Cow::Owned(result)
+        std::borrow::Cow::Owned(rewrite_placeholders(s))
     } else {
         std::borrow::Cow::Borrowed(s)
     }
 }
 
-/// Create the read pool and return it. Does NOT run migrations.
-pub async fn create_pool(url: &str) -> Result<DbPool> {
-    pool::create_read_pool(url).await
-}
-
-/// Create the writer pool (max_connections=1 for SQLite, standard for PG).
-/// Does NOT run migrations.
-pub async fn create_writer_pool(url: &str) -> Result<DbPool> {
-    pool::create_write_pool(url).await
-}
-
-/// Create the background-writer pool (low max_connections). Postgres-only;
-/// SQLite uses a dedicated single-connection writer pool per subsystem instead.
 #[cfg(feature = "postgres")]
-pub async fn create_bg_pool(url: &str) -> Result<DbPool> {
-    pool::create_bg_pool(url).await
-}
+pub use pool::create_bg_pool;
+pub use pool::create_read_pool as create_pool;
+pub use pool::create_write_pool as create_writer_pool;
 
 /// Run a PRAGMA on a SQLite pool. No-op for PostgreSQL.
 #[cfg(feature = "sqlite")]

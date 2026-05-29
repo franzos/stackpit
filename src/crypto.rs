@@ -1,4 +1,4 @@
-use aes_gcm::aead::{Aead, KeyInit, OsRng, Payload};
+use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
@@ -48,38 +48,22 @@ impl SecretEncryptor {
 
     /// AES-256-GCM encrypt. Output is base64(nonce || ciphertext).
     pub fn encrypt(&self, plaintext: &str) -> Option<String> {
-        use aes_gcm::aead::rand_core::RngCore;
-        let mut nonce_bytes = [0u8; 12];
-        OsRng.fill_bytes(&mut nonce_bytes);
-        let nonce = Nonce::from_slice(&nonce_bytes);
-
-        let ciphertext = self.cipher.encrypt(nonce, plaintext.as_bytes()).ok()?;
-
-        let mut combined = Vec::with_capacity(12 + ciphertext.len());
-        combined.extend_from_slice(&nonce_bytes);
-        combined.extend_from_slice(&ciphertext);
-        Some(B64.encode(&combined))
+        // Empty AAD is byte-identical to no AAD in GCM, so this stays
+        // wire-compatible with data written by the older no-AAD path.
+        Some(B64.encode(self.encrypt_bytes_with_aad(plaintext.as_bytes(), b"")?))
     }
 
     /// Reverses what `encrypt` did -- base64-decode, split nonce, decrypt.
     pub fn decrypt(&self, encoded: &str) -> Option<String> {
-        let combined = B64.decode(encoded).ok()?;
-        if combined.len() < 12 {
-            return None;
-        }
-        let (nonce_bytes, ciphertext) = combined.split_at(12);
-        let nonce = Nonce::from_slice(nonce_bytes);
-        let plaintext = self.cipher.decrypt(nonce, ciphertext).ok()?;
-        String::from_utf8(plaintext).ok()
+        String::from_utf8(self.decrypt_bytes_with_aad(&B64.decode(encoded).ok()?, b"")?).ok()
     }
 
     /// AES-256-GCM encrypt with AAD. Output is `nonce || ciphertext || tag`
     /// (raw bytes, BLOB-friendly). Bind `aad` to the row's PK so blob-swap
     /// attacks across rows surface as decryption failures.
     pub fn encrypt_bytes_with_aad(&self, plaintext: &[u8], aad: &[u8]) -> Option<Vec<u8>> {
-        use aes_gcm::aead::rand_core::RngCore;
         let mut nonce_bytes = [0u8; NONCE_LEN];
-        OsRng.fill_bytes(&mut nonce_bytes);
+        getrandom::fill(&mut nonce_bytes).expect("OS RNG must be available");
         let nonce = Nonce::from_slice(&nonce_bytes);
 
         let ciphertext = self

@@ -63,16 +63,15 @@ pub trait UserProvisioner: Send + Sync {
     async fn provision(&self, iss: &str, sub: &str) -> ProvisionResult;
 }
 
-/// Provisioning failure. The backend message is opaque to the gate -- it only
-/// logs it and skips the cache store, so a single carried-message variant
-/// captures everything the implementors produce.
+/// Host-hook backend failure. The gate only logs the carried message (and for
+/// revocation, fails closed), so a single opaque variant covers both hooks.
 #[derive(Debug, thiserror::Error)]
-pub enum ProvisionError {
-    #[error("user provisioning backend error: {0}")]
+pub enum BackendError {
+    #[error("auth backend error: {0}")]
     Backend(String),
 }
 
-pub type ProvisionResult = Result<(), ProvisionError>;
+pub type ProvisionResult = Result<(), BackendError>;
 
 /// Checked after every successful validation (cache hits included).
 /// `Ok(true)` = revoked; `Err` = fail closed (treated as revoked).
@@ -83,15 +82,7 @@ pub trait RevocationStore: Send + Sync {
         iss: &str,
         sub: &str,
         sid: Option<&str>,
-    ) -> Result<bool, RevocationError>;
-}
-
-/// Revocation lookup failure. The gate fails closed on any error and logs the
-/// message, so a single carried-message variant is sufficient.
-#[derive(Debug, thiserror::Error)]
-pub enum RevocationError {
-    #[error("revocation store backend error: {0}")]
-    Backend(String),
+    ) -> Result<bool, BackendError>;
 }
 
 /// Cheap to clone; Arc-shared inner state.
@@ -379,7 +370,11 @@ pub fn extract_bearer(headers: &HeaderMap) -> Option<&str> {
     value
         .to_str()
         .ok()
-        .and_then(|s| s.strip_prefix("Bearer "))
+        // RFC 7235: the auth scheme is case-insensitive ("Bearer"/"bearer"/...).
+        .and_then(|s| {
+            let (scheme, token) = s.split_at_checked(7)?;
+            scheme.eq_ignore_ascii_case("Bearer ").then_some(token)
+        })
         .map(str::trim)
         .filter(|s| !s.is_empty())
 }
@@ -702,7 +697,7 @@ mod tests {
             _iss: &str,
             _sub: &str,
             _sid: Option<&str>,
-        ) -> Result<bool, RevocationError> {
+        ) -> Result<bool, BackendError> {
             *self.calls.lock() += 1;
             Ok(false)
         }

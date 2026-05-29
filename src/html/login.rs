@@ -9,6 +9,9 @@ use crate::server::AppState;
 pub const ADMIN_COOKIE: &str = "stackpit_token";
 pub const ADMIN_COOKIE_HOST: &str = "__Host-stackpit_token";
 
+pub const CSRF_SALT_COOKIE: &str = "stackpit_csrf_salt";
+pub const CSRF_SALT_COOKIE_HOST: &str = "__Host-stackpit_csrf_salt";
+
 /// Pick the admin-token cookie name based on the deployment's TLS posture.
 /// `__Host-` requires `Secure` + `Path=/` + no `Domain` -- we only use it
 /// when cookies are Secure so the prefix's invariants hold.
@@ -18,6 +21,24 @@ pub fn admin_cookie_name(secure: bool) -> &'static str {
     } else {
         ADMIN_COOKIE
     }
+}
+
+/// Salt cookie name, mirroring [`admin_cookie_name`]'s `__Host-` posture.
+pub fn csrf_salt_cookie_name(secure: bool) -> &'static str {
+    if secure {
+        CSRF_SALT_COOKIE_HOST
+    } else {
+        CSRF_SALT_COOKIE
+    }
+}
+
+/// Per-session CSRF salt cookie. Same flags as the admin token cookie so it
+/// rides along for the whole admin session; the CSRF derivation folds it in
+/// so an attacker who only knows `admin_token` can't precompute the token.
+pub fn build_csrf_salt_cookie(salt: &str, secure: bool) -> String {
+    let name = csrf_salt_cookie_name(secure);
+    let secure_flag = if secure { "; Secure" } else { "" };
+    format!("{name}={salt}; Path=/; SameSite=Strict; HttpOnly{secure_flag}")
 }
 
 #[derive(askama::Template)]
@@ -159,9 +180,16 @@ pub async fn handle_login(
         let name = admin_cookie_name(secure);
         let hashed = crate::middleware::hash_token_for_cookie(&token);
         let cookie = format!("{name}={hashed}; Path=/; SameSite=Strict; HttpOnly{secure_flag}");
+        // Fresh per-login salt so the admin CSRF token isn't a forever-valid
+        // function of admin_token alone.
+        let salt = crate::crypto::random_hex::<32>();
+        let salt_cookie = build_csrf_salt_cookie(&salt, secure);
         let mut resp = axum::response::Redirect::to("/web/projects/").into_response();
         if let Ok(val) = cookie.parse() {
-            resp.headers_mut().insert("set-cookie", val);
+            resp.headers_mut().append("set-cookie", val);
+        }
+        if let Ok(val) = salt_cookie.parse() {
+            resp.headers_mut().append("set-cookie", val);
         }
         resp
     } else {
@@ -183,9 +211,15 @@ pub async fn handle_logout(State(state): State<AppState>) -> impl IntoResponse {
     let secure_flag = if secure { "; Secure" } else { "" };
     let name = admin_cookie_name(secure);
     let cookie = format!("{name}=; Path=/; SameSite=Strict; HttpOnly; Max-Age=0{secure_flag}");
+    let salt_name = csrf_salt_cookie_name(secure);
+    let salt_cookie =
+        format!("{salt_name}=; Path=/; SameSite=Strict; HttpOnly; Max-Age=0{secure_flag}");
     let mut resp = axum::response::Redirect::to("/web/login").into_response();
     if let Ok(val) = cookie.parse() {
-        resp.headers_mut().insert("set-cookie", val);
+        resp.headers_mut().append("set-cookie", val);
+    }
+    if let Ok(val) = salt_cookie.parse() {
+        resp.headers_mut().append("set-cookie", val);
     }
     resp
 }

@@ -126,8 +126,8 @@ pub struct EmailConfig {
     /// Global provider API token. Same posture as `[server] admin_token` and
     /// `[auth.oauth] client_secret` — kept in config rather than DB-encrypted
     /// because it's a single instance-wide secret.
-    #[serde(default, deserialize_with = "empty_string_as_none")]
-    pub token: Option<String>,
+    #[serde(default)]
+    pub token: Option<SecretString>,
     /// Lock sender + provider to this config: integrations only pick recipients.
     #[serde(default)]
     pub lock: bool,
@@ -185,12 +185,6 @@ pub struct OAuthConfig {
     /// cache; startup rejects values above 300.
     #[serde(default = "default_bearer_cache_max_ttl")]
     pub cache_max_ttl_secs: u64,
-    /// **Deprecated.** Set `web_audience` instead. Kept for one release so
-    /// existing deployments can bind an audience; every boot with this set
-    /// emits a deprecation warning.
-    // TODO: remove `allow_empty_web_audience` after v0.2.0.
-    #[serde(default)]
-    pub allow_empty_web_audience: bool,
     /// Web bearer-gate introspection endpoint. Defaults to MCP's value.
     pub introspection_url: Option<String>,
     /// `true` = fail startup on discovery failure. `false` = log + fall back
@@ -508,13 +502,10 @@ mod tests {
     }
 
     #[test]
-    fn empty_web_audience_without_flag_rejected() {
+    fn empty_web_audience_rejected() {
         let mut cfg = loopback_oauth_enabled();
         cfg.auth.oauth.web_audience = String::new();
-        cfg.auth.oauth.allow_empty_web_audience = false;
-        let err = cfg
-            .validate()
-            .expect_err("empty audience without opt-in must fail");
+        let err = cfg.validate().expect_err("empty audience must fail");
         let msg = format!("{err:#}");
         assert!(
             msg.contains("web_audience"),
@@ -523,24 +514,10 @@ mod tests {
     }
 
     #[test]
-    fn empty_web_audience_with_deprecation_flag_still_validates() {
-        // Behaviour preserved for the deprecation window: existing operators
-        // with the flag set must keep booting. The deprecation log is fired
-        // here; we can't assert on it without a tracing-test dev-dep.
-        let mut cfg = loopback_oauth_enabled();
-        cfg.auth.oauth.web_audience = String::new();
-        cfg.auth.oauth.allow_empty_web_audience = true;
-        cfg.validate()
-            .expect("deprecated flag still accepted for one release");
-    }
-
-    #[test]
-    fn populated_web_audience_validates_without_flag() {
+    fn populated_web_audience_validates() {
         let mut cfg = loopback_oauth_enabled();
         cfg.auth.oauth.web_audience = "stackpit-web".to_string();
-        cfg.auth.oauth.allow_empty_web_audience = false;
-        cfg.validate()
-            .expect("populated audience should pass without the deprecated flag");
+        cfg.validate().expect("populated audience should pass");
     }
 
     #[test]

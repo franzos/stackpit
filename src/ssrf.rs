@@ -32,25 +32,26 @@ pub async fn check_ssrf(url: &str) -> Result<ResolvedWebhook, String> {
 }
 
 /// Pulls the hostname and "host:port" out of a URL.
-/// Returns (hostname, host_port) -- hostname is without port, host_port is for `lookup_host`.
+/// Returns (hostname, host_port) -- hostname is the bare host (no brackets,
+/// for reqwest `.resolve()`), host_port is bracketed-as-needed for `lookup_host`.
 fn extract_host_and_host_port(url: &str) -> Option<(String, String)> {
-    let after_scheme = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))?;
+    let parsed = url::Url::parse(url).ok()?;
 
-    let authority = after_scheme.split('/').next()?;
-    if authority.is_empty() {
+    if !matches!(parsed.scheme(), "http" | "https") {
         return None;
     }
 
-    if authority.contains(':') {
-        let hostname = authority.split(':').next()?.to_string();
-        Some((hostname, authority.to_string()))
-    } else if url.starts_with("https://") {
-        Some((authority.to_string(), format!("{authority}:443")))
+    let hostname = parsed.host_str()?.to_string();
+    let port = parsed.port_or_known_default()?;
+
+    // IPv6 literals must be bracketed in the host:port form.
+    let host_port = if hostname.contains(':') {
+        format!("[{hostname}]:{port}")
     } else {
-        Some((authority.to_string(), format!("{authority}:80")))
-    }
+        format!("{hostname}:{port}")
+    };
+
+    Some((hostname, host_port))
 }
 
 fn is_private_ip(ip: &IpAddr) -> bool {

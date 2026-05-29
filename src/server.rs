@@ -13,18 +13,25 @@ use crate::queries::filters::load_filter_data;
 use crate::stats::{DiscardStats, IngestStats};
 use crate::writer::{self, WriterHandle};
 use anyhow::Result;
+use axum::extract::Request;
 use axum::routing::{get, post};
-use axum::Router;
+use axum::{Router, ServiceExt};
 use stackpit_auth::{BearerGate, BearerGateConfig, JwksCache, JwtVerifierConfig};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::decompression::RequestDecompressionLayer;
 use tower_http::limit::RequestBodyLimitLayer;
+use tower_http::normalize_path::NormalizePath;
 use tower_http::timeout::TimeoutLayer;
 
-/// Shared application state. The `ReadPool` extractor narrows access for
-/// read-only paths.
+/// Artifact-bundle uploads can be large; cap both the extractor (`DefaultBodyLimit`)
+/// and the transport reader (`RequestBodyLimitLayer`) at the same ceiling.
+const ARTIFACT_BUNDLE_BODY_LIMIT: usize = 64 * 1024 * 1024;
+
+/// Shared application state. The `ReadPool` extractor is an ergonomic shortcut
+/// that clones the read pool; it does not narrow access at the type level
+/// (it yields the same `DbPool` as the write pools).
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<Config>,
@@ -297,8 +304,10 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
     // Rate limiting: handled by filter engine at handler level.
     // CORS: permissive for SDKs. Body limit: 64MB for artifact bundles.
     let sentry_api = api::sentry_api_routes()
-        .layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024))
-        .layer(RequestBodyLimitLayer::new(64 * 1024 * 1024))
+        .layer(axum::extract::DefaultBodyLimit::max(
+            ARTIFACT_BUNDLE_BODY_LIMIT,
+        ))
+        .layer(RequestBodyLimitLayer::new(ARTIFACT_BUNDLE_BODY_LIMIT))
         .with_state(state.clone());
 
     // Tight limits for ingestion: compressed → decompress → decompressed.
@@ -354,7 +363,7 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
         ]);
     let cors_scoped = sentry_api.merge(ingest_routes).layer(ingest_cors);
 
-    let ingest_app = Router::new()
+    let ingest_router = Router::new()
         .route("/", get(ingest_landing))
         .route("/health", get(ingest_health_handler))
         .with_state(state.clone())
@@ -362,8 +371,14 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
         .layer(TimeoutLayer::with_status_code(
             axum::http::StatusCode::REQUEST_TIMEOUT,
             std::time::Duration::from_secs(30),
-        ))
-        .into_make_service_with_connect_info::<std::net::SocketAddr>();
+        ));
+
+    // Outermost: rewrites the path before routing so Sentry's trailing-slash
+    // requests match the canonical (slash-less) routes. Must wrap the whole
+    // service; a `Router::layer` would run after routing, too late to help.
+    let ingest_app = ServiceExt::<Request>::into_make_service_with_connect_info::<
+        std::net::SocketAddr,
+    >(NormalizePath::trim_trailing_slash(ingest_router));
 
     let ingest_bind = &config.server.ingest_bind;
     let ingest_listener = tokio::net::TcpListener::bind(ingest_bind).await?;

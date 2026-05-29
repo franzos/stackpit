@@ -1,19 +1,20 @@
-/// A sliding window over 60 one-second buckets. Pretty simple -- each bucket
-/// holds the count for that second, and we zero out stale ones on advance.
-pub(super) struct SlidingWindow {
+//! Sliding window over 60 one-second buckets, shared by the ingest filter and
+//! notification rate limiters. Each bucket holds the count for that second;
+//! stale buckets are zeroed on advance.
+pub(crate) struct SlidingWindow {
     counts: [u32; 60],
-    pub(super) current_second: u64,
+    pub(crate) current_second: u64,
 }
 
 impl SlidingWindow {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             counts: [0; 60],
             current_second: 0,
         }
     }
 
-    pub fn advance(&mut self, now_secs: u64) {
+    pub(crate) fn advance(&mut self, now_secs: u64) {
         if self.current_second == 0 {
             self.current_second = now_secs;
             return;
@@ -35,11 +36,11 @@ impl SlidingWindow {
         self.current_second = now_secs;
     }
 
-    pub fn count(&self) -> u32 {
+    pub(crate) fn count(&self) -> u32 {
         self.counts.iter().sum()
     }
 
-    pub fn increment(&mut self, now_secs: u64) {
+    pub(crate) fn increment(&mut self, now_secs: u64) {
         let idx = (now_secs % 60) as usize;
         self.counts[idx] = self.counts[idx].saturating_add(1);
     }

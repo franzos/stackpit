@@ -25,6 +25,11 @@ const MAX_ITEM_PAYLOAD_BYTES: usize = 1_048_576;
 /// Profiles and replay recordings can be much larger
 const MAX_LARGE_ITEM_PAYLOAD_BYTES: usize = 50 * 1_048_576; // 50MB
 
+/// Cumulative cap across all accepted item payloads in one envelope. Bounds
+/// decompression amplification even if an operator raises `max_body_size`
+/// above the per-item large limit. A few large items' worth of headroom.
+const MAX_ENVELOPE_TOTAL_BYTES: usize = 4 * MAX_LARGE_ITEM_PAYLOAD_BYTES; // 200MB
+
 /// Parse a Sentry envelope — the wire format is `header\n(item_header\npayload\n)*`.
 pub fn parse(body: &[u8], project_id: u64, auth: &SentryAuth) -> Result<ParsedEnvelope> {
     let mut result = ParsedEnvelope {
@@ -86,6 +91,7 @@ pub fn parse(body: &[u8], project_id: u64, auth: &SentryAuth) -> Result<ParsedEn
     };
 
     let mut item_count: usize = 0;
+    let mut total_payload_bytes: usize = 0;
 
     while pos < body.len() {
         if item_count >= MAX_ENVELOPE_ITEMS {
@@ -187,6 +193,14 @@ pub fn parse(body: &[u8], project_id: u64, auth: &SentryAuth) -> Result<ParsedEn
                 payload_bytes.len()
             );
             continue;
+        }
+
+        total_payload_bytes = total_payload_bytes.saturating_add(payload_bytes.len());
+        if total_payload_bytes > MAX_ENVELOPE_TOTAL_BYTES {
+            tracing::warn!(
+                "envelope cumulative payload exceeds cap ({total_payload_bytes} > {MAX_ENVELOPE_TOTAL_BYTES}), truncating"
+            );
+            break;
         }
 
         item_count += 1;

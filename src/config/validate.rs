@@ -83,19 +83,15 @@ impl Config {
         }
 
         // Without audience or scope binding, an IdP-issued token for another
-        // resource server would pass the admin UI gate. `allow_empty_web_audience`
-        // is the deprecated opt-out.
+        // resource server would pass the admin UI gate.
         if self.auth.oauth.required
             && self.auth.oauth.web_audience.trim().is_empty()
             && self.auth.oauth.web_required_scope.trim().is_empty()
-            && !self.auth.oauth.allow_empty_web_audience
         {
             anyhow::bail!(
                 "auth.oauth.required = true but both auth.oauth.web_audience and \
                  auth.oauth.web_required_scope are empty. Set at least one so the \
-                 web bearer gate binds tokens to this resource server, or set \
-                 auth.oauth.allow_empty_web_audience = true to opt in to the legacy \
-                 behaviour during deprecation."
+                 web bearer gate binds tokens to this resource server."
             );
         }
 
@@ -224,19 +220,10 @@ impl Config {
         }
 
         if oauth.is_enabled() && oauth.web_audience.is_empty() {
-            if !oauth.allow_empty_web_audience {
-                anyhow::bail!(
-                    "auth.oauth.web_audience is empty -- set it to the audience your IdP issues \
-                     for the web client (e.g. \"stackpit-web\"), or set \
-                     auth.oauth.allow_empty_web_audience = true to acknowledge that web-side \
-                     audience checks are disabled (confused-deputy risk)."
-                );
-            }
-            // Warn on every boot so the operator can't forget.
-            tracing::warn!(
-                "DEPRECATION: `auth.oauth.allow_empty_web_audience = true` will be removed in \
-                 the next release; configure `auth.oauth.web_audience` to bind audience and \
-                 prevent confused-deputy attacks across resource servers."
+            anyhow::bail!(
+                "auth.oauth.web_audience is empty -- set it to the audience your IdP issues \
+                 for the web client (e.g. \"stackpit-web\") so web-side audience checks bind \
+                 tokens to this resource server (confused-deputy risk)."
             );
         }
 

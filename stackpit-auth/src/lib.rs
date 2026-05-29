@@ -9,9 +9,9 @@
 //! no axum dependency.
 //!
 //! The `axum` feature -- on by default for now, since Stackpit is the only
-//! consumer -- layers in typed extractors ([`RequireAdmin`], [`RequireUser`]),
-//! the admin-token resolution middleware, a borrowing cookie reader
-//! ([`read_cookie`]), and the MCP `Response`-rendering wrapper.
+//! consumer -- layers in admin-token resolution ([`resolve_admin`]), a
+//! borrowing cookie reader ([`read_cookie`]), and the MCP `Response`-rendering
+//! wrapper.
 
 pub mod admin_token;
 pub mod bearer;
@@ -20,8 +20,8 @@ pub mod jwks;
 
 pub use admin_token::hash_token_for_cookie;
 pub use bearer::{
-    extract_bearer, BearerAuthOutcome, BearerGate, BearerGateConfig, JwtVerifierConfig,
-    ProvisionError, ProvisionResult, RevocationError, RevocationStore, UserProvisioner,
+    extract_bearer, BackendError, BearerAuthOutcome, BearerGate, BearerGateConfig,
+    JwtVerifierConfig, ProvisionResult, RevocationStore, UserProvisioner,
 };
 pub use context::{AuthContext, AuthSource, PrincipalId};
 pub use jwks::{JwksCache, JwksError, VerifyError};
@@ -38,6 +38,5 @@ pub mod axum_ext;
 #[cfg(feature = "axum")]
 pub use axum_ext::{
     mcp::{mcp_auth_middleware, McpAuthLayerState},
-    middleware::{resolve_auth_context, AdminToken},
-    resolve_admin, RequireAdmin, RequireUser,
+    resolve_admin,
 };

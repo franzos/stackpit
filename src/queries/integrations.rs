@@ -1,24 +1,25 @@
 use anyhow::Result;
 use sqlx::Row;
+use std::str::FromStr;
 
 use crate::db::sql;
 use crate::db::DbPool;
 
-use super::types::{Integration, ProjectIntegration};
+use super::types::{Integration, IntegrationKind, ProjectIntegration};
 
 // --- Read queries ---
 
-fn row_to_integration(row: &crate::db::DbRow) -> Integration {
-    Integration {
+fn row_to_integration(row: &crate::db::DbRow) -> Result<Integration> {
+    Ok(Integration {
         id: row.get(0),
         name: row.get(1),
-        kind: row.get(2),
+        kind: IntegrationKind::from_str(&row.get::<String, _>(2))?,
         url: row.get(3),
         secret: row.get(4),
         encrypted: row.get::<bool, _>(5),
         config: row.get(6),
         created_at: row.get(7),
-    }
+    })
 }
 
 /// All configured integrations -- webhooks, Slack, email, etc.
@@ -29,7 +30,7 @@ pub async fn list_integrations(pool: &DbPool) -> Result<Vec<Integration>> {
     ))
     .fetch_all(pool)
     .await?;
-    Ok(rows.iter().map(row_to_integration).collect())
+    rows.iter().map(row_to_integration).collect()
 }
 
 /// Fetch a single integration by ID.
@@ -41,16 +42,16 @@ pub async fn get_integration(pool: &DbPool, id: i64) -> Result<Option<Integratio
     .bind(id)
     .fetch_optional(pool)
     .await?;
-    Ok(row.as_ref().map(row_to_integration))
+    row.as_ref().map(row_to_integration).transpose()
 }
 
-fn row_to_project_integration(row: &crate::db::DbRow) -> ProjectIntegration {
-    ProjectIntegration {
+fn row_to_project_integration(row: &crate::db::DbRow) -> Result<ProjectIntegration> {
+    Ok(ProjectIntegration {
         id: row.get(0),
         project_id: row.get::<i64, _>(1) as u64,
         integration_id: row.get(2),
         integration_name: row.get(3),
-        integration_kind: row.get(4),
+        integration_kind: IntegrationKind::from_str(&row.get::<String, _>(4))?,
         integration_url: row.get(5),
         integration_secret: row.get(6),
         integration_encrypted: row.get::<bool, _>(7),
@@ -63,7 +64,7 @@ fn row_to_project_integration(row: &crate::db::DbRow) -> ProjectIntegration {
         enabled: row.get::<bool, _>(14),
         notify_threshold: row.get::<bool, _>(15),
         notify_digests: row.get::<bool, _>(16),
-    }
+    })
 }
 
 const PROJECT_INTEGRATION_SELECT: &str = "SELECT pi.id, pi.project_id, pi.integration_id,
@@ -85,7 +86,7 @@ pub async fn list_project_integrations(
         .bind(project_id as i64)
         .fetch_all(pool)
         .await?;
-    Ok(rows.iter().map(row_to_project_integration).collect())
+    rows.iter().map(row_to_project_integration).collect()
 }
 
 /// Only the enabled integrations for a project -- this is what the notification
@@ -102,7 +103,7 @@ pub async fn get_active_for_project(
         .bind(project_id as i64)
         .fetch_all(pool)
         .await?;
-    Ok(rows.iter().map(row_to_project_integration).collect())
+    rows.iter().map(row_to_project_integration).collect()
 }
 
 /// Integrations not yet linked to a project -- candidates for the "add" dropdown.
@@ -121,7 +122,7 @@ pub async fn list_available_for_project(
     .bind(project_id as i64)
     .fetch_all(pool)
     .await?;
-    Ok(rows.iter().map(row_to_integration).collect())
+    rows.iter().map(row_to_integration).collect()
 }
 
 // --- Write operations ---

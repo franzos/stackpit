@@ -1,7 +1,5 @@
 use axum::http::HeaderMap;
 
-use crate::encoding::percent_decode;
-
 #[derive(Debug, Clone)]
 pub struct SentryAuth {
     pub sentry_key: String,
@@ -19,14 +17,11 @@ pub fn extract_from_header(headers: &HeaderMap) -> Option<SentryAuth> {
 
 pub fn extract_from_query(query: Option<&str>) -> Option<SentryAuth> {
     let query = query?;
-    for pair in query.split('&') {
-        if let Some(key) = pair.strip_prefix("sentry_key=") {
-            return Some(SentryAuth {
-                sentry_key: percent_decode(key),
-            });
-        }
-    }
-    None
+    form_urlencoded::parse(query.as_bytes())
+        .find(|(k, _)| k == "sentry_key")
+        .map(|(_, v)| SentryAuth {
+            sentry_key: v.into_owned(),
+        })
 }
 
 /// Cracks open a DSN string to get the auth key and project ID out of it.

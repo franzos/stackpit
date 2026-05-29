@@ -68,11 +68,27 @@ pub async fn web_auth_middleware(
         if let Some(ctx) =
             auth_mw::resolve_admin(req.headers(), expected.expose_secret(), admin_cookie)
         {
-            // Derived deterministically so admin sessions need no extra storage.
-            let csrf = derive_admin_csrf_token(expected.expose_secret());
+            // Same salt cookie feeds render (here) and verify (csrf_middleware
+            // reads the CsrfToken we insert), so the tokens always match. A
+            // logged-in admin missing the cookie gets a fresh salt set below.
+            let salt_cookie = crate::html::login::csrf_salt_cookie_name(secure_cookies);
+            let (salt, set_salt) =
+                match crate::middleware::cookie::read_cookie(req.headers(), salt_cookie) {
+                    Some(s) => (s.to_string(), false),
+                    None => (crate::crypto::random_hex::<32>(), true),
+                };
+            let csrf = derive_admin_csrf_token(expected.expose_secret(), &salt);
             req.extensions_mut().insert(ctx);
             req.extensions_mut().insert(CsrfToken(csrf));
-            return next.run(req).await;
+            let mut resp = next.run(req).await;
+            if set_salt {
+                if let Ok(val) =
+                    crate::html::login::build_csrf_salt_cookie(&salt, secure_cookies).parse()
+                {
+                    resp.headers_mut().append("set-cookie", val);
+                }
+            }
+            return resp;
         }
     }
 

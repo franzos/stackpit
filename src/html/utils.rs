@@ -198,14 +198,9 @@ pub fn build_filter_qs(params: &[(&str, &str)], sort: &str) -> (String, String) 
     (base_qs, filter_qs)
 }
 
-/// Bare-minimum percent-encoding for query string values. Good enough for our use case.
-pub fn urlencoded(s: &str) -> String {
-    s.replace('%', "%25")
-        .replace('&', "%26")
-        .replace('=', "%3D")
-        .replace('+', "%2B")
-        .replace(' ', "+")
-        .replace('#', "%23")
+/// Percent-encodes a query-string value (`application/x-www-form-urlencoded`, space-as-`+`).
+fn urlencoded(s: &str) -> String {
+    form_urlencoded::byte_serialize(s.as_bytes()).collect()
 }
 
 pub const DEFAULTS_COOKIE: &str = "sp_defaults";

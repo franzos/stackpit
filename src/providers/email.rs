@@ -2,6 +2,7 @@ use crate::encoding::escape_html;
 use crate::notify::NotificationEvent;
 use anyhow::Result;
 use polymail::{Address, Body, Email, Mailer};
+use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,7 +61,10 @@ pub async fn send(
     let (provider, token, from, name) = if email_cfg.lock {
         (
             email_cfg.provider,
-            email_cfg.token.clone(),
+            email_cfg
+                .token
+                .as_ref()
+                .map(|t| t.expose_secret().to_string()),
             email_cfg.from_address.clone(),
             email_cfg.from_name.clone(),
         )
@@ -69,7 +73,12 @@ pub async fn send(
         let provider = int_str("provider")
             .and_then(|p| EmailProvider::parse(&p))
             .unwrap_or(EmailProvider::Postmark);
-        let token = secret.map(String::from).or_else(|| email_cfg.token.clone());
+        let token = secret.map(String::from).or_else(|| {
+            email_cfg
+                .token
+                .as_ref()
+                .map(|t| t.expose_secret().to_string())
+        });
         let from = int_str("from").or_else(|| email_cfg.from_address.clone());
         let name = int_str("from_name").or_else(|| email_cfg.from_name.clone());
         (provider, token, from, name)

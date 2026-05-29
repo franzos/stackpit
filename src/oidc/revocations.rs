@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use stackpit_auth::{RevocationError, RevocationStore};
+use stackpit_auth::{BackendError, RevocationStore};
 
 use crate::db::{sql, DbPool};
 
@@ -38,12 +38,12 @@ impl RevocationStore for SqliteRevocationStore {
         iss: &str,
         sub: &str,
         sid: Option<&str>,
-    ) -> Result<bool, RevocationError> {
+    ) -> Result<bool, BackendError> {
         // Surface the error so the bearer gate's fail-closed log carries
         // the underlying sqlx/context message instead of a bare bool.
         check_revoked(&self.pool, iss, sub, sid)
             .await
-            .map_err(|e| RevocationError::Backend(format!("{e:#}")))
+            .map_err(|e| BackendError::Backend(format!("{e:#}")))
     }
 }
 
@@ -161,19 +161,4 @@ pub async fn jti_seen_or_remember(pool: &DbPool, jti: &str, expires_at: i64) -> 
         }
         Err(e) => Err(e).context("inserting JTI dedupe row"),
     }
-}
-
-/// Grant count for `(iss, sid)`. Logout handler uses this to report how
-/// many sessions are being torn down.
-#[allow(dead_code)] // future settings UI / audit logging
-pub async fn count_grants_for_sid(pool: &DbPool, iss: &str, sid: &str) -> Result<i64> {
-    let row: (i64,) = sqlx::query_as(sql!(
-        "SELECT COUNT(*) FROM oidc_grants WHERE iss = ?1 AND sid = ?2"
-    ))
-    .bind(iss)
-    .bind(sid)
-    .fetch_one(pool)
-    .await
-    .context("counting grants by sid")?;
-    Ok(row.0)
 }

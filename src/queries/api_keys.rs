@@ -84,24 +84,6 @@ pub async fn get_api_key_for_project(
     }))
 }
 
-/// Delete the API key for a project+scope.
-#[allow(dead_code)]
-pub async fn delete_api_key_for_project(
-    pool: &DbPool,
-    project_id: u64,
-    scope: &str,
-) -> Result<u64> {
-    let result = sqlx::query(sql!(
-        "DELETE FROM api_keys WHERE project_id = ?1 AND scope = ?2"
-    ))
-    .bind(project_id as i64)
-    .bind(scope)
-    .execute(pool)
-    .await?;
-
-    Ok(result.rows_affected())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -195,7 +195,7 @@ impl UserProvisioner for DbProvisioner {
             Err(e) => {
                 // Don't touch the LRU -- next request retries the upsert.
                 // Caller skips the introspection cache on Err.
-                Err(stackpit_auth::ProvisionError::Backend(format!("{e:#}")))
+                Err(stackpit_auth::BackendError::Backend(format!("{e:#}")))
             }
         }
     }

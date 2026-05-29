@@ -487,8 +487,8 @@ async fn fetch_endpoint_urls(
     let jwks_uri = json
         .get("jwks_uri")
         .and_then(|v| v.as_str())
-        .map(str::to_string)
-        .ok_or_else(|| anyhow::anyhow!("discovery doc missing jwks_uri"))?;
+        .and_then(validate_discovery_url)
+        .ok_or_else(|| anyhow::anyhow!("discovery doc missing or has non-https jwks_uri"))?;
     // Drop non-https URLs -- a misconfigured discovery doc could flow `javascript:` into `Redirect::to(...)`.
     let end_session_endpoint = json
         .get("end_session_endpoint")

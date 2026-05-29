@@ -1,6 +1,9 @@
 /// Try all patterns against the text. Patterns are expected to be pre-lowercased
 /// at load time -- we only lowercase the input here.
 pub fn glob_match_any(patterns: &[String], text: &str) -> bool {
+    if patterns.is_empty() {
+        return false;
+    }
     let text_lower = text.to_lowercase();
     let text_bytes = text_lower.as_bytes();
     for pattern in patterns {

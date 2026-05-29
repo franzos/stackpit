@@ -1,6 +1,5 @@
 /// Why we dropped an event. Useful for metrics and debugging.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // all variants used in tests; some only via pre_filter_check at runtime
 pub enum DropReason {
     DiscardedFingerprint,
     BrowserExtension,

@@ -32,6 +32,8 @@ pub async fn list_for_project(
     Path(project_id): Path<u64>,
     Query(params): Query<ListParams>,
 ) -> impl IntoResponse {
+    // TODO: enforce project/org scoping here before multi-user ships -- AuthContext
+    // carries no per-user project ownership today, so any authed caller sees any project.
     let filter = IssueFilter {
         level: params.level,
         status: params.status,
@@ -47,6 +49,7 @@ pub async fn list_for_project(
 
 /// GET /api/0/issues/{fingerprint}/
 pub async fn get(ReadPool(pool): ReadPool, Path(fingerprint): Path<String>) -> impl IntoResponse {
+    // TODO: enforce project/org scoping here before multi-user ships -- no ownership model yet.
     json_or_404(
         queries::issues::get_issue(&pool, &fingerprint).await,
         "issue not found",
@@ -59,6 +62,7 @@ pub async fn update_status(
     Path(fingerprint): Path<String>,
     Json(body): Json<UpdateBody>,
 ) -> impl IntoResponse {
+    // TODO: enforce project/org scoping here before multi-user ships -- no ownership model yet.
     match queries::issues::update_issue_status(&state.writer_pool, &fingerprint, body.status).await
     {
         Ok(0) => json_error(StatusCode::NOT_FOUND, "issue not found"),

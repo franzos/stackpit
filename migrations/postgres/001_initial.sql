@@ -172,7 +172,7 @@ CREATE INDEX IF NOT EXISTS idx_message_filters_project ON message_filters (proje
 CREATE TABLE IF NOT EXISTS rate_limits (
     id                    BIGSERIAL PRIMARY KEY,
     project_id            BIGINT NOT NULL,
-    public_key            TEXT,
+    public_key            TEXT NOT NULL DEFAULT '',
     max_events_per_minute INTEGER NOT NULL DEFAULT 0,
     UNIQUE(project_id, public_key)
 );

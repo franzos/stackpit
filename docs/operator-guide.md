@@ -110,8 +110,11 @@ hydra create oauth2-client \
   --response-type code \
   --scope "openid email profile offline_access" \
   --token-endpoint-auth-method client_secret_post \
+  --audience stackpit-web \
   --redirect-uri https://stackpit.example.com/web/auth/callback
 ```
+
+The `--audience` allow-list entry matters: stackpit sends `audience=stackpit-web` on the authorization request so Hydra binds it into the access token's `aud`, and the web gate then checks for it. Hydra only honours audiences that appear on the client's allow-list — leave it off and the token comes back without the `aud`, and every web session is rejected with `InvalidAudience`. (Hydra uses a non-standard `audience=` parameter for this; RFC 8707 `resource=` isn't wired in Hydra yet.)
 
 Then wire it into `stackpit.toml`:
 
@@ -128,6 +131,13 @@ web_audience  = "stackpit-web"                  # required — must match the Id
 ```
 
 `web_audience` binds the BFF to the audience your IdP issues to the web client; it blocks confused-deputy attacks across resource servers and is enforced at startup.
+
+**Access-token validation: JWT vs opaque.** On every request the web gate validates the grant's access token. It supports both token shapes:
+
+- **JWT access tokens (recommended, the default for Hydra).** Validated locally against the IdP's JWKS — signature, `iss`, `aud`, `exp`. No network call on the hot path, no admin-API reachability needed. As long as discovery advertises a `jwks_uri` (it normally does), this just works.
+- **Opaque access tokens.** Can't be validated locally — they require RFC 7662 introspection. For these to work, **the IdP's discovery document must advertise an `introspection_endpoint`, or you must set `introspection_url` under `[auth.oauth]` manually.** Note Hydra only exposes introspection on its *admin* API (not in public discovery) and that API is private, so opaque-token setups need stackpit to have a network path to it.
+
+If neither validator is available — no JWKS and no introspection URL — the web gate can't be built and SSO is disabled (stackpit logs an error at startup). If only JWKS is available (no introspection), stackpit logs a warning that opaque tokens will be rejected; this is fine for the JWT default but a misconfiguration if your IdP issues opaque tokens.
 
 User rows are provisioned just-in-time on first login, linked by the OIDC `(iss, sub)` pair. Every authenticated user sees everything — there is no admin/user privilege split in the UI today. The `admin_token` is a separate break-glass code path (CLI, headless ops) and doesn't flow through the users table at all. Email is stored only when the IdP reports `email_verified=true`; unverified emails are ignored to keep an attacker-controlled string out of identity decisions.
 

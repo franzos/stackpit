@@ -4,8 +4,10 @@
 //! - `sp_login`: short-lived encrypted blob holding state + nonce + PKCE
 //!   verifier between `/web/auth/login` and `/web/auth/callback`.
 //!
-//! Both HttpOnly. `SameSite=Strict` except the login cookie (Lax, since the
-//! IdP callback crosses origins).
+//! Both HttpOnly + `SameSite=Lax`: the grant cookie is set on the IdP callback
+//! redirect, so `Strict` would be withheld on the post-login navigation back
+//! from Hydra and bounce the user to /web/login. Lax still blocks cross-site
+//! POST/subresource sends; state-changing requests are CSRF-token protected.
 
 use axum::http::header::{HeaderValue, SET_COOKIE};
 use axum::response::Response;
@@ -27,7 +29,7 @@ pub fn grant_cookie_name(secure: bool) -> &'static str {
 /// Session cookie (no Max-Age): the server-side row drives lifetime.
 pub fn build_grant_cookie(handle_hex: &str, secure: bool) -> HeaderValue {
     let name = grant_cookie_name(secure);
-    let mut v = format!("{name}={handle_hex}; HttpOnly; SameSite=Strict; Path=/");
+    let mut v = format!("{name}={handle_hex}; HttpOnly; SameSite=Lax; Path=/");
     if secure {
         v.push_str("; Secure");
     }
@@ -36,7 +38,7 @@ pub fn build_grant_cookie(handle_hex: &str, secure: bool) -> HeaderValue {
 
 pub fn clear_grant_cookie(secure: bool) -> HeaderValue {
     let name = grant_cookie_name(secure);
-    let mut v = format!("{name}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0");
+    let mut v = format!("{name}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
     if secure {
         v.push_str("; Secure");
     }

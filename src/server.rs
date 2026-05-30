@@ -621,21 +621,15 @@ fn build_mcp_runtime(
     Ok(Some(Arc::new(McpRuntime { metadata, gate })))
 }
 
-/// Introspects the access token from the grant vault per request. `None`
-/// when no introspection endpoint is resolvable from oauth/mcp/discovery.
+/// Validates the access token from the grant vault per request. Prefers local
+/// JWKS validation (the IdP issues JWT access tokens by default), falling back
+/// to introspection for opaque-token deployments. `None` when neither is
+/// resolvable, or when no issuer is configured.
 fn build_web_bearer_gate(
     oidc: &Arc<OidcClient>,
     config: &Config,
     revocation_store: Option<crate::oidc::revocations::SqliteRevocationStore>,
 ) -> Option<BearerGate> {
-    let introspection_url = config
-        .auth
-        .oauth
-        .introspection_url
-        .as_deref()
-        .or(config.auth.mcp.introspection_url.as_deref())
-        .or_else(|| oidc.introspection_endpoint())
-        .map(str::to_string)?;
     let issuer = config.auth.oauth.issuer_url.as_deref()?.to_string();
     let client_id = config
         .auth
@@ -645,10 +639,47 @@ fn build_web_bearer_gate(
         .unwrap_or("")
         .to_string();
 
+    // Reuse OidcClient's warmed cache so JWT access tokens validate locally.
+    let jwks_cache = if oidc.jwks_uri().is_empty() {
+        None
+    } else {
+        Some(oidc.jwks_cache().clone())
+    };
+
+    // Introspection is a fallback for opaque tokens, not a requirement.
+    let introspection_url = config
+        .auth
+        .oauth
+        .introspection_url
+        .as_deref()
+        .or(config.auth.mcp.introspection_url.as_deref())
+        .or_else(|| oidc.introspection_endpoint())
+        .map(str::to_string);
+
+    if jwks_cache.is_none() && introspection_url.is_none() {
+        tracing::error!(
+            "OAuth is enabled but the web bearer gate has no token validator: the IdP \
+             advertises neither a JWKS endpoint (for local JWT validation) nor an \
+             introspection endpoint, so browser SSO sessions cannot be validated and will \
+             bounce to /web/login. Configure Hydra to advertise jwks_uri, or set \
+             auth.oauth.introspection_url."
+        );
+        return None;
+    }
+
+    if jwks_cache.is_some() && introspection_url.is_none() {
+        tracing::warn!(
+            "the IdP advertises no introspection endpoint and none is configured: the web \
+             bearer gate will validate JWT access tokens only. Opaque access tokens cannot be \
+             introspected and will be rejected. Set auth.oauth.introspection_url (or have the \
+             IdP advertise one) if this deployment uses opaque tokens."
+        );
+    }
+
     Some(BearerGate::with_client(
         oidc.http_client(),
         BearerGateConfig {
-            introspection_url: Some(introspection_url),
+            introspection_url,
             audience: config.auth.oauth.web_audience.clone(),
             resource_metadata_url: String::new(),
             realm: String::new(),
@@ -663,8 +694,7 @@ fn build_web_bearer_gate(
             // Callback upserts the user row before issuing the grant.
             provisioner: None,
             revocation: revocation_store.map(|r| r.into_arc()),
-            // Web BFF accepts only opaque cookie-resolved tokens.
-            jwt: None,
+            jwt: jwks_cache.map(|jwks| JwtVerifierConfig { jwks }),
         },
     ))
 }

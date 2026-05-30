@@ -49,6 +49,9 @@ struct Inner {
     /// RFC 7662 discovery field. MCP gate falls back to this when
     /// `auth.mcp.introspection_url` is unset.
     introspection_endpoint: Option<String>,
+    /// Hydra binds this as the token's `aud`; sent as the non-standard
+    /// `audience=` authorization param. Empty = omit it.
+    web_audience: String,
 }
 
 /// Auth start: auth URL + session secrets (state/nonce/PKCE).
@@ -193,6 +196,7 @@ impl OidcClient {
                 jwks_cache,
                 end_session_endpoint: endpoints.end_session_endpoint,
                 introspection_endpoint: endpoints.introspection_endpoint,
+                web_audience: cfg.web_audience.clone(),
             }),
         })
     }
@@ -235,7 +239,7 @@ impl OidcClient {
         let client = &self.inner.client;
         let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
 
-        let (auth_url, state, nonce) = client
+        let mut req = client
             .authorize_url(
                 CoreAuthenticationFlow::AuthorizationCode,
                 CsrfToken::new_random,
@@ -245,8 +249,15 @@ impl OidcClient {
             .add_scope(Scope::new("email".to_string()))
             .add_scope(Scope::new("profile".to_string()))
             .add_scope(Scope::new("offline_access".to_string()))
-            .set_pkce_challenge(pkce_challenge)
-            .url();
+            .set_pkce_challenge(pkce_challenge);
+
+        // Hydra binds `audience=` (non-standard) into the access token's `aud`,
+        // which the web gate then requires.
+        if !self.inner.web_audience.is_empty() {
+            req = req.add_extra_param("audience", self.inner.web_audience.as_str());
+        }
+
+        let (auth_url, state, nonce) = req.url();
 
         LoginStart {
             auth_url: auth_url.to_string(),

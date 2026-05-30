@@ -120,9 +120,9 @@ pub async fn get_inbound_filters(
 
 /// Project-level rate limit, or 0 if none is configured.
 pub async fn get_rate_limit(pool: &crate::db::DbPool, project_id: u64) -> Result<u32> {
-    let row = sqlx::query(
-        sql!("SELECT max_events_per_minute FROM rate_limits WHERE project_id = ?1 AND public_key IS NULL"),
-    )
+    let row = sqlx::query(sql!(
+        "SELECT max_events_per_minute FROM rate_limits WHERE project_id = ?1 AND public_key = ''"
+    ))
     .bind(project_id as i64)
     .fetch_optional(pool)
     .await?;
@@ -261,7 +261,7 @@ pub async fn set_rate_limit(
          ON CONFLICT(project_id, public_key) DO UPDATE SET max_events_per_minute = excluded.max_events_per_minute"),
     )
     .bind(project_id as i64)
-    .bind(public_key)
+    .bind(public_key.unwrap_or(""))
     .bind(max_events_per_minute as i64)
     .execute(pool)
     .await?;
@@ -619,4 +619,37 @@ pub async fn upsert_discard_stats(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::queries::test_helpers::open_test_db;
+
+    // Guards the NULL-sentinel upsert regression: project-level limits use '' so
+    // ON CONFLICT(project_id, public_key) actually fires instead of inserting dupes.
+    #[tokio::test]
+    async fn set_rate_limit_updates_in_place() {
+        let pool = open_test_db().await;
+        let project_id = 1u64;
+
+        set_rate_limit(&pool, project_id, None, 10).await.unwrap();
+        assert_eq!(get_rate_limit(&pool, project_id).await.unwrap(), 10);
+
+        set_rate_limit(&pool, project_id, None, 5).await.unwrap();
+        assert_eq!(get_rate_limit(&pool, project_id).await.unwrap(), 5);
+
+        let count: i64 = sqlx::query(sql!(
+            "SELECT COUNT(*) FROM rate_limits WHERE project_id = ?1 AND public_key = ''"
+        ))
+        .bind(project_id as i64)
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+        .get::<i64, _>(0);
+        assert_eq!(count, 1);
+
+        set_rate_limit(&pool, project_id, None, 0).await.unwrap();
+        assert_eq!(get_rate_limit(&pool, project_id).await.unwrap(), 0);
+    }
 }

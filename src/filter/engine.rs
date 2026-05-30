@@ -281,19 +281,24 @@ impl FilterEngine {
             return Ok(());
         }
 
-        let mut window = self
-            .rate_windows
-            .entry(Box::from(public_key))
-            .or_insert_with(SlidingWindow::new);
-        window.advance(now_secs);
+        // Scope the entry guard: the RefMut holds a shard write lock, and
+        // evict_stale_rate_windows -> retain() locks every shard. Drop it first
+        // or we self-deadlock on parking_lot's non-reentrant locks.
+        {
+            let mut window = self
+                .rate_windows
+                .entry(Box::from(public_key))
+                .or_insert_with(SlidingWindow::new);
+            window.advance(now_secs);
 
-        if window.count() >= limit {
-            let retry_after = 60u32;
-            return Err(retry_after);
+            if window.count() >= limit {
+                let retry_after = 60u32;
+                return Err(retry_after);
+            }
+
+            // Still holding the entry guard -- check+increment must be atomic.
+            window.increment(now_secs);
         }
-
-        // Still holding the entry guard -- check+increment must be atomic.
-        window.increment(now_secs);
 
         self.evict_stale_rate_windows(now_secs);
 
@@ -453,6 +458,11 @@ impl FilterEngine {
     pub fn remove_discarded_fingerprint(&self, fingerprint: &str) {
         self.discarded.write().remove(fingerprint);
     }
+
+    #[cfg(test)]
+    fn backdate_eviction_throttle(&mut self, last_secs: u64) {
+        self.eviction_throttle = Throttle::with_last(last_secs);
+    }
 }
 
 #[cfg(test)]
@@ -566,6 +576,21 @@ mod tests {
     #[test]
     fn rate_limiter_blocks_over_limit() {
         let engine = FilterEngine::new(FilterData::default(), 5, vec![], vec![]);
+
+        for _ in 0..5 {
+            assert!(engine.check_rate_limit("testkey", 1).is_ok());
+        }
+        assert!(engine.check_rate_limit("testkey", 1).is_err());
+    }
+
+    // Guards against the entry-guard-held-across-retain reentrant deadlock:
+    // pre-fix, the RefMut shard lock was still live when eviction ran retain().
+    #[test]
+    fn rate_limit_eviction_does_not_deadlock() {
+        let mut engine = FilterEngine::new(FilterData::default(), 5, vec![], vec![]);
+        // Backdate the throttle so eviction's `allow(now, 60)` fires on the very
+        // first call -- the exact condition that deadlocks pre-fix.
+        engine.backdate_eviction_throttle(0);
 
         for _ in 0..5 {
             assert!(engine.check_rate_limit("testkey", 1).is_ok());

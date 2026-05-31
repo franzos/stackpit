@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.2] - 2026-05-31
+
+### Fixed
+- PostgreSQL: rate-limited projects crashed with a column decode error
+
 ## [0.3.1] - 2026-05-31
 
 ### Added

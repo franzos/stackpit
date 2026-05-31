@@ -126,7 +126,7 @@ pub async fn get_rate_limit(pool: &crate::db::DbPool, project_id: u64) -> Result
     .bind(project_id as i64)
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|r| r.get::<i64, _>(0) as u32).unwrap_or(0))
+    Ok(row.map(|r| r.get::<i32, _>(0) as u32).unwrap_or(0))
 }
 
 /// Check if a fingerprint has been explicitly discarded.
@@ -468,7 +468,7 @@ pub async fn load_filter_data(pool: &crate::db::DbPool) -> Result<crate::filter:
         for row in &rows {
             let pid = row.get::<i64, _>(0) as u64;
             let pkey = row.get::<Option<String>, _>(1);
-            let limit = row.get::<i64, _>(2) as u32;
+            let limit = row.get::<i32, _>(2) as u32;
             let key = match pkey {
                 Some(k) if !k.is_empty() => format!("key:{k}"),
                 _ => format!("project:{pid}"),

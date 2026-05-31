@@ -3,54 +3,80 @@
 
 {% block title %}Metrics — {{ nav.label }} — Stackpit{% endblock %}
 
-{% block sidebar_nav %}{% call m::project_sidebar(project_id, nav, "metrics") %}{% endcall %}{% endblock %}
+{% block sidebar_nav %}
+  {% call m::project_sidebar(project_id, nav, "metrics") %}
+  {% endcall %}
+{% endblock %}
 
 {% block breadcrumbs %}
-<span class="breadcrumb-sep">/</span>
-<a class="breadcrumb-link" href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
-<span class="breadcrumb-sep">/</span>
-<span class="breadcrumb-current">Metrics</span>
+  <span class="breadcrumb-sep">/</span>
+  <a class="breadcrumb-link" href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
+  <span class="breadcrumb-sep">/</span>
+  <span class="breadcrumb-current">Metrics</span>
 {% endblock %}
 
 {% block content %}
-<div class="page-header"><h1>Metrics</h1></div>
-
-{% if result.items.is_empty() %}
-<div class="card"><p class="empty">No metrics found. Metric events will appear here once received.</p></div>
-{% else %}
-<div class="card overflow-hidden">
-  <div class="table-wrap">
-    <table class="table">
-      <thead>
-        <tr>
-          <th>MRI</th>
-          <th>Type</th>
-          <th>Data points</th>
-          <th>First seen</th>
-          <th>Last seen</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for metric in result.items %}
-        <tr>
-          <td><a class="text-mono text-[12px]" href="/web/projects/{{ project_id }}/metrics/{{ metric.mri|urlencode }}/">{{ metric.mri }}</a></td>
-          <td><span class="badge badge-neutral">{{ metric.metric_type }}</span></td>
-          <td class="text-tabular">{{ metric.data_points }}</td>
-          <td class="text-muted"><time datetime="{{ metric.first_seen|format_ts }}" title="{{ metric.first_seen|format_ts }}">{{ metric.first_seen|format_relative }}</time></td>
-          <td class="text-muted"><time datetime="{{ metric.last_seen|format_ts }}" title="{{ metric.last_seen|format_ts }}">{{ metric.last_seen|format_relative }}</time></td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+  <div class="page-header">
+    <h1>Metrics</h1>
   </div>
-</div>
 
-<nav class="pagination" aria-label="Pagination">
-  <span>{{ result.total }} metric{% if result.total != 1 %}s{% endif %}</span>
-  <span class="flex gap-2">
-    {% if result.has_prev() %}<a class="btn btn-ghost" href="/web/projects/{{ project_id }}/metrics/?offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}">« Previous</a>{% endif %}
-    {% if result.has_next() %}<a class="btn btn-ghost" href="/web/projects/{{ project_id }}/metrics/?offset={{ result.next_offset() }}&amp;limit={{ result.limit }}">Next »</a>{% endif %}
-  </span>
-</nav>
-{% endif %}
+  {% if result.items.is_empty() %}
+    <div class="card">
+      <p class="empty">No metrics found. Metric events will appear here once received.</p>
+    </div>
+  {% else %}
+    <div class="card overflow-hidden">
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>MRI</th>
+              <th>Type</th>
+              <th>Data points</th>
+              <th>First seen</th>
+              <th>Last seen</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for metric in result.items %}
+              <tr>
+                <td>
+                  <a class="text-mono text-[12px]"
+                     href="/web/projects/{{ project_id }}/metrics/{{ metric.mri|urlencode }}/">{{ metric.mri }}</a>
+                </td>
+                <td>
+                  <span class="badge badge-neutral">{{ metric.metric_type }}</span>
+                </td>
+                <td class="text-tabular">{{ metric.data_points }}</td>
+                <td class="text-muted">
+                  <time datetime="{{ metric.first_seen|format_ts }}"
+                        title="{{ metric.first_seen|format_ts }}">{{ metric.first_seen|format_relative }}</time>
+                </td>
+                <td class="text-muted">
+                  <time datetime="{{ metric.last_seen|format_ts }}"
+                        title="{{ metric.last_seen|format_ts }}">{{ metric.last_seen|format_relative }}</time>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <nav class="pagination" aria-label="Pagination">
+      <span>{{ result.total }} metric
+        {% if result.total != 1 %}s{% endif %}
+      </span>
+      <span class="flex gap-2">
+        {% if result.has_prev() %}
+          <a class="btn btn-ghost"
+             href="/web/projects/{{ project_id }}/metrics/?offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}">« Previous</a>
+        {% endif %}
+        {% if result.has_next() %}
+          <a class="btn btn-ghost"
+             href="/web/projects/{{ project_id }}/metrics/?offset={{ result.next_offset() }}&amp;limit={{ result.limit }}">Next »</a>
+        {% endif %}
+      </span>
+    </nav>
+  {% endif %}
 {% endblock %}

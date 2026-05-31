@@ -3,40 +3,71 @@
 
 {% block title %}Replay {{ replay.event_id|truncate_id }} — Stackpit{% endblock %}
 
-{% block sidebar_nav %}{% call m::project_sidebar(project_id, nav, "replays") %}{% endcall %}{% endblock %}
+{% block sidebar_nav %}
+  {% call m::project_sidebar(project_id, nav, "replays") %}
+  {% endcall %}
+{% endblock %}
 
 {% block breadcrumbs %}
-<span class="breadcrumb-sep">/</span>
-<a class="breadcrumb-link" href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
-<span class="breadcrumb-sep">/</span>
-<a class="breadcrumb-link" href="/web/projects/{{ project_id }}/replays/">Replays</a>
-<span class="breadcrumb-sep">/</span>
-<span class="breadcrumb-current text-mono">{{ replay.event_id|truncate_id }}</span>
+  <span class="breadcrumb-sep">/</span>
+  <a class="breadcrumb-link" href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
+  <span class="breadcrumb-sep">/</span>
+  <a class="breadcrumb-link"
+     href="/web/projects/{{ project_id }}/replays/">Replays</a>
+  <span class="breadcrumb-sep">/</span>
+  <span class="breadcrumb-current text-mono">{{ replay.event_id|truncate_id }}</span>
 {% endblock %}
 
 {% block content %}
-<div class="page-header">
-  <h1 class="text-mono">{{ replay.event_id|truncate_id }}</h1>
-</div>
-
-<div class="card mb-4">
-  <div class="card-header"><span>Replay</span></div>
-  <div class="p-4 text-muted text-[13px]">Recording playback not yet available. Raw replay data is shown below.</div>
-  <div class="table-wrap">
-    <table class="table">
-      <tbody>
-        <tr><th>Event ID</th><td class="text-mono">{{ replay.event_id }}</td></tr>
-        <tr><th>Type</th><td><span class="badge badge-neutral">{{ replay.replay_type }}</span></td></tr>
-        <tr><th>Release</th><td class="text-mono">{% match replay.release %}{% when Some with (r) %}{{ r }}{% when None %}<span class="text-muted">—</span>{% endmatch %}</td></tr>
-        <tr><th>Environment</th><td class="text-mono">{% match replay.environment %}{% when Some with (e) %}{{ e }}{% when None %}<span class="text-muted">—</span>{% endmatch %}</td></tr>
-        <tr><th>Timestamp</th><td class="text-mono"><time datetime="{{ replay.timestamp|format_ts }}">{{ replay.timestamp|format_ts }}</time></td></tr>
-      </tbody>
-    </table>
+  <div class="page-header">
+    <h1 class="text-mono">{{ replay.event_id|truncate_id }}</h1>
   </div>
-</div>
 
-<div class="card">
-  <div class="card-header"><span>Raw payload</span></div>
-  <pre class="codeblock m-4">{{ raw_json }}</pre>
-</div>
+  <div class="card mb-4">
+    <div class="card-header">
+      <span>Replay</span>
+    </div>
+    <div class="p-4 text-muted text-[13px]">Recording playback not yet available. Raw replay data is shown below.</div>
+    <div class="table-wrap">
+      <table class="table">
+        <tbody>
+          <tr>
+            <th>Event ID</th>
+            <td class="text-mono">{{ replay.event_id }}</td>
+          </tr>
+          <tr>
+            <th>Type</th>
+            <td>
+              <span class="badge badge-neutral">{{ replay.replay_type }}</span>
+            </td>
+          </tr>
+          <tr>
+            <th>Release</th>
+            <td class="text-mono">
+              {% match replay.release %}{% when Some with (r) %}{{ r }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
+            </td>
+          </tr>
+          <tr>
+            <th>Environment</th>
+            <td class="text-mono">
+              {% match replay.environment %}{% when Some with (e) %}{{ e }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
+            </td>
+          </tr>
+          <tr>
+            <th>Timestamp</th>
+            <td class="text-mono">
+              <time datetime="{{ replay.timestamp|format_ts }}">{{ replay.timestamp|format_ts }}</time>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <span>Raw payload</span>
+    </div>
+    <pre class="codeblock m-4">{{ raw_json }}</pre>
+  </div>
 {% endblock %}

@@ -3,40 +3,65 @@
 
 {% block title %}Add webhook — Stackpit{% endblock %}
 
-{% block sidebar_nav %}{% call m::settings_sidebar("integrations") %}{% endcall %}{% endblock %}
+{% block sidebar_nav %}
+  {% call m::settings_sidebar("integrations") %}
+  {% endcall %}
+{% endblock %}
 
 {% block breadcrumbs %}
-<span class="breadcrumb-sep">/</span>
-<a class="breadcrumb-link" href="/web/settings/integrations/">Integrations</a>
-<span class="breadcrumb-sep">/</span>
-<span class="breadcrumb-current">Add webhook</span>
+  <span class="breadcrumb-sep">/</span>
+  <a class="breadcrumb-link" href="/web/settings/integrations/">Integrations</a>
+  <span class="breadcrumb-sep">/</span>
+  <span class="breadcrumb-current">Add webhook</span>
 {% endblock %}
 
 {% block content %}
-<div class="page-header">
-  <div>
-    <h1>Add webhook integration</h1>
+  <div class="page-header">
+    <div>
+      <h1>Add webhook integration</h1>
+    </div>
+    <div class="page-actions">
+      <a href="/web/settings/integrations/" class="btn btn-secondary">Cancel</a>
+    </div>
   </div>
-  <div class="page-actions"><a href="/web/settings/integrations/" class="btn btn-secondary">Cancel</a></div>
-</div>
 
-<div class="card card-pad max-w-2xl">
-  <form class="settings-form" method="post" action="/web/settings/integrations/create">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <input type="hidden" name="kind" value="webhook">
-    <div>
-      <label class="field-label" for="int_name">Name</label>
-      <input class="input" type="text" id="int_name" name="name" placeholder="e.g. Production alerts" required>
-    </div>
-    <div>
-      <label class="field-label" for="int_url">Webhook URL</label>
-      <input class="input text-mono" type="url" id="int_url" name="url" placeholder="https://example.com/webhook" required>
-    </div>
-    <div>
-      <label class="field-label" for="int_secret">HMAC secret <span class="text-muted normal-case tracking-normal font-normal">(optional)</span></label>
-      <input class="input" type="password" id="int_secret" name="secret" placeholder="Optional signing secret">
-    </div>
-    <div><button type="submit" class="btn btn-primary">Create integration</button></div>
-  </form>
-</div>
+  <div class="card card-pad max-w-2xl">
+    <form class="settings-form"
+          method="post"
+          action="/web/settings/integrations/create">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="kind" value="webhook">
+      <div>
+        <label class="field-label" for="int_name">Name</label>
+        <input class="input"
+               type="text"
+               id="int_name"
+               name="name"
+               placeholder="e.g. Production alerts"
+               required>
+      </div>
+      <div>
+        <label class="field-label" for="int_url">Webhook URL</label>
+        <input class="input text-mono"
+               type="url"
+               id="int_url"
+               name="url"
+               placeholder="https://example.com/webhook"
+               required>
+      </div>
+      <div>
+        <label class="field-label" for="int_secret">
+          HMAC secret <span class="text-muted normal-case tracking-normal font-normal">(optional)</span>
+        </label>
+        <input class="input"
+               type="password"
+               id="int_secret"
+               name="secret"
+               placeholder="Optional signing secret">
+      </div>
+      <div>
+        <button type="submit" class="btn btn-primary">Create integration</button>
+      </div>
+    </form>
+  </div>
 {% endblock %}

@@ -1,53 +1,60 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
+  <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
-    <title>{% block title %}Stackpit{% endblock %}</title>
+    <title>
+      {% block title %}Stackpit{% endblock %}
+    </title>
     <link rel="stylesheet" href="/web/_assets/style.css">
     <link rel="icon" type="image/svg+xml" href="/web/_assets/icon.svg">
     <script src="/web/_assets/bulk.js" defer></script>
     <script src="/web/_assets/confirm.js" defer></script>
     <script src="/web/_assets/stop-propagation.js" defer></script>
-</head>
-<body class="min-h-screen">
-{% block layout %}
-<div class="flex min-h-screen">
-    <aside class="w-[var(--spacing-sidebar)] shrink-0 border-r border-outline-variant flex flex-col"
-           style="background: var(--color-surface-container-low);">
-        <a href="/web/projects/" class="flex items-center gap-2 px-4 h-14 border-b border-outline-variant">
+  </head>
+  <body class="min-h-screen">
+    {% block layout %}
+      <div class="flex min-h-screen">
+        <aside class="w-[var(--spacing-sidebar)] shrink-0 border-r border-outline-variant flex flex-col"
+               style="background: var(--color-surface-container-low)">
+          <a href="/web/projects/"
+             class="flex items-center gap-2 px-4 h-14 border-b border-outline-variant">
             <img src="/web/_assets/icon.svg" alt="" width="22" height="22">
             <span class="font-semibold">Stackpit</span>
-        </a>
-        <nav class="flex-1 py-3 overflow-y-auto" aria-label="Primary">
+          </a>
+          <nav class="flex-1 py-3 overflow-y-auto" aria-label="Primary">
             {% block sidebar_nav %}
-            <div class="px-2 space-y-0.5">
+              <div class="px-2 space-y-0.5">
                 <a href="/web/projects/" class="sidebar-link"><span>Projects</span></a>
-            </div>
+              </div>
             {% endblock %}
-        </nav>
-        <div class="border-t border-outline-variant py-2 px-2 space-y-0.5">
+          </nav>
+          <div class="border-t border-outline-variant py-2 px-2 space-y-0.5">
             <a href="/web/settings/integrations/" class="sidebar-link"><span>Settings</span></a>
             <a href="/web/settings/defaults/" class="sidebar-link"><span>Defaults</span></a>
             <form method="post" action="/web/logout" class="contents">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button type="submit" class="sidebar-link"><span>Logout</span></button>
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button type="submit" class="sidebar-link">
+                <span>Logout</span>
+              </button>
             </form>
-        </div>
-    </aside>
-    <div class="flex-1 min-w-0 flex flex-col">
-        <header class="h-14 border-b border-outline-variant px-6 flex items-center"
-                style="background: var(--color-surface);">
+          </div>
+        </aside>
+        <div class="flex-1 min-w-0 flex flex-col">
+          <header class="h-14 border-b border-outline-variant px-6 flex items-center"
+                  style="background: var(--color-surface)">
             <nav class="text-[13px] flex items-center gap-1.5" aria-label="Breadcrumb">
-                <a href="/web/projects/" class="breadcrumb-link">Projects</a>
-                {% block breadcrumbs %}{% endblock %}
+              <a href="/web/projects/" class="breadcrumb-link">Projects</a>
+              {% block breadcrumbs %}{% endblock %}
             </nav>
-        </header>
-        <main class="flex-1 px-6 py-6 min-w-0">{% block content %}{% endblock %}</main>
-    </div>
-</div>
-{% endblock %}
-{% block scripts %}{% endblock %}
-</body>
+          </header>
+          <main class="flex-1 px-6 py-6 min-w-0">
+            {% block content %}{% endblock %}
+          </main>
+        </div>
+      </div>
+    {% endblock %}
+    {% block scripts %}{% endblock %}
+  </body>
 </html>

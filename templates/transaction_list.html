@@ -3,146 +3,217 @@
 
 {% block title %}Transactions — {{ nav.label }} — Stackpit{% endblock %}
 
-{% block sidebar_nav %}{% call m::project_sidebar(project_id, nav, "transactions") %}{% endcall %}{% endblock %}
+{% block sidebar_nav %}
+  {% call m::project_sidebar(project_id, nav, "transactions") %}
+  {% endcall %}
+{% endblock %}
 
 {% block breadcrumbs %}
-<span class="breadcrumb-sep">/</span>
-<a class="breadcrumb-link" href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
-<span class="breadcrumb-sep">/</span>
-<span class="breadcrumb-current">Transactions</span>
+  <span class="breadcrumb-sep">/</span>
+  <a class="breadcrumb-link" href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
+  <span class="breadcrumb-sep">/</span>
+  <span class="breadcrumb-current">Transactions</span>
 {% endblock %}
 
 {% block content %}
-<div class="page-header">
-  <h1>Transactions</h1>
-</div>
-
-{% if !chart_svg.is_empty() %}
-<div class="event-chart">{{ chart_svg|safe }}</div>
-{% endif %}
-
-{% if !tag.is_empty() %}
-<div class="active-filter">
-  Filtered by tag: <strong>{{ tag }}</strong>
-  <a href="/web/projects/{{ project_id }}/transactions/?{% if !query.is_empty() %}query={{ query }}&amp;{% endif %}{% if !level.is_empty() %}level={{ level }}&amp;{% endif %}{% if !status.is_empty() %}status={{ status }}&amp;{% endif %}{% if !release.is_empty() %}release={{ release }}&amp;{% endif %}{% if !sort.is_empty() %}sort={{ sort }}&amp;{% endif %}{% if !period.is_empty() %}period={{ period }}{% endif %}" title="Clear tag filter" aria-label="Clear tag filter">×</a>
-</div>
-{% endif %}
-
-<form class="filter-form" method="get" action="/web/projects/{{ project_id }}/transactions/">
-  {% if !sort.is_empty() %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
-  {% if !tag.is_empty() %}<input type="hidden" name="tag" value="{{ tag }}">{% endif %}
-  <input class="input" type="text" name="query" placeholder="Search transactions…" value="{{ query }}" aria-label="Search transactions">
-  <select class="select w-auto" name="status" aria-label="Filter by status">
-    <option value="">All statuses</option>
-    <option value="unresolved"{% if status == "unresolved" %} selected{% endif %}>Unresolved</option>
-    <option value="resolved"{% if status == "resolved" %} selected{% endif %}>Resolved</option>
-    <option value="ignored"{% if status == "ignored" %} selected{% endif %}>Ignored</option>
-  </select>
-  <select class="select w-auto" name="level" aria-label="Filter by level">
-    <option value="">All levels</option>
-    <option value="fatal"{% if level == "fatal" %} selected{% endif %}>fatal</option>
-    <option value="error"{% if level == "error" %} selected{% endif %}>error</option>
-    <option value="warning"{% if level == "warning" %} selected{% endif %}>warning</option>
-    <option value="info"{% if level == "info" %} selected{% endif %}>info</option>
-    <option value="debug"{% if level == "debug" %} selected{% endif %}>debug</option>
-  </select>
-  {% if !releases.is_empty() %}
-  <select class="select w-auto" name="release" aria-label="Filter by release">
-    <option value="">All releases</option>
-    {% for r in releases %}
-    <option value="{{ r }}"{% if release == *r %} selected{% endif %}>{{ r }}</option>
-    {% endfor %}
-  </select>
-  {% endif %}
-  <select class="select w-auto" name="period" aria-label="Time range">
-    <option value="">All time</option>
-    <option value="1h"{% if period == "1h" %} selected{% endif %}>Last hour</option>
-    <option value="24h"{% if period == "24h" %} selected{% endif %}>Last 24h</option>
-    <option value="7d"{% if period == "7d" %} selected{% endif %}>Last 7 days</option>
-    <option value="14d"{% if period == "14d" %} selected{% endif %}>Last 14 days</option>
-    <option value="30d"{% if period == "30d" %} selected{% endif %}>Last 30 days</option>
-    <option value="90d"{% if period == "90d" %} selected{% endif %}>Last 90 days</option>
-    <option value="365d"{% if period == "365d" %} selected{% endif %}>Last 365 days</option>
-  </select>
-  <button class="btn btn-secondary" type="submit">Filter</button>
-</form>
-
-{% if result.items.is_empty() %}
-<div class="card"><p class="empty">No transactions match the current filters.</p></div>
-{% else %}
-
-<form method="post" action="/web/projects/{{ project_id }}/transactions/bulk">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-  <input type="hidden" name="mode" value="selected">
-  {% if !period.is_empty() %}<input type="hidden" name="period" value="{{ period }}">{% endif %}
-  <div class="bulk-bar">
-    <button type="submit" name="action" value="resolve" class="btn btn-secondary">Resolve</button>
-    <button type="submit" name="action" value="ignore" class="btn btn-secondary">Ignore</button>
-    <button type="submit" name="action" value="delete" class="btn btn-danger" data-confirm="Permanently delete selected?">Delete</button>
+  <div class="page-header">
+    <h1>Transactions</h1>
   </div>
 
-  <div class="card overflow-hidden">
-    <div class="table-wrap">
-      <table class="table table-fixed-layout">
-        <thead>
-          <tr>
-            <th class="col-check"></th>
-            <th class="col-title">Title</th>
-            <th class="col-narrow">Level</th>
-            <th class="col-narrow"><a href="/web/projects/{{ project_id }}/transactions/?sort=event_count{{ base_qs }}"{% if sort == "event_count" %} class="active-sort"{% endif %}>Events</a></th>
-            <th class="col-narrow">Users</th>
-            <th class="hide-mobile col-time"><a href="/web/projects/{{ project_id }}/transactions/?sort=first_seen{{ base_qs }}"{% if sort == "first_seen" %} class="active-sort"{% endif %}>First seen</a></th>
-            <th class="col-time"><a href="/web/projects/{{ project_id }}/transactions/?{{ base_qs }}"{% if sort.is_empty() %} class="active-sort"{% endif %}>Last seen</a></th>
-            <th class="col-narrow">Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for issue in result.items %}
-          <tr{% match issue.level %}{% when Some with (lvl) %} data-level="{{ lvl }}"{% when None %}{% endmatch %}>
-            <td class="col-check"><input type="checkbox" name="ids" value="{{ issue.fingerprint }}" aria-label="Select transaction"></td>
-            <td class="col-title min-w-0" title="{% match issue.title %}{% when Some with (t) %}{{ t }}{% when None %}(untitled){% endmatch %}">
-              <div class="flex items-center gap-2 min-w-0">
-                <span class="type-icon type-icon-{{ issue.item_type }}"></span>
-                <a class="font-semibold truncate" href="/web/projects/{{ project_id }}/issues/{{ issue.fingerprint }}/">{% match issue.title %}{% when Some with (t) %}{{ t|split_error_type }}{% when None %}(untitled){% endmatch %}</a>
-              </div>
-              {% match issue.title %}{% when Some with (t) %}<div class="issue-title-msg">{{ t|split_error_message }}</div>{% when None %}{% endmatch %}
-            </td>
-            <td>{% match issue.level %}{% when Some with (lvl) %}<span class="badge badge-{{ lvl }}">{{ lvl }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}</td>
-            <td class="text-tabular">{{ issue.event_count }}</td>
-            <td class="text-tabular">{{ issue.user_count }}</td>
-            <td class="hide-mobile text-muted"><time datetime="{{ issue.first_seen|format_ts }}" title="{{ issue.first_seen|format_ts }}">{{ issue.first_seen|format_relative }}</time></td>
-            <td class="text-muted"><time datetime="{{ issue.last_seen|format_ts }}" title="{{ issue.last_seen|format_ts }}">{{ issue.last_seen|format_relative }}</time></td>
-            <td><span class="badge badge-{{ issue.status }}">{{ issue.status }}</span></td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+  {% if !chart_svg.is_empty() %}<div class="event-chart">{{ chart_svg|safe }}</div>{% endif %}
+
+  {% if !tag.is_empty() %}
+    <div class="active-filter">
+      Filtered by tag: <strong>{{ tag }}</strong>
+      <a href="/web/projects/{{ project_id }}/transactions/?{% if !query.is_empty() %}query={{ query }}&amp;{% endif %}{% if !level.is_empty() %}level={{ level }}&amp;{% endif %}{% if !status.is_empty() %}status={{ status }}&amp;{% endif %}{% if !release.is_empty() %}release={{ release }}&amp;{% endif %}{% if !sort.is_empty() %}sort={{ sort }}&amp;{% endif %}{% if !period.is_empty() %}period={{ period }}{% endif %}"
+         title="Clear tag filter"
+         aria-label="Clear tag filter">×</a>
     </div>
-  </div>
-</form>
+  {% endif %}
 
-{% if result.total > 0 %}
-<form class="flex gap-2 mt-3" method="post" action="/web/projects/{{ project_id }}/transactions/bulk">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-  <input type="hidden" name="mode" value="all_matching">
-  {% if !query.is_empty() %}<input type="hidden" name="query" value="{{ query }}">{% endif %}
-  {% if !level.is_empty() %}<input type="hidden" name="level" value="{{ level }}">{% endif %}
-  {% if !status.is_empty() %}<input type="hidden" name="status" value="{{ status }}">{% endif %}
-  {% if !release.is_empty() %}<input type="hidden" name="release" value="{{ release }}">{% endif %}
-  {% if !tag.is_empty() %}<input type="hidden" name="tag" value="{{ tag }}">{% endif %}
-  {% if !period.is_empty() %}<input type="hidden" name="period" value="{{ period }}">{% endif %}
-  <button type="submit" name="action" value="resolve" class="btn btn-secondary" data-confirm="Resolve all {{ result.total }}?">Resolve all {{ result.total }}</button>
-  <button type="submit" name="action" value="ignore" class="btn btn-secondary" data-confirm="Ignore all {{ result.total }}?">Ignore all {{ result.total }}</button>
-  <button type="submit" name="action" value="delete" class="btn btn-danger" data-confirm="Delete all {{ result.total }}?">Delete all {{ result.total }}</button>
-</form>
-{% endif %}
+  <form class="filter-form"
+        method="get"
+        action="/web/projects/{{ project_id }}/transactions/">
+    {% if !sort.is_empty() %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
+    {% if !tag.is_empty() %}<input type="hidden" name="tag" value="{{ tag }}">{% endif %}
+    <input class="input"
+           type="text"
+           name="query"
+           placeholder="Search transactions…"
+           value="{{ query }}"
+           aria-label="Search transactions">
+    <select class="select w-auto" name="status" aria-label="Filter by status">
+      <option value="">All statuses</option>
+      <option value="unresolved"{% if status == "unresolved" %} selected{% endif %}>Unresolved</option>
+      <option value="resolved"{% if status == "resolved" %} selected{% endif %}>Resolved</option>
+      <option value="ignored"{% if status == "ignored" %} selected{% endif %}>Ignored</option>
+    </select>
+    <select class="select w-auto" name="level" aria-label="Filter by level">
+      <option value="">All levels</option>
+      <option value="fatal"{% if level == "fatal" %} selected{% endif %}>fatal</option>
+      <option value="error"{% if level == "error" %} selected{% endif %}>error</option>
+      <option value="warning"{% if level == "warning" %} selected{% endif %}>warning</option>
+      <option value="info"{% if level == "info" %} selected{% endif %}>info</option>
+      <option value="debug"{% if level == "debug" %} selected{% endif %}>debug</option>
+    </select>
+    {% if !releases.is_empty() %}
+      <select class="select w-auto" name="release" aria-label="Filter by release">
+        <option value="">All releases</option>
+        {% for r in releases %}
+          <option value="{{ r }}"{% if release == *r %} selected{% endif %}>{{ r }}</option>
+        {% endfor %}
+      </select>
+    {% endif %}
+    <select class="select w-auto" name="period" aria-label="Time range">
+      <option value="">All time</option>
+      <option value="1h"{% if period == "1h" %} selected{% endif %}>Last hour</option>
+      <option value="24h"{% if period == "24h" %} selected{% endif %}>Last 24h</option>
+      <option value="7d"{% if period == "7d" %} selected{% endif %}>Last 7 days</option>
+      <option value="14d"{% if period == "14d" %} selected{% endif %}>Last 14 days</option>
+      <option value="30d"{% if period == "30d" %} selected{% endif %}>Last 30 days</option>
+      <option value="90d"{% if period == "90d" %} selected{% endif %}>Last 90 days</option>
+      <option value="365d"{% if period == "365d" %} selected{% endif %}>Last 365 days</option>
+    </select>
+    <button class="btn btn-secondary" type="submit">Filter</button>
+  </form>
 
-<nav class="pagination" aria-label="Pagination">
-  <span>{{ result.total }} transaction{% if result.total != 1 %}s{% endif %}</span>
-  <span class="flex gap-2">
-    {% if result.has_prev() %}<a class="btn btn-ghost" href="/web/projects/{{ project_id }}/transactions/?offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}{{ filter_qs }}">« Previous</a>{% endif %}
-    {% if result.has_next() %}<a class="btn btn-ghost" href="/web/projects/{{ project_id }}/transactions/?offset={{ result.next_offset() }}&amp;limit={{ result.limit }}{{ filter_qs }}">Next »</a>{% endif %}
-  </span>
-</nav>
-{% endif %}
+  {% if result.items.is_empty() %}
+    <div class="card">
+      <p class="empty">No transactions match the current filters.</p>
+    </div>
+  {% else %}
+
+    <form method="post"
+          action="/web/projects/{{ project_id }}/transactions/bulk">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="mode" value="selected">
+      {% if !period.is_empty() %}<input type="hidden" name="period" value="{{ period }}">{% endif %}
+      <div class="bulk-bar">
+        <button type="submit" name="action" value="resolve" class="btn btn-secondary">Resolve</button>
+        <button type="submit" name="action" value="ignore" class="btn btn-secondary">Ignore</button>
+        <button type="submit"
+                name="action"
+                value="delete"
+                class="btn btn-danger"
+                data-confirm="Permanently delete selected?">Delete</button>
+      </div>
+
+      <div class="card overflow-hidden">
+        <div class="table-wrap">
+          <table class="table table-fixed-layout">
+            <thead>
+              <tr>
+                <th class="col-check"></th>
+                <th class="col-title">Title</th>
+                <th class="col-narrow">Level</th>
+                <th class="col-narrow">
+                  <a href="/web/projects/{{ project_id }}/transactions/?sort=event_count{{ base_qs }}"
+                     {% if sort == "event_count" %}class="active-sort"{% endif %}>Events</a>
+                </th>
+                <th class="col-narrow">Users</th>
+                <th class="hide-mobile col-time">
+                  <a href="/web/projects/{{ project_id }}/transactions/?sort=first_seen{{ base_qs }}"
+                     {% if sort == "first_seen" %}class="active-sort"{% endif %}>First seen</a>
+                </th>
+                <th class="col-time">
+                  <a href="/web/projects/{{ project_id }}/transactions/?{{ base_qs }}"
+                     {% if sort.is_empty() %}class="active-sort"{% endif %}>Last seen</a>
+                </th>
+                <th class="col-narrow">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for issue in result.items %}
+                <tr {% match issue.level %}
+                    {% when Some with (lvl) %}
+                    data-level="{{ lvl }}"
+                    {% when None %}
+                    {% endmatch %}>
+                  <td class="col-check">
+                    <input type="checkbox"
+                           name="ids"
+                           value="{{ issue.fingerprint }}"
+                           aria-label="Select transaction">
+                  </td>
+                  <td class="col-title min-w-0"
+                      title="{% match issue.title %}{% when Some with (t) %}{{ t }}{% when None %}(untitled){% endmatch %}">
+                    <div class="flex items-center gap-2 min-w-0">
+                      <span class="type-icon type-icon-{{ issue.item_type }}"></span>
+                      <a class="font-semibold truncate"
+                         href="/web/projects/{{ project_id }}/issues/{{ issue.fingerprint }}/">{% match issue.title %}{% when Some with (t) %}{{ t|split_error_type }}{% when None %}(untitled){% endmatch %}</a>
+                    </div>
+                    {% match issue.title %}{% when Some with (t) %}
+                    <div class="issue-title-msg">{{ t|split_error_message }}</div>
+                    {% when None %}{% endmatch %}
+                  </td>
+                  <td>
+                    {% match issue.level %}{% when Some with (lvl) %}<span class="badge badge-{{ lvl }}">{{ lvl }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
+                  </td>
+                  <td class="text-tabular">{{ issue.event_count }}</td>
+                  <td class="text-tabular">{{ issue.user_count }}</td>
+                  <td class="hide-mobile text-muted">
+                    <time datetime="{{ issue.first_seen|format_ts }}"
+                          title="{{ issue.first_seen|format_ts }}">{{ issue.first_seen|format_relative }}</time>
+                  </td>
+                  <td class="text-muted">
+                    <time datetime="{{ issue.last_seen|format_ts }}"
+                          title="{{ issue.last_seen|format_ts }}">{{ issue.last_seen|format_relative }}</time>
+                  </td>
+                  <td>
+                    <span class="badge badge-{{ issue.status }}">{{ issue.status }}</span>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </form>
+
+    {% if result.total > 0 %}
+      <form class="flex gap-2 mt-3"
+            method="post"
+            action="/web/projects/{{ project_id }}/transactions/bulk">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="mode" value="all_matching">
+        {% if !query.is_empty() %}<input type="hidden" name="query" value="{{ query }}">{% endif %}
+        {% if !level.is_empty() %}<input type="hidden" name="level" value="{{ level }}">{% endif %}
+        {% if !status.is_empty() %}<input type="hidden" name="status" value="{{ status }}">{% endif %}
+        {% if !release.is_empty() %}<input type="hidden" name="release" value="{{ release }}">{% endif %}
+        {% if !tag.is_empty() %}<input type="hidden" name="tag" value="{{ tag }}">{% endif %}
+        {% if !period.is_empty() %}<input type="hidden" name="period" value="{{ period }}">{% endif %}
+        <button type="submit"
+                name="action"
+                value="resolve"
+                class="btn btn-secondary"
+                data-confirm="Resolve all {{ result.total }}?">Resolve all {{ result.total }}</button>
+        <button type="submit"
+                name="action"
+                value="ignore"
+                class="btn btn-secondary"
+                data-confirm="Ignore all {{ result.total }}?">Ignore all {{ result.total }}</button>
+        <button type="submit"
+                name="action"
+                value="delete"
+                class="btn btn-danger"
+                data-confirm="Delete all {{ result.total }}?">Delete all {{ result.total }}</button>
+      </form>
+    {% endif %}
+
+    <nav class="pagination" aria-label="Pagination">
+      <span>{{ result.total }} transaction
+        {% if result.total != 1 %}s{% endif %}
+      </span>
+      <span class="flex gap-2">
+        {% if result.has_prev() %}
+          <a class="btn btn-ghost"
+             href="/web/projects/{{ project_id }}/transactions/?offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}{{ filter_qs }}">« Previous</a>
+        {% endif %}
+        {% if result.has_next() %}
+          <a class="btn btn-ghost"
+             href="/web/projects/{{ project_id }}/transactions/?offset={{ result.next_offset() }}&amp;limit={{ result.limit }}{{ filter_qs }}">Next »</a>
+        {% endif %}
+      </span>
+    </nav>
+  {% endif %}
 {% endblock %}

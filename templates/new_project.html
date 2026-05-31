@@ -3,56 +3,66 @@
 
 {% block title %}New project — Stackpit{% endblock %}
 
-{% block sidebar_nav %}{% call m::top_sidebar("projects") %}{% endcall %}{% endblock %}
+{% block sidebar_nav %}
+  {% call m::top_sidebar("projects") %}
+  {% endcall %}
+{% endblock %}
 
 {% block breadcrumbs %}
-<span class="breadcrumb-sep">/</span>
-<span class="breadcrumb-current">New project</span>
+  <span class="breadcrumb-sep">/</span>
+  <span class="breadcrumb-current">New project</span>
 {% endblock %}
 
 {% block content %}
-<div class="page-header">
-  <h1>New project</h1>
-</div>
+  <div class="page-header">
+    <h1>New project</h1>
+  </div>
 
-{% match message %}{% when Some with (msg) %}
-<div class="settings-message mb-4">{{ msg }}</div>
-{% when None %}{% endmatch %}
+  {% match message %}{% when Some with (msg) %}
+  <div class="settings-message mb-4">{{ msg }}</div>
+  {% when None %}{% endmatch %}
 
-<div class="card card-pad max-w-2xl">
-  <form class="settings-form" method="post" action="/web/projects/new">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <div class="card card-pad max-w-2xl">
+    <form class="settings-form" method="post" action="/web/projects/new">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
-    <div>
-      <label class="field-label" for="project_name">Project name</label>
-      <input class="input" type="text" id="project_name" name="name" placeholder="My Project" required>
-    </div>
+      <div>
+        <label class="field-label" for="project_name">Project name</label>
+        <input class="input"
+               type="text"
+               id="project_name"
+               name="name"
+               placeholder="My Project"
+               required>
+      </div>
 
-    <div>
-      <label class="field-label" for="platform">Platform <span class="text-muted normal-case tracking-normal font-normal">(optional)</span></label>
-      <select class="select" id="platform" name="platform">
-        <option value="">Select a platform…</option>
-        <option value="javascript">JavaScript</option>
-        <option value="python">Python</option>
-        <option value="rust">Rust</option>
-        <option value="go">Go</option>
-        <option value="java">Java</option>
-        <option value="node">Node.js</option>
-        <option value="ruby">Ruby</option>
-        <option value="php">PHP</option>
-        <option value="elixir">Elixir</option>
-        <option value="csharp">C#</option>
-        <option value="swift">Swift</option>
-        <option value="kotlin">Kotlin</option>
-        <option value="native">Native (C/C++)</option>
-        <option value="other">Other</option>
-      </select>
-    </div>
+      <div>
+        <label class="field-label" for="platform">
+          Platform <span class="text-muted normal-case tracking-normal font-normal">(optional)</span>
+        </label>
+        <select class="select" id="platform" name="platform">
+          <option value="">Select a platform…</option>
+          <option value="javascript">JavaScript</option>
+          <option value="python">Python</option>
+          <option value="rust">Rust</option>
+          <option value="go">Go</option>
+          <option value="java">Java</option>
+          <option value="node">Node.js</option>
+          <option value="ruby">Ruby</option>
+          <option value="php">PHP</option>
+          <option value="elixir">Elixir</option>
+          <option value="csharp">C#</option>
+          <option value="swift">Swift</option>
+          <option value="kotlin">Kotlin</option>
+          <option value="native">Native (C/C++)</option>
+          <option value="other">Other</option>
+        </select>
+      </div>
 
-    <div class="flex gap-2">
-      <button type="submit" class="btn btn-primary">Create project</button>
-      <a href="/web/projects/" class="btn btn-secondary">Cancel</a>
-    </div>
-  </form>
-</div>
+      <div class="flex gap-2">
+        <button type="submit" class="btn btn-primary">Create project</button>
+        <a href="/web/projects/" class="btn btn-secondary">Cancel</a>
+      </div>
+    </form>
+  </div>
 {% endblock %}

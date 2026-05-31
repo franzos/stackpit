@@ -3,78 +3,135 @@
 
 {% block title %}SDK Setup — {{ nav.label }} — Stackpit{% endblock %}
 
-{% block sidebar_nav %}{% call m::project_sidebar(project_id, nav, "settings") %}{% endcall %}{% endblock %}
+{% block sidebar_nav %}
+  {% call m::project_sidebar(project_id, nav, "settings") %}
+  {% endcall %}
+{% endblock %}
 
 {% block breadcrumbs %}
-<span class="breadcrumb-sep">/</span>
-<a class="breadcrumb-link" href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
-<span class="breadcrumb-sep">/</span>
-<a class="breadcrumb-link" href="/web/projects/{{ project_id }}/settings/">Settings</a>
-<span class="breadcrumb-sep">/</span>
-<span class="breadcrumb-current">SDK setup</span>
+  <span class="breadcrumb-sep">/</span>
+  <a class="breadcrumb-link" href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
+  <span class="breadcrumb-sep">/</span>
+  <a class="breadcrumb-link"
+     href="/web/projects/{{ project_id }}/settings/">Settings</a>
+  <span class="breadcrumb-sep">/</span>
+  <span class="breadcrumb-current">SDK setup</span>
 {% endblock %}
 
 {% block content %}
-<div class="page-header"><h1>SDK setup</h1></div>
-
-<nav class="flex gap-1 mb-6 border-b border-outline-variant -mx-6 px-6" aria-label="Settings sections">
-  <a href="/web/projects/{{ project_id }}/settings/" class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-transparent text-muted hover:text-on-surface">General</a>
-  <a href="/web/projects/{{ project_id }}/settings/keys/" class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-primary text-on-surface">SDK setup</a>
-  <a href="/web/projects/{{ project_id }}/settings/sourcemaps/" class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-transparent text-muted hover:text-on-surface">Source maps</a>
-  <a href="/web/projects/{{ project_id }}/settings/filters/" class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-transparent text-muted hover:text-on-surface">Filters</a>
-  <a href="/web/projects/{{ project_id }}/settings/integrations/" class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-transparent text-muted hover:text-on-surface">Integrations</a>
-</nav>
-
-{% match message %}{% when Some with (msg) %}<div class="settings-message mb-4">{{ msg }}</div>{% when None %}{% endmatch %}
-
-<div class="space-y-6 max-w-3xl">
-  <div class="card">
-    <div class="card-header"><span>DSN</span></div>
-    <div class="p-4">
-      {% if dsn.is_empty() %}<p class="empty">No keys registered. Create a key below to get a DSN.</p>
-      {% else %}<pre class="codeblock select-all">{{ dsn }}</pre>{% endif %}
-    </div>
+  <div class="page-header">
+    <h1>SDK setup</h1>
   </div>
 
-  <div class="card">
-    <div class="card-header"><span>Project keys</span></div>
-    {% if keys.is_empty() %}
-    <div class="p-4"><p class="empty">No keys registered for this project.</p></div>
-    {% else %}
-    <div class="table-wrap">
-      <table class="table">
-        <thead><tr><th>Public key</th><th>Label</th><th>Status</th><th>Created</th><th></th></tr></thead>
-        <tbody>
-          {% for key in keys %}
-          <tr>
-            <td><code class="text-mono text-[11px]">{{ key.public_key }}</code></td>
-            <td>{% match key.label %}{% when Some with (l) %}{{ l }}{% when None %}<span class="text-muted">—</span>{% endmatch %}</td>
-            <td>{% if !key.status.is_archived() %}<span class="badge badge-resolved">{{ key.status }}</span>{% else %}<span class="badge badge-ignored">{{ key.status }}</span>{% endif %}</td>
-            <td class="text-muted"><time datetime="{{ key.created_at|format_ts }}" title="{{ key.created_at|format_ts }}">{{ key.created_at|format_relative }}</time></td>
-            <td>
-              <form method="post" action="/web/projects/{{ project_id }}/settings/keys/{{ key.public_key }}/delete">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button type="submit" class="btn btn-danger" data-confirm="Delete this key? SDKs using it will stop working.">Delete</button>
-              </form>
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    {% endif %}
-  </div>
+  <nav class="flex gap-1 mb-6 border-b border-outline-variant -mx-6 px-6"
+       aria-label="Settings sections">
+    <a href="/web/projects/{{ project_id }}/settings/"
+       class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-transparent text-muted hover:text-on-surface">General</a>
+    <a href="/web/projects/{{ project_id }}/settings/keys/"
+       class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-primary text-on-surface">SDK setup</a>
+    <a href="/web/projects/{{ project_id }}/settings/sourcemaps/"
+       class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-transparent text-muted hover:text-on-surface">Source maps</a>
+    <a href="/web/projects/{{ project_id }}/settings/filters/"
+       class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-transparent text-muted hover:text-on-surface">Filters</a>
+    <a href="/web/projects/{{ project_id }}/settings/integrations/"
+       class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-transparent text-muted hover:text-on-surface">Integrations</a>
+  </nav>
 
-  <div class="card card-pad">
-    <h2 class="page-h2 mb-3">Create key</h2>
-    <form class="settings-form" method="post" action="/web/projects/{{ project_id }}/settings/keys/create">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <div>
-        <label class="field-label" for="key_label">Label <span class="text-muted normal-case tracking-normal font-normal">(optional)</span></label>
-        <input class="input" type="text" id="key_label" name="label" placeholder="e.g. production, staging">
+  {% match message %}{% when Some with (msg) %}
+  <div class="settings-message mb-4">{{ msg }}</div>
+  {% when None %}{% endmatch %}
+
+  <div class="space-y-6 max-w-3xl">
+    <div class="card">
+      <div class="card-header">
+        <span>DSN</span>
       </div>
-      <div><button type="submit" class="btn btn-primary">Create key</button></div>
-    </form>
+      <div class="p-4">
+        {% if dsn.is_empty() %}
+          <p class="empty">No keys registered. Create a key below to get a DSN.</p>
+        {% else %}
+          <pre class="codeblock select-all">{{ dsn }}</pre>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span>Project keys</span>
+      </div>
+      {% if keys.is_empty() %}
+        <div class="p-4">
+          <p class="empty">No keys registered for this project.</p>
+        </div>
+      {% else %}
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Public key</th>
+                <th>Label</th>
+                <th>Status</th>
+                <th>Created</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for key in keys %}
+                <tr>
+                  <td>
+                    <code class="text-mono text-[11px]">{{ key.public_key }}</code>
+                  </td>
+                  <td>
+                    {% match key.label %}{% when Some with (l) %}{{ l }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
+                  </td>
+                  <td>
+                    {% if !key.status.is_archived() %}
+                      <span class="badge badge-resolved">{{ key.status }}</span>
+                    {% else %}
+                      <span class="badge badge-ignored">{{ key.status }}</span>
+                    {% endif %}
+                  </td>
+                  <td class="text-muted">
+                    <time datetime="{{ key.created_at|format_ts }}"
+                          title="{{ key.created_at|format_ts }}">{{ key.created_at|format_relative }}</time>
+                  </td>
+                  <td>
+                    <form method="post"
+                          action="/web/projects/{{ project_id }}/settings/keys/{{ key.public_key }}/delete">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                      <button type="submit"
+                              class="btn btn-danger"
+                              data-confirm="Delete this key? SDKs using it will stop working.">Delete</button>
+                    </form>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="card card-pad">
+      <h2 class="page-h2 mb-3">Create key</h2>
+      <form class="settings-form"
+            method="post"
+            action="/web/projects/{{ project_id }}/settings/keys/create">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div>
+          <label class="field-label" for="key_label">
+            Label <span class="text-muted normal-case tracking-normal font-normal">(optional)</span>
+          </label>
+          <input class="input"
+                 type="text"
+                 id="key_label"
+                 name="label"
+                 placeholder="e.g. production, staging">
+        </div>
+        <div>
+          <button type="submit" class="btn btn-primary">Create key</button>
+        </div>
+      </form>
+    </div>
   </div>
-</div>
 {% endblock %}

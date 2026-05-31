@@ -3,60 +3,109 @@
 
 {% block title %}Add email — Stackpit{% endblock %}
 
-{% block sidebar_nav %}{% call m::settings_sidebar("integrations") %}{% endcall %}{% endblock %}
+{% block sidebar_nav %}
+  {% call m::settings_sidebar("integrations") %}
+  {% endcall %}
+{% endblock %}
 
 {% block breadcrumbs %}
-<span class="breadcrumb-sep">/</span>
-<a class="breadcrumb-link" href="/web/settings/integrations/">Integrations</a>
-<span class="breadcrumb-sep">/</span>
-<span class="breadcrumb-current">Add email</span>
+  <span class="breadcrumb-sep">/</span>
+  <a class="breadcrumb-link" href="/web/settings/integrations/">Integrations</a>
+  <span class="breadcrumb-sep">/</span>
+  <span class="breadcrumb-current">Add email</span>
 {% endblock %}
 
 {% block content %}
-<div class="page-header">
-  <div><h1>Add email integration</h1></div>
-  <div class="page-actions"><a href="/web/settings/integrations/" class="btn btn-secondary">Cancel</a></div>
-</div>
-
-<div class="card card-pad max-w-2xl">
-  <form class="settings-form" method="post" action="/web/settings/integrations/create">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <input type="hidden" name="kind" value="email">
+  <div class="page-header">
     <div>
-      <label class="field-label" for="int_name">Name</label>
-      <input class="input" type="text" id="int_name" name="name" placeholder="e.g. Team email alerts" required>
+      <h1>Add email integration</h1>
     </div>
-
-    {% if lock %}
-    <p class="field-hint">Provider and sender come from the server's <code class="text-mono">[email]</code> config; this integration only picks the recipient.</p>
-    {% else %}
-    <div>
-      <label class="field-label" for="int_provider">Provider</label>
-      <select class="select" id="int_provider" name="provider" required>
-        <option value="lettermint"{% if default_provider == "lettermint" %} selected{% endif %}>Lettermint</option>
-        <option value="postmark"{% if default_provider == "postmark" %} selected{% endif %}>Postmark</option>
-        <option value="sendgrid"{% if default_provider == "sendgrid" %} selected{% endif %}>SendGrid</option>
-      </select>
+    <div class="page-actions">
+      <a href="/web/settings/integrations/" class="btn btn-secondary">Cancel</a>
     </div>
-    <div>
-      <label class="field-label" for="int_secret">API token{% if !has_default_token %} <span class="text-error normal-case tracking-normal font-normal">(required)</span>{% endif %}</label>
-      {% if has_default_token %}
-      <input class="input" type="password" id="int_secret" name="secret" placeholder="Leave blank to use the default">
+  </div>
+
+  <div class="card card-pad max-w-2xl">
+    <form class="settings-form"
+          method="post"
+          action="/web/settings/integrations/create">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="kind" value="email">
+      <div>
+        <label class="field-label" for="int_name">Name</label>
+        <input class="input"
+               type="text"
+               id="int_name"
+               name="name"
+               placeholder="e.g. Team email alerts"
+               required>
+      </div>
+
+      {% if lock %}
+        <p class="field-hint">
+          Provider and sender come from the server's <code class="text-mono">[email]</code> config; this integration only picks the recipient.
+        </p>
       {% else %}
-      <input class="input" type="password" id="int_secret" name="secret" placeholder="Provider API token" required>
+        <div>
+          <label class="field-label" for="int_provider">Provider</label>
+          <select class="select" id="int_provider" name="provider" required>
+            <option value="lettermint"
+                    {% if default_provider == "lettermint" %}selected{% endif %}>Lettermint</option>
+            <option value="postmark"
+                    {% if default_provider == "postmark" %}selected{% endif %}>Postmark</option>
+            <option value="sendgrid"
+                    {% if default_provider == "sendgrid" %}selected{% endif %}>SendGrid</option>
+          </select>
+        </div>
+        <div>
+          <label class="field-label" for="int_secret">
+            API token
+            {% if !has_default_token %}
+              <span class="text-error normal-case tracking-normal font-normal">(required)</span>
+            {% endif %}
+          </label>
+          {% if has_default_token %}
+            <input class="input"
+                   type="password"
+                   id="int_secret"
+                   name="secret"
+                   placeholder="Leave blank to use the default">
+          {% else %}
+            <input class="input"
+                   type="password"
+                   id="int_secret"
+                   name="secret"
+                   placeholder="Provider API token"
+                   required>
+          {% endif %}
+        </div>
+        <div>
+          <label class="field-label" for="int_from">
+            From address
+            {% if !has_default_from %}
+              <span class="text-error normal-case tracking-normal font-normal">(required)</span>
+            {% endif %}
+          </label>
+          <input class="input"
+                 type="email"
+                 id="int_from"
+                 name="from_address"
+                 placeholder="{{ from_placeholder }}"
+                 {% if !has_default_from %}required{% endif %}>
+        </div>
+        <div>
+          <label class="field-label" for="int_from_name">From name</label>
+          <input class="input"
+                 type="text"
+                 id="int_from_name"
+                 name="from_name"
+                 placeholder="{{ from_name_placeholder }}">
+        </div>
       {% endif %}
-    </div>
-    <div>
-      <label class="field-label" for="int_from">From address{% if !has_default_from %} <span class="text-error normal-case tracking-normal font-normal">(required)</span>{% endif %}</label>
-      <input class="input" type="email" id="int_from" name="from_address" placeholder="{{ from_placeholder }}"{% if !has_default_from %} required{% endif %}>
-    </div>
-    <div>
-      <label class="field-label" for="int_from_name">From name</label>
-      <input class="input" type="text" id="int_from_name" name="from_name" placeholder="{{ from_name_placeholder }}">
-    </div>
-    {% endif %}
 
-    <div><button type="submit" class="btn btn-primary">Create integration</button></div>
-  </form>
-</div>
+      <div>
+        <button type="submit" class="btn btn-primary">Create integration</button>
+      </div>
+    </form>
+  </div>
 {% endblock %}

@@ -3,34 +3,55 @@
 
 {% block title %}Add Slack — Stackpit{% endblock %}
 
-{% block sidebar_nav %}{% call m::settings_sidebar("integrations") %}{% endcall %}{% endblock %}
+{% block sidebar_nav %}
+  {% call m::settings_sidebar("integrations") %}
+  {% endcall %}
+{% endblock %}
 
 {% block breadcrumbs %}
-<span class="breadcrumb-sep">/</span>
-<a class="breadcrumb-link" href="/web/settings/integrations/">Integrations</a>
-<span class="breadcrumb-sep">/</span>
-<span class="breadcrumb-current">Add Slack</span>
+  <span class="breadcrumb-sep">/</span>
+  <a class="breadcrumb-link" href="/web/settings/integrations/">Integrations</a>
+  <span class="breadcrumb-sep">/</span>
+  <span class="breadcrumb-current">Add Slack</span>
 {% endblock %}
 
 {% block content %}
-<div class="page-header">
-  <div><h1>Add Slack integration</h1></div>
-  <div class="page-actions"><a href="/web/settings/integrations/" class="btn btn-secondary">Cancel</a></div>
-</div>
+  <div class="page-header">
+    <div>
+      <h1>Add Slack integration</h1>
+    </div>
+    <div class="page-actions">
+      <a href="/web/settings/integrations/" class="btn btn-secondary">Cancel</a>
+    </div>
+  </div>
 
-<div class="card card-pad max-w-2xl">
-  <form class="settings-form" method="post" action="/web/settings/integrations/create">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <input type="hidden" name="kind" value="slack">
-    <div>
-      <label class="field-label" for="int_name">Name</label>
-      <input class="input" type="text" id="int_name" name="name" placeholder="e.g. #alerts channel" required>
-    </div>
-    <div>
-      <label class="field-label" for="int_url">Slack webhook URL</label>
-      <input class="input text-mono" type="url" id="int_url" name="url" placeholder="https://hooks.slack.com/services/…" required>
-    </div>
-    <div><button type="submit" class="btn btn-primary">Create integration</button></div>
-  </form>
-</div>
+  <div class="card card-pad max-w-2xl">
+    <form class="settings-form"
+          method="post"
+          action="/web/settings/integrations/create">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="kind" value="slack">
+      <div>
+        <label class="field-label" for="int_name">Name</label>
+        <input class="input"
+               type="text"
+               id="int_name"
+               name="name"
+               placeholder="e.g. #alerts channel"
+               required>
+      </div>
+      <div>
+        <label class="field-label" for="int_url">Slack webhook URL</label>
+        <input class="input text-mono"
+               type="url"
+               id="int_url"
+               name="url"
+               placeholder="https://hooks.slack.com/services/…"
+               required>
+      </div>
+      <div>
+        <button type="submit" class="btn btn-primary">Create integration</button>
+      </div>
+    </form>
+  </div>
 {% endblock %}

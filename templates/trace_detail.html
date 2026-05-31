@@ -3,57 +3,78 @@
 
 {% block title %}Trace {{ trace_id|truncate_id }} — Stackpit{% endblock %}
 
-{% block sidebar_nav %}{% call m::project_sidebar(project_id, nav, "spans") %}{% endcall %}{% endblock %}
+{% block sidebar_nav %}
+  {% call m::project_sidebar(project_id, nav, "spans") %}
+  {% endcall %}
+{% endblock %}
 
 {% block breadcrumbs %}
-<span class="breadcrumb-sep">/</span>
-<a class="breadcrumb-link" href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
-<span class="breadcrumb-sep">/</span>
-<a class="breadcrumb-link" href="/web/projects/{{ project_id }}/spans/">Spans</a>
-<span class="breadcrumb-sep">/</span>
-<span class="breadcrumb-current text-mono">{{ trace_id|truncate_id }}</span>
+  <span class="breadcrumb-sep">/</span>
+  <a class="breadcrumb-link" href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
+  <span class="breadcrumb-sep">/</span>
+  <a class="breadcrumb-link" href="/web/projects/{{ project_id }}/spans/">Spans</a>
+  <span class="breadcrumb-sep">/</span>
+  <span class="breadcrumb-current text-mono">{{ trace_id|truncate_id }}</span>
 {% endblock %}
 
 {% block content %}
-<div class="page-header">
-  <div>
-    <h1 class="text-mono">{{ trace_id|truncate_id }}</h1>
-    <p class="text-muted text-[13px] mt-1 text-mono break-all">trace_id: {{ trace_id }} · {{ spans.len() }} span{% if spans.len() != 1 %}s{% endif %}</p>
+  <div class="page-header">
+    <div>
+      <h1 class="text-mono">{{ trace_id|truncate_id }}</h1>
+      <p class="text-muted text-[13px] mt-1 text-mono break-all">
+        trace_id: {{ trace_id }} · {{ spans.len() }} span
+        {% if spans.len() != 1 %}s{% endif %}
+      </p>
+    </div>
   </div>
-</div>
 
-{% if spans.is_empty() %}
-<div class="card"><p class="empty">No spans found for this trace.</p></div>
-{% else %}
-<div class="card overflow-hidden">
-  <div class="table-wrap">
-    <table class="table">
-      <thead>
-        <tr>
-          <th>Span ID</th>
-          <th>Parent</th>
-          <th>Op</th>
-          <th>Description</th>
-          <th>Status</th>
-          <th>Duration</th>
-          <th>Timestamp</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for span in spans %}
-        <tr>
-          <td class="text-mono">{{ span.span_id|truncate_id }}</td>
-          <td class="text-mono">{% match span.parent_span_id %}{% when Some with (p) %}{{ p|truncate_id }}{% when None %}<em class="text-muted">root</em>{% endmatch %}</td>
-          <td class="text-mono">{% match span.op %}{% when Some with (op) %}{{ op }}{% when None %}<span class="text-muted">—</span>{% endmatch %}</td>
-          <td class="truncate-cell text-mono text-[12px]">{% match span.description %}{% when Some with (d) %}{{ d }}{% when None %}<span class="text-muted">—</span>{% endmatch %}</td>
-          <td>{% match span.status %}{% when Some with (s) %}<span class="badge badge-neutral">{{ s }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}</td>
-          <td class="text-tabular">{% match span.duration_ms %}{% when Some with (ms) %}{{ ms }}ms{% when None %}<span class="text-muted">—</span>{% endmatch %}</td>
-          <td class="text-muted"><time datetime="{{ span.timestamp|format_ts }}" title="{{ span.timestamp|format_ts }}">{{ span.timestamp|format_relative }}</time></td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</div>
-{% endif %}
+  {% if spans.is_empty() %}
+    <div class="card">
+      <p class="empty">No spans found for this trace.</p>
+    </div>
+  {% else %}
+    <div class="card overflow-hidden">
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Span ID</th>
+              <th>Parent</th>
+              <th>Op</th>
+              <th>Description</th>
+              <th>Status</th>
+              <th>Duration</th>
+              <th>Timestamp</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for span in spans %}
+              <tr>
+                <td class="text-mono">{{ span.span_id|truncate_id }}</td>
+                <td class="text-mono">
+                  {% match span.parent_span_id %}{% when Some with (p) %}{{ p|truncate_id }}{% when None %}<em class="text-muted">root</em>{% endmatch %}
+                </td>
+                <td class="text-mono">
+                  {% match span.op %}{% when Some with (op) %}{{ op }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
+                </td>
+                <td class="truncate-cell text-mono text-[12px]">
+                  {% match span.description %}{% when Some with (d) %}{{ d }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
+                </td>
+                <td>
+                  {% match span.status %}{% when Some with (s) %}<span class="badge badge-neutral">{{ s }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
+                </td>
+                <td class="text-tabular">
+                  {% match span.duration_ms %}{% when Some with (ms) %}{{ ms }}ms{% when None %}<span class="text-muted">—</span>{% endmatch %}
+                </td>
+                <td class="text-muted">
+                  <time datetime="{{ span.timestamp|format_ts }}"
+                        title="{{ span.timestamp|format_ts }}">{{ span.timestamp|format_relative }}</time>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {% endif %}
 {% endblock %}

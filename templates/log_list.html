@@ -3,68 +3,102 @@
 
 {% block title %}Logs — {{ nav.label }} — Stackpit{% endblock %}
 
-{% block sidebar_nav %}{% call m::project_sidebar(project_id, nav, "logs") %}{% endcall %}{% endblock %}
+{% block sidebar_nav %}
+  {% call m::project_sidebar(project_id, nav, "logs") %}
+  {% endcall %}
+{% endblock %}
 
 {% block breadcrumbs %}
-<span class="breadcrumb-sep">/</span>
-<a class="breadcrumb-link" href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
-<span class="breadcrumb-sep">/</span>
-<span class="breadcrumb-current">Logs</span>
+  <span class="breadcrumb-sep">/</span>
+  <a class="breadcrumb-link" href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
+  <span class="breadcrumb-sep">/</span>
+  <span class="breadcrumb-current">Logs</span>
 {% endblock %}
 
 {% block content %}
-<div class="page-header"><h1>Logs</h1></div>
-
-<form class="filter-form" method="get" action="/web/projects/{{ project_id }}/logs/">
-  <input class="input" type="text" name="query" placeholder="Search logs…" value="{{ query }}" aria-label="Search logs">
-  <select class="select w-auto" name="level" aria-label="Filter by level">
-    <option value="">All levels</option>
-    <option value="error"{% if level == "error" %} selected{% endif %}>error</option>
-    <option value="warning"{% if level == "warning" %} selected{% endif %}>warning</option>
-    <option value="info"{% if level == "info" %} selected{% endif %}>info</option>
-    <option value="debug"{% if level == "debug" %} selected{% endif %}>debug</option>
-    <option value="trace"{% if level == "trace" %} selected{% endif %}>trace</option>
-  </select>
-  <button class="btn btn-secondary" type="submit">Filter</button>
-</form>
-
-{% if result.items.is_empty() %}
-<div class="card"><p class="empty">No logs match the current filters.</p></div>
-{% else %}
-
-<div class="card overflow-hidden">
-  <div class="table-wrap">
-    <table class="table">
-      <thead>
-        <tr>
-          <th class="w-44">Timestamp</th>
-          <th class="w-24">Level</th>
-          <th>Body</th>
-          <th class="hide-mobile">Trace</th>
-          <th class="hide-mobile">Release</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for log in result.items %}
-        <tr>
-          <td class="text-muted text-mono text-[12px] nowrap"><time datetime="{{ log.timestamp|format_ts }}" title="{{ log.timestamp|format_ts }}">{{ log.timestamp|format_relative }}</time></td>
-          <td>{% match log.level %}{% when Some with (lvl) %}<span class="log-level log-level-{{ lvl }}">{{ lvl }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}</td>
-          <td class="truncate-cell text-mono text-[12px]" title="{% match log.body %}{% when Some with (b) %}{{ b }}{% when None %}{% endmatch %}">{% match log.body %}{% when Some with (b) %}{{ b }}{% when None %}<span class="text-muted">(empty)</span>{% endmatch %}</td>
-          <td class="hide-mobile">{% match log.trace_id %}{% when Some with (tid) %}<code class="text-mono text-[12px]" title="{{ tid }}">{{ tid|truncate_id }}</code>{% when None %}<span class="text-muted">—</span>{% endmatch %}</td>
-          <td class="hide-mobile text-mono text-[12px]">{% match log.release %}{% when Some with (r) %}{{ r }}{% when None %}<span class="text-muted">—</span>{% endmatch %}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+  <div class="page-header">
+    <h1>Logs</h1>
   </div>
-</div>
 
-<nav class="pagination" aria-label="Pagination">
-  <span>{{ result.total }} log{% if result.total != 1 %}s{% endif %}</span>
-  <span class="flex gap-2">
-    {% if result.has_prev() %}<a class="btn btn-ghost" href="/web/projects/{{ project_id }}/logs/?offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}{{ filter_qs }}">« Previous</a>{% endif %}
-    {% if result.has_next() %}<a class="btn btn-ghost" href="/web/projects/{{ project_id }}/logs/?offset={{ result.next_offset() }}&amp;limit={{ result.limit }}{{ filter_qs }}">Next »</a>{% endif %}
-  </span>
-</nav>
-{% endif %}
+  <form class="filter-form"
+        method="get"
+        action="/web/projects/{{ project_id }}/logs/">
+    <input class="input"
+           type="text"
+           name="query"
+           placeholder="Search logs…"
+           value="{{ query }}"
+           aria-label="Search logs">
+    <select class="select w-auto" name="level" aria-label="Filter by level">
+      <option value="">All levels</option>
+      <option value="error"{% if level == "error" %} selected{% endif %}>error</option>
+      <option value="warning"{% if level == "warning" %} selected{% endif %}>warning</option>
+      <option value="info"{% if level == "info" %} selected{% endif %}>info</option>
+      <option value="debug"{% if level == "debug" %} selected{% endif %}>debug</option>
+      <option value="trace"{% if level == "trace" %} selected{% endif %}>trace</option>
+    </select>
+    <button class="btn btn-secondary" type="submit">Filter</button>
+  </form>
+
+  {% if result.items.is_empty() %}
+    <div class="card">
+      <p class="empty">No logs match the current filters.</p>
+    </div>
+  {% else %}
+
+    <div class="card overflow-hidden">
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th class="w-44">Timestamp</th>
+              <th class="w-24">Level</th>
+              <th>Body</th>
+              <th class="hide-mobile">Trace</th>
+              <th class="hide-mobile">Release</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for log in result.items %}
+              <tr>
+                <td class="text-muted text-mono text-[12px] nowrap">
+                  <time datetime="{{ log.timestamp|format_ts }}"
+                        title="{{ log.timestamp|format_ts }}">{{ log.timestamp|format_relative }}</time>
+                </td>
+                <td>
+                  {% match log.level %}{% when Some with (lvl) %}<span class="log-level log-level-{{ lvl }}">{{ lvl }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
+                </td>
+                <td class="truncate-cell text-mono text-[12px]"
+                    title="{% match log.body %}{% when Some with (b) %}{{ b }}{% when None %}{% endmatch %}">
+                  {% match log.body %}{% when Some with (b) %}{{ b }}{% when None %}<span class="text-muted">(empty)</span>{% endmatch %}
+                </td>
+                <td class="hide-mobile">
+                  {% match log.trace_id %}{% when Some with (tid) %}<code class="text-mono text-[12px]" title="{{ tid }}">{{ tid|truncate_id }}</code>{% when None %}<span class="text-muted">—</span>{% endmatch %}
+                </td>
+                <td class="hide-mobile text-mono text-[12px]">
+                  {% match log.release %}{% when Some with (r) %}{{ r }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <nav class="pagination" aria-label="Pagination">
+      <span>{{ result.total }} log
+        {% if result.total != 1 %}s{% endif %}
+      </span>
+      <span class="flex gap-2">
+        {% if result.has_prev() %}
+          <a class="btn btn-ghost"
+             href="/web/projects/{{ project_id }}/logs/?offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}{{ filter_qs }}">« Previous</a>
+        {% endif %}
+        {% if result.has_next() %}
+          <a class="btn btn-ghost"
+             href="/web/projects/{{ project_id }}/logs/?offset={{ result.next_offset() }}&amp;limit={{ result.limit }}{{ filter_qs }}">Next »</a>
+        {% endif %}
+      </span>
+    </nav>
+  {% endif %}
 {% endblock %}

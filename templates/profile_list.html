@@ -3,56 +3,87 @@
 
 {% block title %}Profiles — {{ nav.label }} — Stackpit{% endblock %}
 
-{% block sidebar_nav %}{% call m::project_sidebar(project_id, nav, "profiles") %}{% endcall %}{% endblock %}
+{% block sidebar_nav %}
+  {% call m::project_sidebar(project_id, nav, "profiles") %}
+  {% endcall %}
+{% endblock %}
 
 {% block breadcrumbs %}
-<span class="breadcrumb-sep">/</span>
-<a class="breadcrumb-link" href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
-<span class="breadcrumb-sep">/</span>
-<span class="breadcrumb-current">Profiles</span>
+  <span class="breadcrumb-sep">/</span>
+  <a class="breadcrumb-link" href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
+  <span class="breadcrumb-sep">/</span>
+  <span class="breadcrumb-current">Profiles</span>
 {% endblock %}
 
 {% block content %}
-<div class="page-header"><h1>Profiles</h1></div>
-
-{% if result.items.is_empty() %}
-<div class="card"><p class="empty">No profiles found. Profile events with <code class="text-mono">item_type = "profile"</code> will appear here.</p></div>
-{% else %}
-<div class="card overflow-hidden">
-  <div class="table-wrap">
-    <table class="table">
-      <thead>
-        <tr>
-          <th>Event ID</th>
-          <th>Transaction</th>
-          <th>Platform</th>
-          <th>Release</th>
-          <th class="hide-mobile">Environment</th>
-          <th>Timestamp</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for p in result.items %}
-        <tr>
-          <td><a class="text-mono" href="/web/projects/{{ project_id }}/profiles/{{ p.event_id }}/">{{ p.event_id|truncate_id }}</a></td>
-          <td class="truncate-cell text-mono text-[12px]">{% match p.transaction_name %}{% when Some with (t) %}{{ t }}{% when None %}<span class="text-muted">—</span>{% endmatch %}</td>
-          <td>{% match p.platform %}{% when Some with (pl) %}<span class="badge badge-platform">{{ pl }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}</td>
-          <td class="text-mono text-[12px]">{% match p.release %}{% when Some with (r) %}{{ r }}{% when None %}<span class="text-muted">—</span>{% endmatch %}</td>
-          <td class="hide-mobile text-mono text-[12px]">{% match p.environment %}{% when Some with (e) %}{{ e }}{% when None %}<span class="text-muted">—</span>{% endmatch %}</td>
-          <td class="text-muted"><time datetime="{{ p.timestamp|format_ts }}" title="{{ p.timestamp|format_ts }}">{{ p.timestamp|format_relative }}</time></td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+  <div class="page-header">
+    <h1>Profiles</h1>
   </div>
-</div>
 
-<nav class="pagination" aria-label="Pagination">
-  <span>{{ result.total }} profile{% if result.total != 1 %}s{% endif %}</span>
-  <span class="flex gap-2">
-    {% if result.has_prev() %}<a class="btn btn-ghost" href="/web/projects/{{ project_id }}/profiles/?offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}">« Previous</a>{% endif %}
-    {% if result.has_next() %}<a class="btn btn-ghost" href="/web/projects/{{ project_id }}/profiles/?offset={{ result.next_offset() }}&amp;limit={{ result.limit }}">Next »</a>{% endif %}
-  </span>
-</nav>
-{% endif %}
+  {% if result.items.is_empty() %}
+    <div class="card">
+      <p class="empty">
+        No profiles found. Profile events with <code class="text-mono">item_type = "profile"</code> will appear here.
+      </p>
+    </div>
+  {% else %}
+    <div class="card overflow-hidden">
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Event ID</th>
+              <th>Transaction</th>
+              <th>Platform</th>
+              <th>Release</th>
+              <th class="hide-mobile">Environment</th>
+              <th>Timestamp</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in result.items %}
+              <tr>
+                <td>
+                  <a class="text-mono"
+                     href="/web/projects/{{ project_id }}/profiles/{{ p.event_id }}/">{{ p.event_id|truncate_id }}</a>
+                </td>
+                <td class="truncate-cell text-mono text-[12px]">
+                  {% match p.transaction_name %}{% when Some with (t) %}{{ t }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
+                </td>
+                <td>
+                  {% match p.platform %}{% when Some with (pl) %}<span class="badge badge-platform">{{ pl }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
+                </td>
+                <td class="text-mono text-[12px]">
+                  {% match p.release %}{% when Some with (r) %}{{ r }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
+                </td>
+                <td class="hide-mobile text-mono text-[12px]">
+                  {% match p.environment %}{% when Some with (e) %}{{ e }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
+                </td>
+                <td class="text-muted">
+                  <time datetime="{{ p.timestamp|format_ts }}"
+                        title="{{ p.timestamp|format_ts }}">{{ p.timestamp|format_relative }}</time>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <nav class="pagination" aria-label="Pagination">
+      <span>{{ result.total }} profile
+        {% if result.total != 1 %}s{% endif %}
+      </span>
+      <span class="flex gap-2">
+        {% if result.has_prev() %}
+          <a class="btn btn-ghost"
+             href="/web/projects/{{ project_id }}/profiles/?offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}">« Previous</a>
+        {% endif %}
+        {% if result.has_next() %}
+          <a class="btn btn-ghost"
+             href="/web/projects/{{ project_id }}/profiles/?offset={{ result.next_offset() }}&amp;limit={{ result.limit }}">Next »</a>
+        {% endif %}
+      </span>
+    </nav>
+  {% endif %}
 {% endblock %}

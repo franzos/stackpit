@@ -3,86 +3,137 @@
 
 {% block title %}Projects — Stackpit{% endblock %}
 
-{% block sidebar_nav %}{% call m::top_sidebar("projects") %}{% endcall %}{% endblock %}
+{% block sidebar_nav %}
+  {% call m::top_sidebar("projects") %}
+  {% endcall %}
+{% endblock %}
 
 {% block breadcrumbs %}{% endblock %}
 
 {% block content %}
-<div class="page-header">
-  <div>
-    <h1>Projects</h1>
-    <p class="text-muted text-[13px] mt-1">Monitor health across your entire architecture.</p>
+  <div class="page-header">
+    <div>
+      <h1>Projects</h1>
+      <p class="text-muted text-[13px] mt-1">Monitor health across your entire architecture.</p>
+    </div>
+    <div class="page-actions">
+      <a href="/web/events/" class="btn btn-secondary">All events</a>
+      <a href="/web/releases/" class="btn btn-secondary">All releases</a>
+      <a href="/web/projects/new" class="btn btn-primary">+ New project</a>
+    </div>
   </div>
-  <div class="page-actions">
-    <a href="/web/events/" class="btn btn-secondary">All events</a>
-    <a href="/web/releases/" class="btn btn-secondary">All releases</a>
-    <a href="/web/projects/new" class="btn btn-primary">+ New project</a>
-  </div>
-</div>
 
-<form class="filter-form" method="get" action="/web/projects/">
-  {% if !sort.is_empty() %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
-  <input class="input" type="text" name="query" placeholder="Query projects by name, platform, or owner…" value="{{ query }}" aria-label="Search projects">
-  <select class="select w-auto" name="period" aria-label="Time range">
-    <option value="">All time</option>
-    <option value="1h"{% if period == "1h" %} selected{% endif %}>Last hour</option>
-    <option value="24h"{% if period == "24h" %} selected{% endif %}>Last 24 hours</option>
-    <option value="7d"{% if period == "7d" %} selected{% endif %}>Last 7 days</option>
-    <option value="14d"{% if period == "14d" %} selected{% endif %}>Last 14 days</option>
-    <option value="30d"{% if period == "30d" %} selected{% endif %}>Last 30 days</option>
-    <option value="90d"{% if period == "90d" %} selected{% endif %}>Last 90 days</option>
-    <option value="365d"{% if period == "365d" %} selected{% endif %}>Last 365 days</option>
-  </select>
-  <button type="submit" class="btn btn-secondary">Filter</button>
-</form>
+  <form class="filter-form" method="get" action="/web/projects/">
+    {% if !sort.is_empty() %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
+    <input class="input"
+           type="text"
+           name="query"
+           placeholder="Query projects by name, platform, or owner…"
+           value="{{ query }}"
+           aria-label="Search projects">
+    <select class="select w-auto" name="period" aria-label="Time range">
+      <option value="">All time</option>
+      <option value="1h"{% if period == "1h" %} selected{% endif %}>Last hour</option>
+      <option value="24h"{% if period == "24h" %} selected{% endif %}>Last 24 hours</option>
+      <option value="7d"{% if period == "7d" %} selected{% endif %}>Last 7 days</option>
+      <option value="14d"{% if period == "14d" %} selected{% endif %}>Last 14 days</option>
+      <option value="30d"{% if period == "30d" %} selected{% endif %}>Last 30 days</option>
+      <option value="90d"{% if period == "90d" %} selected{% endif %}>Last 90 days</option>
+      <option value="365d"{% if period == "365d" %} selected{% endif %}>Last 365 days</option>
+    </select>
+    <button type="submit" class="btn btn-secondary">Filter</button>
+  </form>
 
-{% if projects.is_empty() %}
-<div class="card"><p class="empty">No projects found. Events will appear here once ingested.</p></div>
-{% else %}
-<div class="card overflow-hidden">
-  <div class="table-wrap">
-    <table class="table">
-      <thead>
-        <tr>
-          <th><a href="/web/projects/?sort=project_id{% if !query.is_empty() %}&amp;query={{ query }}{% endif %}{% if !period.is_empty() %}&amp;period={{ period }}{% endif %}"{% if sort == "project_id" %} class="active-sort"{% endif %}>Project</a></th>
-          <th>Platforms</th>
-          <th><a href="/web/projects/?sort=issues{% if !query.is_empty() %}&amp;query={{ query }}{% endif %}{% if !period.is_empty() %}&amp;period={{ period }}{% endif %}"{% if sort == "issues" %} class="active-sort"{% endif %}>Issues</a></th>
-          <th><a href="/web/projects/?sort=events{% if !query.is_empty() %}&amp;query={{ query }}{% endif %}{% if !period.is_empty() %}&amp;period={{ period }}{% endif %}"{% if sort == "events" %} class="active-sort"{% endif %}>Events</a></th>
-          <th class="hide-mobile">Breakdown</th>
-          <th class="hide-mobile">Release</th>
-          <th class="hide-mobile"><a href="/web/projects/?sort=first_seen{% if !query.is_empty() %}&amp;query={{ query }}{% endif %}{% if !period.is_empty() %}&amp;period={{ period }}{% endif %}"{% if sort == "first_seen" %} class="active-sort"{% endif %}>First seen</a></th>
-          <th><a href="/web/projects/?{% if !query.is_empty() %}query={{ query }}&amp;{% endif %}{% if !period.is_empty() %}period={{ period }}{% endif %}"{% if sort.is_empty() %} class="active-sort"{% endif %}>Last seen</a></th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for p in projects %}
-        <tr>
-          <td>
-            <a class="font-semibold" href="/web/projects/{{ p.project_id }}/?{% if !query.is_empty() %}query={{ query }}&amp;{% endif %}period={{ period }}">{% match p.name %}{% when Some with (n) %}{{ n }}{% when None %}{{ p.project_id }}{% endmatch %}</a>
-            <div class="text-muted text-[12px] text-mono mt-0.5">id: {{ p.project_id }}</div>
-          </td>
-          <td>
-            {% if !p.platforms.is_empty() %}<span class="badge badge-platform">{{ p.platforms }}</span>
-            {% else %}<span class="text-muted">—</span>{% endif %}
-          </td>
-          <td class="text-tabular">{{ p.issue_count }}</td>
-          <td class="text-tabular">{{ p.event_count }}</td>
-          <td class="hide-mobile">
-            <div class="type-breakdown">
-              {% if p.error_count > 0 %}<span class="seg event" style="height:{% if p.event_count > 0 %}{{ p.error_count * 100 / p.event_count }}{% else %}0{% endif %}%" title="Errors: {{ p.error_count }}"></span>{% endif %}
-              {% if p.transaction_count > 0 %}<span class="seg transaction" style="height:{% if p.event_count > 0 %}{{ p.transaction_count * 100 / p.event_count }}{% else %}0{% endif %}%" title="Transactions: {{ p.transaction_count }}"></span>{% endif %}
-              {% if p.session_count > 0 %}<span class="seg log" style="height:{% if p.event_count > 0 %}{{ p.session_count * 100 / p.event_count }}{% else %}0{% endif %}%" title="Sessions: {{ p.session_count }}"></span>{% endif %}
-              {% if p.other_count > 0 %}<span class="seg" style="height:50%" title="Other: {{ p.other_count }}"></span>{% endif %}
-            </div>
-          </td>
-          <td class="hide-mobile text-mono text-[12px]">{% match p.latest_release %}{% when Some with (r) %}{{ r }}{% when None %}<span class="text-muted">—</span>{% endmatch %}</td>
-          <td class="hide-mobile text-muted"><time datetime="{{ p.first_seen|format_ts }}" title="{{ p.first_seen|format_ts }}">{{ p.first_seen|format_relative }}</time></td>
-          <td class="text-muted"><time datetime="{{ p.last_seen|format_ts }}" title="{{ p.last_seen|format_ts }}">{{ p.last_seen|format_relative }}</time></td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</div>
-{% endif %}
+  {% if projects.is_empty() %}
+    <div class="card">
+      <p class="empty">No projects found. Events will appear here once ingested.</p>
+    </div>
+  {% else %}
+    <div class="card overflow-hidden">
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>
+                <a href="/web/projects/?sort=project_id{% if !query.is_empty() %}&amp;query={{ query }}{% endif %}{% if !period.is_empty() %}&amp;period={{ period }}{% endif %}"
+                   {% if sort == "project_id" %}class="active-sort"{% endif %}>Project</a>
+              </th>
+              <th>Platforms</th>
+              <th>
+                <a href="/web/projects/?sort=issues{% if !query.is_empty() %}&amp;query={{ query }}{% endif %}{% if !period.is_empty() %}&amp;period={{ period }}{% endif %}"
+                   {% if sort == "issues" %}class="active-sort"{% endif %}>Issues</a>
+              </th>
+              <th>
+                <a href="/web/projects/?sort=events{% if !query.is_empty() %}&amp;query={{ query }}{% endif %}{% if !period.is_empty() %}&amp;period={{ period }}{% endif %}"
+                   {% if sort == "events" %}class="active-sort"{% endif %}>Events</a>
+              </th>
+              <th class="hide-mobile">Breakdown</th>
+              <th class="hide-mobile">Release</th>
+              <th class="hide-mobile">
+                <a href="/web/projects/?sort=first_seen{% if !query.is_empty() %}&amp;query={{ query }}{% endif %}{% if !period.is_empty() %}&amp;period={{ period }}{% endif %}"
+                   {% if sort == "first_seen" %}class="active-sort"{% endif %}>First seen</a>
+              </th>
+              <th>
+                <a href="/web/projects/?{% if !query.is_empty() %}query={{ query }}&amp;{% endif %}{% if !period.is_empty() %}period={{ period }}{% endif %}"
+                   {% if sort.is_empty() %}class="active-sort"{% endif %}>Last seen</a>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in projects %}
+              <tr>
+                <td>
+                  <a class="font-semibold"
+                     href="/web/projects/{{ p.project_id }}/?{% if !query.is_empty() %}query={{ query }}&amp;{% endif %}period={{ period }}">{% match p.name %}{% when Some with (n) %}{{ n }}{% when None %}{{ p.project_id }}{% endmatch %}</a>
+                  <div class="text-muted text-[12px] text-mono mt-0.5">id: {{ p.project_id }}</div>
+                </td>
+                <td>
+                  {% if !p.platforms.is_empty() %}
+                    <span class="badge badge-platform">{{ p.platforms }}</span>
+                  {% else %}
+                    <span class="text-muted">—</span>
+                  {% endif %}
+                </td>
+                <td class="text-tabular">{{ p.issue_count }}</td>
+                <td class="text-tabular">{{ p.event_count }}</td>
+                <td class="hide-mobile">
+                  <div class="type-breakdown">
+                    {% if p.error_count > 0 %}
+                      <span class="seg event"
+                            style="height:{% if p.event_count > 0 %}{{ p.error_count * 100 / p.event_count }}{% else %}0{% endif %}%"
+                            title="Errors: {{ p.error_count }}"></span>
+                    {% endif %}
+                    {% if p.transaction_count > 0 %}
+                      <span class="seg transaction"
+                            style="height:{% if p.event_count > 0 %}{{ p.transaction_count * 100 / p.event_count }}{% else %}0{% endif %}%"
+                            title="Transactions: {{ p.transaction_count }}"></span>
+                    {% endif %}
+                    {% if p.session_count > 0 %}
+                      <span class="seg log"
+                            style="height:{% if p.event_count > 0 %}{{ p.session_count * 100 / p.event_count }}{% else %}0{% endif %}%"
+                            title="Sessions: {{ p.session_count }}"></span>
+                    {% endif %}
+                    {% if p.other_count > 0 %}
+                      <span class="seg" style="height:50%" title="Other: {{ p.other_count }}"></span>
+                    {% endif %}
+                  </div>
+                </td>
+                <td class="hide-mobile text-mono text-[12px]">
+                  {% match p.latest_release %}{% when Some with (r) %}{{ r }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
+                </td>
+                <td class="hide-mobile text-muted">
+                  <time datetime="{{ p.first_seen|format_ts }}"
+                        title="{{ p.first_seen|format_ts }}">{{ p.first_seen|format_relative }}</time>
+                </td>
+                <td class="text-muted">
+                  <time datetime="{{ p.last_seen|format_ts }}"
+                        title="{{ p.last_seen|format_ts }}">{{ p.last_seen|format_relative }}</time>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {% endif %}
 {% endblock %}

@@ -3,44 +3,61 @@
 
 {% block title %}Monitors — {{ nav.label }} — Stackpit{% endblock %}
 
-{% block sidebar_nav %}{% call m::project_sidebar(project_id, nav, "monitors") %}{% endcall %}{% endblock %}
+{% block sidebar_nav %}
+  {% call m::project_sidebar(project_id, nav, "monitors") %}
+  {% endcall %}
+{% endblock %}
 
 {% block breadcrumbs %}
-<span class="breadcrumb-sep">/</span>
-<a class="breadcrumb-link" href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
-<span class="breadcrumb-sep">/</span>
-<span class="breadcrumb-current">Monitors</span>
+  <span class="breadcrumb-sep">/</span>
+  <a class="breadcrumb-link" href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
+  <span class="breadcrumb-sep">/</span>
+  <span class="breadcrumb-current">Monitors</span>
 {% endblock %}
 
 {% block content %}
-<div class="page-header"><h1>Monitors</h1></div>
-
-{% if monitors.is_empty() %}
-<div class="card"><p class="empty">No monitors found. Check-in events with a <code class="text-mono">monitor_slug</code> will appear here.</p></div>
-{% else %}
-<div class="card overflow-hidden">
-  <div class="table-wrap">
-    <table class="table">
-      <thead>
-        <tr>
-          <th>Slug</th>
-          <th>Last status</th>
-          <th>Last check-in</th>
-          <th>Count</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for mon in monitors %}
-        <tr>
-          <td><a class="text-mono" href="/web/projects/{{ project_id }}/monitors/{{ mon.monitor_slug }}/">{{ mon.monitor_slug }}</a></td>
-          <td><span class="badge badge-monitor-{{ mon.last_status }}">{{ mon.last_status }}</span></td>
-          <td class="text-muted"><time datetime="{{ mon.last_checkin|format_ts }}" title="{{ mon.last_checkin|format_ts }}">{{ mon.last_checkin|format_relative }}</time></td>
-          <td class="text-tabular">{{ mon.checkin_count }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+  <div class="page-header">
+    <h1>Monitors</h1>
   </div>
-</div>
-{% endif %}
+
+  {% if monitors.is_empty() %}
+    <div class="card">
+      <p class="empty">
+        No monitors found. Check-in events with a <code class="text-mono">monitor_slug</code> will appear here.
+      </p>
+    </div>
+  {% else %}
+    <div class="card overflow-hidden">
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Slug</th>
+              <th>Last status</th>
+              <th>Last check-in</th>
+              <th>Count</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for mon in monitors %}
+              <tr>
+                <td>
+                  <a class="text-mono"
+                     href="/web/projects/{{ project_id }}/monitors/{{ mon.monitor_slug }}/">{{ mon.monitor_slug }}</a>
+                </td>
+                <td>
+                  <span class="badge badge-monitor-{{ mon.last_status }}">{{ mon.last_status }}</span>
+                </td>
+                <td class="text-muted">
+                  <time datetime="{{ mon.last_checkin|format_ts }}"
+                        title="{{ mon.last_checkin|format_ts }}">{{ mon.last_checkin|format_relative }}</time>
+                </td>
+                <td class="text-tabular">{{ mon.checkin_count }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {% endif %}
 {% endblock %}

@@ -3,40 +3,76 @@
 
 {% block title %}Profile {{ profile.event_id|truncate_id }} — Stackpit{% endblock %}
 
-{% block sidebar_nav %}{% call m::project_sidebar(project_id, nav, "profiles") %}{% endcall %}{% endblock %}
+{% block sidebar_nav %}
+  {% call m::project_sidebar(project_id, nav, "profiles") %}
+  {% endcall %}
+{% endblock %}
 
 {% block breadcrumbs %}
-<span class="breadcrumb-sep">/</span>
-<a class="breadcrumb-link" href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
-<span class="breadcrumb-sep">/</span>
-<a class="breadcrumb-link" href="/web/projects/{{ project_id }}/profiles/">Profiles</a>
-<span class="breadcrumb-sep">/</span>
-<span class="breadcrumb-current text-mono">{{ profile.event_id|truncate_id }}</span>
+  <span class="breadcrumb-sep">/</span>
+  <a class="breadcrumb-link" href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
+  <span class="breadcrumb-sep">/</span>
+  <a class="breadcrumb-link"
+     href="/web/projects/{{ project_id }}/profiles/">Profiles</a>
+  <span class="breadcrumb-sep">/</span>
+  <span class="breadcrumb-current text-mono">{{ profile.event_id|truncate_id }}</span>
 {% endblock %}
 
 {% block content %}
-<div class="page-header">
-  <h1 class="text-mono">{{ profile.event_id|truncate_id }}</h1>
-</div>
-
-<div class="card mb-4">
-  <div class="card-header"><span>Profile</span></div>
-  <div class="table-wrap">
-    <table class="table">
-      <tbody>
-        <tr><th>Event ID</th><td class="text-mono">{{ profile.event_id }}</td></tr>
-        <tr><th>Transaction</th><td class="text-mono">{% match profile.transaction_name %}{% when Some with (t) %}{{ t }}{% when None %}<span class="text-muted">—</span>{% endmatch %}</td></tr>
-        <tr><th>Platform</th><td>{% match profile.platform %}{% when Some with (p) %}<span class="badge badge-platform">{{ p }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}</td></tr>
-        <tr><th>Release</th><td class="text-mono">{% match profile.release %}{% when Some with (r) %}{{ r }}{% when None %}<span class="text-muted">—</span>{% endmatch %}</td></tr>
-        <tr><th>Environment</th><td class="text-mono">{% match profile.environment %}{% when Some with (e) %}{{ e }}{% when None %}<span class="text-muted">—</span>{% endmatch %}</td></tr>
-        <tr><th>Timestamp</th><td class="text-mono"><time datetime="{{ profile.timestamp|format_ts }}">{{ profile.timestamp|format_ts }}</time></td></tr>
-      </tbody>
-    </table>
+  <div class="page-header">
+    <h1 class="text-mono">{{ profile.event_id|truncate_id }}</h1>
   </div>
-</div>
 
-<div class="card">
-  <div class="card-header"><span>Raw payload</span></div>
-  <pre class="codeblock m-4">{{ raw_json }}</pre>
-</div>
+  <div class="card mb-4">
+    <div class="card-header">
+      <span>Profile</span>
+    </div>
+    <div class="table-wrap">
+      <table class="table">
+        <tbody>
+          <tr>
+            <th>Event ID</th>
+            <td class="text-mono">{{ profile.event_id }}</td>
+          </tr>
+          <tr>
+            <th>Transaction</th>
+            <td class="text-mono">
+              {% match profile.transaction_name %}{% when Some with (t) %}{{ t }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
+            </td>
+          </tr>
+          <tr>
+            <th>Platform</th>
+            <td>
+              {% match profile.platform %}{% when Some with (p) %}<span class="badge badge-platform">{{ p }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
+            </td>
+          </tr>
+          <tr>
+            <th>Release</th>
+            <td class="text-mono">
+              {% match profile.release %}{% when Some with (r) %}{{ r }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
+            </td>
+          </tr>
+          <tr>
+            <th>Environment</th>
+            <td class="text-mono">
+              {% match profile.environment %}{% when Some with (e) %}{{ e }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
+            </td>
+          </tr>
+          <tr>
+            <th>Timestamp</th>
+            <td class="text-mono">
+              <time datetime="{{ profile.timestamp|format_ts }}">{{ profile.timestamp|format_ts }}</time>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <span>Raw payload</span>
+    </div>
+    <pre class="codeblock m-4">{{ raw_json }}</pre>
+  </div>
 {% endblock %}

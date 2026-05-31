@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.1] - 2026-05-31
+
+### Added
+- Docker images published to GHCR on release (SQLite and PostgreSQL variants)
+
 ## [0.3.0] - 2026-05-28
 
 ### Changed

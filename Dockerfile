@@ -1,9 +1,26 @@
-FROM rust:1.88-slim AS builder
+# syntax=docker/dockerfile:1
+
+# Build stage. One Dockerfile, two backends selected via DB_FEATURE
+# (sqlite|postgres) — Stackpit's db features are mutually exclusive, so each
+# image bundles exactly one. sqlx is pure-Rust over rustls (no libpq/OpenSSL);
+# the sqlite backend statically compiles bundled libsqlite3, which needs a C
+# toolchain — already present in the rust image.
+FROM rust:1-slim-bookworm AS builder
+ARG DB_FEATURE=sqlite
 WORKDIR /app
+
+# Cache dependencies: copy the workspace manifests (root + members), build a
+# stub, then build for real once the sources land.
 COPY Cargo.toml Cargo.lock ./
-RUN mkdir src && echo "fn main() {}" > src/main.rs && cargo build --release && rm -rf src
+COPY stackpit-auth/Cargo.toml stackpit-auth/
+RUN mkdir src stackpit-auth/src \
+    && echo "fn main() {}" > src/main.rs \
+    && touch stackpit-auth/src/lib.rs \
+    && cargo build --release --no-default-features --features "$DB_FEATURE" \
+    && rm -rf src stackpit-auth/src
 COPY . .
-RUN touch src/main.rs && cargo build --release
+RUN touch src/main.rs stackpit-auth/src/lib.rs \
+    && cargo build --release --no-default-features --features "$DB_FEATURE"
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/*

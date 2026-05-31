@@ -30,14 +30,14 @@ pub(super) fn extract_span_fields(payload: &[u8]) -> SpanFields {
 
     match json {
         Some(v) => {
-            let duration_ms = v
-                .get("timestamp")
-                .and_then(|end| v.get("start_timestamp").map(|start| (end, start)))
-                .and_then(|(end, start)| {
-                    let end_f = end.as_f64()?;
-                    let start_f = start.as_f64()?;
-                    Some(((end_f - start_f) * 1000.0) as i64)
-                });
+            let duration_ms =
+                v.get("timestamp")
+                    .zip(v.get("start_timestamp"))
+                    .and_then(|(end, start)| {
+                        let end_f = end.as_f64()?;
+                        let start_f = start.as_f64()?;
+                        Some(((end_f - start_f) * 1000.0) as i64)
+                    });
 
             SpanFields {
                 span_id: v

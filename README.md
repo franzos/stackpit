@@ -4,6 +4,12 @@
 <p align="center">
   A drop-in, self-hosted replacement for Sentry's event ingestion and browsing. Single binary, single SQLite file, no external dependencies.
 </p>
+<p align="center">
+  <a href="https://github.com/franzos/stackpit/actions/workflows/ci.yml"><img src="https://github.com/franzos/stackpit/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/franzos/stackpit/actions/workflows/release.yml"><img src="https://github.com/franzos/stackpit/actions/workflows/release.yml/badge.svg" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="https://github.com/franzos/stackpit/pkgs/container/stackpit"><img src="https://img.shields.io/badge/ghcr.io-stackpit-097aba?logo=docker&logoColor=white" alt="Container"></a>
+</p>
 
 I got tired of paying for Sentry on smaller projects and self-hosting the official thing is... a lot. The thing is, most of what I need is ingestion, grouping, and a way to browse errors. So I built this — point your existing Sentry SDKs at it, browse errors in the web UI, or query via the JSON API.
 
@@ -29,6 +35,7 @@ I got tired of paying for Sentry on smaller projects and self-hosting the offici
 | Debian/Ubuntu | Download [`.deb`](https://github.com/franzos/stackpit/releases) — `sudo dpkg -i stackpit_*_amd64.deb` |
 | Fedora/RHEL | Download [`.rpm`](https://github.com/franzos/stackpit/releases) — `sudo rpm -i stackpit-*.x86_64.rpm` |
 | Guix | `guix install -L <panther> stackpit` ([Panther channel](https://github.com/franzos/panther)) |
+| Docker | `docker pull ghcr.io/franzos/stackpit:latest` ([all tags](https://github.com/franzos/stackpit/pkgs/container/stackpit)) |
 
 Pre-built binaries for Linux (x86_64) and macOS (Apple Silicon, Intel) on [GitHub Releases](https://github.com/franzos/stackpit/releases).
 
@@ -41,6 +48,26 @@ stackpit serve --ingest-only  # ingestion only, no admin UI/API
 ```
 
 `stackpit init` generates a random 32-byte admin token and writes it into the config, so the admin UI is usable on first boot without any extra steps.
+
+### Docker
+
+Images are published to the GitHub Container Registry on every release — a default **SQLite** image and a **PostgreSQL** variant (same tags, `-postgres` suffix):
+
+```bash
+docker pull ghcr.io/franzos/stackpit:latest            # SQLite
+docker pull ghcr.io/franzos/stackpit:latest-postgres   # PostgreSQL
+
+# first run: generate stackpit.toml (with an admin token) into the volume
+docker run --rm -v stackpit-data:/app ghcr.io/franzos/stackpit:latest ./stackpit init
+
+# then serve
+docker run -d --name stackpit \
+  -p 3000:3000 -p 3001:3001 \
+  -v stackpit-data:/app \
+  ghcr.io/franzos/stackpit:latest
+```
+
+The SQLite file and `stackpit.toml` live in the working directory (`/app`) — mount a volume there to persist them. Note the admin listener binds to `127.0.0.1` by default, so set `bind = "0.0.0.0:3000"` in `stackpit.toml` for the mapped `3000` port to be reachable from outside the container.
 
 ### Ports
 

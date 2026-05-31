@@ -155,7 +155,7 @@ async fn render_page(
                 (p.project_id, label)
             })
             .collect();
-    projects.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
+    projects.sort_by_key(|a| a.1.to_lowercase());
 
     let tmpl = AlertsTemplate {
         alert_rules,

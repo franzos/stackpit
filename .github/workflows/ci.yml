@@ -9,7 +9,7 @@ jobs:
   test-sqlite:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -27,6 +27,19 @@ jobs:
 
       - name: Test
         run: cargo test --no-default-features --features sqlite
+
+  audit:
+    name: cargo-deny advisories
+    runs-on: ubuntu-latest
+    # Warn, don't block: advisories surface as PR annotations + in the log, but
+    # an unfixed transitive CVE never stalls an unrelated PR. The GitHub Security
+    # tab / Dependabot drive remediation. Flip this off to make CVEs gate merges.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories
 
   test-postgres:
     runs-on: ubuntu-latest
@@ -50,7 +63,7 @@ jobs:
       DATABASE_URL: postgres://stackpit:stackpit@localhost:5432/stackpit_test
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@stable
         with:

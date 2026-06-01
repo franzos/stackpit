@@ -5,7 +5,7 @@
 # image bundles exactly one. sqlx is pure-Rust over rustls (no libpq/OpenSSL);
 # the sqlite backend statically compiles bundled libsqlite3, which needs a C
 # toolchain — already present in the rust image.
-FROM rust:1-slim-bookworm AS builder
+FROM rust:1-slim-trixie AS builder
 ARG DB_FEATURE=sqlite
 WORKDIR /app
 
@@ -22,7 +22,7 @@ COPY . .
 RUN touch src/main.rs stackpit-auth/src/lib.rs \
     && cargo build --release --no-default-features --features "$DB_FEATURE"
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=builder /app/target/release/stackpit /app/stackpit

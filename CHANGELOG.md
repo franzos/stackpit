@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.3] - 2026-06-01
+
+### Changed
+- Docker images rebased on Debian trixie
+
+### Added
+- CI scans dependencies for RustSec advisories (non-blocking)
+
 ## [0.3.2] - 2026-05-31
 
 ### Fixed

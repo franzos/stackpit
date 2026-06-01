@@ -1,0 +1,9 @@
+# cargo-deny config. CI runs `cargo deny check advisories` against Cargo.lock
+# (RustSec advisory DB) as a non-blocking signal — see .github/workflows/ci.yml.
+# Add advisory IDs to `ignore` with a one-line rationale to silence a known,
+# accepted finding.
+[advisories]
+version = 2
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "warn"
+ignore = []

@@ -6,4 +6,10 @@
 version = 2
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "warn"
-ignore = []
+ignore = [
+    # rsa (via openidconnect): Marvin timing sidechannel on RSA *decryption*.
+    # We only verify RS256 id_token/JWKS signatures with the IdP's public key —
+    # no private-key decryption — so the key-recovery attack doesn't apply. No
+    # fixed rsa release exists yet.
+    "RUSTSEC-2023-0071",
+]

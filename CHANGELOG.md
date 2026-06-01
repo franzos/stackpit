@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.4] - 2026-06-01
+
+### Security
+- Resolved RustSec advisories: dropped unused `rand`, bumped `lru` to 0.16
+
 ## [0.3.3] - 2026-06-01
 
 ### Changed

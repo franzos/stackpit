@@ -1,6 +1,6 @@
 [package]
 name = "stackpit"
-version = "0.3.4"
+version = "0.3.5"
 edition = "2021"
 description = "Lightweight, self-hosted error tracking and event monitoring"
 authors = ["Franz Geffke <mail@gofranz.com>"]
@@ -73,7 +73,7 @@ openidconnect = { version = "4", default-features = false, features = ["reqwest"
 # both of which the spec forbids on logout tokens -- so we do it ourselves
 # with jsonwebtoken. RSA-only (RS256); the JWK conversion in oidc::logout
 # tracks Hydra's documented signing algorithm.
-jsonwebtoken = { version = "9", default-features = false }
+jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
 url = "2"
 
 [dev-dependencies]

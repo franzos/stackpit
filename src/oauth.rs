@@ -6,14 +6,14 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use openidconnect::core::{
-    CoreAuthenticationFlow, CoreClient, CoreIdTokenClaims, CoreIdTokenVerifier, CoreJsonWebKey,
-    CoreProviderMetadata,
+    CoreAuthenticationFlow, CoreClient, CoreClientAuthMethod, CoreIdTokenClaims,
+    CoreIdTokenVerifier, CoreJsonWebKey, CoreProviderMetadata,
+};
+use openidconnect::{
+    AccessTokenHash, AuthType, ClientId, ClientSecret, CsrfToken, IssuerUrl, Nonce,
+    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope,
 };
 use openidconnect::{AuthorizationCode, JsonWebKeySet, OAuth2TokenResponse, TokenResponse};
-use openidconnect::{
-    ClientId, ClientSecret, CsrfToken, IssuerUrl, Nonce, PkceCodeChallenge, PkceCodeVerifier,
-    RedirectUrl, Scope,
-};
 use secrecy::{ExposeSecret, SecretString};
 use stackpit_auth::JwksCache;
 
@@ -118,7 +118,15 @@ impl OidcClient {
             .build()
             .context("building OAuth HTTP client")?;
 
-        let client = build_client(issuer, client_id, client_secret, redirect_uri, &http).await?;
+        let client = build_client(
+            issuer,
+            client_id,
+            client_secret,
+            redirect_uri,
+            &http,
+            cfg.token_endpoint_auth_method.as_deref(),
+        )
+        .await?;
 
         // openidconnect's typed metadata doesn't surface end_session_endpoint
         // or introspection_endpoint; re-fetch the raw doc for those + jwks_uri.
@@ -295,6 +303,23 @@ impl OidcClient {
         let claims = id_token
             .claims(&verifier, &nonce)
             .context("id_token verification failed")?;
+
+        // at_hash binds the access token to this id_token (OIDC Core 1.0 §3.1.3.6).
+        // Optional in code flow, but catches a token endpoint swapping the access token.
+        if let Some(expected) = claims.access_token_hash() {
+            let actual = AccessTokenHash::from_token(
+                token_response.access_token(),
+                id_token.signing_alg().context("id_token signing_alg")?,
+                id_token
+                    .signing_key(&verifier)
+                    .context("id_token signing_key")?,
+            )
+            .context("computing at_hash")?;
+            if actual != *expected {
+                anyhow::bail!("id_token at_hash does not match access_token");
+            }
+        }
+
         let mut login_claims = extract_login_claims(claims);
 
         // `sid` isn't in openidconnect 4's standard claim set; pull it from
@@ -554,12 +579,46 @@ fn validate_discovery_url(raw: &str) -> Option<String> {
     Some(trimmed.to_string())
 }
 
+/// Token-endpoint client-auth method. Explicit override wins; otherwise honour
+/// discovery, preferring client_secret_basic (RFC 6749 §2.3.1). openidconnect
+/// can only send Basic or POST, so other advertised methods fall back to Basic.
+fn resolve_token_auth_type(
+    supported: Option<&[CoreClientAuthMethod]>,
+    override_method: Option<&str>,
+) -> AuthType {
+    if let Some(m) = override_method {
+        return match m.trim().to_ascii_lowercase().as_str() {
+            "client_secret_post" | "post" => AuthType::RequestBody,
+            _ => AuthType::BasicAuth, // validated at config load; default safe
+        };
+    }
+    match supported {
+        Some(methods) => {
+            if methods
+                .iter()
+                .any(|m| matches!(m, CoreClientAuthMethod::ClientSecretBasic))
+            {
+                AuthType::BasicAuth
+            } else if methods
+                .iter()
+                .any(|m| matches!(m, CoreClientAuthMethod::ClientSecretPost))
+            {
+                AuthType::RequestBody
+            } else {
+                AuthType::BasicAuth
+            }
+        }
+        None => AuthType::BasicAuth,
+    }
+}
+
 async fn build_client(
     issuer: &str,
     client_id: &str,
     client_secret: &str,
     redirect_uri: &str,
     http: &openidconnect::reqwest::Client,
+    auth_method_override: Option<&str>,
 ) -> Result<CoreClientType> {
     let issuer_url = IssuerUrl::new(issuer.to_string())
         .with_context(|| format!("invalid issuer_url '{issuer}'"))?;
@@ -567,11 +626,33 @@ async fn build_client(
         .await
         .with_context(|| format!("OIDC discovery failed for '{issuer}'"))?;
 
+    let supported = metadata.token_endpoint_auth_methods_supported();
+    // Discovery advertised methods, but none are ones openidconnect can send.
+    if auth_method_override.is_none()
+        && supported.is_some_and(|m| {
+            !m.is_empty()
+                && !m.iter().any(|m| {
+                    matches!(
+                        m,
+                        CoreClientAuthMethod::ClientSecretBasic
+                            | CoreClientAuthMethod::ClientSecretPost
+                    )
+                })
+        })
+    {
+        tracing::warn!(
+            "OIDC discovery advertises no client_secret_basic/post token-endpoint auth method; \
+             defaulting to client_secret_basic"
+        );
+    }
+    let auth_type = resolve_token_auth_type(supported.map(Vec::as_slice), auth_method_override);
+
     let client = CoreClient::from_provider_metadata(
         metadata,
         ClientId::new(client_id.to_string()),
         Some(ClientSecret::new(client_secret.to_string())),
     )
+    .set_auth_type(auth_type)
     .set_redirect_uri(
         RedirectUrl::new(redirect_uri.to_string())
             .with_context(|| format!("invalid redirect_uri '{redirect_uri}'"))?,
@@ -651,5 +732,59 @@ mod tests {
             check_end_session_precondition(false, false, true),
             EndSessionDecision::Ok
         );
+    }
+
+    // AuthType doesn't implement PartialEq in this crate version.
+    fn is_basic(t: &AuthType) -> bool {
+        matches!(t, AuthType::BasicAuth)
+    }
+    fn is_post(t: &AuthType) -> bool {
+        matches!(t, AuthType::RequestBody)
+    }
+
+    #[test]
+    fn auth_type_override_post_wins() {
+        assert!(is_post(&resolve_token_auth_type(None, Some("post"))));
+        assert!(is_post(&resolve_token_auth_type(
+            None,
+            Some("client_secret_post")
+        )));
+    }
+
+    #[test]
+    fn auth_type_override_basic_wins() {
+        assert!(is_basic(&resolve_token_auth_type(None, Some("basic"))));
+    }
+
+    #[test]
+    fn auth_type_discovery_post_only() {
+        assert!(is_post(&resolve_token_auth_type(
+            Some(&[CoreClientAuthMethod::ClientSecretPost]),
+            None
+        )));
+    }
+
+    #[test]
+    fn auth_type_discovery_prefers_basic() {
+        assert!(is_basic(&resolve_token_auth_type(
+            Some(&[
+                CoreClientAuthMethod::ClientSecretBasic,
+                CoreClientAuthMethod::ClientSecretPost,
+            ]),
+            None
+        )));
+    }
+
+    #[test]
+    fn auth_type_discovery_none_defaults_basic() {
+        assert!(is_basic(&resolve_token_auth_type(None, None)));
+    }
+
+    #[test]
+    fn auth_type_discovery_unsupported_defaults_basic() {
+        assert!(is_basic(&resolve_token_auth_type(
+            Some(&[CoreClientAuthMethod::ClientSecretJwt]),
+            None
+        )));
     }
 }

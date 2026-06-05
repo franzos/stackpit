@@ -1,9 +1,11 @@
 use axum::extract::{Form, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use secrecy::ExposeSecret;
 use serde::Deserialize;
 
+use crate::oidc::cookies::{append_set_cookie, clear_grant_cookie};
+use crate::oidc::{grants, logout};
 use crate::server::AppState;
 
 pub const ADMIN_COOKIE: &str = "stackpit_token";
@@ -206,7 +208,10 @@ pub struct LoginForm {
     token: String,
 }
 
-pub async fn handle_logout(State(state): State<AppState>) -> impl IntoResponse {
+/// Universal logout for both admin-token and OIDC (SSO) sessions. Clears the
+/// admin cookie + CSRF salt, and -- when OAuth is enabled -- tears down the
+/// server-side grant and runs RP-initiated logout against the IdP.
+pub async fn handle_logout(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     let secure = state.config.server.cookies_should_be_secure();
     let secure_flag = if secure { "; Secure" } else { "" };
     let name = admin_cookie_name(secure);
@@ -214,13 +219,48 @@ pub async fn handle_logout(State(state): State<AppState>) -> impl IntoResponse {
     let salt_name = csrf_salt_cookie_name(secure);
     let salt_cookie =
         format!("{salt_name}=; Path=/; SameSite=Strict; HttpOnly; Max-Age=0{secure_flag}");
-    let mut resp = axum::response::Redirect::to("/web/login").into_response();
+
+    // OIDC teardown: resolve + forget the grant, capturing the id_token hint.
+    let mut had_grant = false;
+    let mut id_token_hint = None;
+    if let (Some(_), Some(encryptor)) = (state.oidc.as_ref(), state.encryptor.as_ref()) {
+        // The middleware grant branch reads from auth_pool -- match it.
+        if let Some(record) =
+            grants::resolve_from_headers(&headers, secure, encryptor, &state.auth_pool).await
+        {
+            had_grant = true;
+            // GrantRecord's `Drop` zeroizes tokens -- clone before forgetting.
+            id_token_hint = record.id_token.clone();
+            grants::forget(&state.auth_pool, &record.handle).await;
+        }
+    }
+
+    // RP-initiated logout if the IdP advertises end_session_endpoint and we have
+    // an id_token hint; else local-only banner for OIDC sessions; else plain.
+    let target = match (
+        state.oidc.as_ref().and_then(|o| o.end_session_endpoint()),
+        id_token_hint.as_deref(),
+    ) {
+        (Some(endpoint), Some(hint)) => {
+            let post = state.config.auth.oauth.post_logout_redirect_uri.as_deref();
+            logout::build_end_session_url(endpoint, hint, post)
+        }
+        _ if had_grant => "/web/login?logout=local".to_string(),
+        _ => "/web/login".to_string(),
+    };
+
+    let mut resp = axum::response::Redirect::to(&target).into_response();
     if let Ok(val) = cookie.parse() {
         resp.headers_mut().append("set-cookie", val);
     }
     if let Ok(val) = salt_cookie.parse() {
         resp.headers_mut().append("set-cookie", val);
     }
+    append_set_cookie(&mut resp, clear_grant_cookie(secure));
+    resp.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
     resp
 }
 

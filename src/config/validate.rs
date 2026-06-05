@@ -209,6 +209,16 @@ impl Config {
             validate_issuer_url_scheme(issuer)?;
         }
 
+        if let Some(ref m) = oauth.token_endpoint_auth_method {
+            match m.trim().to_ascii_lowercase().as_str() {
+                "client_secret_basic" | "basic" | "client_secret_post" | "post" => {}
+                other => anyhow::bail!(
+                    "auth.oauth.token_endpoint_auth_method '{other}' is not supported; \
+                     use client_secret_basic or client_secret_post"
+                ),
+            }
+        }
+
         if oauth.refresh_token_max_ttl_secs > REFRESH_TOKEN_MAX_TTL_CAP_SECS {
             anyhow::bail!(
                 "auth.oauth.refresh_token_max_ttl_secs is {} seconds, which exceeds the 90-day \

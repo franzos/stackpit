@@ -32,7 +32,9 @@ fn is_public_path(path: &str) -> bool {
         || path == "/health"
         || path.starts_with("/web/_assets/")
         || path.starts_with("/api/0/")
-        || path.starts_with("/web/auth/")
+        || path == "/web/auth/login"
+        || path == "/web/auth/callback"
+        || path == "/web/auth/backchannel-logout"
 }
 
 pub async fn web_auth_middleware(
@@ -114,6 +116,15 @@ pub async fn web_auth_middleware(
             return unauthenticated_response(&req, secure_cookies);
         };
         let handle = grant.handle.clone();
+
+        // Logout must succeed even with an expired or revoked access token, so it
+        // skips the bearer gate + eager refresh. Inject the per-grant CSRF token so
+        // the synchronizer check passes; the handler does the actual teardown.
+        if path == "/web/logout" {
+            req.extensions_mut()
+                .insert(CsrfToken(grant.csrf_token.clone()));
+            return next.run(req).await;
+        }
 
         // Failures fall through to the existing token; the gate will reject if expired.
         let now = chrono::Utc::now().timestamp();
@@ -207,4 +218,33 @@ fn handle_to_uuid(handle: &GrantHandle) -> uuid::Uuid {
     bytes[6] = (bytes[6] & 0x0f) | 0x80;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     uuid::Uuid::from_bytes(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_public_path;
+
+    #[test]
+    fn only_pre_session_oauth_paths_are_public() {
+        for p in [
+            "/web/login",
+            "/health",
+            "/web/_assets/style.css",
+            "/web/auth/login",
+            "/web/auth/callback",
+            "/web/auth/backchannel-logout",
+        ] {
+            assert!(is_public_path(p), "{p} must be public");
+        }
+        // Gated: logout needs the gate to run so the CSRF token is injected.
+        // A blanket `/web/auth/` match here is what once broke OIDC logout.
+        for p in [
+            "/web/logout",
+            "/web/auth/logout",
+            "/web/projects/",
+            "/web/settings/integrations/",
+        ] {
+            assert!(!is_public_path(p), "{p} must be gated");
+        }
+    }
 }

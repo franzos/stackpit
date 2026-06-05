@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.5] - 2026-06-06
+
+### Added
+- OIDC id_token `at_hash` verification
+- Token-endpoint auth method auto-negotiated from discovery, overridable via config
+
+### Fixed
+- SSO logout now ends OIDC sessions, not just the admin cookie
+
 ## [0.3.4] - 2026-06-01
 
 ### Security

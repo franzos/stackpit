@@ -369,7 +369,6 @@ pub fn routes() -> Router<AppState> {
         // -- SSO (OAuth/OIDC) --
         .route("/web/auth/login", get(auth::login))
         .route("/web/auth/callback", get(auth::callback))
-        .route("/web/auth/logout", post(auth::logout_handler))
         .route(
             "/web/auth/backchannel-logout",
             post(auth::backchannel_logout),

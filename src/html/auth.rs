@@ -178,48 +178,6 @@ pub async fn callback(
     resp
 }
 
-/// `POST /web/auth/logout` -- destroy local grant, redirect to Hydra's
-/// `end_session_endpoint` (RP-initiated logout) so the IdP session also
-/// goes away.
-pub async fn logout_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let secure = state.config.server.cookies_should_be_secure();
-
-    // Best-effort local cleanup: delete the grant row + clear the cookie.
-    let id_token_hint = match state.encryptor.as_ref() {
-        Some(enc) => {
-            match grants::resolve_from_headers(&headers, secure, enc, &state.pool).await {
-                Some(record) => {
-                    // GrantRecord's `Drop` zeroizes tokens -- clone, don't move.
-                    let id_token = record.id_token.clone();
-                    grants::forget(&state.pool, &record.handle).await;
-                    id_token
-                }
-                None => None,
-            }
-        }
-        None => None,
-    };
-
-    // RP-initiated logout: only if the IdP advertises an end_session_endpoint
-    // AND we have an id_token to use as hint. Falls back to local-only logout,
-    // signalled to the login page via `?logout=local` so the user gets an
-    // info banner ("we cleared *our* session, not the IdP's").
-    let target = match (
-        state.oidc.as_ref().and_then(|o| o.end_session_endpoint()),
-        id_token_hint.as_deref(),
-    ) {
-        (Some(endpoint), Some(hint)) => {
-            let post = state.config.auth.oauth.post_logout_redirect_uri.as_deref();
-            logout::build_end_session_url(endpoint, hint, post)
-        }
-        _ => "/web/login?logout=local".to_string(),
-    };
-
-    let mut resp = Redirect::to(&target).into_response();
-    append_set_cookie(&mut resp, crate::oidc::cookies::clear_grant_cookie(secure));
-    resp
-}
-
 /// `POST /web/auth/backchannel-logout` -- Hydra POSTs a signed logout token
 /// when the user logs out elsewhere. Validate strictly, dedupe by jti,
 /// write revocation marker, eager-delete matching grants. Returns 200 OK

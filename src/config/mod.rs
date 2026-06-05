@@ -198,6 +198,10 @@ pub struct OAuthConfig {
     /// logout (Stackpit-only logout; the IdP session survives).
     #[serde(default)]
     pub allow_local_only_logout: bool,
+    /// Override the token-endpoint client-auth method. Unset = negotiate from
+    /// discovery (prefers client_secret_basic). Accepts `client_secret_basic`
+    /// (alias `basic`) or `client_secret_post` (alias `post`).
+    pub token_endpoint_auth_method: Option<String>,
 }
 
 fn default_access_token_max_ttl() -> u64 {

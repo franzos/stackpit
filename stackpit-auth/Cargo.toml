@@ -18,7 +18,7 @@ hex = "0.4"
 http = "1"
 thiserror = "2"
 # RS256 JWKS validation for the MCP JWT arm + back-channel logout.
-jsonwebtoken = { version = "9", default-features = false }
+jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
 # O(1) LRU eviction for the bearer + revocation caches.
 lru = "0.16"
 parking_lot = "0.12"

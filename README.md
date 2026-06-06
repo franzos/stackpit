@@ -14,10 +14,10 @@
 I got tired of paying for Sentry on smaller projects and self-hosting the official thing is... a lot. The thing is, most of what I need is ingestion, grouping, and a way to browse errors. So I built this — point your existing Sentry SDKs at it, browse errors in the web UI, or query via the JSON API.
 
 <p align="center">
-  <img src="docs/screenshots/01-projects.png" alt="Project dashboard" width="49%">
-  <img src="docs/screenshots/02-issue-detail.png" alt="Issue detail with stacktrace" width="49%">
-  <img src="docs/screenshots/03-releases.png" alt="Releases with adoption" width="49%">
-  <img src="docs/screenshots/04-logs.png" alt="Logs" width="49%">
+  <img src="docs/screenshots/01-projects.png" alt="Project dashboard" width="24%">
+  <img src="docs/screenshots/02-issue-detail.png" alt="Issue detail with stacktrace" width="24%">
+  <img src="docs/screenshots/03-releases.png" alt="Releases with adoption" width="24%">
+  <img src="docs/screenshots/04-logs.png" alt="Logs" width="24%">
 </p>
 
 ## Features

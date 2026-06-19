@@ -194,7 +194,7 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
 
     let auth_cache: AuthCache = Arc::new(dashmap::DashMap::new());
 
-    let encryptor = SecretEncryptor::from_env()
+    let encryptor = SecretEncryptor::from_config_or_env(config.server.master_key.as_ref())
         .map_err(anyhow::Error::msg)?
         .map(Arc::new);
 

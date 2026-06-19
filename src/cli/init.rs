@@ -17,6 +17,7 @@ ingest_bind = "0.0.0.0:3001"
 # is configured, or you accept the no-auth posture on loopback via
 # `no_auth_loopback_acknowledged = true`. Rotate with `openssl rand -hex 32`.
 admin_token = "__ADMIN_TOKEN__"
+# master_key = ""   # 64 hex chars (openssl rand -hex 32); STACKPIT_MASTER_KEY env var overrides this
 # force_secure_cookies = true   # set when behind a TLS-terminating proxy (nginx/Caddy) and external_url is https
 # no_auth_loopback_acknowledged = true   # only valid on loopback binds; lets you run with no auth at all
 

@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::db;
 use anyhow::Result;
+use secrecy::ExposeSecret;
 use sqlx::Row;
 pub async fn run(config: &Config) -> Result<()> {
     let database_url = config.storage.database_url();
@@ -53,16 +54,28 @@ pub async fn run(config: &Config) -> Result<()> {
         }
     }
 
-    let has_master_key = std::env::var("STACKPIT_MASTER_KEY")
+    let is_valid_key = |k: &str| {
+        hex::decode(k.trim())
+            .map(|b| b.len() == 32)
+            .unwrap_or(false)
+    };
+    let env_key = std::env::var("STACKPIT_MASTER_KEY")
         .ok()
-        .filter(|k| {
-            hex::decode(k.trim())
-                .map(|b| b.len() == 32)
-                .unwrap_or(false)
-        })
-        .is_some();
-    if has_master_key {
-        println!("    Encryption      \x1b[32menabled\x1b[0m (STACKPIT_MASTER_KEY)");
+        .filter(|k| is_valid_key(k));
+    let config_key = config
+        .server
+        .master_key
+        .as_ref()
+        .filter(|k| is_valid_key(k.expose_secret()));
+    let key_source = if env_key.is_some() {
+        Some("STACKPIT_MASTER_KEY")
+    } else if config_key.is_some() {
+        Some("server.master_key")
+    } else {
+        None
+    };
+    if let Some(source) = key_source {
+        println!("    Encryption      \x1b[32menabled\x1b[0m ({source})");
     } else {
         println!(
             "    Encryption      \x1b[33mdisabled\x1b[0m \x1b[2m(set STACKPIT_MASTER_KEY for encrypted secrets)\x1b[0m"

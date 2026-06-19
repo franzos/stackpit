@@ -127,7 +127,7 @@ issuer_url    = "https://hydra.example.com"
 client_id     = "<from hydra output>"
 client_secret = "<from hydra output>"
 redirect_uri  = "https://stackpit.example.com/web/auth/callback"
-web_audience  = "stackpit-web"                  # required — must match the IdP audience for the web client
+web_audience  = "stackpit.example.com"                  # required — must match the IdP audience for the web client
 ```
 
 `web_audience` binds the BFF to the audience your IdP issues to the web client; it blocks confused-deputy attacks across resource servers and is enforced at startup.
@@ -147,13 +147,20 @@ The full set of OAuth knobs (`post_logout_redirect_uri`, `access_token_max_ttl_s
 
 ## Secret encryption
 
-When OAuth is enabled, stackpit **requires** a 32-byte hex master key — OIDC tokens are stored encrypted at rest in `oidc_grants` and startup will refuse without it:
+When OAuth is enabled, stackpit **requires** a 32-byte hex master key — OIDC tokens are stored encrypted at rest in `oidc_grants` and startup will refuse without it. The same key encrypts integration credentials (Slack tokens, webhook URLs). Without it and without OAuth, integration secrets fall back to plaintext storage and stackpit warns on startup.
+
+Supply the key one of two ways:
 
 ```bash
 export STACKPIT_MASTER_KEY=$(openssl rand -hex 32)
 ```
 
-The same key encrypts integration credentials (Slack tokens, webhook URLs). Without it and without OAuth, integration secrets fall back to plaintext storage and stackpit warns on startup.
+```toml
+[server]
+master_key = "..."   # 64-char hex string (32 bytes) from `openssl rand -hex 32`
+```
+
+The env var wins when both are set — so you can keep a key out of the config file entirely (systemd `EnvironmentFile`, a secrets manager) and still override a placeholder in `stackpit.toml`. That separation matters more than it looks: this key decrypts the secrets sitting in your database, so storing it next to the DB — same directory, same backup — defeats the point. Keep them apart if you can. A malformed key (bad hex, wrong length) fails startup fast from either source, naming whichever one it came from.
 
 ## Connecting SDKs
 

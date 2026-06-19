@@ -52,6 +52,10 @@ pub struct ServerConfig {
     /// Shared token for the admin UI. If set, all admin routes require it
     /// via Bearer header or `stackpit_token` cookie.
     pub admin_token: Option<SecretString>,
+    /// AES-256 master key (64 hex chars) for at-rest secret encryption.
+    /// `STACKPIT_MASTER_KEY` env var overrides this.
+    #[serde(default)]
+    pub master_key: Option<SecretString>,
     /// Max request body size in bytes (applied after decompression).
     #[serde(default = "default_max_body_size")]
     pub max_body_size: usize,
@@ -284,6 +288,7 @@ impl Default for ServerConfig {
             external_url: None,
             external_ingest_url: None,
             admin_token: None,
+            master_key: None,
             max_body_size: DEFAULT_MAX_BODY_SIZE,
             max_compressed_body_size: None,
             force_secure_cookies: false,

@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.6] - 2026-06-19
+
+### Added
+- Master key configurable via `[server].master_key` (env var still overrides)
+
 ## [0.3.5] - 2026-06-06
 
 ### Added

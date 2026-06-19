@@ -2,6 +2,7 @@ use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
+use secrecy::{ExposeSecret, SecretString};
 use zeroize::Zeroizing;
 
 /// AES-GCM standard nonce length, prepended to every ciphertext.
@@ -19,31 +20,36 @@ pub struct SecretEncryptor {
 }
 
 impl SecretEncryptor {
-    /// Read `STACKPIT_MASTER_KEY` (64 hex chars = 32 bytes).
+    /// Resolve the master key (64 hex chars = 32 bytes) from, in order:
+    /// `STACKPIT_MASTER_KEY` env var, then `[server].master_key` in config.
     ///
-    /// - unset → `Ok(None)` (no at-rest encryption)
+    /// - neither set → `Ok(None)` (no at-rest encryption)
     /// - set but malformed → `Err(_)` so startup fails fast. Silently
     ///   disabling encryption on a typo'd key would be a footgun for OAuth.
-    pub fn from_env() -> Result<Option<Self>, &'static str> {
-        let Ok(raw) = std::env::var("STACKPIT_MASTER_KEY") else {
-            return Ok(None);
-        };
-        // Zeroize the heap-allocated String so the key doesn't linger.
-        let hex_key = Zeroizing::new(raw);
-        let key_bytes: Zeroizing<Vec<u8>> = match hex::decode(hex_key.trim()) {
-            Ok(b) => Zeroizing::new(b),
-            Err(_) => {
-                return Err(
-                    "STACKPIT_MASTER_KEY is set but is not valid hex; expected 64 hex chars",
-                );
+    pub fn from_config_or_env(config_key: Option<&SecretString>) -> Result<Option<Self>, String> {
+        if let Ok(raw) = std::env::var("STACKPIT_MASTER_KEY") {
+            return Self::parse_key(&Zeroizing::new(raw), "STACKPIT_MASTER_KEY").map(Some);
+        }
+        match config_key {
+            Some(secret) => {
+                let raw = Zeroizing::new(secret.expose_secret().to_string());
+                Self::parse_key(&raw, "server.master_key").map(Some)
             }
+            None => Ok(None),
+        }
+    }
+
+    fn parse_key(raw: &str, source: &str) -> Result<Self, String> {
+        let key_bytes: Zeroizing<Vec<u8>> = match hex::decode(raw.trim()) {
+            Ok(b) => Zeroizing::new(b),
+            Err(_) => return Err(format!("{source} is not valid hex; expected 64 hex chars")),
         };
         if key_bytes.len() != 32 {
-            return Err("STACKPIT_MASTER_KEY is set but is not 32 bytes (64 hex chars)");
+            return Err(format!("{source} is not 32 bytes (64 hex chars)"));
         }
         let cipher = Aes256Gcm::new_from_slice(&key_bytes)
-            .map_err(|_| "STACKPIT_MASTER_KEY: AES-256-GCM cipher init failed")?;
-        Ok(Some(Self { cipher }))
+            .map_err(|_| format!("{source}: AES-256-GCM cipher init failed"))?;
+        Ok(Self { cipher })
     }
 
     /// AES-256-GCM encrypt. Output is base64(nonce || ciphertext).

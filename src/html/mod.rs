@@ -501,6 +501,8 @@ pub fn html_error(status: axum::http::StatusCode, detail: &str) -> axum::respons
         r#"<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><title>Error - Stackpit</title>
+<link rel="preload" href="/web/_assets/fonts/Inter-Regular.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/web/_assets/fonts/Inter-SemiBold.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/web/_assets/style.css">
 <link rel="icon" type="image/svg+xml" href="/web/_assets/icon.svg"></head>
 <body>

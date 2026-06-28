@@ -90,15 +90,37 @@ jobs:
     needs: [build, deb, rpm]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
       - name: Download artifacts
         uses: actions/download-artifact@v7
         with:
           merge-multiple: true
 
+      - name: Build release notes from changelog
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v ver="$version" '
+            $0 ~ "^## \\[" ver "\\]" { f = 1; next }
+            /^## \[/ { f = 0 }
+            f' CHANGELOG.md > RELEASE_NOTES.md
+          if [ ! -s RELEASE_NOTES.md ]; then
+            echo "No CHANGELOG section for $version" >&2
+            exit 1
+          fi
+          prev="$(git tag --sort=-v:refname | awk -v cur="$GITHUB_REF_NAME" 'f { print; exit } $0 == cur { f = 1 }')"
+          if [ -n "$prev" ]; then
+            printf '\n**Full Changelog**: %s/%s/compare/%s...%s\n' \
+              "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$prev" "$GITHUB_REF_NAME" >> RELEASE_NOTES.md
+          fi
+          cat RELEASE_NOTES.md
+
       - name: Create release
         uses: softprops/action-gh-release@v3
         with:
-          generate_release_notes: true
+          body_path: RELEASE_NOTES.md
           draft: false
           files: |
             stackpit-*.tar.gz

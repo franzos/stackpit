@@ -54,12 +54,12 @@
                   style="background: var(--color-surface)">
             <nav class="text-[13px] flex items-center gap-1.5" aria-label="Breadcrumb">
               <a href="/web/projects/" class="breadcrumb-link">Projects</a>
-              {% block breadcrumbs %}{% endblock %}
+              {% block breadcrumbs %}
+              {% endblock %}
             </nav>
           </header>
           <main class="flex-1 px-6 py-6 min-w-0">
-            {% block content %}
-            {% endblock %}
+            {% block content %}{% endblock %}
           </main>
         </div>
       </div>

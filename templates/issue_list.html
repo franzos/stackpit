@@ -42,7 +42,9 @@
     {% if !sort.is_empty() %}
       <input type="hidden" name="sort" value="{{ sort }}">
     {% endif %}
-    {% if !tag.is_empty() %}<input type="hidden" name="tag" value="{{ tag }}">{% endif %}
+    {% if !tag.is_empty() %}
+      <input type="hidden" name="tag" value="{{ tag }}">
+    {% endif %}
     <input class="input"
            type="text"
            name="query"

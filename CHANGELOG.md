@@ -1,31 +1,24 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.7] - 2026-06-28
 
 ### Added
-- Release Health crash-free users (distinct-user crash rate via HLL)
+- Transaction performance monitoring: duration percentiles (p50/p75/p95), throughput, and failure rate rolled up hourly, with a transactions list and per-transaction instances view (slowest first)
+- Distributed tracing: embedded child spans extracted into a spans table, and a trace detail view rendered as a time-positioned span waterfall with correlated error events
+- Web Vitals card (LCP, FCP, CLS, TTFB) on event detail, derived from transaction measurements
+- Release Health: crash-free users (distinct-user crash rate via HLL) and a daily sessions trend chart
 - Client Reports outcomes summary (dropped events by category and reason)
-- Transaction performance model: duration percentiles (p50/p75/p95), throughput, and failure rate, rolled up hourly
-- Transactions list and per-transaction instances view (slowest first), linking into trace detail
-- Embedded transaction child spans extracted into the spans table with absolute millisecond start times
-- Trace detail now renders a span waterfall (nested, time-positioned bars) with correlated error events
-- Release Health daily sessions trend chart
 - User report detail surfaces feedback fields (name, email, comments, related event) above the raw JSON
-- Event detail renders a Web Vitals card (LCP, FCP, CLS, TTFB, …) from transaction measurements
-- Transaction detail shows the trace op in its header and a per-instance trace status badge, with each instance linking to its event detail
 
 ### Changed
-- Trace detail replaces the flat span table with the waterfall view
 - Transactions no longer create error-style issues; they feed a dedicated performance rollup
 - Transactions tab badge now counts distinct transaction names
+- Event and session charts scale to the full container width
 
 ### Fixed
-- Release Health now counts aggregated `sessions` envelopes instead of dropping them
-- Crash-free rate no longer counts errored sessions as crashes
-- Session `release`/`environment` read from `attrs` (were silently null)
-- Sessions are dated by their own start time instead of the ingestion time
-- Tag facet bars now render as background fills instead of pushing the values out of line
-- Event/session charts scale to the full container width instead of a fixed 1400px
+- Release Health counts aggregated `sessions` envelopes instead of dropping them, no longer counts errored sessions as crashes, and dates sessions by their own start time
+- Session `release`/`environment` now read from `attrs` (were silently null)
+- Tag facet bars render as background fills instead of pushing values out of line
 
 ## [0.3.6] - 2026-06-19
 

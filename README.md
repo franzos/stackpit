@@ -26,12 +26,38 @@ I got tired of paying for Sentry on smaller projects and self-hosting the offici
 - **Single binary, no dependencies** — one process, one SQLite file. PostgreSQL optional.
 - **Issue grouping** — fingerprint-based grouping with regressions and resolution tracking.
 - **Server-rendered web UI** — browse issues, events, transactions, logs, traces, replays, monitors, and more.
+- **Performance & tracing** — transaction percentiles, throughput, and failure rates, span waterfalls across traces, Web Vitals, and release-health crash-free rates.
 - **JSON API** — query everything the UI shows.
 - **Notifications & alerts** — email (Lettermint, Postmark, or SendGrid), Slack, and webhooks, with digests and threshold rules.
 - **Source maps** — upload via `sentry-cli` so minified traces resolve to original source.
 - **Monitors** — cron check-in tracking via Sentry's protocol.
 - **Auth your way** — a shared admin token for solo use, or OAuth/OIDC SSO for teams.
 - **Migrate in** — pull historical events, issues, and releases from an existing Sentry instance.
+
+## Stackpit vs Sentry
+
+Stackpit covers the everyday error-tracking workflow and a useful slice of performance monitoring, then deliberately stops short of Sentry's heavier features. It's a drop-in for the common case, not a full reimplementation. Here's roughly how they line up:
+
+| Capability | Stackpit | Sentry |
+|------------|----------|--------|
+| Error ingestion (Sentry protocol, any SDK) | Yes | Yes |
+| Issue grouping, regressions, resolution | Yes (own fingerprinting) | Yes (richer heuristics) |
+| Source maps | Yes | Yes |
+| Releases & release health (crash-free users/sessions) | Yes | Yes |
+| Performance monitoring | Basic (percentiles, throughput, failure rate) | Full APM |
+| Distributed tracing | Basic (span waterfalls) | Full |
+| Web Vitals | Yes | Yes |
+| Logs | Yes | Yes |
+| Cron monitors | Yes | Yes |
+| Session replay | Stores/browses what the SDK sends | Full player |
+| Profiling | View-only | Full |
+| Alerts (email, Slack, webhook, digests, thresholds) | Yes | Yes |
+| Auth / SSO | Admin token + OAuth/OIDC | Yes |
+| Deployment | Single binary, one SQLite file | Many services (PostgreSQL, ClickHouse, Kafka, Redis) |
+| Storage backend | SQLite or PostgreSQL | PostgreSQL + ClickHouse + Kafka |
+| License | MIT, self-hosted | SaaS or heavy self-host |
+
+Do take this with a grain of salt: the "basic" rows are genuinely basic, and the gaps are intentional. If deep APM, full-fidelity replay, or profiling are load-bearing for you, run the real thing.
 
 ## Install
 
@@ -101,7 +127,7 @@ Everything past first boot — the full `stackpit.toml` reference, PostgreSQL, a
 
 ## Acknowledgements
 
-This project wouldn't be possible without [Sentry](https://sentry.io) and is not meant to be a replacement, but rather a lightweight drop-in with limited features. If you need the full power of Sentry — performance monitoring, session replay, profiling, and so on — use the real thing.
+This project wouldn't be possible without [Sentry](https://sentry.io) and is not meant to be a replacement, but rather a lightweight drop-in with limited features. If you need the full power of Sentry — profiling, full-fidelity session replay, advanced performance monitoring, and so on — use the real thing.
 
 ## Building
 

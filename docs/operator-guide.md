@@ -227,7 +227,7 @@ Browse monitors per-project at `/web/projects/{id}/monitors/` to see check-in hi
 
 ## Web UI
 
-The admin UI is server-rendered HTML, no SPA. Beyond Issues and Events, each project surfaces views for **transactions, logs, spans/traces, metrics, profiles, replays, release health, monitors, user reports, and client reports** — these reflect whatever the SDK sent in the corresponding envelope items. Most of it is read-only browsing; the things you'd actually configure (filters, integrations, alerts, source map keys, project archival) live under each project's **Settings**.
+The admin UI is server-rendered HTML, no SPA. Beyond Issues and Events, each project surfaces views for **transactions, logs, spans/traces, metrics, profiles, replays, release health, monitors, user reports, and client reports** — these reflect whatever the SDK sent in the corresponding envelope items. Performance rollups (transaction percentiles, throughput, failure rate), span waterfalls, Web Vitals, and release-health crash-free rates are all derived automatically from the incoming envelopes — there's nothing to configure. Most of it is read-only browsing; the things you'd actually configure (filters, integrations, alerts, source map keys, project archival) live under each project's **Settings**.
 
 ## Syncing from Sentry
 

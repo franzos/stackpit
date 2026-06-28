@@ -42,13 +42,12 @@ pub fn spawn_retention_task(pool: DbPool, retention_days: u32, cancel: Cancellat
                 Ok(_) => {}
                 Err(e) => tracing::warn!("retention cleanup error: {e}"),
             }
-            // Clean up stale upload chunks (older than 24h)
             match crate::sourcemap::cleanup_stale_chunks(&pool, 86400).await {
                 Ok(n) if n > 0 => tracing::info!("chunk cleanup: deleted {n} stale chunks"),
                 Ok(_) => {}
                 Err(e) => tracing::warn!("chunk cleanup error: {e}"),
             }
-            // Clean up old sourcemaps (same retention window as events)
+            // Same retention window as events.
             let sm_max_age = retention_days as i64 * 86400;
             match crate::sourcemap::cleanup_old_sourcemaps(&pool, sm_max_age).await {
                 Ok(n) if n > 0 => tracing::info!("sourcemap cleanup: deleted {n} old sourcemaps"),
@@ -171,9 +170,8 @@ async fn run_digest_cycle(
             }
         };
 
-        // Only send if there's something to report
         if projects.is_empty() {
-            // Still update last_sent so we don't keep checking the same empty period
+            // Advance last_sent so we don't keep re-checking the same empty period.
             if let Err(e) =
                 crate::queries::alerts::update_digest_last_sent(pool, schedule.id, now).await
             {
@@ -188,11 +186,9 @@ async fn run_digest_cycle(
             projects: projects.clone(),
         };
 
-        // For digest notifications, we need to send to all project integrations
-        // that have digests enabled. Use project_id 0 as a sentinel for global digests.
+        // project_id 0 is the sentinel for global digests.
         let project_id = schedule.project_id.unwrap_or(0);
 
-        // For global digests, send one notification per project that has activity
         let mut any_sent = false;
         if schedule.project_id.is_none() {
             for project in &projects {

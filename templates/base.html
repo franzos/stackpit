@@ -4,11 +4,17 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
-    <title>
-      {% block title %}Stackpit{% endblock %}
-    </title>
-    <link rel="preload" href="/web/_assets/fonts/Inter-Regular.woff2" as="font" type="font/woff2" crossorigin>
-    <link rel="preload" href="/web/_assets/fonts/Inter-SemiBold.woff2" as="font" type="font/woff2" crossorigin>
+    <title>{% block title %}Stackpit{% endblock %}</title>
+    <link rel="preload"
+          href="/web/_assets/fonts/Inter-Regular.woff2"
+          as="font"
+          type="font/woff2"
+          crossorigin>
+    <link rel="preload"
+          href="/web/_assets/fonts/Inter-SemiBold.woff2"
+          as="font"
+          type="font/woff2"
+          crossorigin>
     <link rel="stylesheet" href="/web/_assets/style.css">
     <link rel="icon" type="image/svg+xml" href="/web/_assets/icon.svg">
     <script src="/web/_assets/bulk.js" defer></script>
@@ -52,7 +58,8 @@
             </nav>
           </header>
           <main class="flex-1 px-6 py-6 min-w-0">
-            {% block content %}{% endblock %}
+            {% block content %}
+            {% endblock %}
           </main>
         </div>
       </div>

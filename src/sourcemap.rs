@@ -48,21 +48,18 @@ fn parse_artifact_bundle_sync(zip_data: &[u8]) -> Result<Vec<SourcemapEntry>> {
         );
     }
 
-    // Try to find the manifest — could be at the root or under artifact-bundle/
+    // Manifest may be at the root or under artifact-bundle/.
     let manifest: serde_json::Value = try_read_manifest(&mut archive)?;
 
     let mut entries = Vec::new();
 
-    // The manifest has a "files" object mapping file paths to metadata
     if let Some(files) = manifest.get("files").and_then(|f| f.as_object()) {
         for (zip_path, meta) in files {
-            // Only care about sourcemap entries
             let file_type = meta.get("type").and_then(|t| t.as_str()).unwrap_or("");
             if file_type != "source_map" && file_type != "sourcemap" {
                 continue;
             }
 
-            // The debug_id can be in headers or at the top level
             let debug_id = extract_debug_id(meta);
             let debug_id = match debug_id {
                 Some(id) => id,
@@ -75,7 +72,6 @@ fn parse_artifact_bundle_sync(zip_data: &[u8]) -> Result<Vec<SourcemapEntry>> {
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
 
-            // Read the actual .map file from the ZIP
             let data = match read_zip_entry(&mut archive, zip_path) {
                 Ok(d) => d,
                 Err(e) => {
@@ -92,8 +88,7 @@ fn parse_artifact_bundle_sync(zip_data: &[u8]) -> Result<Vec<SourcemapEntry>> {
         }
     }
 
-    // Fallback: if no manifest or no entries found, scan for .map files
-    // that have debug_id embedded in the JSON
+    // Fallback when no manifest entries: scan .map files for embedded debug_id.
     if entries.is_empty() {
         entries = scan_for_sourcemaps(&mut archive)?;
     }
@@ -104,7 +99,6 @@ fn parse_artifact_bundle_sync(zip_data: &[u8]) -> Result<Vec<SourcemapEntry>> {
 fn try_read_manifest(
     archive: &mut zip::ZipArchive<std::io::Cursor<&[u8]>>,
 ) -> Result<serde_json::Value> {
-    // Try both possible manifest locations
     for name in &["manifest.json", "artifact-bundle/manifest.json"] {
         if let Ok(data) = read_zip_entry(archive, name) {
             if let Ok(val) = serde_json::from_slice(&data) {
@@ -116,7 +110,6 @@ fn try_read_manifest(
 }
 
 fn extract_debug_id(meta: &serde_json::Value) -> Option<String> {
-    // Check headers.debug-id first
     if let Some(id) = meta
         .get("headers")
         .and_then(|h| h.get("debug-id"))
@@ -124,7 +117,6 @@ fn extract_debug_id(meta: &serde_json::Value) -> Option<String> {
     {
         return Some(normalize_debug_id(id));
     }
-    // Then top-level debug_id / debugId
     if let Some(id) = meta
         .get("debug_id")
         .or_else(|| meta.get("debugId"))
@@ -135,7 +127,7 @@ fn extract_debug_id(meta: &serde_json::Value) -> Option<String> {
     None
 }
 
-/// Normalize debug IDs — strip the optional `-sourcemap` suffix
+/// Normalize debug IDs; strips the optional `-sourcemap` suffix.
 fn normalize_debug_id(id: &str) -> String {
     id.split_once("-sourcemap")
         .map(|(base, _)| base.to_string())
@@ -181,7 +173,6 @@ fn scan_for_sourcemaps(
             Err(_) => continue,
         };
 
-        // Try to extract debug_id from the sourcemap JSON
         if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&data) {
             let debug_id = val
                 .get("debug_id")
@@ -219,7 +210,6 @@ pub fn resolve_frame(sm: &sourcemap::SourceMap, line: u32, col: u32) -> Option<R
     let filename = token.get_source().unwrap_or("<unknown>").to_string();
     let function = token.get_name().map(|s| s.to_string());
 
-    // Try to get source content for context lines
     let (context_line, pre_context, post_context) =
         if let Some(source) = sm.get_source_contents(src_id) {
             extract_context(source, orig_line as usize)

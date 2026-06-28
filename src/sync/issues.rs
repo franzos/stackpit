@@ -27,14 +27,12 @@ pub async fn sync_issue_statuses(
         for issue in &page.issues {
             let sentry_status = normalize_status(&issue.status);
 
-            // We only care about resolved/ignored here -- new events already
-            // handle the resolved -> unresolved transition on their own
+            // Only resolved/ignored matter; new events drive resolved -> unresolved.
             if sentry_status == "unresolved" {
                 synced += 1;
                 continue;
             }
 
-            // Match by sentry_group_id first (reliable), fall back to title if needed
             let changed = queries::issues::update_status_by_group_id(
                 pool,
                 project.id,

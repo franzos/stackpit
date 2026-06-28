@@ -22,59 +22,147 @@
     <div>
       <h1 class="text-mono">{{ trace_id|truncate_id }}</h1>
       <p class="text-muted text-[13px] mt-1 text-mono break-all">
-        trace_id: {{ trace_id }} · {{ spans.len() }} span
-        {% if spans.len() != 1 %}s{% endif %}
+        trace_id: {{ trace_id }} ·
+        {{- " " }}{{ waterfall.span_count }} span
+        {%- if waterfall.span_count != 1 %}s{% endif %}
+        · {{ waterfall.total_ms }}ms total
+        {% if waterfall.truncated %}· showing first {{ waterfall.rows.len() }} of {{ waterfall.span_count }}{% endif %}
       </p>
     </div>
   </div>
 
-  {% if spans.is_empty() %}
+  {% if waterfall.rows.is_empty() %}
     <div class="card">
       <p class="empty">No spans found for this trace.</p>
     </div>
   {% else %}
-    <div class="card overflow-hidden">
-      <div class="table-wrap">
-        <table class="table">
-          <thead>
-            <tr>
-              <th>Span ID</th>
-              <th>Parent</th>
-              <th>Op</th>
-              <th>Description</th>
-              <th>Status</th>
-              <th>Duration</th>
-              <th>Timestamp</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for span in spans %}
-              <tr>
-                <td class="text-mono">{{ span.span_id|truncate_id }}</td>
-                <td class="text-mono">
-                  {% match span.parent_span_id %}{% when Some with (p) %}{{ p|truncate_id }}{% when None %}<em class="text-muted">root</em>{% endmatch %}
-                </td>
-                <td class="text-mono">
-                  {% match span.op %}{% when Some with (op) %}{{ op }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
-                </td>
-                <td class="truncate-cell text-mono text-[12px]">
-                  {% match span.description %}{% when Some with (d) %}{{ d }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
-                </td>
-                <td>
-                  {% match span.status %}{% when Some with (s) %}<span class="badge badge-neutral">{{ s }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
-                </td>
-                <td class="text-tabular">
-                  {% match span.duration_ms %}{% when Some with (ms) %}{{ ms }}ms{% when None %}<span class="text-muted">—</span>{% endmatch %}
-                </td>
-                <td class="text-muted">
-                  <time datetime="{{ span.timestamp|format_ts }}"
-                        title="{{ span.timestamp|format_ts }}">{{ span.timestamp|format_relative }}</time>
-                </td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
+    <div class="card card-pad">
+      {# column header + time axis, aligned with the span rows below #}
+      <div class="flex items-end gap-3 pb-2 text-[11px] text-muted uppercase tracking-wide"
+           style="border-bottom: 1px solid var(--color-outline-variant)">
+        <div class="shrink-0" style="width: 260px">Span</div>
+        <div class="grow relative" style="height: 14px">
+          <span class="absolute bottom-0 text-tabular normal-case" style="left: 0">0ms</span>
+          <span class="absolute bottom-0 text-tabular normal-case"
+                style="left: 25%;
+                       transform: translateX(-50%)">{{ waterfall.total_ms / 4 }}ms</span>
+          <span class="absolute bottom-0 text-tabular normal-case"
+                style="left: 50%;
+                       transform: translateX(-50%)">{{ waterfall.total_ms / 2 }}ms</span>
+          <span class="absolute bottom-0 text-tabular normal-case"
+                style="left: 75%;
+                       transform: translateX(-50%)">{{ waterfall.total_ms * 3 / 4 }}ms</span>
+          <span class="absolute bottom-0 text-tabular normal-case" style="right: 0">{{ waterfall.total_ms }}ms</span>
+        </div>
+        <div class="shrink-0 text-right" style="width: 60px">Duration</div>
       </div>
+
+      {# root row: the transaction this trace belongs to, spanning the full width #}
+      {% match root %}
+      {% when Some with (r) %}
+      <div class="flex items-center gap-3 py-2"
+           style="border-bottom: 1px solid var(--color-outline-variant)">
+        <div class="shrink-0 font-semibold text-[12px]"
+             style="width: 260px;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap">
+          {% match r.name %}{% when Some with (n) %}{{ n }}{% when None %}<span class="text-muted">(trace root)</span>{% endmatch %}
+        </div>
+        <div class="grow relative"
+             style="height: 20px;
+                    background-image: linear-gradient(to right, var(--color-outline-variant) 1px, transparent 1px);
+                    background-size: 25% 100%">
+          <div class="rounded-sm"
+               style="position: absolute;
+                      top: 2px;
+                      left: 0;
+                      width: {% match r.duration_ms %}{% when Some with (ms) %}{{ ms * 100 / waterfall.total_ms }}{% when None %}100{% endmatch %}%;
+                      height: 16px;
+                      background-color: var(--color-primary);
+                      opacity: 0.85"></div>
+        </div>
+        <div class="shrink-0 text-right text-tabular text-[12px]"
+             style="width: 60px">
+          {% match r.duration_ms %}{% when Some with (ms) %}{{ ms }}ms{% when None %}{{ waterfall.total_ms }}ms{% endmatch %}
+        </div>
+      </div>
+      {% when None %}
+    {% endmatch %}
+
+    {# one row per span: label · timeline bar · duration #}
+    <div class="text-[12px]">
+      {% for row in waterfall.rows %}
+        <div class="flex items-center gap-3 py-1"
+             style="border-bottom: 1px solid var(--color-outline-variant)">
+          <div class="shrink-0"
+               style="width: 260px;
+                      padding-left: {{ row.depth * 16 }}px;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap">
+            {% if row.is_error() %}<span title="error" style="color: var(--color-error)">●</span>{% endif %}
+            {% match row.op %}{% when Some with (op) %}<span class="font-medium text-mono">{{ op }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
+            {% match row.description %}{% when Some with (d) %} <span class="text-muted">{{ d }}</span>{% when None %}{% endmatch %}
+          </div>
+          <div class="grow relative"
+               style="height: 20px;
+                      background-image: linear-gradient(to right, var(--color-outline-variant) 1px, transparent 1px);
+                      background-size: 25% 100%">
+            <div class="rounded-sm"
+                 title="{% match row.op %}{% when Some with (op) %}{{ op }}{% when None %}span{% endmatch %} · {% match row.duration_ms %}{% when Some with (ms) %}{{ ms }}ms{% when None %}?{% endmatch %}"
+                 style="position: absolute;
+                        top: 2px;
+                        left: {{ row.offset_pct }}%;
+                        width: {{ row.width_pct }}%;
+                        height: 16px;
+                        background-color: {{ row.bar_color() }}"></div>
+          </div>
+          <div class="shrink-0 text-right text-tabular text-muted"
+               style="width: 60px">
+            {% match row.duration_ms %}{% when Some with (ms) %}{{ ms }}ms{% when None %}—{% endmatch %}
+          </div>
+        </div>
+      {% endfor %}
     </div>
-  {% endif %}
+  </div>
+{% endif %}
+
+{% if !errors.is_empty() %}
+  <div class="card overflow-hidden mt-4">
+    <div class="card-pad pb-0">
+      <h2 class="text-[14px] font-semibold">Correlated errors</h2>
+    </div>
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Level</th>
+            <th>Title</th>
+            <th>Timestamp</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for err in errors %}
+            <tr>
+              <td>
+                {% match err.level %}{% when Some with (lvl) %}<span class="badge badge-{{ lvl }}">{{ lvl }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
+              </td>
+              <td class="truncate-cell">
+                <a class="breadcrumb-link"
+                   href="/web/projects/{{ project_id }}/events/{{ err.event_id }}/">
+                  {% match err.title %}{% when Some with (t) %}{{ t }}{% when None %}<span class="text-mono">{{ err.event_id|truncate_id }}</span>{% endmatch %}
+                </a>
+              </td>
+              <td class="text-muted">
+                <time datetime="{{ err.timestamp|format_ts }}"
+                      title="{{ err.timestamp|format_ts }}">{{ err.timestamp|format_relative }}</time>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% endif %}
 {% endblock %}

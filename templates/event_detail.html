@@ -53,7 +53,7 @@
              href="/web/projects/{{ event.project_id }}/events/{{ prev_id }}/">« Newer</a>
           {% when None %}<span class="btn btn-ghost opacity-50 pointer-events-none">« Newer</span>{% endmatch %}
           <span>{{ event_nav.total }} event
-            {% if event_nav.total != 1 %}s{% endif %}
+            {%- if event_nav.total != 1 %}s{% endif %}
           in issue</span>
           {% match event_nav.next_event_id %}{% when Some with (next_id) %}
           <a class="btn btn-ghost"
@@ -62,6 +62,31 @@
         </nav>
         {% when None %}{% endmatch %}
       {% endif %}
+
+      {% match own_feedback %}{% when Some with (fb) %}
+      <details open class="card">
+        <summary class="card-header cursor-pointer select-none">User feedback</summary>
+        <div class="p-4 space-y-3">
+          <p class="text-[13px]">
+            <strong>{% match fb.name %}{% when Some with (n) %}{{ n }}{% when None %}Anonymous{% endmatch %}</strong>
+            {% match fb.email %}{% when Some with (e) %} <span class="text-muted">&lt;{{ e }}&gt;</span>{% when None %}{% endmatch %}
+          </p>
+          {% match fb.comments %}{% when Some with (c) %}
+          <blockquote class="pl-3 border-l-2 border-outline-variant text-muted"
+                      style="white-space: pre-wrap">
+            {{- c -}}
+          </blockquote>
+          {% when None %}{% endmatch %}
+          {% match fb.event_id %}{% when Some with (eid) %}
+          <p class="text-[12px] text-muted">
+            Related event:
+            <a class="breadcrumb-link text-mono"
+               href="/web/projects/{{ event.project_id }}/events/{{ eid }}/">{{ eid|truncate_id }}</a>
+          </p>
+          {% when None %}{% endmatch %}
+        </div>
+      </details>
+      {% when None %}{% endmatch %}
 
       {% if !exceptions.is_empty() %}
         <details open class="card">
@@ -108,7 +133,9 @@
                           {% match frame.context_line %}{% when Some with (cl) %}
                           <li class="current-line">{{ cl }}</li>
                           {% when None %}{% endmatch %}
-                          {% for line in frame.post_context %}<li>{{ line }}</li>{% endfor %}
+                          {% for line in frame.post_context %}
+                            <li>{{ line }}</li>
+                          {% endfor %}
                         </ol>
                       </div>
                     {% endif %}
@@ -322,6 +349,20 @@
               </tbody>
             </table>
           </div>
+        </details>
+      {% endif %}
+
+      {% if !measurements.is_empty() %}
+        <details open class="card">
+          <summary class="card-header cursor-pointer select-none">Web Vitals</summary>
+          <dl class="meta-grid p-4">
+            {% for m in measurements %}
+              <dt>{{ m.label }}</dt>
+              <dd>
+                {% match m.rating_class() %}{% when Some with (c) %}<span class="{{ c }}">{{ m.value }}</span>{% when None %}{{ m.value }}{% endmatch %}
+              </dd>
+            {% endfor %}
+          </dl>
         </details>
       {% endif %}
 

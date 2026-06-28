@@ -39,26 +39,6 @@ struct IssueListTemplate {
     csrf_token: String,
 }
 
-#[derive(Template)]
-#[template(path = "transaction_list.html")]
-struct TransactionListTemplate {
-    project_id: u64,
-    result: PagedResult<queries::IssueSummary>,
-    query: String,
-    level: String,
-    status: String,
-    sort: String,
-    release: String,
-    tag: String,
-    period: String,
-    releases: Vec<String>,
-    filter_qs: String,
-    base_qs: String,
-    nav: ProjectNavCounts,
-    chart_svg: String,
-    csrf_token: String,
-}
-
 pub async fn handler(
     BrowserDefaults(defaults): BrowserDefaults,
     RawQuery(raw_qs): RawQuery,
@@ -76,25 +56,6 @@ pub async fn handler(
         return Ok(axum::response::Redirect::to(&url).into_response());
     }
     issue_or_transaction_handler(&pool, project_id, params, "event", csrf).await
-}
-
-pub async fn transaction_handler(
-    BrowserDefaults(defaults): BrowserDefaults,
-    RawQuery(raw_qs): RawQuery,
-    ReadPool(pool): ReadPool,
-    Csrf(csrf): Csrf,
-    Path(project_id): Path<u64>,
-    Query(params): Query<ListParams>,
-) -> Result<axum::response::Response, HtmlError> {
-    if let Some(url) = defaults_redirect_url(
-        &format!("/web/projects/{project_id}/transactions/"),
-        raw_qs.as_deref(),
-        &defaults,
-        &["status", "level", "period"],
-    ) {
-        return Ok(axum::response::Redirect::to(&url).into_response());
-    }
-    issue_or_transaction_handler(&pool, project_id, params, "transaction", csrf).await
 }
 
 async fn issue_or_transaction_handler(
@@ -145,41 +106,21 @@ async fn issue_or_transaction_handler(
         &sort_str,
     );
 
-    if item_type == "transaction" {
-        Ok(render_template(&TransactionListTemplate {
-            project_id,
-            result,
-            query: query_str,
-            level: level_str,
-            status: status_str,
-            sort: sort_str,
-            release: release_str,
-            tag: tag_str,
-            period: period_str,
-            releases,
-            filter_qs,
-            base_qs,
-            nav,
-            chart_svg,
-            csrf_token: csrf,
-        }))
-    } else {
-        Ok(render_template(&IssueListTemplate {
-            project_id,
-            result,
-            query: query_str,
-            level: level_str,
-            status: status_str,
-            sort: sort_str,
-            release: release_str,
-            tag: tag_str,
-            period: period_str,
-            releases,
-            filter_qs,
-            base_qs,
-            nav,
-            chart_svg,
-            csrf_token: csrf,
-        }))
-    }
+    Ok(render_template(&IssueListTemplate {
+        project_id,
+        result,
+        query: query_str,
+        level: level_str,
+        status: status_str,
+        sort: sort_str,
+        release: release_str,
+        tag: tag_str,
+        period: period_str,
+        releases,
+        filter_qs,
+        base_qs,
+        nav,
+        chart_svg,
+        csrf_token: csrf,
+    }))
 }

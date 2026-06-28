@@ -92,23 +92,18 @@ struct ProjectFiltersTemplate {
     project_id: u64,
     nav: crate::queries::ProjectNavCounts,
     message: Option<String>,
-    // -- tier 1: quick toggles --
     browser_extensions_enabled: bool,
     localhost_enabled: bool,
     message_filters: Vec<(i64, String)>,
-    // -- tier 2: rate limits & string filters --
     rate_limit: u32,
     environment_filters: Vec<(i64, String)>,
     release_filters: Vec<(i64, String)>,
     ua_filters: Vec<(i64, String)>,
-    // -- tier 3: advanced rules --
     filter_rules: Vec<queries::RawFilterRule>,
     ip_blocks: Vec<(i64, String)>,
     discard_stats: Vec<(String, String, u64)>,
     csrf_token: String,
 }
-
-// — GET handler
 
 pub async fn handler(
     State(state): State<AppState>,
@@ -196,8 +191,6 @@ async fn build_filters_template(
     })
 }
 
-// — Form structs
-
 #[derive(Deserialize)]
 pub struct InboundFilterForm {
     #[serde(default)]
@@ -236,8 +229,6 @@ pub struct RuleForm {
     #[serde(default)]
     pub priority: i32,
 }
-
-// — POST handlers
 
 pub async fn set_inbound_filters(
     State(state): State<AppState>,

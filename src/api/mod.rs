@@ -74,7 +74,6 @@ pub fn routes() -> Router<AppState> {
             get(events::latest_for_issue),
         )
         .route("/api/v1/events/{event_id}/", get(events::get))
-        // Alert rules
         .route(
             "/api/v1/alerts/rules",
             get(alerts::list_rules).post(alerts::create_rule),
@@ -83,7 +82,6 @@ pub fn routes() -> Router<AppState> {
             "/api/v1/alerts/rules/{id}",
             put(alerts::update_rule).delete(alerts::delete_rule),
         )
-        // Digest schedules
         .route(
             "/api/v1/digests",
             get(alerts::list_digests).post(alerts::create_digest),

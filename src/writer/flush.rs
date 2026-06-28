@@ -9,6 +9,9 @@ use std::time::Instant;
 use super::accumulator::Accumulators;
 use super::msg::WriteMsg;
 
+/// Stored (users_hll, users_crashed_hll) blobs for a session-aggregate row.
+type HllPair = (Option<Vec<u8>>, Option<Vec<u8>>);
+
 /// Max fingerprints per IN-clause chunk. 1 bind param each;
 /// SQLite limit is 32766, use 30000 for a comfortable margin.
 const TRIGGER_CHUNK_SIZE: usize = 30_000;
@@ -75,6 +78,8 @@ pub(super) async fn flush_batch(
             if should_agg {
                 accumulators.issues.clear();
                 accumulators.tags.clear();
+                accumulators.session_aggregates.clear();
+                accumulators.transaction_metrics.clear();
                 send_notifications(pending_notifications, notify_tx);
                 accumulators.last_flush = Instant::now();
             }
@@ -97,6 +102,8 @@ pub(super) async fn flush_batch(
                     if should_agg {
                         accumulators.issues.clear();
                         accumulators.tags.clear();
+                        accumulators.session_aggregates.clear();
+                        accumulators.transaction_metrics.clear();
                         send_notifications(pending_notifications, notify_tx);
                         accumulators.last_flush = Instant::now();
                     }
@@ -110,6 +117,8 @@ pub(super) async fn flush_batch(
                     if should_agg {
                         accumulators.issues.clear();
                         accumulators.tags.clear();
+                        accumulators.session_aggregates.clear();
+                        accumulators.transaction_metrics.clear();
                         accumulators.last_flush = Instant::now();
                     }
                     false
@@ -161,7 +170,6 @@ async fn do_flush_inner<'a>(
     tx: &mut sqlx::Transaction<'_, crate::db::Db>,
     batch: &'a [WriteMsg],
 ) -> Result<Vec<&'a StorableEvent>> {
-    // Collect event references and track which messages have attachments
     let mut all_events: Vec<&StorableEvent> = Vec::with_capacity(batch.len());
     let mut attachment_msgs: Vec<usize> = Vec::new();
 
@@ -178,10 +186,8 @@ async fn do_flush_inner<'a>(
         }
     }
 
-    // Bulk-insert all events at once
     event_writes::insert_event_rows_bulk(tx, &all_events).await?;
 
-    // Insert attachments individually
     for &idx in &attachment_msgs {
         if let WriteMsg::EventWithAttachments(_, attachments) = &batch[idx] {
             for att in attachments {
@@ -206,7 +212,11 @@ pub(super) async fn flush_aggregation(
     accumulators: &mut Accumulators,
     notify_tx: Option<&tokio::sync::mpsc::Sender<crate::notify::NotificationEvent>>,
 ) -> Result<()> {
-    if accumulators.issues.is_empty() && accumulators.tags.is_empty() {
+    if accumulators.issues.is_empty()
+        && accumulators.tags.is_empty()
+        && accumulators.session_aggregates.is_empty()
+        && accumulators.transaction_metrics.is_empty()
+    {
         accumulators.last_flush = Instant::now();
         return Ok(());
     }
@@ -223,6 +233,8 @@ pub(super) async fn flush_aggregation(
 
     accumulators.issues.clear();
     accumulators.tags.clear();
+    accumulators.session_aggregates.clear();
+    accumulators.transaction_metrics.clear();
     send_notifications(pending, notify_tx);
     accumulators.last_flush = Instant::now();
     Ok(())
@@ -300,21 +312,14 @@ async fn flush_aggregation_inner(
     let tag_count = accumulators.tags.len();
     let mut threshold_candidates = Vec::new();
 
-    // ---------------------------------------------------------------
-    // 1. Batch detect triggers: single SELECT for existing issue statuses
-    // ---------------------------------------------------------------
     let fingerprints: Vec<&str> = accumulators.issues.keys().map(|s| s.as_str()).collect();
     let existing_statuses = detect_existing_issue_statuses(tx, &fingerprints).await;
 
-    // ---------------------------------------------------------------
-    // 2. Build notifications from pre-fetched statuses
-    // ---------------------------------------------------------------
     let now = chrono::Utc::now().timestamp();
 
     for (fingerprint, delta) in &accumulators.issues {
         match existing_statuses.get(fingerprint.as_str()) {
             None => {
-                // Not in issues table -> new issue
                 pending.push(crate::notify::NotificationEvent {
                     trigger: crate::notify::NotifyTrigger::NewIssue,
                     project_id: delta.project_id,
@@ -339,7 +344,7 @@ async fn flush_aggregation_inner(
                 });
             }
             _ => {
-                // Existing, not resolved -> candidate for threshold alerts (post-TX)
+                // existing, not resolved: candidate for threshold alerts (post-TX)
                 threshold_candidates.push(ThresholdCandidate {
                     fingerprint: fingerprint.clone(),
                     project_id: delta.project_id,
@@ -350,9 +355,6 @@ async fn flush_aggregation_inner(
         }
     }
 
-    // ---------------------------------------------------------------
-    // 3. Batch issue UPSERTs via multi-row INSERT ... ON CONFLICT
-    // ---------------------------------------------------------------
     struct IssueRow<'a> {
         fingerprint: &'a str,
         project_id: i64,
@@ -429,9 +431,6 @@ async fn flush_aggregation_inner(
         builder.build().execute(&mut **tx).await?;
     }
 
-    // ---------------------------------------------------------------
-    // 4. Batch HLL read-modify-write
-    // ---------------------------------------------------------------
     let hll_fingerprints: Vec<&str> = accumulators
         .issues
         .iter()
@@ -440,7 +439,6 @@ async fn flush_aggregation_inner(
         .collect();
 
     if !hll_fingerprints.is_empty() {
-        // Batch read all existing HLL registers in one query
         let mut existing_hlls: HashMap<String, Vec<u8>> = HashMap::new();
         for chunk in hll_fingerprints.chunks(TRIGGER_CHUNK_SIZE) {
             let mut builder = QueryBuilder::<crate::db::Db>::new(
@@ -464,7 +462,7 @@ async fn flush_aggregation_inner(
             }
         }
 
-        // Merge in memory, write back individually (each row has unique blob data)
+        // write back individually: each row has unique blob data
         for fp in &hll_fingerprints {
             let delta = &accumulators.issues[*fp];
             let merged = match existing_hlls.get(*fp) {
@@ -485,13 +483,317 @@ async fn flush_aggregation_inner(
         }
     }
 
-    // ---------------------------------------------------------------
-    // 5. Flush tag counts (already batched)
-    // ---------------------------------------------------------------
     event_writes::bulk_upsert_tag_counts(tx, &accumulators.tags).await?;
+    flush_session_aggregates(tx, accumulators).await?;
+    flush_transaction_metrics(tx, accumulators).await?;
 
     tracing::debug!("aggregation flush: {issue_count} issues, {tag_count} tag entries");
     Ok(threshold_candidates)
+}
+
+/// Max session-aggregate rows per multi-row INSERT chunk. 11 bind params per
+/// row; 32766 / 11 = 2978, use 2700 for margin.
+const SESSION_UPSERT_CHUNK_SIZE: usize = 2700;
+
+/// UPSERT session rollups and merge their user HLL sketches in place.
+async fn flush_session_aggregates(
+    tx: &mut sqlx::Transaction<'_, crate::db::Db>,
+    accumulators: &Accumulators,
+) -> Result<()> {
+    use crate::models::HLL_REGISTER_COUNT;
+    use simple_hll::HyperLogLog;
+
+    if accumulators.session_aggregates.is_empty() {
+        return Ok(());
+    }
+
+    let now = chrono::Utc::now().timestamp();
+
+    struct SessRow<'a> {
+        project_id: i64,
+        release: &'a str,
+        environment: &'a str,
+        day_bucket: i64,
+        total: i64,
+        crashed: i64,
+        errored: i64,
+        abnormal: i64,
+        has_aggregate: i64,
+        first_seen: i64,
+        last_seen: i64,
+    }
+
+    let mut rows: Vec<SessRow<'_>> = Vec::with_capacity(accumulators.session_aggregates.len());
+    for ((project_id, release, environment, day_bucket), delta) in &accumulators.session_aggregates
+    {
+        let first_seen = if delta.first_seen == i64::MAX {
+            now
+        } else {
+            delta.first_seen
+        };
+        let last_seen = if delta.last_seen == i64::MIN {
+            now
+        } else {
+            delta.last_seen
+        };
+        rows.push(SessRow {
+            project_id: *project_id as i64,
+            release,
+            environment,
+            day_bucket: *day_bucket,
+            total: delta.total as i64,
+            crashed: delta.crashed as i64,
+            errored: delta.errored as i64,
+            abnormal: delta.abnormal as i64,
+            has_aggregate: i64::from(delta.has_aggregate),
+            first_seen,
+            last_seen,
+        });
+    }
+
+    for chunk in rows.chunks(SESSION_UPSERT_CHUNK_SIZE) {
+        let mut builder = QueryBuilder::<crate::db::Db>::new(
+            "INSERT INTO session_aggregates (project_id, release, environment, day_bucket, sessions_total, sessions_crashed, sessions_errored, sessions_abnormal, has_aggregate, first_seen, last_seen) ",
+        );
+
+        builder.push_values(chunk.iter(), |mut b, row| {
+            b.push_bind(row.project_id);
+            b.push_bind(row.release);
+            b.push_bind(row.environment);
+            b.push_bind(row.day_bucket);
+            b.push_bind(row.total);
+            b.push_bind(row.crashed);
+            b.push_bind(row.errored);
+            b.push_bind(row.abnormal);
+            b.push_bind(row.has_aggregate);
+            b.push_bind(row.first_seen);
+            b.push_bind(row.last_seen);
+        });
+
+        #[cfg(feature = "sqlite")]
+        builder.push(
+            " ON CONFLICT(project_id, release, environment, day_bucket) DO UPDATE SET \
+                 sessions_total = session_aggregates.sessions_total + excluded.sessions_total, \
+                 sessions_crashed = session_aggregates.sessions_crashed + excluded.sessions_crashed, \
+                 sessions_errored = session_aggregates.sessions_errored + excluded.sessions_errored, \
+                 sessions_abnormal = session_aggregates.sessions_abnormal + excluded.sessions_abnormal, \
+                 has_aggregate = MAX(session_aggregates.has_aggregate, excluded.has_aggregate), \
+                 first_seen = MIN(session_aggregates.first_seen, excluded.first_seen), \
+                 last_seen = MAX(session_aggregates.last_seen, excluded.last_seen)",
+        );
+        #[cfg(not(feature = "sqlite"))]
+        builder.push(
+            " ON CONFLICT(project_id, release, environment, day_bucket) DO UPDATE SET \
+                 sessions_total = session_aggregates.sessions_total + excluded.sessions_total, \
+                 sessions_crashed = session_aggregates.sessions_crashed + excluded.sessions_crashed, \
+                 sessions_errored = session_aggregates.sessions_errored + excluded.sessions_errored, \
+                 sessions_abnormal = session_aggregates.sessions_abnormal + excluded.sessions_abnormal, \
+                 has_aggregate = GREATEST(session_aggregates.has_aggregate, excluded.has_aggregate), \
+                 first_seen = LEAST(session_aggregates.first_seen, excluded.first_seen), \
+                 last_seen = GREATEST(session_aggregates.last_seen, excluded.last_seen)",
+        );
+
+        builder.build().execute(&mut **tx).await?;
+    }
+
+    // HLL read-modify-write per (project, release, environment, day) with user data.
+    for ((project_id, release, environment, day_bucket), delta) in &accumulators.session_aggregates
+    {
+        if !delta.has_user_data {
+            continue;
+        }
+
+        let existing: Option<HllPair> = sqlx::query_as(sql!(
+            "SELECT users_hll, users_crashed_hll FROM session_aggregates \
+             WHERE project_id = ?1 AND release = ?2 AND environment = ?3 AND day_bucket = ?4"
+        ))
+        .bind(*project_id as i64)
+        .bind(release)
+        .bind(environment)
+        .bind(*day_bucket)
+        .fetch_optional(&mut **tx)
+        .await?;
+
+        let merge = |existing: Option<Vec<u8>>, fresh: &HyperLogLog<12>| -> Vec<u8> {
+            match existing {
+                Some(buf) if buf.len() == HLL_REGISTER_COUNT => {
+                    let mut base = HyperLogLog::with_registers(buf);
+                    base.merge(fresh);
+                    base.get_registers().to_vec()
+                }
+                _ => fresh.get_registers().to_vec(),
+            }
+        };
+
+        let (cur_users, cur_crashed) = existing.unwrap_or((None, None));
+        let users_blob = merge(cur_users, &delta.users_hll);
+        let crashed_blob = merge(cur_crashed, &delta.users_crashed_hll);
+
+        sqlx::query(sql!(
+            "UPDATE session_aggregates SET users_hll = ?1, users_crashed_hll = ?2 \
+             WHERE project_id = ?3 AND release = ?4 AND environment = ?5 AND day_bucket = ?6"
+        ))
+        .bind(users_blob)
+        .bind(crashed_blob)
+        .bind(*project_id as i64)
+        .bind(release)
+        .bind(environment)
+        .bind(*day_bucket)
+        .execute(&mut **tx)
+        .await?;
+    }
+
+    Ok(())
+}
+
+/// Max transaction-metric rows per multi-row INSERT chunk. 32 bind params per
+/// row (3 key + count/sum/failed + 24 buckets + 2 seen); 32766 / 32 = 1023,
+/// use 1000 for margin.
+const TXN_UPSERT_CHUNK_SIZE: usize = 1000;
+
+/// Column list for the histogram buckets, used by both INSERT and the
+/// `existing + excluded` UPDATE clause. Keep in lockstep with the migration.
+const TXN_BUCKET_COLS: &str = "bucket_0, bucket_1, bucket_2, bucket_3, bucket_4, bucket_5, bucket_6, bucket_7, bucket_8, bucket_9, bucket_10, bucket_11, bucket_12, bucket_13, bucket_14, bucket_15, bucket_16, bucket_17, bucket_18, bucket_19, bucket_20, bucket_21, bucket_22, bucket_23";
+
+/// UPSERT transaction perf rollups and merge their user HLL sketches in place.
+async fn flush_transaction_metrics(
+    tx: &mut sqlx::Transaction<'_, crate::db::Db>,
+    accumulators: &Accumulators,
+) -> Result<()> {
+    use crate::models::HLL_REGISTER_COUNT;
+    use simple_hll::HyperLogLog;
+
+    if accumulators.transaction_metrics.is_empty() {
+        return Ok(());
+    }
+
+    let now = chrono::Utc::now().timestamp();
+
+    struct TxnRow<'a> {
+        project_id: i64,
+        name: &'a str,
+        hour_bucket: i64,
+        count: i64,
+        sum_duration_ms: i64,
+        failed_count: i64,
+        buckets: [i64; 24],
+        first_seen: i64,
+        last_seen: i64,
+    }
+
+    let mut rows: Vec<TxnRow<'_>> = Vec::with_capacity(accumulators.transaction_metrics.len());
+    for ((project_id, name, hour_bucket), delta) in &accumulators.transaction_metrics {
+        let first_seen = if delta.first_seen == i64::MAX {
+            now
+        } else {
+            delta.first_seen
+        };
+        let last_seen = if delta.last_seen == i64::MIN {
+            now
+        } else {
+            delta.last_seen
+        };
+        let mut buckets = [0i64; 24];
+        for (i, b) in delta.buckets.iter().enumerate() {
+            buckets[i] = *b as i64;
+        }
+        rows.push(TxnRow {
+            project_id: *project_id as i64,
+            name,
+            hour_bucket: *hour_bucket,
+            count: delta.count as i64,
+            sum_duration_ms: delta.sum_duration_ms as i64,
+            failed_count: delta.failed_count as i64,
+            buckets,
+            first_seen,
+            last_seen,
+        });
+    }
+
+    // Build the "col = table.col + excluded.col" list for the 24 buckets once.
+    let bucket_updates: String = (0..24)
+        .map(|i| format!("bucket_{i} = transaction_metrics.bucket_{i} + excluded.bucket_{i}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    #[cfg(feature = "sqlite")]
+    let (min_fn, max_fn) = ("MIN", "MAX");
+    #[cfg(not(feature = "sqlite"))]
+    let (min_fn, max_fn) = ("LEAST", "GREATEST");
+
+    let conflict_clause = format!(
+        " ON CONFLICT(project_id, transaction_name, hour_bucket) DO UPDATE SET \
+             count = transaction_metrics.count + excluded.count, \
+             sum_duration_ms = transaction_metrics.sum_duration_ms + excluded.sum_duration_ms, \
+             failed_count = transaction_metrics.failed_count + excluded.failed_count, \
+             {bucket_updates}, \
+             first_seen = {min_fn}(transaction_metrics.first_seen, excluded.first_seen), \
+             last_seen = {max_fn}(transaction_metrics.last_seen, excluded.last_seen)"
+    );
+
+    let insert_prefix = format!(
+        "INSERT INTO transaction_metrics (project_id, transaction_name, hour_bucket, count, sum_duration_ms, failed_count, {TXN_BUCKET_COLS}, first_seen, last_seen) "
+    );
+
+    for chunk in rows.chunks(TXN_UPSERT_CHUNK_SIZE) {
+        let mut builder = QueryBuilder::<crate::db::Db>::new(&insert_prefix);
+
+        builder.push_values(chunk.iter(), |mut b, row| {
+            b.push_bind(row.project_id);
+            b.push_bind(row.name);
+            b.push_bind(row.hour_bucket);
+            b.push_bind(row.count);
+            b.push_bind(row.sum_duration_ms);
+            b.push_bind(row.failed_count);
+            for bucket in &row.buckets {
+                b.push_bind(*bucket);
+            }
+            b.push_bind(row.first_seen);
+            b.push_bind(row.last_seen);
+        });
+
+        builder.push(&conflict_clause);
+        builder.build().execute(&mut **tx).await?;
+    }
+
+    // HLL read-modify-write per (project, transaction, hour) with user data.
+    for ((project_id, name, hour_bucket), delta) in &accumulators.transaction_metrics {
+        if !delta.has_user_data {
+            continue;
+        }
+
+        let existing: Option<(Option<Vec<u8>>,)> = sqlx::query_as(sql!(
+            "SELECT users_hll FROM transaction_metrics \
+             WHERE project_id = ?1 AND transaction_name = ?2 AND hour_bucket = ?3"
+        ))
+        .bind(*project_id as i64)
+        .bind(name)
+        .bind(*hour_bucket)
+        .fetch_optional(&mut **tx)
+        .await?;
+
+        let merged = match existing.and_then(|(b,)| b) {
+            Some(buf) if buf.len() == HLL_REGISTER_COUNT => {
+                let mut base = HyperLogLog::<12>::with_registers(buf);
+                base.merge(&delta.users_hll);
+                base.get_registers().to_vec()
+            }
+            _ => delta.users_hll.get_registers().to_vec(),
+        };
+
+        sqlx::query(sql!(
+            "UPDATE transaction_metrics SET users_hll = ?1 \
+             WHERE project_id = ?2 AND transaction_name = ?3 AND hour_bucket = ?4"
+        ))
+        .bind(merged)
+        .bind(*project_id as i64)
+        .bind(name)
+        .bind(*hour_bucket)
+        .execute(&mut **tx)
+        .await?;
+    }
+
+    Ok(())
 }
 
 /// Data needed to check threshold alerts after the write transaction commits.
@@ -520,8 +822,6 @@ async fn check_threshold_alerts(
     if candidates.is_empty() {
         return;
     }
-
-    // -- Step 1: fetch all enabled threshold rules once --
 
     let all_rules = match sqlx::query(sql!(
         "SELECT id, project_id, fingerprint, threshold_count, window_secs, cooldown_secs
@@ -568,8 +868,6 @@ async fn check_threshold_alerts(
         return;
     }
 
-    // -- Step 2: match rules to candidates in memory --
-
     struct RuleMatch {
         rule_idx: usize,
         candidate_idx: usize,
@@ -595,8 +893,6 @@ async fn check_threshold_alerts(
     if matches.is_empty() {
         return;
     }
-
-    // -- Step 3: batch-fetch cooldown state --
 
     let unique_rule_ids: Vec<i64> = {
         let mut v: Vec<i64> = rules.iter().map(|r| r.id).collect();
@@ -645,8 +941,6 @@ async fn check_threshold_alerts(
 
     let now = chrono::Utc::now().timestamp();
 
-    // -- Step 4: filter by cooldown, group remaining by window --
-
     struct PendingCheck {
         rule_idx: usize,
         candidate_idx: usize,
@@ -673,8 +967,6 @@ async fn check_threshold_alerts(
     if by_window.is_empty() {
         return;
     }
-
-    // -- Step 5: batch COUNT per window (typically 1-2 distinct windows) --
 
     let mut event_counts: BTreeMap<(i64, String), i64> = BTreeMap::new();
     for (&window, checks) in &by_window {
@@ -708,8 +1000,6 @@ async fn check_threshold_alerts(
         }
     }
 
-    // -- Step 6: evaluate thresholds, fire notifications, update state --
-
     for (&window, checks) in &by_window {
         for check in checks {
             let rule = &rules[check.rule_idx];
@@ -723,7 +1013,6 @@ async fn check_threshold_alerts(
                 continue;
             }
 
-            // State updates are rare (only when threshold is actually exceeded)
             if let Err(e) = sqlx::query(sql!(
                 "INSERT INTO alert_state (alert_rule_id, fingerprint, last_triggered)
                  VALUES (?1, ?2, ?3)

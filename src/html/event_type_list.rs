@@ -28,6 +28,7 @@ struct UserReportListTemplate {
 struct ClientReportListTemplate {
     project_id: u64,
     result: PagedResult<EventSummary>,
+    outcomes: Vec<crate::queries::client_reports::ClientReportOutcome>,
     nav: ProjectNavCounts,
     csrf_token: String,
 }
@@ -75,11 +76,16 @@ pub async fn client_reports_handler(
 
     let result = queries::events::list_all_events(&pool, &filter, &page).await?;
 
+    let since = chrono::Utc::now().timestamp() - 30 * 86400;
+    let outcomes =
+        queries::client_reports::summarize_client_reports(&pool, project_id, since).await?;
+
     let nav = queries::projects::get_nav_counts(&pool, project_id).await;
 
     let tmpl = ClientReportListTemplate {
         project_id,
         result,
+        outcomes,
         nav,
         csrf_token: csrf,
     };

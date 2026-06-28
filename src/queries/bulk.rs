@@ -5,7 +5,7 @@ use super::types::{EventFilter, IssueFilter, IssueStatus};
 
 use crate::db::DbPool;
 
-/// Resolve a filter down to a list of fingerprints using QueryBuilder.
+/// Resolve a filter down to a list of fingerprints.
 async fn fingerprints_by_filter(
     pool: &DbPool,
     project_id: u64,

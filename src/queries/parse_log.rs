@@ -20,24 +20,17 @@ fn normalize_log_level(level: &str) -> String {
 
 pub(super) fn extract_log_timestamp(v: &serde_json::Value) -> Option<i64> {
     v.get("timestamp").and_then(|ts| {
-        // Try as float (seconds with fractional), then as integer
         if let Some(f) = ts.as_f64() {
-            // Distinguish seconds vs milliseconds vs microseconds vs nanoseconds
+            // magnitude distinguishes ns / us / ms / s, normalised to seconds
             if f > 1e18 {
                 Some((f / 1e9) as i64)
-            }
-            // nanoseconds
-            else if f > 1e15 {
+            } else if f > 1e15 {
                 Some((f / 1e6) as i64)
-            }
-            // microseconds
-            else if f > 1e12 {
+            } else if f > 1e12 {
                 Some((f / 1e3) as i64)
-            }
-            // milliseconds
-            else {
+            } else {
                 Some(f as i64)
-            } // seconds
+            }
         } else {
             ts.as_str()
                 .and_then(|s| s.parse::<f64>().ok())

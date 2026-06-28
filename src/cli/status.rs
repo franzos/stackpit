@@ -9,8 +9,6 @@ pub async fn run(config: &Config) -> Result<()> {
         database_url.starts_with("postgres://") || database_url.starts_with("postgresql://");
     let backend = if is_postgres { "PostgreSQL" } else { "SQLite" };
 
-    // --- Server ---
-
     println!("\x1b[1m  Server\x1b[0m");
     println!();
     println!("    Admin UI        {}", config.server.bind);
@@ -27,8 +25,6 @@ pub async fn run(config: &Config) -> Result<()> {
         "    Max body size   {}",
         format_bytes(config.server.max_body_size)
     );
-
-    // --- Security ---
 
     println!();
     println!("\x1b[1m  Security\x1b[0m");
@@ -82,15 +78,12 @@ pub async fn run(config: &Config) -> Result<()> {
         );
     }
 
-    // --- Storage ---
-
     println!();
     println!("\x1b[1m  Storage\x1b[0m");
     println!();
     println!("    Backend         {backend}");
 
     if is_postgres {
-        // Mask password in URL for display
         let display_url = mask_postgres_url(&database_url);
         println!("    URL             {display_url}");
     } else {
@@ -105,7 +98,6 @@ pub async fn run(config: &Config) -> Result<()> {
         } else {
             println!("    Size            \x1b[2m(file not found)\x1b[0m");
         }
-        // Check for WAL file size too
         let wal_path = format!("{db_path}-wal");
         if let Ok(meta) = std::fs::metadata(&wal_path) {
             if meta.len() > 0 {
@@ -119,8 +111,6 @@ pub async fn run(config: &Config) -> Result<()> {
     } else {
         println!("    Retention       \x1b[33mforever\x1b[0m \x1b[2m(retention_days = 0)\x1b[0m");
     }
-
-    // --- Filter ---
 
     println!();
     println!("\x1b[1m  Ingestion\x1b[0m");
@@ -157,8 +147,6 @@ pub async fn run(config: &Config) -> Result<()> {
         );
     }
 
-    // --- Live data (requires DB connection) ---
-
     let pool = match db::create_pool(&database_url).await {
         Ok(p) => p,
         Err(e) => {
@@ -168,7 +156,6 @@ pub async fn run(config: &Config) -> Result<()> {
         }
     };
 
-    // Gather stats in one go
     let project_count: i64 = sqlx::query(db::sql!("SELECT COUNT(*) FROM projects"))
         .fetch_one(&pool)
         .await
@@ -223,7 +210,6 @@ pub async fn run(config: &Config) -> Result<()> {
         println!("    Sourcemaps      {sourcemap_count}");
     }
 
-    // Oldest / newest event
     let oldest: Option<i64> = sqlx::query(db::sql!("SELECT MIN(received_at) FROM events"))
         .fetch_one(&pool)
         .await
@@ -244,8 +230,6 @@ pub async fn run(config: &Config) -> Result<()> {
         };
         println!("    Time range      {} .. {}", fmt(old), fmt(new));
     }
-
-    // --- Notifications ---
 
     if integration_count > 0 || alert_count > 0 {
         println!();

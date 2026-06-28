@@ -4,7 +4,7 @@ use crate::sync::client::SentryEvent;
 use anyhow::Result;
 use serde_json::Value;
 
-/// Takes a Sentry API event response and turns it into something we can actually store.
+/// Convert a Sentry API event response into a `StorableEvent`.
 pub fn to_storable_event(sentry_event: &SentryEvent, project_id: u64) -> Result<StorableEvent> {
     let json = &sentry_event.json;
 
@@ -24,8 +24,7 @@ pub fn to_storable_event(sentry_event: &SentryEvent, project_id: u64) -> Result<
         .timestamp()
         .unwrap_or_else(|| chrono::Utc::now().timestamp());
 
-    // The Sentry events list API omits most fields at the top level —
-    // the actual values live in the tags array instead.
+    // The events list API omits most fields at the top level; they live in tags.
     let level = json
         .get("level")
         .and_then(|v| v.as_str())
@@ -104,12 +103,12 @@ pub fn to_storable_event(sentry_event: &SentryEvent, project_id: u64) -> Result<
             })
     });
 
-    // The Sentry API response has a different shape than a raw SDK event —
-    // we need to reshape it so fingerprinting and storage work correctly.
+    // Reshape the API response into the SDK event shape so fingerprinting and
+    // storage work correctly.
     let payload_json = build_payload_for_storage(json, &api_title);
 
-    // Recompute the title from the payload — the API often returns poor titles
-    // (e.g. just "error" instead of "Error: actual message")
+    // Recompute the title; the API often returns poor ones (e.g. "error" instead
+    // of "Error: actual message").
     let title = crate::enrich::extract_title_from(&payload_json, &item_type, None).or(api_title);
     let fp = fingerprint::compute_fingerprint_from_value(project_id, &item_type, &payload_json);
     let compressed = zstd::encode_all(serde_json::to_vec(&payload_json)?.as_slice(), 3)?;
@@ -136,15 +135,18 @@ pub fn to_storable_event(sentry_event: &SentryEvent, project_id: u64) -> Result<
         parent_event_id: None,
         user_identifier,
         tags: extract_tags_from_api(json),
+        session_buckets: Vec::new(),
+        trace_id: None,
+        duration_ms: None,
+        trace_status: None,
     })
 }
 
-/// Sentry's API wraps exception/breadcrumb data inside `entries[]` — we
-/// unwrap that back into the standard event shape for storage and fingerprinting.
+/// Sentry's API wraps exception/breadcrumb data inside `entries[]`; unwrap it
+/// back into the standard event shape for storage and fingerprinting.
 fn build_payload_for_storage(api_json: &Value, title: &Option<String>) -> Value {
     let mut payload = serde_json::json!({});
 
-    // Carry over the standard top-level fields as-is
     for key in &[
         "event_id",
         "eventID",
@@ -169,7 +171,7 @@ fn build_payload_for_storage(api_json: &Value, title: &Option<String>) -> Value 
         }
     }
 
-    // The API omits many fields at the top level — fill them in from tags
+    // Fill top-level fields the API omits from the tags array.
     for tag_key in &[
         "level",
         "release",
@@ -184,14 +186,12 @@ fn build_payload_for_storage(api_json: &Value, title: &Option<String>) -> Value 
         }
     }
 
-    // Copy dateCreated as timestamp if the API didn't provide one
     if payload.get("timestamp").is_none() {
         if let Some(v) = api_json.get("dateCreated") {
             payload["timestamp"] = v.clone();
         }
     }
 
-    // Pull exception/breadcrumbs out of the entries[] wrapper
     if let Some(entries) = api_json.get("entries").and_then(|v| v.as_array()) {
         for entry in entries {
             let entry_type = entry.get("type").and_then(|v| v.as_str()).unwrap_or("");
@@ -232,7 +232,7 @@ fn build_payload_for_storage(api_json: &Value, title: &Option<String>) -> Value 
         }
     }
 
-    // If there's no exception or message but we do have a title, use that
+    // Fall back to the title as message when no exception/message/logentry.
     if payload.get("exception").is_none()
         && payload.get("message").is_none()
         && payload.get("logentry").is_none()
@@ -245,7 +245,7 @@ fn build_payload_for_storage(api_json: &Value, title: &Option<String>) -> Value 
     payload
 }
 
-/// Sentry's API returns frames in camelCase with a `context` array. We need
+/// Sentry's API returns frames in camelCase with a `context` array. Convert to
 /// snake_case keys and the standard `context_line`/`pre_context`/`post_context` split.
 fn normalize_exception_frames(exc: &mut Value) {
     let values = match exc.get_mut("values").and_then(|v| v.as_array_mut()) {
@@ -254,7 +254,6 @@ fn normalize_exception_frames(exc: &mut Value) {
     };
 
     for value in values {
-        // Both stacktrace and rawStacktrace need the same treatment
         for key in &["stacktrace", "rawStacktrace"] {
             if let Some(st) = value.get_mut(*key).and_then(|v| v.as_object_mut()) {
                 if let Some(frames) = st.get_mut("frames").and_then(|v| v.as_array_mut()) {
@@ -267,14 +266,13 @@ fn normalize_exception_frames(exc: &mut Value) {
     }
 }
 
-/// Converts a single stack frame from Sentry's API format to the SDK format we store.
+/// Convert a single stack frame from Sentry's API format to the stored SDK format.
 fn normalize_frame(frame: &mut Value) {
     let obj = match frame.as_object_mut() {
         Some(o) => o,
         None => return,
     };
 
-    // camelCase → snake_case
     if let Some(v) = obj.remove("lineNo") {
         obj.entry("lineno").or_insert(v);
     }
@@ -288,10 +286,10 @@ fn normalize_frame(frame: &mut Value) {
         obj.entry("in_app").or_insert(v);
     }
 
-    // The API gives us context as [[lineNo, text], ...] — split that into
-    // pre_context, context_line, and post_context based on the current lineno
+    // The API gives context as [[lineNo, text], ...]; split it into
+    // pre_context/context_line/post_context around the current lineno.
     if obj.contains_key("context_line") {
-        return; // already in SDK format, nothing to do
+        return; // already in SDK format
     }
 
     let context = match obj.get("context").and_then(|v| v.as_array()) {
@@ -383,7 +381,7 @@ fn extract_tags_from_api(json: &Value) -> Vec<(String, String)> {
 }
 
 fn find_tag<'a>(tags: &'a Value, key: &str) -> Option<&'a str> {
-    // Sentry's tags come in two shapes — array of objects or flat object
+    // Sentry tags come in two shapes: array of objects or flat object.
     match tags {
         Value::Array(arr) => arr.iter().find_map(|tag| {
             if tag.get("key").and_then(|v| v.as_str()) == Some(key) {

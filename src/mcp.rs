@@ -55,7 +55,7 @@ pub fn routes(runtime: &McpRuntime) -> Router<AppState> {
         .merge(protected)
 }
 
-// — RFC 9728 resource-metadata document
+// RFC 9728 resource-metadata document
 
 /// Built once at startup; Arc-shared so handlers don't re-serialize per request.
 #[derive(Debug, Clone)]
@@ -97,7 +97,7 @@ async fn well_known_handler(State(state): State<AppState>) -> impl IntoResponse 
     (StatusCode::OK, Json(body))
 }
 
-// — JSON-RPC handler
+// JSON-RPC handler
 
 const JSONRPC_PARSE_ERROR: i64 = -32700;
 const JSONRPC_INVALID_REQUEST: i64 = -32600;
@@ -152,7 +152,7 @@ fn jsonrpc_result(id: Value, result: Value) -> axum::response::Response {
         .into_response()
 }
 
-// — JIT user provisioner (LRU dampens upserts during token refresh cycles)
+// JIT user provisioner (LRU dampens upserts during token refresh cycles)
 
 const PROVISION_TTL: Duration = Duration::from_secs(300);
 const PROVISION_LRU_CAP: usize = 1024;

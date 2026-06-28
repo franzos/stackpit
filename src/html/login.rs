@@ -4,7 +4,7 @@ use axum::response::IntoResponse;
 use secrecy::ExposeSecret;
 use serde::Deserialize;
 
-use crate::oidc::cookies::{append_set_cookie, clear_grant_cookie};
+use crate::oidc::cookies::{append_set_cookie, clear_grant_cookie_all_variants};
 use crate::oidc::{grants, logout};
 use crate::server::AppState;
 
@@ -41,6 +41,21 @@ pub fn build_csrf_salt_cookie(salt: &str, secure: bool) -> String {
     let name = csrf_salt_cookie_name(secure);
     let secure_flag = if secure { "; Secure" } else { "" };
     format!("{name}={salt}; Path=/; SameSite=Strict; HttpOnly{secure_flag}")
+}
+
+/// Clear all admin-token + CSRF-salt cookie variants. `__Host-` clears must
+/// carry `Secure` to be accepted; the bare variants must not.
+fn clear_session_cookies() -> [String; 4] {
+    let clear = |name: &str, secure: bool| {
+        let secure_flag = if secure { "; Secure" } else { "" };
+        format!("{name}=; Path=/; SameSite=Strict; HttpOnly; Max-Age=0{secure_flag}")
+    };
+    [
+        clear(ADMIN_COOKIE, false),
+        clear(ADMIN_COOKIE_HOST, true),
+        clear(CSRF_SALT_COOKIE, false),
+        clear(CSRF_SALT_COOKIE_HOST, true),
+    ]
 }
 
 #[derive(askama::Template)]
@@ -128,10 +143,8 @@ fn error_message(code: &str) -> String {
             "Sign-in is misconfigured on this deployment. Contact your administrator.".into()
         }
         other => {
-            // Unknown codes are almost always a sign that a new error path was
-            // added without updating the mapping. Log so support can trace it;
-            // render a generic message so we never echo attacker-controlled
-            // strings into the HTML even though the redirect path is internal.
+            // Log unknown codes (usually a new error path missing here) but
+            // render a generic message so we never echo arbitrary input into HTML.
             tracing::warn!(
                 target: "stackpit::auth",
                 code = %other,
@@ -182,8 +195,7 @@ pub async fn handle_login(
         let name = admin_cookie_name(secure);
         let hashed = crate::middleware::hash_token_for_cookie(&token);
         let cookie = format!("{name}={hashed}; Path=/; SameSite=Strict; HttpOnly{secure_flag}");
-        // Fresh per-login salt so the admin CSRF token isn't a forever-valid
-        // function of admin_token alone.
+        // Fresh per-login salt so the CSRF token isn't a fixed function of admin_token.
         let salt = crate::crypto::random_hex::<32>();
         let salt_cookie = build_csrf_salt_cookie(&salt, secure);
         let mut resp = axum::response::Redirect::to("/web/projects/").into_response();
@@ -213,23 +225,16 @@ pub struct LoginForm {
 /// server-side grant and runs RP-initiated logout against the IdP.
 pub async fn handle_logout(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     let secure = state.config.server.cookies_should_be_secure();
-    let secure_flag = if secure { "; Secure" } else { "" };
-    let name = admin_cookie_name(secure);
-    let cookie = format!("{name}=; Path=/; SameSite=Strict; HttpOnly; Max-Age=0{secure_flag}");
-    let salt_name = csrf_salt_cookie_name(secure);
-    let salt_cookie =
-        format!("{salt_name}=; Path=/; SameSite=Strict; HttpOnly; Max-Age=0{secure_flag}");
 
-    // OIDC teardown: resolve + forget the grant, capturing the id_token hint.
     let mut had_grant = false;
     let mut id_token_hint = None;
     if let (Some(_), Some(encryptor)) = (state.oidc.as_ref(), state.encryptor.as_ref()) {
-        // The middleware grant branch reads from auth_pool -- match it.
+        // auth_pool to match the middleware grant branch.
         if let Some(record) =
             grants::resolve_from_headers(&headers, secure, encryptor, &state.auth_pool).await
         {
             had_grant = true;
-            // GrantRecord's `Drop` zeroizes tokens -- clone before forgetting.
+            // GrantRecord's Drop zeroizes tokens; clone before forgetting.
             id_token_hint = record.id_token.clone();
             grants::forget(&state.auth_pool, &record.handle).await;
         }
@@ -250,13 +255,16 @@ pub async fn handle_logout(State(state): State<AppState>, headers: HeaderMap) ->
     };
 
     let mut resp = axum::response::Redirect::to(&target).into_response();
-    if let Ok(val) = cookie.parse() {
-        resp.headers_mut().append("set-cookie", val);
+    // Clear both name variants of every session cookie so a stale
+    // opposite-posture cookie can't linger and recreate the admin+OIDC overlap.
+    for cookie in clear_session_cookies() {
+        if let Ok(val) = cookie.parse() {
+            resp.headers_mut().append("set-cookie", val);
+        }
     }
-    if let Ok(val) = salt_cookie.parse() {
-        resp.headers_mut().append("set-cookie", val);
+    for val in clear_grant_cookie_all_variants() {
+        append_set_cookie(&mut resp, val);
     }
-    append_set_cookie(&mut resp, clear_grant_cookie(secure));
     resp.headers_mut().insert(
         axum::http::header::CACHE_CONTROL,
         axum::http::HeaderValue::from_static("no-store"),

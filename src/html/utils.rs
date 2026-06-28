@@ -11,10 +11,9 @@ use crate::queries;
 use crate::queries::ProjectNavCounts;
 
 /// Pulls the per-session CSRF token from request extensions. Infallible:
-/// when web_auth_middleware skipped insertion (a no-auth pass-through
-/// edge case), falls back to an empty string -- the middleware exempts
-/// the same paths that don't have a token, so mutating /web/ POSTs from
-/// non-authed contexts already 403 there.
+/// falls back to an empty string when the middleware skipped insertion
+/// (no-auth pass-through); those same paths are CSRF-exempt, so mutating
+/// /web/ POSTs from non-authed contexts already 403.
 pub struct Csrf(pub String);
 
 impl<S> axum::extract::FromRequestParts<S> for Csrf
@@ -37,9 +36,9 @@ where
     }
 }
 
-/// Runs an admin DB write and renders a success/error response (reusable POST pattern).
-/// Generic over the payload -- success renders the message and drops the value,
-/// so handlers that ignore the returned id can still use this.
+/// Runs an admin DB write and renders a success/error response. Success
+/// renders the message and drops the value, so handlers that ignore the
+/// returned id can still use this.
 pub async fn query_then_render<T, F, Fut>(
     result: anyhow::Result<T>,
     success_msg: &str,
@@ -56,8 +55,8 @@ where
 }
 
 /// Fetches the project nav counts and renders a per-project list page.
-/// `build` keeps each page's distinct template type while this owns the
-/// shared nav-counts + render boilerplate.
+/// `build` supplies the page-specific template; this owns the shared
+/// nav-counts and render boilerplate.
 pub async fn render_project_list<T, F, Tmpl>(
     pool: &DbPool,
     project_id: u64,
@@ -94,8 +93,7 @@ where
     Ok(render_template(&build(project_id, item, nav, csrf)))
 }
 
-/// Shared query params for all the list pages. Serde drops unknown fields,
-/// so unused `Option`s just stay `None` -- no harm done.
+/// Shared query params for all list pages. Unused fields stay `None`.
 #[derive(Deserialize)]
 pub struct ListParams {
     pub query: Option<String>,
@@ -152,7 +150,7 @@ pub fn issue_filter_from_params(
     }
 }
 
-/// Treats empty strings as `None` for numeric query params -- browsers love sending those.
+/// Treats empty strings as `None` for numeric query params (browsers send those).
 pub fn empty_string_as_none<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -180,9 +178,8 @@ pub fn period_to_timestamp(period: &str) -> Option<i64> {
     Some(now - seconds)
 }
 
-/// Builds the query strings for pagination and filtering. The thing is,
-/// `sort` only belongs in filter_qs -- we don't want it leaking into
-/// pagination links.
+/// Builds the query strings for pagination and filtering. `sort` belongs
+/// only in filter_qs, not in pagination links.
 pub fn build_filter_qs(params: &[(&str, &str)], sort: &str) -> (String, String) {
     let mut base_parts = Vec::new();
     for (name, value) in params {

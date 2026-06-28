@@ -23,7 +23,9 @@
     </div>
   </div>
 
-  {% if !chart_svg.is_empty() %}<div class="event-chart">{{ chart_svg|safe }}</div>{% endif %}
+  {% if !chart_svg.is_empty() %}
+    <div class="event-chart">{{ chart_svg|safe }}</div>
+  {% endif %}
 
   {% if !tag.is_empty() %}
     <div class="active-filter">
@@ -37,7 +39,9 @@
   <form class="filter-form"
         method="get"
         action="/web/projects/{{ project_id }}/">
-    {% if !sort.is_empty() %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
+    {% if !sort.is_empty() %}
+      <input type="hidden" name="sort" value="{{ sort }}">
+    {% endif %}
     {% if !tag.is_empty() %}<input type="hidden" name="tag" value="{{ tag }}">{% endif %}
     <input class="input"
            type="text"
@@ -207,7 +211,7 @@
 
     <nav class="pagination" aria-label="Pagination">
       <span>{{ result.total }} issue
-        {% if result.total != 1 %}s{% endif %}
+        {%- if result.total != 1 %}s{% endif %}
       </span>
       <span class="flex gap-2">
         {% if result.has_prev() %}

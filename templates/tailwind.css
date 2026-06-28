@@ -446,7 +446,7 @@
     background: color-mix(in srgb, var(--color-primary) 14%, transparent);
     width: var(--facet-pct, 0%);
   }
-  .tag-facet-row > * { position: relative; z-index: 1; }
+  .tag-facet-row > *:not(.tag-facet-bar) { position: relative; z-index: 1; }
   .tag-facet-value { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .tag-facet-row .facet-count { margin-left: auto; color: var(--color-on-surface-variant); font-variant-numeric: tabular-nums; }
   .tag-facet-bar-stack { display: flex; height: 4px; border-radius: 9999px; overflow: hidden; margin-bottom: 0.5rem; }

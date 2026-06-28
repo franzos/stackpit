@@ -32,6 +32,8 @@ struct EventDetailTemplate {
     event_nav: EventNav,
     attachments: Vec<AttachmentInfo>,
     user_reports: Vec<queries::UserReportData>,
+    own_feedback: Option<queries::types::UserFeedback>,
+    measurements: Vec<Measurement>,
     raw_json: String,
     csrf_token: String,
 }
@@ -79,6 +81,8 @@ pub async fn handler(
         event_nav,
         attachments,
         user_reports,
+        own_feedback,
+        measurements,
         raw_json,
     } = event_supplements::get_event_detail_data(&event, supplements, Some(&resolver));
 
@@ -95,6 +99,8 @@ pub async fn handler(
         event_nav,
         attachments,
         user_reports,
+        own_feedback,
+        measurements,
         raw_json,
         csrf_token: csrf,
     };

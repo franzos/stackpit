@@ -11,8 +11,8 @@ use crate::bearer::extract_bearer;
 use crate::context::AuthContext;
 use crate::cookie::read_cookie;
 
-/// Returns `None` if no admin credential was presented. `cookie_name` is
-/// plumbed so callers can pick `__Host-`-prefixed names.
+/// Returns `None` if no admin credential was presented. `cookie_name` lets
+/// callers pick `__Host-`-prefixed names.
 pub fn resolve_admin(
     headers: &HeaderMap,
     expected: &str,

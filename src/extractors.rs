@@ -23,7 +23,7 @@ impl FromRequestParts<AppState> for BrowserDefaults {
     }
 }
 
-/// Clones the read pool from state. Infallible -- used by both HTML and API handlers.
+/// Clones the read pool from state. Infallible; used by HTML and API handlers.
 pub struct ReadPool(pub DbPool);
 
 impl FromRequestParts<AppState> for ReadPool {

@@ -25,13 +25,13 @@ impl NotifyRateLimiter {
 
     /// Returns `true` if the notification is allowed, `false` if rate-limited.
     pub fn check_and_record(&self, project_id: u64, now_secs: u64) -> bool {
-        // Periodic cleanup: evict stale project entries every 2 minutes
+        // Evict stale project entries every 2 minutes.
         if self.cleanup_throttle.allow(now_secs, 120) {
             self.project_windows
                 .retain(|_, w| now_secs.saturating_sub(w.current_second) < 120);
         }
 
-        // Check per-project limit (don't increment yet -- wait for global check)
+        // Check per-project limit but don't increment yet (global check may still reject).
         if self.project_limit > 0 {
             let mut entry = self
                 .project_windows
@@ -44,7 +44,6 @@ impl NotifyRateLimiter {
             }
         }
 
-        // Check global limit
         if self.global_limit > 0 {
             let mut global = self.global_window.lock();
             global.advance(now_secs);
@@ -54,7 +53,7 @@ impl NotifyRateLimiter {
             global.increment(now_secs);
         }
 
-        // Both limits passed -- now safe to increment per-project
+        // Both limits passed: now safe to increment per-project.
         if self.project_limit > 0 {
             if let Some(mut entry) = self.project_windows.get_mut(&project_id) {
                 entry.value_mut().increment(now_secs);

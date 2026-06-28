@@ -10,8 +10,8 @@ use rate_limit::NotifyRateLimiter;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-/// Reqwest clients keyed by (host, SSRF-resolved addr). Each client pins its
-/// connections to exactly that addr; repeated deliveries reuse the pool + TLS.
+/// Reqwest clients keyed by (host, SSRF-resolved addr); each pins connections
+/// to that addr so repeated deliveries reuse the pool and TLS.
 type ClientCache = Arc<DashMap<(String, SocketAddr), reqwest::Client>>;
 
 #[derive(Debug, Clone)]
@@ -86,13 +86,11 @@ pub struct DigestIssue {
     pub first_seen: i64,
 }
 
-/// Cap on concurrent in-flight webhook/email deliveries. An alert burst can
-/// match many integrations at once; each task holds a client and up to ~22s of
-/// retry/timeout, so we queue past this rather than spawn unbounded tasks.
+/// Cap on concurrent in-flight deliveries; each task holds a client and up to
+/// ~22s of retry/timeout, so bursts queue rather than spawn unbounded tasks.
 const MAX_CONCURRENT_DISPATCH: usize = 32;
 
-/// Run `send`, and on error warn, wait 2s, then try once more (error+drop on
-/// second failure). `name`/`kind` are only used for log context.
+/// Run `send`, retrying once after 2s on failure (drops on the second failure).
 async fn send_with_one_retry<F, Fut, E>(name: &str, kind: &str, send: F)
 where
     F: Fn() -> Fut,
@@ -108,9 +106,7 @@ where
     }
 }
 
-/// Fetch a cached client pinned to `resolved`, building (and caching) one on
-/// first use. The pin stays exact: a client for a given (host, addr) only ever
-/// resolves that host to that addr.
+/// Fetch (or build and cache) a client pinned to `resolved.addr` for its host.
 fn pinned_client(
     cache: &ClientCache,
     resolved: &crate::ssrf::ResolvedWebhook,
@@ -131,7 +127,7 @@ fn pinned_client(
 fn passes_min_level(event_level: Option<&str>, min_level: Option<&str>) -> bool {
     match (event_level, min_level) {
         (_, None) => true,
-        (None, Some(_)) => true, // no level on the event -- let it through rather than silently drop it
+        (None, Some(_)) => true, // event has no level: let it through rather than silently drop it
         (Some(ev), Some(min)) => {
             let ev_level: crate::models::Level =
                 ev.parse().unwrap_or(crate::models::Level::Unknown);
@@ -173,15 +169,11 @@ pub async fn run_dispatcher(
 ) {
     tracing::info!("notification dispatcher started");
 
-    // Shared across every spawned delivery task to bound concurrent in-flight sends.
     let dispatch_limit = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_DISPATCH));
-
-    // Reused across notifications so repeat deliveries to the same webhook
-    // keep their connection pool and pinned-addr resolution.
     let client_cache: ClientCache = Arc::new(DashMap::new());
 
     while let Some(event) = rx.recv().await {
-        // Digest notifications bypass rate limiting -- they're already interval-controlled
+        // Digests bypass rate limiting; they're already interval-controlled.
         if !matches!(event.trigger, NotifyTrigger::Digest) {
             let now_secs = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -207,15 +199,12 @@ pub async fn run_dispatcher(
                 }
             };
 
-        // Share one event across all matching integrations rather than deep-cloning
-        // the (potentially large) digest tree per task.
+        // Share one event across integrations rather than deep-cloning the
+        // (potentially large) digest tree per task.
         let event = Arc::new(event);
 
-        // Dispatch to all matching integrations concurrently.
-        // Tasks are fire-and-forget so a slow webhook never blocks the
-        // dispatcher from processing the next notification event.
+        // Fire-and-forget so a slow webhook never blocks the next event.
         for pi in &integrations {
-            // Skip if this integration doesn't care about this trigger
             match event.trigger {
                 NotifyTrigger::NewIssue if !pi.notify_new_issues => continue,
                 NotifyTrigger::Regression if !pi.notify_regressions => continue,
@@ -224,12 +213,10 @@ pub async fn run_dispatcher(
                 _ => {}
             }
 
-            // Check severity threshold
             if !passes_min_level(event.level.as_deref(), pi.min_level.as_deref()) {
                 continue;
             }
 
-            // Check environment filter
             if !passes_env_filter(
                 event.environment.as_deref(),
                 pi.environment_filter.as_deref(),
@@ -237,7 +224,6 @@ pub async fn run_dispatcher(
                 continue;
             }
 
-            // Decrypt the secret if it's encrypted, otherwise use as-is
             let secret = match (&pi.integration_secret, pi.integration_encrypted, &encryptor) {
                 (Some(s), true, Some(enc)) => enc.decrypt(s),
                 (Some(s), false, _) => Some(s.clone()),
@@ -255,8 +241,8 @@ pub async fn run_dispatcher(
             let client_cache = client_cache.clone();
 
             tokio::spawn(async move {
-                // Hold a permit for the task's lifetime so a burst queues rather
-                // than spawning unbounded concurrent sends. Closes only on shutdown.
+                // Hold a permit for the task's lifetime so bursts queue rather
+                // than spawn unbounded sends.
                 let _permit = match dispatch_limit.acquire_owned().await {
                     Ok(p) => p,
                     Err(_) => return,
@@ -264,7 +250,7 @@ pub async fn run_dispatcher(
 
                 let kind_label = kind.as_str();
 
-                // Email has no client/url/SSRF surface -- polymail owns the endpoint.
+                // Email has no client/url/SSRF surface; polymail owns the endpoint.
                 if let crate::queries::types::IntegrationKind::Email = kind {
                     send_with_one_retry(&name, kind_label, || {
                         providers::email::send(

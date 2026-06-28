@@ -34,7 +34,7 @@ pub mod release_health;
 pub mod release_list;
 pub mod replays;
 pub mod spans;
-pub mod transaction_list;
+pub mod transactions;
 pub mod utils;
 
 pub fn routes() -> Router<AppState> {
@@ -72,7 +72,11 @@ pub fn routes() -> Router<AppState> {
         )
         .route(
             "/web/projects/{project_id}/transactions/",
-            get(transaction_list::handler),
+            get(transactions::list_handler),
+        )
+        .route(
+            "/web/projects/{project_id}/transactions/detail",
+            get(transactions::detail_handler),
         )
         .route("/web/projects/{project_id}/logs/", get(logs::list_handler))
         .route(
@@ -239,10 +243,6 @@ pub fn routes() -> Router<AppState> {
         // -- bulk operations --
         .route("/web/events/bulk", post(bulk::events_bulk))
         .route("/web/projects/{project_id}/bulk", post(bulk::issues_bulk))
-        .route(
-            "/web/projects/{project_id}/transactions/bulk",
-            post(bulk::transactions_bulk),
-        )
         .route(
             "/web/projects/{project_id}/user-reports/bulk",
             post(bulk::user_reports_bulk),

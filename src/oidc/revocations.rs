@@ -39,8 +39,7 @@ impl RevocationStore for SqliteRevocationStore {
         sub: &str,
         sid: Option<&str>,
     ) -> Result<bool, BackendError> {
-        // Surface the error so the bearer gate's fail-closed log carries
-        // the underlying sqlx/context message instead of a bare bool.
+        // Surface the error so the fail-closed log carries the underlying message, not a bare bool.
         check_revoked(&self.pool, iss, sub, sid)
             .await
             .map_err(|e| BackendError::Backend(format!("{e:#}")))
@@ -133,7 +132,7 @@ pub async fn purge_expired(pool: &DbPool, now_secs: i64) -> Result<u64> {
 }
 
 /// Atomically remember a back-channel logout JTI. Returns `true` if seen
-/// before -- caller MUST reject the request as a replay.
+/// before; caller MUST reject the request as a replay.
 pub async fn jti_seen_or_remember(pool: &DbPool, jti: &str, expires_at: i64) -> Result<bool> {
     let res = sqlx::query(sql!(
         "INSERT INTO oidc_logout_jti (jti, expires_at) VALUES (?1, ?2)"

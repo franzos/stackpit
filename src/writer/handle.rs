@@ -11,9 +11,8 @@ use super::msg::WriteMsg;
 
 type SendError = Box<tokio::sync::mpsc::error::TrySendError<WriteMsg>>;
 
-/// The public face of the writer task. Wraps the channel sender so
-/// callers can just call domain methods instead of constructing `WriteMsg`
-/// variants by hand.
+/// Public handle to the writer task, wrapping the channel sender with domain
+/// methods so callers don't construct `WriteMsg` variants by hand.
 #[derive(Clone)]
 pub struct WriterHandle {
     tx: Sender<WriteMsg>,

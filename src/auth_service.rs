@@ -1,8 +1,8 @@
-//! Handles project key validation with an in-memory cache in front of the DB.
-//! Open mode auto-provisions a **new** project (with its first key) the first
-//! time we see an unknown project_id; once a project exists, only registered
-//! keys are accepted. Closed mode requires every project_id+key to exist.
-//! HTTP-level stuff (headers, responses) lives in `endpoints::auth`.
+//! Project key validation with an in-memory cache in front of the DB.
+//! Open mode auto-provisions a new project (with its first key) on an unknown
+//! project_id; once a project exists, only registered keys are accepted.
+//! Closed mode requires every project_id+key to exist.
+//! HTTP-level handling (headers, responses) lives in `endpoints::auth`.
 
 use crate::config::RegistrationMode;
 use crate::queries;
@@ -20,7 +20,7 @@ pub type AuthCache = Arc<dashmap::DashMap<String, CacheEntry>>;
 
 pub const AUTH_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(300);
 
-/// Drops all cached entries for a project -- used when project settings change.
+/// Drops all cached entries for a project (call when project settings change).
 pub fn invalidate_project(cache: &AuthCache, project_id: u64) {
     cache.retain(|_, entry| entry.project_id != project_id);
 }
@@ -45,8 +45,7 @@ pub async fn validate_project_key(
     sentry_key: &str,
     project_id: u64,
 ) -> Result<(), AuthError> {
-    // Fast path: hit the cache. We do all comparisons before branching
-    // to avoid leaking info through timing.
+    // Compute all comparisons before branching to avoid leaking info through timing.
     if let Some(entry) = state.auth_cache.get(sentry_key) {
         let cached = entry.value();
         if cached.inserted_at.elapsed() < AUTH_CACHE_TTL {
@@ -65,25 +64,22 @@ pub async fn validate_project_key(
             }
             return Ok(());
         }
-        // Expired -- drop the ref, then evict only if still expired so a fresh
-        // concurrent insert isn't race-clobbered.
+        // Evict only if still expired so a concurrent fresh insert isn't clobbered.
         drop(entry);
         state
             .auth_cache
             .remove_if(sentry_key, |_, e| e.inserted_at.elapsed() >= AUTH_CACHE_TTL);
     }
 
-    // Cache miss -- query the pool
     let pool = &state.pool;
 
-    // Archived projects should be rejected early
     if let Ok(Some(status)) = queries::projects::get_project_status(pool, project_id).await {
         if status.is_archived() {
             return Err(AuthError::Archived);
         }
     }
 
-    // Housekeeping -- prune expired entries when the cache gets big
+    // Prune expired entries when the cache gets big.
     if state.auth_cache.len() > AUTH_CACHE_MAX_ENTRIES {
         state
             .auth_cache
@@ -126,11 +122,8 @@ pub async fn validate_project_key(
                     );
                 }
                 Ok(None) => {
-                    // First DSN wins: only auto-provision when the project
-                    // itself doesn't exist yet. Once a project has any key,
-                    // additional keys must be minted explicitly via the
-                    // admin UI -- otherwise any client could grant themselves
-                    // a valid key by guessing project_id + sending a random hex.
+                    // First DSN wins: auto-provision only when the project doesn't exist yet,
+                    // else a client could mint a key by guessing project_id with random hex.
                     let project_exists = queries::projects::get_project_status(pool, project_id)
                         .await
                         .ok()
@@ -162,8 +155,8 @@ pub async fn validate_project_key(
     Ok(())
 }
 
-/// Commits the project/key row (on the writer's pool, so it serialises with
-/// the actor) before any events referencing it can be flushed.
+/// Commits the project/key row on the writer pool so it serialises with the
+/// actor before any events referencing it can be flushed.
 async fn auto_register_key(state: &AppState, sentry_key: &str, project_id: u64) {
     match queries::projects::ensure_project_key(&state.writer_pool, project_id, sentry_key).await {
         Ok(()) => {

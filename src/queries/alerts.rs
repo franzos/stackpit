@@ -6,8 +6,6 @@ use sqlx::Row;
 use crate::db::sql;
 use crate::db::DbPool;
 
-// -- Alert rule types ---
-
 pub struct AlertRule {
     pub id: i64,
     pub project_id: Option<u64>,
@@ -33,8 +31,6 @@ fn map_alert_rule(row: &crate::db::DbRow) -> AlertRule {
         created_at: row.get("created_at"),
     }
 }
-
-// -- Alert rule CRUD ---
 
 pub async fn create_alert_rule(
     pool: &DbPool,
@@ -102,7 +98,7 @@ pub async fn update_alert_rule(
 
 pub async fn delete_alert_rule(pool: &DbPool, id: i64) -> Result<u64> {
     let mut tx = pool.begin().await?;
-    // Clean up cooldown state first
+    // delete cooldown state first: FK dependency on alert_rules
     sqlx::query(sql!("DELETE FROM alert_state WHERE alert_rule_id = ?1"))
         .bind(id)
         .execute(&mut *tx)
@@ -150,7 +146,7 @@ pub async fn get_alert_rule(pool: &DbPool, id: i64) -> Result<Option<AlertRule>>
     Ok(row.as_ref().map(map_alert_rule))
 }
 
-// -- Threshold helpers (test-only; production uses batched queries in writer::flush) --
+// threshold helpers are test-only; production uses batched queries in writer::flush
 
 #[cfg(test)]
 async fn matching_threshold_rules(
@@ -211,8 +207,6 @@ async fn record_trigger(pool: &DbPool, rule_id: i64, fingerprint: &str, now: i64
     .await?;
     Ok(())
 }
-
-// -- Digest schedule CRUD ---
 
 pub struct DigestSchedule {
     pub id: i64,
@@ -310,9 +304,7 @@ pub async fn get_digest_schedule(pool: &DbPool, id: i64) -> Result<Option<Digest
     Ok(row.as_ref().map(map_digest_schedule))
 }
 
-// -- Digest task queries ---
-
-/// Digest schedules that are due -- i.e. enough time has passed since last send.
+/// Digest schedules that are due (enough time elapsed since last send).
 pub async fn list_due_digests(pool: &DbPool, now: i64) -> Result<Vec<DigestSchedule>> {
     let rows = sqlx::query(sql!(
         "SELECT id, project_id, interval_secs, last_sent, enabled, created_at
@@ -346,7 +338,6 @@ pub async fn build_digest_data(
 ) -> Result<Vec<crate::notify::DigestProject>> {
     use crate::notify::{DigestIssue, DigestProject};
 
-    // Figure out which projects we're covering
     let projects: Vec<(u64, Option<String>)> = match project_id {
         Some(pid) => {
             let row = sqlx::query(sql!("SELECT name FROM projects WHERE project_id = ?1"))
@@ -368,7 +359,7 @@ pub async fn build_digest_data(
         }
     };
 
-    // Collect per-project event stats -- batch in chunks to stay within SQLite's variable limit
+    // chunk to stay within SQLite's bind-variable limit
     let project_ids: Vec<u64> = projects.iter().map(|(pid, _)| *pid).collect();
     let mut stats_map: HashMap<u64, (u64, u64)> = HashMap::new();
     for chunk in project_ids.chunks(500) {
@@ -401,7 +392,6 @@ pub async fn build_digest_data(
     for (pid, name) in projects {
         let (active_issues_count, total_events) = stats_map.get(&pid).copied().unwrap_or((0, 0));
 
-        // Issues that first appeared during this period
         let new_issue_rows = sqlx::query(sql!(
             "SELECT fingerprint, title, level, event_count, first_seen
              FROM issues
@@ -426,7 +416,7 @@ pub async fn build_digest_data(
             })
             .collect();
 
-        // Skip projects with zero activity -- no point cluttering the digest
+        // skip projects with zero activity
         if total_events > 0 || !new_issues.is_empty() {
             result.push(DigestProject {
                 project_id: pid,
@@ -483,16 +473,15 @@ mod tests {
     async fn threshold_rule_matching() {
         let pool = open_test_db().await;
 
-        // Global rule (project_id = NULL)
+        // global rule (project_id = NULL)
         let global = create_alert_rule(&pool, None, None, "threshold", Some(10), Some(3600), 3600)
             .await
             .unwrap();
-        // Project-specific rule
         let specific =
             create_alert_rule(&pool, Some(1), None, "threshold", Some(5), Some(1800), 3600)
                 .await
                 .unwrap();
-        // Rule for a different project
+        // rule for a different project
         create_alert_rule(
             &pool,
             Some(2),
@@ -529,20 +518,19 @@ mod tests {
         .await
         .unwrap();
 
-        // Not in cooldown initially
+        // not in cooldown initially
         assert!(!is_in_cooldown(&pool, rule_id, "fp-1", now, 3600)
             .await
             .unwrap());
 
-        // Record trigger
         record_trigger(&pool, rule_id, "fp-1", now).await.unwrap();
 
-        // Now in cooldown
+        // now in cooldown
         assert!(is_in_cooldown(&pool, rule_id, "fp-1", now + 100, 3600)
             .await
             .unwrap());
 
-        // Past cooldown
+        // past cooldown
         assert!(!is_in_cooldown(&pool, rule_id, "fp-1", now + 3601, 3600)
             .await
             .unwrap());
@@ -575,21 +563,20 @@ mod tests {
         let pool = open_test_db().await;
         let now = chrono::Utc::now().timestamp();
 
-        // Schedule that's due (last_sent = 0, interval = 3600)
+        // due: last_sent = 0, interval = 3600
         let id = create_digest_schedule(&pool, None, 3600).await.unwrap();
 
         let due = list_due_digests(&pool, now).await.unwrap();
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].id, id);
 
-        // Mark as sent
         update_digest_last_sent(&pool, id, now).await.unwrap();
 
-        // Not due anymore
+        // not due anymore
         let due = list_due_digests(&pool, now + 100).await.unwrap();
         assert!(due.is_empty());
 
-        // Due again after interval
+        // due again after interval
         let due = list_due_digests(&pool, now + 3601).await.unwrap();
         assert_eq!(due.len(), 1);
     }
@@ -599,13 +586,11 @@ mod tests {
         let pool = open_test_db().await;
         let now = chrono::Utc::now().timestamp();
 
-        // Set up project
         sqlx::query("INSERT INTO projects (project_id, name, status) VALUES (1, 'Test', 'active')")
             .execute(&pool)
             .await
             .unwrap();
 
-        // Insert events and issues
         insert_test_event(
             &pool,
             "e1",

@@ -1,13 +1,13 @@
 use serde::{Deserialize, Serialize};
 
-/// I've seen SDKs send hundreds of tags per event — this keeps things sane.
+/// Cap on tags stored per event; SDKs can send hundreds.
 pub const MAX_TAGS_PER_EVENT: usize = 200;
 
-/// HLL-12 precision — 4096 registers per sketch, good enough for our counts.
+/// HLL-12 precision: 4096 registers per sketch.
 pub const HLL_REGISTER_COUNT: usize = 1 << 12;
 
-/// Event severity level — the five standard Sentry levels plus an Unknown
-/// fallback for unrecognized values from SDKs.
+/// Event severity level: the five standard Sentry levels plus an Unknown
+/// fallback for unrecognized SDK values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Level {
     Debug,
@@ -30,7 +30,7 @@ impl Level {
         }
     }
 
-    /// Numeric rank for severity comparisons — higher means more severe.
+    /// Numeric rank for severity comparisons; higher means more severe.
     pub fn rank(self) -> usize {
         match self {
             Self::Debug => 0,
@@ -64,6 +64,24 @@ impl std::fmt::Display for Level {
     }
 }
 
+/// One parsed session occurrence: a single session item or one entry of a
+/// `sessions` aggregate. `did` (distinct id) drives user-level crash-free
+/// metrics; it's None for identity-less aggregates.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionBucket {
+    pub release: String,
+    pub environment: String,
+    pub started_ts: i64,
+    pub total: u64,
+    pub crashed: u64,
+    pub errored: u64,
+    pub abnormal: u64,
+    pub did: Option<String>,
+    /// True when this bucket came from a `sessions` aggregate (no per-user
+    /// identity); marks crash-free-users as unavailable.
+    pub is_aggregate: bool,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct StorableEvent {
     pub event_id: String,
@@ -87,6 +105,13 @@ pub struct StorableEvent {
     pub parent_event_id: Option<String>,
     pub user_identifier: Option<String>,
     pub tags: Vec<(String, String)>,
+    pub session_buckets: Vec<SessionBucket>,
+    /// Trace this event belongs to (transactions only).
+    pub trace_id: Option<String>,
+    /// Transaction wall-clock duration in milliseconds.
+    pub duration_ms: Option<i64>,
+    /// `contexts.trace.status`; drives transaction failure classification.
+    pub trace_status: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -177,7 +202,7 @@ impl std::fmt::Display for ItemType {
 }
 
 impl StorableEvent {
-    /// New event with the required fields — everything optional defaults to None.
+    /// New event with the required fields; everything optional defaults to None.
     pub fn new(
         event_id: String,
         item_type: ItemType,
@@ -207,6 +232,10 @@ impl StorableEvent {
             parent_event_id: None,
             user_identifier: None,
             tags: Vec::new(),
+            session_buckets: Vec::new(),
+            trace_id: None,
+            duration_ms: None,
+            trace_status: None,
         }
     }
 }
@@ -236,6 +265,10 @@ impl StorableEvent {
             parent_event_id: None,
             user_identifier: None,
             tags: Vec::new(),
+            session_buckets: Vec::new(),
+            trace_id: None,
+            duration_ms: None,
+            trace_status: None,
         }
     }
 }

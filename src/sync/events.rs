@@ -15,7 +15,7 @@ pub async fn sync_project_events(
     let state_key = format!("sync:{}:{}:last_timestamp", org, project.slug);
     let last_ts = state::get_checkpoint(pool, &state_key).await?;
 
-    // Subtract 5 minutes from the checkpoint to catch any stragglers
+    // Back up 5 minutes from the checkpoint to catch stragglers.
     let start = last_ts.map(|ts| {
         chrono::DateTime::from_timestamp(ts.saturating_sub(300), 0)
             .unwrap_or_default()
@@ -68,7 +68,7 @@ pub async fn sync_project_events(
                 inserted += 1;
             }
 
-            // Stash the Sentry groupID so we can reliably sync statuses later
+            // Stash the Sentry groupID so status sync can match later.
             if let (Some(ref fp), Some(group_id)) = (
                 &storable.fingerprint,
                 sentry_event.json.get("groupID").and_then(|v| v.as_str()),
@@ -76,7 +76,6 @@ pub async fn sync_project_events(
                 queries::issues::set_sentry_group_id(pool, fp, group_id).await?;
             }
 
-            // Track the latest timestamp for our checkpoint
             if let Some(ts) = sentry_event.timestamp() {
                 max_timestamp = Some(max_timestamp.map_or(ts, |prev: i64| prev.max(ts)));
             }
@@ -85,7 +84,7 @@ pub async fn sync_project_events(
         pages += 1;
         println!("  page {pages} | {fetched} fetched | {inserted} new");
 
-        // Persist cursor so we can resume if something goes wrong mid-run
+        // Persist the cursor so a mid-run failure can resume.
         if let Some(ref c) = page.next_cursor {
             state::set_checkpoint(pool, &cursor_key, c).await?;
         }
@@ -97,12 +96,10 @@ pub async fn sync_project_events(
         cursor = page.next_cursor;
     }
 
-    // Save our high-water mark
     if let Some(ts) = max_timestamp {
         state::set_checkpoint(pool, &state_key, &ts.to_string()).await?;
     }
 
-    // Done paginating -- clear the cursor
     state::clear_checkpoint(pool, &cursor_key).await?;
 
     println!(

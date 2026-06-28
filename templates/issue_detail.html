@@ -130,7 +130,9 @@
                             {% match frame.context_line %}{% when Some with (cl) %}
                             <li class="current-line">{{ cl }}</li>
                             {% when None %}{% endmatch %}
-                            {% for line in frame.post_context %}<li>{{ line }}</li>{% endfor %}
+                            {% for line in frame.post_context %}
+                              <li>{{ line }}</li>
+                            {% endfor %}
                           </ol>
                         </div>
                       {% endif %}
@@ -421,7 +423,7 @@
 
         <nav class="pagination" aria-label="Pagination">
           <span>{{ events.total }} event
-            {% if events.total != 1 %}s{% endif %}
+            {%- if events.total != 1 %}s{% endif %}
           </span>
           <span class="flex gap-2">
             {% if events.has_prev() %}

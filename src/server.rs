@@ -114,18 +114,15 @@ async fn ingest_health_handler() -> &'static str {
 pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
     let db_url = config.storage.database_url();
 
-    // Run migrations once before creating pools
     let migration_pool = db::create_writer_pool(&db_url).await?;
     db::run_migrations(&migration_pool).await?;
     crate::oidc::grants::backfill_csrf_tokens(&migration_pool).await?;
     drop(migration_pool);
 
-    // Create pools
     let pool = db::create_pool(&db_url).await?;
 
     let config = Arc::new(config);
 
-    // Load initial filter data before constructing the engine
     let initial_data = match load_filter_data(&pool).await {
         Ok(data) => data,
         Err(e) => {
@@ -134,7 +131,7 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
         }
     };
 
-    // FilterEngine must be created before writer::spawn so the writer can reference it
+    // FilterEngine must exist before writer::spawn so the writer can reference it.
     let filter_engine = Arc::new(FilterEngine::new(
         initial_data,
         config.filter.rate_limit,
@@ -142,7 +139,6 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
         config.filter.blocked_user_agents.clone(),
     ));
 
-    // Notification channel + dispatcher
     let (notify_tx, notify_rx) = tokio::sync::mpsc::channel(1000);
     let digest_notify_tx = notify_tx.clone();
 
@@ -266,7 +262,6 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
         .as_ref()
         .and_then(|client| build_web_bearer_gate(client, &config, revocation_store.clone()));
 
-    // Spawn notification dispatcher
     {
         let notify_pool = pool.clone();
         let notify_encryptor = encryptor.clone();

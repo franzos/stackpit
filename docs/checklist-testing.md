@@ -10,9 +10,10 @@ Each item has a stable ID (e.g. `4.3.2`) so findings can reference it. Check ite
 off as you verify them. Don't fix anything mid-review — record the finding with a
 `file:line` pointer and hand it back.
 
-Cross-checked against the code on the `feature/oidc` branch (stackpit 0.1.9). Where
-this list and an older skill note disagree, the code wins — known drifts are flagged
-inline with **(was: …)**.
+Cross-checked against the code on `master` (stackpit 0.3.6), after the
+spans/transactions performance work and the OIDC work merged. Where this list and an
+older skill note disagree, the code wins; known drifts are flagged inline with
+**(was: …)**.
 
 ---
 
@@ -173,19 +174,20 @@ Route: `GET /web/projects/{project_id}/events/{event_id}/`.
 - [ ] **4.5.3 Accordions** — same set as §4.4.5; Raw JSON always present.
 - [ ] **4.5.4 Sidebar** — Event ID, Type, Timestamp, Level, Platform, Transaction, Release, Environment, Server, SDK name+version, Received; User sub-section (id/email/username/ip) when present.
 - [ ] **4.5.5 Summary tags** — non-clickable spans here (unlike issue detail).
+- [ ] **4.5.6 Web Vitals card** — for transaction events, a Web Vitals card (LCP, FCP, CLS, TTFB, …) renders from the transaction's measurements with per-metric ratings; absent for plain error events.
 
 ### §4.6 Per-project tabs
 
 Each tab only appears in the nav when its count > 0. The seed exercises all of them for at least some projects.
 
-- [ ] **4.6.1 Transactions** — `/transactions/`, same filter set as issues; `POST /transactions/bulk`.
-- [ ] **4.6.2 Spans + Traces** — `/spans/` shows span list + top-25 traces; `/traces/{trace_id}/` shows the span hierarchy.
+- [ ] **4.6.1 Transactions** — `/transactions/` is a performance rollup (one row per transaction name) with `period` (default `7d`) and `sort` (default `p95`); columns surface p50/p75/p95 duration, throughput, and failure rate. No bulk actions (transactions feed the rollup, not error-style issues). `/transactions/detail?name=<txn>` lists that transaction's instances slowest-first, shows the trace op in the header and a per-instance trace status badge, and links each instance into event/trace detail.
+- [ ] **4.6.2 Spans + Traces** — `/spans/` shows span list + top-25 traces; `/traces/{trace_id}/` renders the span waterfall (nested, time-positioned bars) plus correlated error events.
 - [ ] **4.6.3 Logs** — `/logs/`, filter `query` + `level`.
 - [ ] **4.6.4 Metrics** — `/metrics/` name list; `/metrics/{mri}` time-series chart (`from`/`to` params).
 - [ ] **4.6.5 Monitors** — `/monitors/` list; `/monitors/{slug}/` check-in list; `POST /monitors/{slug}/bulk` delete.
 - [ ] **4.6.6 Profiles** — `/profiles/` list; `/profiles/{event_id}/` detail with raw JSON.
 - [ ] **4.6.7 Replays** — `/replays/` list; `/replays/{event_id}/` detail with raw JSON.
-- [ ] **4.6.8 Health** — `/health/` per-release session table.
+- [ ] **4.6.8 Health** — `/health/` per-release session table with crash-free sessions and crash-free users (distinct-user crash rate via HLL), plus a daily sessions trend chart.
 - [ ] **4.6.9 User Reports** — `/user-reports/`; `POST /user-reports/bulk` delete.
 - [ ] **4.6.10 Client Reports** — `/client-reports/`; `POST /client-reports/bulk` delete.
 - [ ] **4.6.11 Empty states** — each tab renders a useful empty message when its list is empty.

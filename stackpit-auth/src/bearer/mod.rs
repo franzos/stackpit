@@ -577,6 +577,27 @@ mod tests {
         assert!(matches!(outcome, BearerAuthOutcome::InvalidToken));
     }
 
+    // Signed with a different key than the one in the primed JWKS (same kid,
+    // valid claims). Signature must fail against the primed public key.
+    #[tokio::test]
+    async fn jwt_wrong_signing_key_rejected() {
+        const OTHER_PRIVATE_DER: &[u8] = include_bytes!("../testdata/test_rsa_priv_2.der");
+        let gate = base_gate(|_| {});
+        let mut header = Header::new(Algorithm::RS256);
+        header.kid = Some(TEST_KID.to_string());
+        let key = EncodingKey::from_rsa_der(OTHER_PRIVATE_DER);
+        let claims = json!({
+            "iss": "https://hydra.example.com",
+            "sub": "alice",
+            "aud": ["https://mcp.example.com"],
+            "exp": now() + 300,
+            "iat": now(),
+        });
+        let jwt = encode(&header, &claims, &key).expect("sign with foreign key");
+        let outcome = gate.authorize(Some(&jwt), "").await;
+        assert!(matches!(outcome, BearerAuthOutcome::InvalidToken));
+    }
+
     #[tokio::test]
     async fn size_guard_oversized_token() {
         let gate = base_gate(|_| {});
@@ -599,7 +620,7 @@ mod tests {
         assert!(matches!(outcome, BearerAuthOutcome::MissingToken));
     }
 
-    // [C2] At capacity, LRU evicts oldest; touched entry survives.
+    // at capacity, LRU evicts oldest; touched entry survives
     #[tokio::test]
     async fn cache_lru_evicts_least_recently_used() {
         let gate = base_gate(|c| c.cache_ttl_secs = 10);
@@ -609,7 +630,6 @@ mod tests {
             scope: None,
         };
         let now = now_secs();
-        // Fill cache to capacity.
         for i in 0..CACHE_CAPACITY {
             let mut key = [0u8; 32];
             key[..8].copy_from_slice(&(i as u64).to_le_bytes());
@@ -617,16 +637,16 @@ mod tests {
         }
         assert_eq!(gate.inner.cache.lock().len(), CACHE_CAPACITY);
 
-        // Ensure the touch is strictly later than every fill insert.
+        // touch must be strictly later than every fill insert
         tokio::time::sleep(Duration::from_millis(10)).await;
 
-        // Touch entry 0 so it becomes most-recently-used.
+        // touch entry 0 so it becomes most-recently-used
         let mut touched = [0u8; 32];
         touched[..8].copy_from_slice(&0u64.to_le_bytes());
         let hit = gate.cache_lookup(&touched);
         assert!(hit.is_some(), "entry 0 should still be present");
 
-        // Insert a new entry; some non-touched entry must be evicted, never entry 0.
+        // a non-touched entry must be evicted, never entry 0
         let mut new_key = [0u8; 32];
         new_key[..8].copy_from_slice(&(CACHE_CAPACITY as u64).to_le_bytes());
         gate.cache_store(new_key, &response, "iss", Some(now + 3600), now);
@@ -640,7 +660,7 @@ mod tests {
         assert!(cache.contains(&new_key), "new entry inserted");
     }
 
-    // [C6] cache_store caps TTL at the configured ceiling.
+    // cache_store caps TTL at the configured ceiling
     #[tokio::test]
     async fn cache_store_caps_ttl_at_max() {
         let gate = base_gate(|c| {
@@ -685,7 +705,7 @@ mod tests {
         );
     }
 
-    // [H9] Revocation cache hits within TTL skip the backing store.
+    // revocation cache hits within TTL skip the backing store
     struct CountingRevocation {
         calls: Mutex<u32>,
     }

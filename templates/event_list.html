@@ -19,7 +19,9 @@
   </div>
 
   <form class="filter-form" method="get" action="/web/events/">
-    {% if !sort.is_empty() %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
+    {% if !sort.is_empty() %}
+      <input type="hidden" name="sort" value="{{ sort }}">
+    {% endif %}
     <input class="input"
            type="text"
            name="query"
@@ -125,7 +127,7 @@
                     {% match event.level %}{% when Some with (lvl) %}<span class="badge badge-{{ lvl }}">{{ lvl }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
                   </td>
                   <td>
-                    <a class="text-mono" href="/web/projects/{{ event.project_id }}/">{{ event.project_id }}</a>
+                    <a class="text-mono" href="/web/projects/{{ event.project_id }}/">{% match event.project_name %}{% when Some with (n) %}{{ n }}{% when None %}{{ event.project_id }}{% endmatch %}</a>
                   </td>
                   <td class="hide-mobile">
                     {% match event.platform %}{% when Some with (p) %}<span class="badge badge-platform">{{ p }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
@@ -163,7 +165,7 @@
 
     <nav class="pagination" aria-label="Pagination">
       <span>{{ result.total }} event
-        {% if result.total != 1 %}s{% endif %}
+        {%- if result.total != 1 %}s{% endif %}
       </span>
       <span class="flex gap-2">
         {% if result.has_prev() %}

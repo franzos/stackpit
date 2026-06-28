@@ -31,8 +31,7 @@ pub async fn login(State(state): State<AppState>) -> Response {
         return Redirect::to("/web/login").into_response();
     };
     let Some(encryptor) = state.encryptor.as_ref() else {
-        // Encryption is required when OAuth is enabled; server.rs enforces
-        // this at startup. Defense in depth -- if we ever drift, fail.
+        // server.rs enforces encryptor-when-OAuth at startup; defense in depth
         tracing::error!("OAuth enabled but no encryptor configured");
         return login_error("encryption_unconfigured");
     };
@@ -97,8 +96,7 @@ pub async fn callback(
         return finish_with_error(&state, "missing_state");
     };
 
-    // Read + decrypt the pre-auth cookie. Forged or expired cookies fail
-    // decryption -- the GCM tag is the integrity check.
+    // forged or expired cookies fail decryption: the GCM tag is the integrity check
     let Some(packed) = read_cookie(&headers, LOGIN_COOKIE) else {
         return finish_with_error(&state, "session_expired");
     };
@@ -144,8 +142,7 @@ pub async fn callback(
         }
     };
 
-    // Persist tokens (encrypted) under a fresh handle. The cookie carries
-    // only the handle from this point forward.
+    // cookie carries only the handle; tokens persist encrypted server-side
     let handle = match grants::insert(
         &state.pool,
         encryptor,
@@ -173,7 +170,6 @@ pub async fn callback(
     let secure = state.config.server.cookies_should_be_secure();
     let mut resp = Redirect::to("/web/").into_response();
     append_set_cookie(&mut resp, build_grant_cookie(&handle.to_hex(), secure));
-    // Clear the now-consumed pre-auth cookie.
     append_set_cookie(&mut resp, clear_login_cookie(secure));
     resp
 }
@@ -190,7 +186,6 @@ pub async fn backchannel_logout(
         return axum::http::StatusCode::BAD_REQUEST.into_response();
     };
 
-    // Parse application/x-www-form-urlencoded body for `logout_token=...`.
     let Some(token) = form_urlencoded::parse(body.as_ref())
         .find(|(k, _)| k == "logout_token")
         .map(|(_, v)| v.into_owned())
@@ -243,9 +238,7 @@ pub async fn backchannel_logout(
         }
         Err(logout::LogoutApplyError::Db(e)) => {
             tracing::error!(error = %e, "back-channel logout DB write failed");
-            // Per spec we don't 5xx -- but we shouldn't silently 200 either,
-            // since Hydra would consider the logout delivered. Returning 400
-            // makes Hydra retry per the integration guide's retry policy.
+            // 400 (not 5xx, not 200) so Hydra retries instead of marking delivered
             axum::http::StatusCode::BAD_REQUEST.into_response()
         }
     }

@@ -20,11 +20,39 @@
     <h1>Client reports</h1>
   </div>
 
+  {% if !outcomes.is_empty() %}
+    <h2 class="text-[14px] font-semibold mb-2">Dropped events</h2>
+    <p class="text-muted text-[13px] mb-2">What the SDKs discarded before sending, by category and reason.</p>
+    <div class="card overflow-hidden mb-4">
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Category</th>
+              <th>Reason</th>
+              <th>Dropped</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for o in outcomes %}
+              <tr>
+                <td><span class="badge badge-platform">{{ o.category }}</span></td>
+                <td class="text-mono text-[12px]">{{ o.reason }}</td>
+                <td class="text-tabular font-semibold">{{ o.quantity }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {% endif %}
+
   {% if result.items.is_empty() %}
     <div class="card">
       <p class="empty">No client reports found for this project.</p>
     </div>
   {% else %}
+    <h2 class="text-[14px] font-semibold mb-2">Reports</h2>
 
     <form method="post"
           action="/web/projects/{{ project_id }}/client-reports/bulk">
@@ -99,7 +127,7 @@
 
     <nav class="pagination" aria-label="Pagination">
       <span>{{ result.total }} report
-        {% if result.total != 1 %}s{% endif %}
+        {%- if result.total != 1 %}s{% endif %}
       </span>
       <span class="flex gap-2">
         {% if result.has_prev() %}

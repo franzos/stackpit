@@ -16,7 +16,7 @@ use super::rules::{FilterAction, FilterRule};
 use super::verdict::{DropReason, FilterVerdict};
 use super::{contains_ignore_ascii_case, starts_with_ignore_ascii_case};
 
-/// Why a pre-filter check said "no" -- before we even parse the body.
+/// Reason a pre-body-parse filter check rejected a request.
 #[derive(Debug)]
 pub enum PreFilterReject {
     RateLimited(u32),
@@ -24,8 +24,8 @@ pub enum PreFilterReject {
     DroppedIp,
 }
 
-/// Immutable lookup data -- gets swapped atomically on reload so readers
-/// never see a half-updated state.
+/// Immutable lookup data, swapped atomically on reload so readers never see
+/// a half-updated state.
 struct FilterSnapshot {
     inbound_filters: HashMap<u64, HashSet<String>>,
     message_filters: HashMap<u64, Vec<String>>,
@@ -73,9 +73,9 @@ impl FilterSnapshot {
 /// Lock-free snapshots for readers; discarded fingerprints in separate lock.
 pub struct FilterEngine {
     snapshot: arc_swap::ArcSwap<FilterSnapshot>,
-    /// Separate from snapshot -- fingerprints get added/removed on the fly.
+    /// Separate from snapshot: fingerprints get added/removed on the fly.
     discarded: RwLock<HashSet<String>>,
-    /// Per-key sliding windows. DashMap gives us lock-free concurrent access.
+    /// Per-key sliding windows.
     rate_windows: dashmap::DashMap<Box<str>, SlidingWindow>,
     global_rate_limit: u32,
     global_excluded_environments: Vec<String>,
@@ -111,28 +111,23 @@ impl FilterEngine {
         }
     }
 
-    /// Swap in new filter data. Doesn't care where it came from -- DB, config,
-    /// tests, whatever.
+    /// Swap in new filter data, regardless of source.
     pub fn apply_data(&self, data: FilterData) {
         *self.discarded.write() = data.discarded.clone();
         let new_snapshot = Arc::new(FilterSnapshot::from_data(data));
         self.snapshot.store(new_snapshot);
     }
 
-    /// Grab an Arc clone of the current snapshot -- lock-free load,
-    /// then all checks run against the immutable data.
+    /// Lock-free load of the current snapshot; checks run against immutable data.
     fn snapshot(&self) -> Arc<FilterSnapshot> {
         self.snapshot.load_full()
     }
 
-    // ---
-    // Tier 1 -- event-level check (after parse, before writer)
-    // ---
+    // Tier 1: event-level check (after parse, before writer)
 
-    /// Run an event through all filter tiers. One snapshot clone, then
-    /// everything's lock-free from there.
+    /// Run an event through all filter tiers.
     pub fn check(&self, event: &StorableEvent) -> FilterVerdict {
-        // Fingerprint discard has its own lock -- separate from the snapshot.
+        // Fingerprint discard has its own lock, separate from the snapshot.
         if let Some(ref fp) = event.fingerprint {
             if self.discarded.read().contains(fp) {
                 return FilterVerdict::Drop {
@@ -143,7 +138,6 @@ impl FilterEngine {
 
         let snap = self.snapshot();
 
-        // Built-in inbound filters
         if let Some(filters) = snap.inbound_filters.get(&event.project_id) {
             if filters.contains("browser_extensions") {
                 if let Some(ref title) = event.title {
@@ -174,7 +168,6 @@ impl FilterEngine {
             }
         }
 
-        // Message glob patterns
         if let Some(ref title) = event.title {
             if let Some(patterns) = snap.message_filters.get(&event.project_id) {
                 if glob_match_any(patterns, title) {
@@ -185,7 +178,7 @@ impl FilterEngine {
             }
         }
 
-        // Excluded environments -- global config first, then per-project.
+        // Global excludes take precedence over per-project.
         if let Some(ref env) = event.environment {
             for excluded in &self.global_excluded_environments {
                 if excluded.eq_ignore_ascii_case(env) {
@@ -194,7 +187,6 @@ impl FilterEngine {
                     };
                 }
             }
-            // Per-project excludes from the DB
             if let Some(set) = snap.excluded_environments.get(&event.project_id) {
                 if set.contains(env) {
                     return FilterVerdict::Drop {
@@ -204,7 +196,6 @@ impl FilterEngine {
             }
         }
 
-        // Release filters
         if let Some(ref release) = event.release {
             if let Some(patterns) = snap.release_filters.get(&event.project_id) {
                 if glob_match_any(patterns, release) {
@@ -215,7 +206,6 @@ impl FilterEngine {
             }
         }
 
-        // Custom filter rules -- the user-defined ones.
         if let Some(rules) = snap.filter_rules.get(&event.project_id) {
             for rule in rules {
                 if rule.matches(event) {
@@ -244,19 +234,16 @@ impl FilterEngine {
         FilterVerdict::Accept
     }
 
-    // ---
-    // Tier 2 -- rate limiting (before body parse)
-    // ---
+    // Tier 2: rate limiting (before body parse)
 
-    /// Returns `Err(retry_after_secs)` if the key's over its limit.
+    /// Returns `Err(retry_after_secs)` if the key is over its limit.
     #[cfg(test)]
     pub fn check_rate_limit(&self, public_key: &str, project_id: u64) -> Result<(), u32> {
         let snap = self.snapshot();
         self.check_rate_limit_with_snap(public_key, project_id, &snap)
     }
 
-    /// Same check, but takes a pre-acquired snapshot so `pre_filter_check`
-    /// doesn't grab the lock twice.
+    /// Rate check against a pre-acquired snapshot, avoiding a second load.
     fn check_rate_limit_with_snap(
         &self,
         public_key: &str,
@@ -268,8 +255,7 @@ impl FilterEngine {
             .unwrap_or_default()
             .as_secs();
 
-        // Priority: per-key > per-project > global. Split maps keep lookups
-        // zero-alloc.
+        // Priority: per-key > per-project > global.
         let limit = snap
             .rate_limits_by_key
             .get(public_key)
@@ -281,9 +267,9 @@ impl FilterEngine {
             return Ok(());
         }
 
-        // Scope the entry guard: the RefMut holds a shard write lock, and
-        // evict_stale_rate_windows -> retain() locks every shard. Drop it first
-        // or we self-deadlock on parking_lot's non-reentrant locks.
+        // Scope the entry guard: the RefMut holds a shard write lock and
+        // evict_stale_rate_windows -> retain() locks every shard; dropping it
+        // first avoids a self-deadlock on the non-reentrant locks.
         {
             let mut window = self
                 .rate_windows
@@ -296,7 +282,7 @@ impl FilterEngine {
                 return Err(retry_after);
             }
 
-            // Still holding the entry guard -- check+increment must be atomic.
+            // Check+increment must be atomic under the entry guard.
             window.increment(now_secs);
         }
 
@@ -305,8 +291,8 @@ impl FilterEngine {
         Ok(())
     }
 
-    /// Cleans up stale rate windows every ~60s. It turns out rotating keys can
-    /// cause unbounded growth, so we also hard-cap at 100k entries.
+    /// Cleans up stale rate windows every ~60s; rotating keys cause unbounded
+    /// growth, so also hard-cap at 100k entries.
     fn evict_stale_rate_windows(&self, now_secs: u64) {
         if !self.eviction_throttle.allow(now_secs, 60) {
             return;
@@ -315,7 +301,7 @@ impl FilterEngine {
         self.rate_windows
             .retain(|_, window| now_secs.saturating_sub(window.current_second) < 120);
 
-        // Still too many? Get aggressive with the cutoff.
+        // Still too many: use a tighter cutoff.
         if self.rate_windows.len() > 100_000 {
             tracing::warn!(
                 "rate_windows has {} entries after time eviction, pruning oldest",
@@ -326,11 +312,9 @@ impl FilterEngine {
         }
     }
 
-    // ---
-    // Tier 2 -- user-agent check (before body parse)
-    // ---
+    // Tier 2: user-agent check (before body parse)
 
-    /// Drops health-check bots and any user-agents matching project or global patterns.
+    /// Drops health-check bots and user-agents matching project or global patterns.
     #[cfg(test)]
     pub fn check_user_agent(&self, user_agent: &str, project_id: u64) -> FilterVerdict {
         let snap = self.snapshot();
@@ -343,7 +327,7 @@ impl FilterEngine {
         project_id: u64,
         snap: &FilterSnapshot,
     ) -> FilterVerdict {
-        // Health check probes -- always dropped, no config needed.
+        // Health check probes are always dropped, no config needed.
         if starts_with_ignore_ascii_case(user_agent, "kube-probe/")
             || starts_with_ignore_ascii_case(user_agent, "elb-healthchecker/")
             || user_agent.eq_ignore_ascii_case("consul health check")
@@ -353,14 +337,12 @@ impl FilterEngine {
             };
         }
 
-        // Global blocked user-agents from config
         if glob_match_any(&self.global_blocked_user_agents, user_agent) {
             return FilterVerdict::Drop {
                 reason: DropReason::BlockedUserAgent,
             };
         }
 
-        // Per-project patterns
         if let Some(patterns) = snap.ua_filters.get(&project_id) {
             if glob_match_any(patterns, user_agent) {
                 return FilterVerdict::Drop {
@@ -372,11 +354,9 @@ impl FilterEngine {
         FilterVerdict::Accept
     }
 
-    // ---
-    // Tier 3 -- IP check
-    // ---
+    // Tier 3: IP check
 
-    /// Match client IP against per-project CIDR blocklists. Unparseable IPs fail open.
+    /// Match client IP against per-project CIDR blocklists; unparseable IPs fail open.
     #[cfg(test)]
     pub fn check_ip(&self, ip_str: &str, project_id: u64) -> FilterVerdict {
         let snap = self.snapshot();
@@ -407,12 +387,9 @@ impl FilterEngine {
         FilterVerdict::Accept
     }
 
-    // ---
     // Combined pre-body-parse filter (rate limit + UA + IP, one snapshot)
-    // ---
 
-    /// The cheap checks we can do before parsing the body -- rate limit, UA,
-    /// and IP. Grabs the snapshot once for all three.
+    /// Cheap checks before parsing the body (rate limit, UA, IP) sharing one snapshot.
     pub fn pre_filter_check(
         &self,
         public_key: &str,
@@ -420,7 +397,6 @@ impl FilterEngine {
         user_agent: Option<&str>,
         client_ip: Option<&str>,
     ) -> Result<(), PreFilterReject> {
-        // One snapshot for all three checks
         let snap = self.snapshot();
 
         if let Err(retry_after) = self.check_rate_limit_with_snap(public_key, project_id, &snap) {
@@ -445,16 +421,14 @@ impl FilterEngine {
         Ok(())
     }
 
-    // ---
     // Cache mutation helpers
-    // ---
 
-    /// Mark a fingerprint as discarded -- future events with it get dropped.
+    /// Mark a fingerprint as discarded; future events with it get dropped.
     pub fn add_discarded_fingerprint(&self, fingerprint: &str) {
         self.discarded.write().insert(fingerprint.to_string());
     }
 
-    /// Un-discard a fingerprint, letting events through again.
+    /// Un-discard a fingerprint so its events pass again.
     pub fn remove_discarded_fingerprint(&self, fingerprint: &str) {
         self.discarded.write().remove(fingerprint);
     }
@@ -583,13 +557,11 @@ mod tests {
         assert!(engine.check_rate_limit("testkey", 1).is_err());
     }
 
-    // Guards against the entry-guard-held-across-retain reentrant deadlock:
-    // pre-fix, the RefMut shard lock was still live when eviction ran retain().
+    // Guards against the entry-guard-held-across-retain reentrant deadlock.
     #[test]
     fn rate_limit_eviction_does_not_deadlock() {
         let mut engine = FilterEngine::new(FilterData::default(), 5, vec![], vec![]);
-        // Backdate the throttle so eviction's `allow(now, 60)` fires on the very
-        // first call -- the exact condition that deadlocks pre-fix.
+        // Backdate the throttle so eviction's `allow(now, 60)` fires on the first call.
         engine.backdate_eviction_throttle(0);
 
         for _ in 0..5 {
@@ -675,9 +647,9 @@ mod tests {
 
         assert!(engine.check_ip("10.1.2.3", 1).is_drop());
         assert!(!engine.check_ip("192.168.1.1", 1).is_drop());
-        // Fail-open on address family mismatch
+        // Fail-open on address family mismatch.
         assert!(!engine.check_ip("::1", 1).is_drop());
-        // Different project -- shouldn't match
+        // Different project must not match.
         assert!(!engine.check_ip("10.1.2.3", 999).is_drop());
     }
 
@@ -705,7 +677,7 @@ mod tests {
         let engine = FilterEngine::new(data, 0, vec![], vec![]);
 
         assert!(engine.check_user_agent("Scrapy/2.5", 1).is_drop());
-        // Different project -- no match
+        // Different project must not match.
         assert!(!engine.check_user_agent("Scrapy/2.5", 2).is_drop());
     }
 
@@ -717,7 +689,6 @@ mod tests {
         event.fingerprint = Some("fp-test".to_string());
         assert!(!engine.check(&event).is_drop());
 
-        // Now discard the fingerprint and swap in new data
         let mut data = FilterData::default();
         data.discarded.insert("fp-test".to_string());
         engine.apply_data(data);

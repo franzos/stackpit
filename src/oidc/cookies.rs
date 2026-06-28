@@ -45,6 +45,18 @@ pub fn clear_grant_cookie(secure: bool) -> HeaderValue {
     HeaderValue::from_str(&v).expect("clear grant cookie value is ASCII")
 }
 
+/// Clear both grant cookie name variants regardless of TLS posture, so a stale
+/// opposite-posture cookie can't outlive logout. `__Host-` clears must carry
+/// `Secure` to be accepted; the bare clear must not.
+pub fn clear_grant_cookie_all_variants() -> [HeaderValue; 2] {
+    let bare = format!("{GRANT_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
+    let host = format!("{GRANT_COOKIE_HOST}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0; Secure");
+    [
+        HeaderValue::from_str(&bare).expect("clear grant cookie value is ASCII"),
+        HeaderValue::from_str(&host).expect("clear grant cookie value is ASCII"),
+    ]
+}
+
 /// 10-minute TTL mirrors Hydra's auth-code lifetime.
 pub fn build_login_cookie(blob_b64: &str, secure: bool) -> HeaderValue {
     let mut v =

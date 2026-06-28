@@ -28,10 +28,10 @@ impl EventSort {
 
     fn as_sql_ident(&self) -> &'static str {
         match self {
-            Self::ProjectId => "project_id DESC, timestamp DESC",
-            Self::Level => "level ASC, timestamp DESC",
-            Self::Platform => "platform ASC, timestamp DESC",
-            Self::Timestamp => "timestamp DESC",
+            Self::ProjectId => "events.project_id DESC, events.timestamp DESC",
+            Self::Level => "events.level ASC, events.timestamp DESC",
+            Self::Platform => "events.platform ASC, events.timestamp DESC",
+            Self::Timestamp => "events.timestamp DESC",
         }
     }
 }
@@ -55,12 +55,12 @@ fn push_event_filter_conditions<'args>(
 
     if let Some(ref level) = filter.level {
         push_conjunction(qb);
-        qb.push("level = ");
+        qb.push("events.level = ");
         qb.push_bind(level.as_str());
     }
     if let Some(project_id) = filter.project_id {
         push_conjunction(qb);
-        qb.push("project_id = ");
+        qb.push("events.project_id = ");
         qb.push_bind(project_id as i64);
     }
     if let Some(ref query) = filter.query {
@@ -69,13 +69,13 @@ fn push_event_filter_conditions<'args>(
             .replace('%', "\\%")
             .replace('_', "\\_");
         push_conjunction(qb);
-        qb.push("title LIKE ");
+        qb.push("events.title LIKE ");
         qb.push_bind(format!("%{escaped}%"));
         qb.push(" ESCAPE '\\'");
     }
     if let Some(ref item_type) = filter.item_type {
         push_conjunction(qb);
-        qb.push("item_type = ");
+        qb.push("events.item_type = ");
         qb.push_bind(item_type.as_str());
     }
 }
@@ -90,16 +90,18 @@ pub async fn list_all_events(
 
     let sort = EventSort::parse(filter.sort.as_deref());
 
-    // COUNT query
     let mut count_qb: QueryBuilder<'_, crate::db::Db> =
         QueryBuilder::new("SELECT COUNT(*) FROM events");
     push_event_filter_conditions(&mut count_qb, filter);
 
     let total: i64 = count_qb.build_query_scalar().fetch_one(pool).await?;
 
-    // SELECT with ORDER BY + pagination
+    // Join projects so the firehose shows names instead of bare numeric ids.
     let mut select_qb: QueryBuilder<'_, crate::db::Db> = QueryBuilder::new(
-        "SELECT event_id, item_type, project_id, fingerprint, timestamp, level, title, platform, release, environment FROM events",
+        "SELECT events.event_id, events.item_type, events.project_id, p.name AS project_name, \
+         events.fingerprint, events.timestamp, events.level, events.title, events.platform, \
+         events.release, events.environment \
+         FROM events LEFT JOIN projects p ON p.project_id = events.project_id",
     );
     push_event_filter_conditions(&mut select_qb, filter);
     select_qb.push(" ORDER BY ");
@@ -241,7 +243,7 @@ pub async fn project_event_histogram(
         "30d" => (86400, 30, "%b %d"),
         "90d" => (86400, 90, "%b %d"),
         "365d" => (86400 * 7, 52, "%b %d"), // weekly buckets
-        _ => return Ok(Vec::new()),         // "all time" — skip chart
+        _ => return Ok(Vec::new()),         // "all time": skip chart
     };
 
     let start = now - chrono::Duration::seconds(bucket_secs * bucket_count as i64);
@@ -358,7 +360,6 @@ pub async fn tail_events(
 
 /// Tag facets for an issue -- grouped by key, top 5 values each.
 pub async fn get_tag_facets(pool: &crate::db::DbPool, fingerprint: &str) -> Result<Vec<TagFacet>> {
-    // Pull all rows sorted by key, then count desc -- we'll group them in a single pass
     let rows = sqlx::query(sql!(
         "SELECT tag_key, tag_value, count
          FROM issue_tag_values
@@ -436,6 +437,7 @@ fn map_event_summary(row: &crate::db::DbRow) -> Result<EventSummary> {
         event_id: row.get("event_id"),
         item_type: item_type_str.parse().unwrap_or_default(),
         project_id: row.get::<i64, _>("project_id") as u64,
+        project_name: row.try_get("project_name").ok().flatten(),
         fingerprint: row.get("fingerprint"),
         timestamp: row.get("timestamp"),
         level: row.get("level"),

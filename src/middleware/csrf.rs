@@ -48,6 +48,20 @@ fn request_carries_session_cookie(cookie_header: &str) -> bool {
     })
 }
 
+/// Whether a mutating request to `path` (carrying a session cookie) needs the
+/// CSRF synchronizer check. Carve-outs: login (pre-session), logout
+/// (non-destructive + SameSite-protected), and the OAuth endpoints.
+fn path_in_csrf_scope(path: &str, has_session_cookie: bool) -> bool {
+    let is_web = path.starts_with("/web/");
+    let is_login = path == "/web/login";
+    let is_logout = path == "/web/logout";
+    let is_oauth_endpoint = path == "/web/auth/login"
+        || path == "/web/auth/callback"
+        || path == "/web/auth/backchannel-logout";
+    let is_cookie_api = path.starts_with("/api/") && has_session_cookie;
+    (is_web && !is_login && !is_logout && !is_oauth_endpoint) || is_cookie_api
+}
+
 fn extract_csrf_field(body: &[u8]) -> Option<String> {
     form_urlencoded::parse(body)
         .find(|(k, _)| k == "csrf_token")
@@ -69,13 +83,6 @@ pub async fn csrf_middleware(
             | axum::http::Method::PATCH
     );
     let path = req.uri().path();
-    let is_web = path.starts_with("/web/");
-    let is_login = path == "/web/login";
-    // OAuth login/callback are GET-only and pre-session; back-channel logout
-    // is a server-to-server POST that verifies its own signature + JTI.
-    let is_oauth_endpoint = path == "/web/auth/login"
-        || path == "/web/auth/callback"
-        || path == "/web/auth/backchannel-logout";
 
     // Gate on a session cookie, not any cookie or an unvalidated Authorization
     // header: genuine bearer API clients carry no session cookie, so only
@@ -85,9 +92,8 @@ pub async fn csrf_middleware(
         .get(axum::http::header::COOKIE)
         .and_then(|v| v.to_str().ok())
         .is_some_and(request_carries_session_cookie);
-    let is_cookie_api = path.starts_with("/api/") && has_session_cookie;
 
-    let in_scope = (is_web && !is_login && !is_oauth_endpoint) || is_cookie_api;
+    let in_scope = path_in_csrf_scope(path, has_session_cookie);
 
     if !is_mutating || !in_scope {
         return next.run(req).await;
@@ -141,6 +147,22 @@ mod tests {
         let a = derive_admin_csrf_token("secret-1", "salt-a");
         let b = derive_admin_csrf_token("secret-1", "salt-b");
         assert_ne!(a, b, "distinct salts must yield distinct tokens");
+    }
+
+    #[test]
+    fn logout_is_out_of_csrf_scope_but_other_web_posts_stay_in() {
+        assert!(
+            !path_in_csrf_scope("/web/logout", true),
+            "logout must be exempt from the CSRF synchronizer check"
+        );
+        assert!(
+            path_in_csrf_scope("/web/projects/", true),
+            "normal mutating /web/ POSTs must stay in CSRF scope"
+        );
+        assert!(
+            !path_in_csrf_scope("/web/login", true),
+            "login is pre-session and must stay exempt"
+        );
     }
 
     #[test]

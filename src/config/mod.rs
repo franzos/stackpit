@@ -128,7 +128,7 @@ pub struct EmailConfig {
     #[serde(default, deserialize_with = "empty_string_as_none")]
     pub from_name: Option<String>,
     /// Global provider API token. Same posture as `[server] admin_token` and
-    /// `[auth.oauth] client_secret` — kept in config rather than DB-encrypted
+    /// `[auth.oauth] client_secret`: kept in config rather than DB-encrypted
     /// because it's a single instance-wide secret.
     #[serde(default)]
     pub token: Option<SecretString>,
@@ -361,7 +361,7 @@ impl OAuthConfig {
             && self.redirect_uri.is_some()
     }
 
-    /// At least one field set -- used to detect partial config and warn.
+    /// True if at least one field is set; used to detect partial config.
     pub fn is_partially_configured(&self) -> bool {
         self.issuer_url.is_some()
             || self.client_id.is_some()

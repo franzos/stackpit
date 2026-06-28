@@ -8,8 +8,6 @@ use anyhow::Result;
 
 pub use pool::{run_migrations, Db, DbPool, DbRow};
 
-// — SQL dialect helpers (?N → $N for PostgreSQL)
-
 /// Translate a static SQL string's ?N placeholders to $N for PostgreSQL.
 /// For SQLite this is a zero-cost pass-through.
 ///
@@ -24,7 +22,7 @@ macro_rules! sql {
 #[cfg(not(feature = "sqlite"))]
 macro_rules! sql {
     ($s:literal $(,)?) => {{
-        // Rewritten once per call site; subsequent calls reuse the cached string.
+        // Rewritten once per call site, then cached.
         static __SQL: std::sync::LazyLock<String> =
             std::sync::LazyLock::new(|| $crate::db::rewrite_placeholders($s));
         __SQL.as_str()
@@ -91,7 +89,7 @@ pub async fn sqlite_pragma(pool: &DbPool, pragma: &str) -> Result<()> {
             pool::DbPool::Sqlite(p) => {
                 sqlx::query(pragma).execute(p).await?;
             }
-            pool::DbPool::Postgres(_) => {} // no-op
+            pool::DbPool::Postgres(_) => {}
         }
         Ok(())
     }
@@ -158,8 +156,7 @@ pub(crate) async fn open_test_pool() -> DbPool {
     let pool = pool::create_write_pool(url).await.unwrap();
     pool::run_migrations(&pool).await.unwrap();
 
-    // Postgres tests share a real database -- clean all data between tests.
-    // TRUNCATE CASCADE handles foreign key ordering for us.
+    // Postgres tests share a real database; TRUNCATE CASCADE clears it between tests.
     #[cfg(all(feature = "postgres", not(feature = "sqlite")))]
     {
         sqlx::query(
@@ -170,7 +167,8 @@ pub(crate) async fn open_test_pool() -> DbPool {
              discard_stats, discarded_fingerprints, inbound_filters, \
              message_filters, rate_limits, environment_filters, \
              release_filters, user_agent_filters, filter_rules, \
-             ip_blocklist, project_repos, sync_state, api_keys \
+             ip_blocklist, project_repos, sync_state, api_keys, \
+             session_aggregates, transaction_metrics \
              CASCADE",
         )
         .execute(&pool)

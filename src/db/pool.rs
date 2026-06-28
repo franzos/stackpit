@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-// — Pool type aliases (backend-dependent)
+// Pool type aliases (backend-dependent)
 
 #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
 pub type DbPool = sqlx::SqlitePool;
@@ -16,7 +16,7 @@ pub type Db = sqlx::Postgres;
 #[cfg(all(feature = "postgres", not(feature = "sqlite")))]
 pub type DbRow = sqlx::postgres::PgRow;
 
-// — Pool creation
+// Pool creation
 
 /// Create a reader pool from a database URL.
 ///
@@ -105,7 +105,7 @@ async fn create_pg_pool(url: &str, max_connections: Option<u32>) -> Result<sqlx:
     Ok(pool)
 }
 
-// — Run migrations
+// Run migrations
 
 /// Run embedded migrations. For SQLite, runs the sqlite migrations directory.
 /// For PostgreSQL, runs the postgres migrations directory.
@@ -123,7 +123,7 @@ pub async fn run_migrations(pool: &DbPool) -> Result<()> {
     Ok(())
 }
 
-// — Database URL resolution
+// Database URL resolution
 
 /// Resolve a database URL from config. If `database_url` is set, use it.
 /// Otherwise, convert a SQLite file path to a `sqlite:` URL.

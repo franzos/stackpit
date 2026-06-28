@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+
+{% block title %}{{ name }} — Transactions — Stackpit{% endblock %}
+
+{% block sidebar_nav %}
+  {% call m::project_sidebar(project_id, nav, "transactions") %}
+  {% endcall %}
+{% endblock %}
+
+{% block breadcrumbs %}
+  <span class="breadcrumb-sep">/</span>
+  <a class="breadcrumb-link" href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
+  <span class="breadcrumb-sep">/</span>
+  <a class="breadcrumb-link"
+     href="/web/projects/{{ project_id }}/transactions/">Transactions</a>
+  <span class="breadcrumb-sep">/</span>
+  <span class="breadcrumb-current">{{ name }}</span>
+{% endblock %}
+
+{% block content %}
+  <div class="page-header">
+    <h1 class="truncate" title="{{ name }}">{{ name }}</h1>
+    {% match op %}{% when Some with (o) %}
+    <p class="text-muted text-[13px]">op: {{ o }}</p>
+    {% when None %}{% endmatch %}
+  </div>
+
+  {% if result.items.is_empty() %}
+    <div class="card">
+      <p class="empty">No instances recorded for this transaction.</p>
+    </div>
+  {% else %}
+    <div class="card overflow-hidden">
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th class="col-narrow">Duration</th>
+              <th class="col-narrow">Status</th>
+              <th class="col-title">Trace</th>
+              <th class="col-time">When</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for i in result.items %}
+              <tr>
+                <td class="text-tabular">{% match i.duration_ms %}{% when Some with (d) %}<a href="/web/projects/{{ project_id }}/events/{{ i.event_id }}/">{{ d }}ms</a>{% when None %}<a class="text-muted"
+   href="/web/projects/{{ project_id }}/events/{{ i.event_id }}/">—</a>{% endmatch %}</td>
+                <td>
+                  {% match i.status %}
+                  {% when Some with (s) %}
+                  {% if i.is_failed() %}
+                    <span class="badge badge-error">{{ s }}</span>
+                  {% else %}
+                    <span class="badge badge-resolved">{{ s }}</span>
+                  {% endif %}
+                  {% when None %}
+                  <span class="text-muted">—</span>
+                {% endmatch %}
+              </td>
+              <td class="col-title min-w-0">
+                {% match i.trace_id %}
+                {% when Some with (tid) %}
+                <a class="truncate"
+                   href="/web/projects/{{ project_id }}/traces/{{ tid }}/">{{ tid }}</a>
+                {% when None %}
+                <span class="text-muted">{{ i.event_id }}</span>
+              {% endmatch %}
+            </td>
+            <td class="text-muted">
+              <time datetime="{{ i.timestamp|format_ts }}"
+                    title="{{ i.timestamp|format_ts }}">{{ i.timestamp|format_relative }}</time>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<nav class="pagination" aria-label="Pagination">
+  <span>{{ result.total }} instance
+    {%- if result.total != 1 %}s{% endif %}
+  </span>
+  <span class="flex gap-2">
+    {% if result.has_prev() %}
+      <a class="btn btn-ghost"
+         href="/web/projects/{{ project_id }}/transactions/detail?name={{ name|urlencode }}&amp;offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}">« Previous</a>
+    {% endif %}
+    {% if result.has_next() %}
+      <a class="btn btn-ghost"
+         href="/web/projects/{{ project_id }}/transactions/detail?name={{ name|urlencode }}&amp;offset={{ result.next_offset() }}&amp;limit={{ result.limit }}">Next »</a>
+    {% endif %}
+  </span>
+</nav>
+{% endif %}
+{% endblock %}

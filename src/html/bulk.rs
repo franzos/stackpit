@@ -146,26 +146,6 @@ pub async fn issues_bulk(
     .await
 }
 
-/// Bulk actions on transactions -- same as issues, different item type.
-pub async fn transactions_bulk(
-    State(state): State<AppState>,
-    Path(project_id): Path<u64>,
-    body: Bytes,
-) -> axum::response::Response {
-    let form = match BulkForm::parse(&body) {
-        Ok(f) => f,
-        Err(e) => return html_error(StatusCode::BAD_REQUEST, &e),
-    };
-    handle_issue_bulk(
-        state,
-        project_id,
-        "transaction",
-        form,
-        &format!("/web/projects/{project_id}/transactions/"),
-    )
-    .await
-}
-
 async fn handle_issue_bulk(
     state: AppState,
     project_id: u64,

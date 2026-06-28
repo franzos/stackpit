@@ -12,7 +12,7 @@ use crate::sourcemap;
 const MAX_CHUNK_FIELDS: usize = 128;
 const MAX_CHUNK_TOTAL_BYTES: usize = 32 * 1024 * 1024;
 
-/// GET /api/0/organizations/{org}/chunk-upload/ — return upload config.
+/// GET /api/0/organizations/{org}/chunk-upload/ returns upload config.
 pub async fn chunk_upload_config(
     State(state): State<AppState>,
     Path(org): Path<String>,
@@ -129,7 +129,6 @@ pub async fn assemble(
     let key_project_id = super::validate_api_key(&state.pool, &headers, "sourcemap").await?;
     let pool = &state.sourcemap_pool;
 
-    // Resolve the project ID from the request, falling back to the key's project
     let project_id = match resolve_project_id(&body.projects) {
         0 => key_project_id,
         id if id == key_project_id => id,
@@ -141,7 +140,7 @@ pub async fn assemble(
         }
     };
 
-    // Validate chunk checksums (must be 40-char lowercase hex SHA1)
+    // Chunk checksums must be 40-char hex SHA1.
     if body.chunks.len() > 128 {
         return Err(super::api_error(StatusCode::BAD_REQUEST, "too many chunks"));
     }
@@ -154,8 +153,7 @@ pub async fn assemble(
         }
     }
 
-    // Check which chunks are already uploaded — return missing ones so
-    // sentry-cli can upload them before retrying the assemble call.
+    // Return missing chunks so sentry-cli uploads them before retrying assemble.
     let missing = sourcemap::find_missing_chunks(pool, &body.chunks, project_id)
         .await
         .map_err(|e| {
@@ -170,7 +168,6 @@ pub async fn assemble(
         })));
     }
 
-    // All chunks present — concatenate into the full artifact bundle
     let zip_data = sourcemap::assemble_chunks(pool, &body.chunks, project_id)
         .await
         .map_err(|e| {
@@ -178,7 +175,6 @@ pub async fn assemble(
             super::internal_error(e)
         })?;
 
-    // Verify bundle integrity
     if let Some(ref expected) = body.checksum {
         let actual = sha1_hex(&zip_data);
         if actual != *expected {
@@ -189,8 +185,7 @@ pub async fn assemble(
         }
     }
 
-    // Parse the artifact bundle and extract sourcemaps. Offloaded to a blocking
-    // task so ZIP decoding + JSON parsing don't stall the async runtime.
+    // Offloaded to a blocking task so ZIP decode + JSON parse don't stall the runtime.
     let entries = sourcemap::parse_artifact_bundle(zip_data)
         .await
         .map_err(|e| {
@@ -205,7 +200,6 @@ pub async fn assemble(
         }
     }
 
-    // Clean up the chunks we consumed
     if let Err(e) = sourcemap::delete_chunks(pool, &body.chunks, project_id).await {
         tracing::warn!("cleanup chunks: {e}");
     }

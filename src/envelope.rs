@@ -15,11 +15,11 @@ pub struct ParsedEnvelope {
     pub clock_drift_secs: i64,
 }
 
-/// Cap on items per envelope — prevents DoS via many small items.
+/// Cap on items per envelope; prevents DoS via many small items.
 /// Sentry SDKs can send hundreds of spans per envelope, so we allow up to 500.
 const MAX_ENVELOPE_ITEMS: usize = 500;
 
-/// Default item size limit — 1MB for most types
+/// Default item size limit: 1MB for most types.
 const MAX_ITEM_PAYLOAD_BYTES: usize = 1_048_576;
 
 /// Profiles and replay recordings can be much larger
@@ -30,7 +30,7 @@ const MAX_LARGE_ITEM_PAYLOAD_BYTES: usize = 50 * 1_048_576; // 50MB
 /// above the per-item large limit. A few large items' worth of headroom.
 const MAX_ENVELOPE_TOTAL_BYTES: usize = 4 * MAX_LARGE_ITEM_PAYLOAD_BYTES; // 200MB
 
-/// Parse a Sentry envelope — the wire format is `header\n(item_header\npayload\n)*`.
+/// Parse a Sentry envelope. Wire format: `header\n(item_header\npayload\n)*`.
 pub fn parse(body: &[u8], project_id: u64, auth: &SentryAuth) -> Result<ParsedEnvelope> {
     let mut result = ParsedEnvelope {
         auth: None,
@@ -41,7 +41,6 @@ pub fn parse(body: &[u8], project_id: u64, auth: &SentryAuth) -> Result<ParsedEn
         clock_drift_secs: 0,
     };
 
-    // Everything before the first newline is the envelope header
     let first_nl = memchr::memchr(b'\n', body).unwrap_or(body.len());
     let header_bytes = &body[..first_nl];
 
@@ -54,7 +53,7 @@ pub fn parse(body: &[u8], project_id: u64, auth: &SentryAuth) -> Result<ParsedEn
                     result.project_id = Some(dsn_project);
                 }
             }
-            // Envelope-level event_id — needed to associate attachments later
+            // Envelope-level event_id, needed to associate attachments later.
             result.envelope_event_id = header
                 .get("event_id")
                 .and_then(|v| v.as_str())
@@ -76,14 +75,13 @@ pub fn parse(body: &[u8], project_id: u64, auth: &SentryAuth) -> Result<ParsedEn
         }
     }
 
-    // Always trust the URL-provided project_id over the DSN one — prevents
-    // cross-project injection from a crafted envelope header.
+    // Trust the URL project_id over the DSN one: prevents cross-project
+    // injection from a crafted envelope header.
     let effective_project = project_id;
-    // Always use the request-level auth key — don't let an envelope header
-    // DSN override which key the events are attributed to.
+    // Use the request-level auth key, not an envelope header DSN, so events
+    // can't be reattributed to another key.
     let effective_key = auth.sentry_key.clone();
 
-    // Walk through items
     let mut pos = if first_nl < body.len() {
         first_nl + 1
     } else {
@@ -99,7 +97,6 @@ pub fn parse(body: &[u8], project_id: u64, auth: &SentryAuth) -> Result<ParsedEn
             break;
         }
 
-        // Each item starts with a JSON header line
         let item_nl = memchr::memchr(b'\n', &body[pos..])
             .map(|i| pos + i)
             .unwrap_or(body.len());
@@ -114,7 +111,7 @@ pub fn parse(body: &[u8], project_id: u64, auth: &SentryAuth) -> Result<ParsedEn
         let item_header: Value = match serde_json::from_slice(item_header_bytes) {
             Ok(v) => v,
             Err(_) => {
-                // Probably trailing garbage — bail out
+                // Probably trailing garbage.
                 break;
             }
         };
@@ -167,7 +164,7 @@ pub fn parse(body: &[u8], project_id: u64, auth: &SentryAuth) -> Result<ParsedEn
                 slice
             }
         } else {
-            // No declared length — read until the next newline
+            // No declared length: read until the next newline.
             let end = memchr::memchr(b'\n', &body[pos..])
                 .map(|i| pos + i)
                 .unwrap_or(body.len());
@@ -216,7 +213,7 @@ pub fn parse(body: &[u8], project_id: u64, auth: &SentryAuth) -> Result<ParsedEn
         }
 
         let mut event = StorableEvent::new(
-            String::new(), // placeholder — extract_fields sets it
+            String::new(), // placeholder; extract_fields sets it
             item_type,
             payload_bytes.to_vec(),
             effective_project,
@@ -225,12 +222,11 @@ pub fn parse(body: &[u8], project_id: u64, auth: &SentryAuth) -> Result<ParsedEn
 
         let parsed_event_id = extract_fields(payload_bytes, &item_type, &mut event);
 
-        // Apply clock drift correction to event timestamp
         if result.clock_drift_secs != 0 {
             event.timestamp += result.clock_drift_secs;
         }
 
-        // UserReport's event_id refers to the parent event — we give it its own UUID
+        // UserReport's event_id refers to the parent event; give it its own UUID.
         if item_type == ItemType::UserReport {
             event.parent_event_id = parsed_event_id;
             event.event_id = uuid::Uuid::new_v4().to_string();
@@ -242,6 +238,17 @@ pub fn parse(body: &[u8], project_id: u64, auth: &SentryAuth) -> Result<ParsedEn
     }
 
     Ok(result)
+}
+
+/// Test-only shim so other modules can exercise field extraction without
+/// reconstructing a full envelope.
+#[cfg(test)]
+pub(crate) fn extract_fields_for_test(
+    payload: &[u8],
+    item_type: &ItemType,
+    event: &mut StorableEvent,
+) {
+    extract_fields(payload, item_type, event);
 }
 
 /// Pull known fields out of the JSON payload into a StorableEvent.
@@ -256,9 +263,9 @@ fn extract_fields(
         Err(_) => return None,
     };
 
-    // Log items may arrive as a JSON array or {"items": [...]} batch.
-    // We can't extract per-item fields here — that happens downstream in
-    // parse_log_entries. Just return None so the event gets a generated UUID.
+    // Log items may arrive as a JSON array or {"items": [...]} batch. Per-item
+    // fields are extracted downstream in parse_log_entries; return None here so
+    // the event gets a generated UUID.
     if *item_type == ItemType::Log
         && (json.is_array() || json.get("items").and_then(|v| v.as_array()).is_some())
     {
@@ -335,6 +342,22 @@ fn extract_fields(
             .get("status")
             .and_then(|v| v.as_str())
             .map(String::from);
+        extract_session_bucket(&json, event);
+    } else if *item_type == ItemType::Sessions {
+        extract_session_aggregates(&json, event);
+    } else if *item_type == ItemType::Transaction {
+        extract_transaction_perf(&json, event);
+    }
+
+    // Error and default events also carry a trace context; capture trace_id so
+    // they correlate to the trace waterfall.
+    if event.trace_id.is_none() {
+        event.trace_id = json
+            .get("contexts")
+            .and_then(|c| c.get("trace"))
+            .and_then(|t| t.get("trace_id"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
     }
 
     if let Some(sdk) = json.get("sdk") {
@@ -373,8 +396,140 @@ fn extract_fields(
     event_id
 }
 
-/// Tags from Sentry can be either `[["key", "value"], ...]` or `{"key": "value", ...}` —
-/// I've seen both in the wild, so we handle both.
+/// Pull trace_id, duration, and trace status off a transaction payload.
+/// Duration prefers `measurements.duration.value` (already ms); otherwise it's
+/// derived from the raw `start_timestamp`/`timestamp` floats (seconds).
+fn extract_transaction_perf(json: &Value, event: &mut StorableEvent) {
+    let trace = json.get("contexts").and_then(|c| c.get("trace"));
+    event.trace_id = trace
+        .and_then(|t| t.get("trace_id"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    event.trace_status = trace
+        .and_then(|t| t.get("status"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    let measured = json
+        .get("measurements")
+        .and_then(|m| m.get("duration"))
+        .and_then(|d| d.get("value"))
+        .and_then(serde_json::Value::as_f64)
+        .filter(|f| f.is_finite());
+
+    event.duration_ms = match measured {
+        Some(ms) => Some(ms.round() as i64),
+        None => {
+            let end = json.get("timestamp").and_then(serde_json::Value::as_f64);
+            let start = json
+                .get("start_timestamp")
+                .and_then(serde_json::Value::as_f64);
+            match (end, start) {
+                (Some(e), Some(s)) if e.is_finite() && s.is_finite() => {
+                    Some(((e - s) * 1000.0).round() as i64)
+                }
+                _ => None,
+            }
+        }
+    };
+}
+
+/// Read release/environment from a session item's `attrs`, defaulting to ''.
+fn session_attrs(json: &Value) -> (String, String) {
+    let attrs = json.get("attrs");
+    let release = attrs
+        .and_then(|a| a.get("release"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let environment = attrs
+        .and_then(|a| a.get("environment"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    (release, environment)
+}
+
+/// Parse a single `session` item into one SessionBucket.
+fn extract_session_bucket(json: &Value, event: &mut StorableEvent) {
+    let (release, environment) = session_attrs(json);
+    let status = json.get("status").and_then(|v| v.as_str()).unwrap_or("ok");
+    let errors = json.get("errors").and_then(|v| v.as_u64()).unwrap_or(0);
+    let init = json.get("init").and_then(|v| v.as_bool()).unwrap_or(false);
+    let did = json.get("did").and_then(|v| v.as_str()).map(String::from);
+
+    let (mut crashed, mut errored, mut abnormal) = (0u64, 0u64, 0u64);
+    if status == "crashed" {
+        crashed = 1;
+    } else if status == "abnormal" {
+        abnormal = 1;
+    } else if errors > 0 {
+        errored = 1;
+    }
+    // total counts the session only on its init update, avoiding double-counting
+    // per-update heartbeats while still letting the terminal crash/abnormal
+    // update contribute to the failure counters.
+    let total = u64::from(init);
+
+    // The session's own start time is an rfc3339 string the generic timestamp
+    // path doesn't parse, so derive it here; otherwise every session buckets to
+    // the ingestion time and the daily trend collapses to one day.
+    let started_ts = json
+        .get("started")
+        .or_else(|| json.get("timestamp"))
+        .and_then(|v| v.as_str())
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map_or(event.timestamp, |dt| dt.timestamp());
+
+    event.session_buckets.push(crate::models::SessionBucket {
+        release,
+        environment,
+        started_ts,
+        total,
+        crashed,
+        errored,
+        abnormal,
+        did,
+        is_aggregate: false,
+    });
+}
+
+/// Parse a `sessions` aggregate item into one SessionBucket per `aggregates[]` entry.
+fn extract_session_aggregates(json: &Value, event: &mut StorableEvent) {
+    let (release, environment) = session_attrs(json);
+    let Some(aggregates) = json.get("aggregates").and_then(|v| v.as_array()) else {
+        return;
+    };
+
+    for agg in aggregates {
+        let exited = agg.get("exited").and_then(|v| v.as_u64()).unwrap_or(0);
+        let errored = agg.get("errored").and_then(|v| v.as_u64()).unwrap_or(0);
+        let crashed = agg.get("crashed").and_then(|v| v.as_u64()).unwrap_or(0);
+        let abnormal = agg.get("abnormal").and_then(|v| v.as_u64()).unwrap_or(0);
+        let total = exited + errored + crashed + abnormal;
+
+        let started_ts = agg
+            .get("started")
+            .and_then(|v| v.as_str())
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map_or(event.timestamp, |dt| dt.timestamp());
+
+        event.session_buckets.push(crate::models::SessionBucket {
+            release: release.clone(),
+            environment: environment.clone(),
+            started_ts,
+            total,
+            crashed,
+            errored,
+            abnormal,
+            did: None,
+            is_aggregate: true,
+        });
+    }
+}
+
+/// Tags from Sentry arrive as either `[["key", "value"], ...]` or
+/// `{"key": "value", ...}`; both shapes occur in the wild.
 fn extract_tags_from_json(json: &Value) -> Vec<(String, String)> {
     let tags = match json.get("tags") {
         Some(v) => v,
@@ -411,7 +566,7 @@ fn extract_tags_from_json(json: &Value) -> Vec<(String, String)> {
     result
 }
 
-/// The legacy `/store/` endpoint sends a plain JSON body — no envelope framing.
+/// The legacy `/store/` endpoint sends a plain JSON body, no envelope framing.
 pub fn parse_store_body(body: &[u8], project_id: u64, auth: &SentryAuth) -> Result<StorableEvent> {
     if body.is_empty() {
         bail!("empty body");
@@ -431,8 +586,7 @@ pub fn parse_store_body(body: &[u8], project_id: u64, auth: &SentryAuth) -> Resu
     Ok(event)
 }
 
-/// Wrap a CSP report into a proper Sentry event — browsers send these in
-/// their own format, so we normalize them.
+/// Wrap a CSP report into a Sentry event, normalizing the browser format.
 pub fn parse_security_body(
     body: &[u8],
     project_id: u64,
@@ -445,7 +599,7 @@ pub fn parse_security_body(
     let raw: Value = serde_json::from_slice(body)
         .map_err(|e| anyhow::anyhow!("invalid JSON in security report: {e}"))?;
 
-    // CSP reports arrive as {"csp-report": {...}} — we group by directive
+    // CSP reports arrive as {"csp-report": {...}}; grouped by directive.
     let csp_report = raw.get("csp-report").unwrap_or(&raw);
     let directive = csp_report
         .get("violated-directive")
@@ -455,8 +609,8 @@ pub fn parse_security_body(
 
     let title = format!("CSP: {directive}");
 
-    // Wrap it as a Sentry event — the message uses only the directive so that
-    // different blocked URIs with the same directive get grouped together
+    // Message uses only the directive so different blocked URIs with the
+    // same directive group together.
     let wrapper = serde_json::json!({
         "event_id": uuid::Uuid::new_v4().to_string(),
         "level": "warning",
@@ -483,7 +637,7 @@ pub fn parse_security_body(
     Ok(event)
 }
 
-/// Minidump uploads — we can't extract much, but we store them as events.
+/// Minidump uploads: little to extract, but stored as events.
 pub fn parse_minidump(event_id: &str, project_id: u64, public_key: &str) -> Result<StorableEvent> {
     let wrapper = serde_json::json!({
         "event_id": event_id,
@@ -553,7 +707,7 @@ mod tests {
         let result = parse(body, 1, &test_auth()).unwrap();
         assert_eq!(result.project_id, Some(99));
         assert_eq!(result.auth.as_ref().unwrap().sentry_key, "envkey");
-        // URL project_id wins over DSN project_id — security measure
+        // URL project_id wins over DSN project_id (security measure).
         assert_eq!(result.events[0].project_id, 1);
         // Request-level auth key always wins over envelope DSN key
         assert_eq!(result.events[0].public_key, "testkey");
@@ -604,7 +758,7 @@ mod tests {
 
     #[test]
     fn parse_empty_body_items_skipped() {
-        // Two newlines in a row — empty payload, should be skipped
+        // Two newlines in a row: empty payload, should be skipped.
         let body = b"{}\n{\"type\":\"event\"}\n\n";
         let result = parse(body, 1, &test_auth()).unwrap();
         assert_eq!(result.events.len(), 0);
@@ -628,7 +782,7 @@ mod tests {
         assert_eq!(event.project_id, 7);
         assert_eq!(event.level, Some(crate::models::Level::Error));
         assert_eq!(event.timestamp, 5000);
-        // Title is now computed in extract_fields (same JSON parse)
+        // Title is computed in extract_fields (same JSON parse).
         assert_eq!(event.title.as_deref(), Some("boom"));
     }
 
@@ -657,8 +811,8 @@ mod tests {
             Some("CSP: script-src")
         );
 
-        // After enrich — title extracted, payload stays raw JSON
-        // (compression now happens in the writer task)
+        // After enrich: title extracted, payload stays raw JSON
+        // (compression happens in the writer task).
         crate::enrich::enrich_event(&mut event);
         assert_eq!(event.title.as_deref(), Some("CSP: script-src"));
         let json2: Value = serde_json::from_slice(&event.payload).unwrap();
@@ -675,7 +829,7 @@ mod tests {
         let mut event2 = parse_security_body(body2, 3, &test_auth()).unwrap();
         crate::enrich::enrich_event(&mut event1);
         crate::enrich::enrich_event(&mut event2);
-        // Same directive, different blocked URI — should group together
+        // Same directive, different blocked URI: should group together.
         assert_eq!(event1.fingerprint, event2.fingerprint);
         // Still distinct events though
         assert_ne!(event1.event_id, event2.event_id);
@@ -698,6 +852,173 @@ mod tests {
     fn parse_security_body_empty() {
         let result = parse_security_body(b"", 1, &test_auth());
         assert!(result.is_err());
+    }
+
+    // --- transaction extraction ---
+
+    fn extract_txn(payload: &str) -> StorableEvent {
+        let mut event = StorableEvent::new(
+            String::new(),
+            ItemType::Transaction,
+            payload.as_bytes().to_vec(),
+            1,
+            "k".to_string(),
+        );
+        extract_fields(payload.as_bytes(), &ItemType::Transaction, &mut event);
+        event
+    }
+
+    #[test]
+    fn transaction_duration_prefers_measurement() {
+        let payload = r#"{"type":"transaction","transaction":"/api/health",
+            "start_timestamp":1700000000.0,"timestamp":1700000002.0,
+            "measurements":{"duration":{"value":1234.5,"unit":"millisecond"}},
+            "contexts":{"trace":{"trace_id":"abc123","status":"ok"}}}"#;
+        let event = extract_txn(payload);
+        assert_eq!(event.duration_ms, Some(1235));
+        assert_eq!(event.trace_id.as_deref(), Some("abc123"));
+        assert_eq!(event.trace_status.as_deref(), Some("ok"));
+    }
+
+    #[test]
+    fn transaction_duration_falls_back_to_timestamps() {
+        let payload = r#"{"type":"transaction","transaction":"/api/slow",
+            "start_timestamp":1700000000.0,"timestamp":1700000002.5,
+            "contexts":{"trace":{"trace_id":"deadbeef","status":"internal_error"}}}"#;
+        let event = extract_txn(payload);
+        assert_eq!(event.duration_ms, Some(2500));
+        assert_eq!(event.trace_id.as_deref(), Some("deadbeef"));
+        assert_eq!(event.trace_status.as_deref(), Some("internal_error"));
+    }
+
+    #[test]
+    fn non_transaction_gets_trace_id_but_no_perf_fields() {
+        let payload = r#"{"message":"hello","contexts":{"trace":{"trace_id":"x"}}}"#;
+        let mut event = StorableEvent::new(
+            String::new(),
+            ItemType::Event,
+            payload.as_bytes().to_vec(),
+            1,
+            "k".to_string(),
+        );
+        extract_fields(payload.as_bytes(), &ItemType::Event, &mut event);
+        assert_eq!(event.trace_id.as_deref(), Some("x"));
+        assert!(event.duration_ms.is_none());
+        assert!(event.trace_status.is_none());
+    }
+
+    // --- session extraction ---
+
+    fn extract_session(payload: &str) -> StorableEvent {
+        let mut event = StorableEvent::new(
+            String::new(),
+            ItemType::Session,
+            payload.as_bytes().to_vec(),
+            1,
+            "k".to_string(),
+        );
+        extract_fields(payload.as_bytes(), &ItemType::Session, &mut event);
+        event
+    }
+
+    #[test]
+    fn session_reads_nested_release_and_environment() {
+        let payload = r#"{"sid":"s1","did":"u1","init":true,"status":"ok","errors":0,
+            "attrs":{"release":"app@1.0","environment":"prod"}}"#;
+        let event = extract_session(payload);
+        assert_eq!(event.session_buckets.len(), 1);
+        let b = &event.session_buckets[0];
+        assert_eq!(b.release, "app@1.0");
+        assert_eq!(b.environment, "prod");
+        assert_eq!(b.did.as_deref(), Some("u1"));
+    }
+
+    #[test]
+    fn session_classifies_crashed() {
+        let payload = r#"{"sid":"s1","init":true,"status":"crashed","errors":1,"attrs":{}}"#;
+        let b = &extract_session(payload).session_buckets[0];
+        assert_eq!(b.crashed, 1);
+        assert_eq!(b.errored, 0);
+        assert_eq!(b.abnormal, 0);
+        assert_eq!(b.total, 1);
+    }
+
+    #[test]
+    fn session_classifies_errored_when_errors_positive_and_status_ok() {
+        let payload = r#"{"sid":"s1","init":true,"status":"ok","errors":2,"attrs":{}}"#;
+        let b = &extract_session(payload).session_buckets[0];
+        assert_eq!(b.errored, 1);
+        assert_eq!(b.crashed, 0);
+        assert_eq!(b.abnormal, 0);
+    }
+
+    #[test]
+    fn session_classifies_abnormal() {
+        let payload = r#"{"sid":"s1","init":true,"status":"abnormal","errors":0,"attrs":{}}"#;
+        let b = &extract_session(payload).session_buckets[0];
+        assert_eq!(b.abnormal, 1);
+        assert_eq!(b.crashed, 0);
+        assert_eq!(b.errored, 0);
+    }
+
+    #[test]
+    fn session_healthy_has_no_failure_counts() {
+        let payload = r#"{"sid":"s1","init":true,"status":"exited","errors":0,"attrs":{}}"#;
+        let b = &extract_session(payload).session_buckets[0];
+        assert_eq!(b.crashed, 0);
+        assert_eq!(b.errored, 0);
+        assert_eq!(b.abnormal, 0);
+        assert_eq!(b.total, 1);
+    }
+
+    #[test]
+    fn session_total_only_counted_on_init() {
+        // Terminal crash update without init: still counts the crash, but not total.
+        let payload = r#"{"sid":"s1","init":false,"status":"crashed","errors":1,"attrs":{}}"#;
+        let b = &extract_session(payload).session_buckets[0];
+        assert_eq!(b.total, 0);
+        assert_eq!(b.crashed, 1);
+    }
+
+    #[test]
+    fn session_started_ts_parsed_from_rfc3339() {
+        // The session's own start time drives day bucketing; an rfc3339 string
+        // must be parsed rather than collapsing onto the ingest timestamp.
+        let payload = r#"{"sid":"s1","init":true,"status":"ok","errors":0,
+            "started":"2025-03-07T12:00:00.000Z","attrs":{}}"#;
+        let b = &extract_session(payload).session_buckets[0];
+        assert_eq!(b.started_ts, 1_741_348_800); // 2025-03-07T12:00:00Z
+    }
+
+    #[test]
+    fn aggregate_sessions_parses_multiple_entries() {
+        let payload = r#"{
+            "aggregates":[
+                {"started":"2025-03-07T12:00:00.000Z","exited":100,"errored":5,"crashed":2},
+                {"started":"2025-03-07T13:00:00.000Z","exited":50,"errored":0,"crashed":0}
+            ],
+            "attrs":{"release":"app@2.0","environment":"staging"}
+        }"#;
+        let mut event = StorableEvent::new(
+            String::new(),
+            ItemType::Sessions,
+            payload.as_bytes().to_vec(),
+            1,
+            "k".to_string(),
+        );
+        extract_fields(payload.as_bytes(), &ItemType::Sessions, &mut event);
+        assert_eq!(event.session_buckets.len(), 2);
+        let first = &event.session_buckets[0];
+        assert_eq!(first.release, "app@2.0");
+        assert_eq!(first.environment, "staging");
+        assert_eq!(first.total, 107); // 100 + 5 + 2
+        assert_eq!(first.crashed, 2);
+        assert_eq!(first.errored, 5);
+        assert!(first.is_aggregate);
+        assert!(first.did.is_none());
+        let second = &event.session_buckets[1];
+        assert_eq!(second.total, 50);
+        assert_eq!(second.crashed, 0);
     }
 
     // --- title enrichment (via parse_store_body + enrich_event) ---

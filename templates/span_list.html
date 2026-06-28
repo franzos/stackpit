@@ -122,9 +122,7 @@
     </div>
 
     <nav class="pagination" aria-label="Pagination">
-      <span>{{ result.total }} span
-        {% if result.total != 1 %}s{% endif %}
-      </span>
+      <span>{{ result.total }} span{%- if result.total != 1 %}s{% endif %}</span>
       <span class="flex gap-2">
         {% if result.has_prev() %}
           <a class="btn btn-ghost"

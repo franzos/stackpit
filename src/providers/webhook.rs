@@ -19,7 +19,6 @@ pub async fn send(
         "event_id": event.event_id,
     });
 
-    // Tack on fields specific to the trigger type
     match &event.trigger {
         crate::notify::NotifyTrigger::ThresholdExceeded {
             rule_id,

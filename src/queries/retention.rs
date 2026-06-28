@@ -3,7 +3,7 @@ use sqlx::Row;
 
 use crate::db::{sql, DbPool};
 
-/// Delete old events in chunks (preserves write-lock granularity for concurrent access).
+/// Per-chunk delete cap, keeps write-lock hold short for concurrent access.
 const CHUNK_LIMIT: i64 = 5000;
 
 pub async fn delete_old_events(pool: &DbPool, retention_days: u32) -> Result<usize> {
@@ -26,7 +26,7 @@ pub async fn delete_old_events(pool: &DbPool, retention_days: u32) -> Result<usi
             )"
         );
 
-        // Collect distinct fingerprints from the rows about to be deleted.
+        // Fingerprints of the rows about to be deleted, for issue reconcile.
         #[cfg(feature = "sqlite")]
         let fp_sql = sql!(
             "SELECT DISTINCT fingerprint FROM events \
@@ -73,21 +73,20 @@ pub async fn delete_old_events(pool: &DbPool, retention_days: u32) -> Result<usi
         tx.commit().await?;
         total_deleted += deleted;
 
-        // If we got fewer than the limit we've caught up -- no need for another round.
         if deleted < CHUNK_LIMIT as usize {
             break;
         }
 
-        // Brief pause between chunks to let the writer acquire the lock if it's waiting.
+        // Pause between chunks to let a waiting writer acquire the lock.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 
     total_deleted += delete_old_spans(pool, cutoff).await?;
     total_deleted += delete_old_metrics(pool, cutoff).await?;
     total_deleted += delete_old_logs(pool, cutoff).await?;
+    total_deleted += delete_old_transaction_metrics(pool, cutoff).await?;
 
-    // Vacuum freed pages outside any transaction so it doesn't hold the
-    // write lock while reclaiming space.
+    // Vacuum outside any transaction so it doesn't hold the write lock.
     #[cfg(feature = "sqlite")]
     if total_deleted > 0 {
         if let Err(e) = sqlx::query("PRAGMA incremental_vacuum").execute(pool).await {
@@ -200,13 +199,23 @@ async fn delete_old_logs(pool: &DbPool, cutoff: i64) -> Result<usize> {
     Ok(total)
 }
 
-/// Reconcile issues touched by a retention delete -- remove orphans,
-/// recount the rest, and vacuum the freed pages.
+/// Drop transaction rollup rows whose most recent activity predates the cutoff.
+/// Rolled-up rows have no `received_at`, so we use `last_seen` (event time).
+async fn delete_old_transaction_metrics(pool: &DbPool, cutoff: i64) -> Result<usize> {
+    let deleted = sqlx::query(sql!("DELETE FROM transaction_metrics WHERE last_seen < ?1"))
+        .bind(cutoff)
+        .execute(pool)
+        .await?
+        .rows_affected() as usize;
+    Ok(deleted)
+}
+
+/// Reconcile issues touched by a retention delete: remove orphans and recount the rest.
 async fn reconcile_affected_issues(
     tx: &mut sqlx::Transaction<'_, crate::db::Db>,
     fingerprints: &[String],
 ) -> Result<()> {
-    // Batch into chunks to stay within the DB's variable limit
+    // Chunk to stay within the DB's bind-variable limit.
     for chunk in fingerprints.chunks(500) {
         let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new(
             "UPDATE issues SET event_count = (
@@ -220,9 +229,8 @@ async fn reconcile_affected_issues(
         qb.push(")");
         qb.build().execute(&mut **tx).await?;
 
-        // Delete tag values for ALL affected fingerprints — we can't recalculate
-        // partial counts since tags aren't stored per-event in a queryable form.
-        // The accumulator rebuilds from new incoming events.
+        // Drop tag values for all affected fingerprints: counts can't be partially
+        // recalculated (tags aren't per-event queryable); the accumulator rebuilds them.
         let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new(
             "DELETE FROM issue_tag_values WHERE fingerprint IN (",
         );
@@ -246,8 +254,7 @@ async fn reconcile_affected_issues(
     Ok(())
 }
 
-/// Targeted reconcile -- recount only the given fingerprints, remove orphans
-/// among them, and vacuum. Opens its own transaction.
+/// Targeted reconcile of the given fingerprints in its own transaction.
 pub async fn reconcile_after_event_delete(pool: &DbPool, fingerprints: &[String]) -> Result<()> {
     if fingerprints.is_empty() {
         return Ok(());

@@ -81,9 +81,7 @@ pub async fn handle(
         accepted += 1;
     }
 
-    // Everything in this envelope got filtered out. We still return 200 --
-    // leaking filter info to the client would be a bad idea. The discards
-    // are tracked in discard_stats so we can surface them in the UI.
+    // Return 200 even when fully filtered: don't leak filter info to clients.
     if accepted == 0 && filtered > 0 {
         tracing::debug!("all {filtered} event(s) in envelope were filtered");
     }

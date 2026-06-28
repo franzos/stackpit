@@ -16,8 +16,8 @@ impl IngestStats {
     }
 }
 
-/// Keeps a running count of discarded events by reason. This is intentionally
-/// decoupled from the filter -- we just bump counters and flush to DB periodically.
+/// Running count of discarded events by reason, decoupled from the filter:
+/// bump counters in memory and flush to the DB periodically.
 pub struct DiscardStats {
     buffer: dashmap::DashMap<(u64, String, Option<i64>, String), u64>,
 }
@@ -38,14 +38,13 @@ impl DiscardStats {
             .or_insert(0) += 1;
     }
 
-    /// Writes accumulated counts to the database. We snapshot first, then subtract
-    /// what we flushed -- so concurrent `record()` calls aren't lost.
+    /// Flush accumulated counts to the database. Snapshots first, then subtracts
+    /// only what was written so concurrent `record()` calls aren't lost.
     pub async fn flush(&self, pool: &crate::db::DbPool) -> anyhow::Result<()> {
         if self.buffer.is_empty() {
             return Ok(());
         }
 
-        // Grab a snapshot -- anything incremented after this is safe
         let entries: Vec<_> = self
             .buffer
             .iter()
@@ -65,7 +64,6 @@ impl DiscardStats {
             }
         }
 
-        // Subtract only what we successfully wrote -- new increments are preserved
         for (key, count) in flushed {
             self.buffer
                 .entry(key)

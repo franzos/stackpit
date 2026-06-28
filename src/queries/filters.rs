@@ -411,8 +411,7 @@ pub async fn delete_ip_block(pool: &crate::db::DbPool, id: i64) -> Result<u64> {
 
 // -- Bulk filter data loading (used by FilterEngine) -----------------------
 
-/// Load the full filter dataset from the database, parsed into domain types.
-/// This feeds the FilterEngine -- one query per filter tier.
+/// Load the full filter dataset, parsed into domain types (one query per filter tier).
 pub async fn load_filter_data(pool: &crate::db::DbPool) -> Result<crate::filter::FilterData> {
     use crate::filter::cidr::CidrBlock;
     use crate::filter::rules::{FilterAction, FilterField, FilterOperator, FilterRule};

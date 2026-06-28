@@ -24,8 +24,7 @@ pub async fn list_synced_events_without_attachments(
     Ok(rows.iter().map(|r| r.get("event_id")).collect())
 }
 
-/// Existing (event_id, filename) pairs for synced events -- used to skip
-/// attachments we've already downloaded.
+/// Existing (event_id, filename) pairs for synced events, to skip already-downloaded attachments.
 pub async fn list_existing_attachment_keys(
     pool: &DbPool,
     project_id: u64,

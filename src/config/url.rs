@@ -60,10 +60,7 @@ pub(super) fn validate_issuer_url_scheme(issuer: &str) -> Result<()> {
     let host = rest.split(['/', '?', '#']).next().unwrap_or("");
     let host_only = host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host);
     match host_only {
-        // `host.containers.internal` is a /etc/hosts alias for 127.0.0.1 on
-        // container-hosting systems (Podman, Docker Desktop). Same loopback
-        // posture as `localhost`; Hydra's discovery doc uses it so the issuer
-        // claim validates from inside other containers too.
+        // `host.containers.internal` is a loopback alias on Podman/Docker Desktop.
         "localhost" | "127.0.0.1" | "[::1]" | "::1" | "host.containers.internal" => Ok(()),
         _ => anyhow::bail!(
             "auth.oauth.issuer_url '{trimmed}' uses http:// with a non-loopback host -- HTTPS is \

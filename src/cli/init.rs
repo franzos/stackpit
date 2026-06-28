@@ -1,8 +1,6 @@
 use anyhow::{bail, Result};
 use std::path::Path;
 
-// TODO(#4): once the `admin-token generate` subcommand lands (Wave 3),
-// move the token-minting logic into a shared helper and call it from here.
 fn generate_admin_token() -> String {
     crate::crypto::random_hex::<32>()
 }

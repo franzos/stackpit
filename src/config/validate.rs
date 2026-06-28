@@ -14,11 +14,10 @@ const REFRESH_TOKEN_MAX_TTL_CAP_SECS: u64 = 90 * 24 * 3600;
 const BEARER_CACHE_MAX_TTL_CAP_SECS: u64 = 300;
 
 impl Config {
-    /// Catches misconfigurations early -- call right after loading.
+    /// Catches misconfigurations early; call right after loading.
     pub fn validate(&self) -> Result<()> {
         use std::net::SocketAddr;
 
-        // Make sure bind addresses are parseable
         self.server
             .bind
             .parse::<SocketAddr>()
@@ -31,7 +30,6 @@ impl Config {
             )
         })?;
 
-        // Sanity-check the external URL scheme
         if let Some(ref url) = self.server.external_url {
             if !url.starts_with("http://") && !url.starts_with("https://") {
                 anyhow::bail!(
@@ -95,7 +93,6 @@ impl Config {
             );
         }
 
-        // Create the DB directory if it doesn't exist yet
         let db_path = Path::new(&self.storage.path);
         if let Some(parent) = db_path.parent() {
             if !parent.as_os_str().is_empty() && !parent.exists() {
@@ -108,7 +105,6 @@ impl Config {
             }
         }
 
-        // Catch empty or too-short admin tokens early
         if let Some(ref token) = self.server.admin_token {
             let trimmed = token.expose_secret().trim();
             if trimmed.is_empty() {
@@ -192,8 +188,8 @@ impl Config {
         Ok(())
     }
 
-    /// OAuth/MCP validation -- a mix of hard errors (insecure issuer URL,
-    /// silently-empty audience) and warnings for half-configured sections.
+    /// OAuth/MCP validation: hard errors (insecure issuer URL, silently-empty
+    /// audience) plus warnings for half-configured sections.
     fn validate_auth(&self) -> Result<()> {
         let oauth = &self.auth.oauth;
 

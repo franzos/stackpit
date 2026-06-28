@@ -4,7 +4,9 @@ use sqlx::Row;
 use crate::db::sql;
 use crate::db::DbPool;
 
-use super::types::{Page, PagedResult, Release, ReleaseFilter, ReleaseHealth, ReleaseSummary};
+use super::types::{
+    DailySessions, Page, PagedResult, Release, ReleaseFilter, ReleaseHealth, ReleaseSummary,
+};
 
 /// Closed set of allowed ORDER BY clauses; the rendered ident is always
 /// `&'static str`, keeping user input out of the SQL string.
@@ -53,7 +55,7 @@ pub async fn find_projects_by_version(pool: &DbPool, version: &str) -> Result<Ve
         .collect())
 }
 
-/// Upsert a release -- creates it if new, or updates fields with fresh data.
+/// Upsert a release, creating it or refreshing its fields.
 pub async fn upsert_release(
     pool: &DbPool,
     project_id: u64,
@@ -118,7 +120,7 @@ pub async fn get_release(pool: &DbPool, project_id: u64, version: &str) -> Resul
 
 /// Distinct releases for a project, most recent first. Capped at 50.
 pub async fn list_releases_for_project(pool: &DbPool, project_id: u64) -> Result<Vec<String>> {
-    // Try the releases table first (populated by sync), fall back to events.release
+    // Prefer the releases table (populated by sync), fall back to events.release.
     let rows = sqlx::query(sql!(
         "SELECT version FROM releases
          WHERE project_id = ?1
@@ -136,7 +138,7 @@ pub async fn list_releases_for_project(pool: &DbPool, project_id: u64) -> Result
             .collect());
     }
 
-    // Fallback: releases extracted from event payloads directly
+    // Fallback: releases from event payloads.
     let rows = sqlx::query(sql!(
         "SELECT release, MAX(timestamp) AS latest FROM events
          WHERE project_id = ?1 AND release IS NOT NULL
@@ -153,49 +155,183 @@ pub async fn list_releases_for_project(pool: &DbPool, project_id: u64) -> Result
         .collect())
 }
 
-/// Release health stats -- crash-free rate per release, computed from session data.
+/// Crash-free rate per release from the `session_aggregates` rollup, summing
+/// environments. User-level crash-free merges HLL sketches and is None when an
+/// identity-less aggregate contributed to the release.
 pub async fn get_release_health(pool: &DbPool, project_id: u64) -> Result<Vec<ReleaseHealth>> {
+    use crate::models::HLL_REGISTER_COUNT;
+    use simple_hll::HyperLogLog;
+
     let rows = sqlx::query(sql!(
-        "SELECT
-            COALESCE(release, '(no release)') AS rel,
-            COUNT(*) AS total,
-            SUM(CASE WHEN session_status = 'ok' OR session_status = 'exited' THEN 1 ELSE 0 END) AS ok_count,
-            SUM(CASE WHEN session_status = 'crashed' THEN 1 ELSE 0 END) AS crashed,
-            SUM(CASE WHEN session_status = 'errored' OR session_status = 'abnormal' THEN 1 ELSE 0 END) AS errored
-         FROM events
-         WHERE project_id = ?1
-           AND item_type IN ('session', 'sessions')
-           AND session_status IS NOT NULL
-           AND session_status != 'init'
-         GROUP BY rel
-         ORDER BY total DESC
-         LIMIT 200"
+        "SELECT release, sessions_total, sessions_crashed, sessions_errored, sessions_abnormal,
+                users_hll, users_crashed_hll, has_aggregate
+         FROM session_aggregates
+         WHERE project_id = ?1"
     ))
     .bind(project_id as i64)
     .fetch_all(pool)
     .await?;
 
-    Ok(rows
+    struct Acc {
+        total: u64,
+        crashed: u64,
+        errored: u64,
+        abnormal: u64,
+        has_aggregate: bool,
+        users: HyperLogLog<12>,
+        users_crashed: HyperLogLog<12>,
+        has_user_data: bool,
+    }
+
+    let mut by_release: std::collections::HashMap<String, Acc> = std::collections::HashMap::new();
+    for row in &rows {
+        let release: String = row.get("release");
+        let acc = by_release.entry(release).or_insert_with(|| Acc {
+            total: 0,
+            crashed: 0,
+            errored: 0,
+            abnormal: 0,
+            has_aggregate: false,
+            users: HyperLogLog::new(),
+            users_crashed: HyperLogLog::new(),
+            has_user_data: false,
+        });
+        acc.total += row.get::<i64, _>("sessions_total") as u64;
+        acc.crashed += row.get::<i64, _>("sessions_crashed") as u64;
+        acc.errored += row.get::<i64, _>("sessions_errored") as u64;
+        acc.abnormal += row.get::<i64, _>("sessions_abnormal") as u64;
+        if row.get::<i64, _>("has_aggregate") != 0 {
+            acc.has_aggregate = true;
+        }
+
+        if let Some(buf) = row.get::<Option<Vec<u8>>, _>("users_hll") {
+            if buf.len() == HLL_REGISTER_COUNT {
+                acc.users.merge(&HyperLogLog::with_registers(buf));
+                acc.has_user_data = true;
+            }
+        }
+        if let Some(buf) = row.get::<Option<Vec<u8>>, _>("users_crashed_hll") {
+            if buf.len() == HLL_REGISTER_COUNT {
+                acc.users_crashed.merge(&HyperLogLog::with_registers(buf));
+            }
+        }
+    }
+
+    let mut out: Vec<ReleaseHealth> = by_release
         .into_iter()
-        .map(|row| {
-            let total: i64 = row.get(1);
-            let crashed: i64 = row.get(3);
-            let errored: i64 = row.get(4);
-            let crash_free = if total > 0 {
-                ((total - crashed - errored) as f64 / total as f64) * 100.0
+        .map(|(release, acc)| {
+            let total = acc.total;
+            let crash_free_sessions = if total > 0 {
+                (total.saturating_sub(acc.crashed) as f64 / total as f64) * 100.0
             } else {
                 100.0
             };
+            let label = if release.is_empty() {
+                "(no release)".to_string()
+            } else {
+                release
+            };
+
+            let (crash_free_users, total_users) = if acc.has_aggregate || !acc.has_user_data {
+                (None, None)
+            } else {
+                let users = acc.users.count() as u64;
+                let crashed_users = acc.users_crashed.count() as u64;
+                let cfu = if users > 0 {
+                    ((users.saturating_sub(crashed_users)) as f64 / users as f64) * 100.0
+                } else {
+                    100.0
+                };
+                (Some((cfu * 100.0).round() / 100.0), Some(users))
+            };
+
             ReleaseHealth {
-                release: row.get(0),
-                total_sessions: total as u64,
-                ok_count: row.get::<i64, _>(2) as u64,
-                crashed_count: crashed as u64,
-                errored_count: errored as u64,
-                crash_free_rate: (crash_free * 100.0).round() / 100.0,
+                release: label,
+                total_sessions: total,
+                ok_count: total.saturating_sub(acc.crashed + acc.errored + acc.abnormal),
+                crashed_count: acc.crashed,
+                errored_count: acc.errored,
+                crash_free_rate: (crash_free_sessions * 100.0).round() / 100.0,
+                crash_free_users,
+                total_users,
             }
         })
-        .collect())
+        .collect();
+
+    out.sort_by_key(|r| std::cmp::Reverse(r.total_sessions));
+    out.truncate(200);
+    Ok(out)
+}
+
+/// Per-day session totals for a project, from `day_bucket` >= `since_ts`,
+/// summed across releases and environments. Ordered oldest-first for charting.
+pub async fn get_release_health_daily(
+    pool: &DbPool,
+    project_id: u64,
+    since_ts: i64,
+) -> Result<Vec<DailySessions>> {
+    let rows = sqlx::query(sql!(
+        "SELECT day_bucket, \
+                SUM(sessions_total) AS total, \
+                SUM(sessions_crashed) AS crashed, \
+                SUM(sessions_errored) AS errored \
+         FROM session_aggregates \
+         WHERE project_id = ?1 AND day_bucket >= ?2 \
+         GROUP BY day_bucket \
+         ORDER BY day_bucket"
+    ))
+    .bind(project_id as i64)
+    .bind(since_ts)
+    .fetch_all(pool)
+    .await?;
+
+    let present: Vec<DailySessions> = rows
+        .into_iter()
+        .map(|row| DailySessions {
+            day: row.get::<i64, _>("day_bucket"),
+            total: row.get::<i64, _>("total") as u64,
+            crashed: row.get::<i64, _>("crashed") as u64,
+            errored: row.get::<i64, _>("errored") as u64,
+        })
+        .collect();
+
+    Ok(fill_session_gaps(present, since_ts))
+}
+
+const SECS_PER_DAY: i64 = 86400;
+
+/// Insert zero-valued entries for missing days so the chart x-axis is
+/// time-proportional. Fills from the requested `since_day` (day-aligned) to the
+/// last present day, capped at 90 days to avoid pathological output.
+fn fill_session_gaps(present: Vec<DailySessions>, since_ts: i64) -> Vec<DailySessions> {
+    let Some(last_day) = present.last().map(|d| d.day) else {
+        return present;
+    };
+    let since_day = (since_ts / SECS_PER_DAY) * SECS_PER_DAY;
+    let first_present = present.first().map(|d| d.day).unwrap_or(last_day);
+    let mut start = since_day.min(first_present);
+    if (last_day - start) / SECS_PER_DAY >= 90 {
+        start = last_day - 89 * SECS_PER_DAY;
+    }
+
+    let by_day: std::collections::HashMap<i64, &DailySessions> =
+        present.iter().map(|d| (d.day, d)).collect();
+
+    let mut out = Vec::new();
+    let mut day = start;
+    while day <= last_day {
+        match by_day.get(&day) {
+            Some(d) => out.push((*d).clone()),
+            None => out.push(DailySessions {
+                day,
+                total: 0,
+                crashed: 0,
+                errored: 0,
+            }),
+        }
+        day += SECS_PER_DAY;
+    }
+    out
 }
 
 /// All releases across projects with event counts, issue counts, and adoption %.
@@ -209,8 +345,6 @@ pub async fn list_all_releases(
     let adoption_since_ts =
         adoption_since.unwrap_or_else(|| chrono::Utc::now().timestamp() - 86400);
 
-    // Build the count query to get the total before pagination.
-    // We collect filter conditions separately so we can reuse them in both queries.
     let mut count_qb = sqlx::QueryBuilder::<crate::db::Db>::new(
         "SELECT COUNT(*) FROM (
             SELECT e.project_id, e.release
@@ -241,7 +375,6 @@ pub async fn list_all_releases(
 
     let sort = ReleaseSort::parse(filter.sort.as_deref());
 
-    // Main CTE query with pagination.
     let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new(
         "WITH project_totals AS (
             SELECT project_id, COUNT(*) AS total
@@ -317,4 +450,213 @@ pub async fn list_all_releases(
         .collect();
 
     Ok(PagedResult::from_page(items, total, page))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use simple_hll::HyperLogLog;
+
+    #[allow(clippy::too_many_arguments)]
+    async fn insert_agg(
+        pool: &DbPool,
+        project_id: i64,
+        release: &str,
+        environment: &str,
+        total: i64,
+        crashed: i64,
+        errored: i64,
+        has_aggregate: i64,
+        users_hll: Option<Vec<u8>>,
+        users_crashed_hll: Option<Vec<u8>>,
+    ) {
+        insert_agg_day(
+            pool,
+            project_id,
+            release,
+            environment,
+            0,
+            total,
+            crashed,
+            errored,
+            has_aggregate,
+            users_hll,
+            users_crashed_hll,
+        )
+        .await;
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn insert_agg_day(
+        pool: &DbPool,
+        project_id: i64,
+        release: &str,
+        environment: &str,
+        day_bucket: i64,
+        total: i64,
+        crashed: i64,
+        errored: i64,
+        has_aggregate: i64,
+        users_hll: Option<Vec<u8>>,
+        users_crashed_hll: Option<Vec<u8>>,
+    ) {
+        sqlx::query(sql!(
+            "INSERT INTO session_aggregates (project_id, release, environment, day_bucket, sessions_total, sessions_crashed, sessions_errored, sessions_abnormal, has_aggregate, users_hll, users_crashed_hll, first_seen, last_seen)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9, ?10, 1000, 2000)"
+        ))
+        .bind(project_id)
+        .bind(release)
+        .bind(environment)
+        .bind(day_bucket)
+        .bind(total)
+        .bind(crashed)
+        .bind(errored)
+        .bind(has_aggregate)
+        .bind(users_hll)
+        .bind(users_crashed_hll)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    fn hll_of(ids: &[&str]) -> Vec<u8> {
+        let mut h: HyperLogLog<12> = HyperLogLog::new();
+        for id in ids {
+            h.add_object(id);
+        }
+        h.get_registers().to_vec()
+    }
+
+    #[tokio::test]
+    async fn crash_free_sessions_errored_only_is_full() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        // 100 sessions, 0 crashed, 10 errored -> crash-free should be 100%.
+        insert_agg(&pool, 1, "app@1.0", "prod", 100, 0, 10, 0, None, None).await;
+
+        let health = get_release_health(&pool, 1).await.unwrap();
+        assert_eq!(health.len(), 1);
+        assert_eq!(health[0].crash_free_rate, 100.0);
+    }
+
+    #[tokio::test]
+    async fn crash_free_sessions_with_crashes() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        insert_agg(&pool, 1, "app@1.0", "prod", 100, 5, 0, 0, None, None).await;
+
+        let health = get_release_health(&pool, 1).await.unwrap();
+        assert_eq!(health[0].crash_free_rate, 95.0);
+    }
+
+    #[tokio::test]
+    async fn crash_free_sessions_does_not_underflow_when_crashed_exceeds_total() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        // Crash updates land with init=false (total=0) while the init row's total
+        // is in a separate aggregate row; a release can sum to crashed > total.
+        insert_agg(&pool, 1, "app@1.0", "prod", 0, 1, 0, 0, None, None).await;
+        insert_agg(&pool, 1, "app@1.0", "staging", 1, 1, 0, 0, None, None).await;
+
+        // total=1, crashed=2 -> must clamp to 0%, never panic or wrap.
+        let health = get_release_health(&pool, 1).await.unwrap();
+        assert_eq!(health[0].crash_free_rate, 0.0);
+    }
+
+    #[tokio::test]
+    async fn crash_free_users_from_hll() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        // 4 distinct users, 1 crashed -> 75% crash-free users.
+        let users = hll_of(&["u1", "u2", "u3", "u4"]);
+        let crashed = hll_of(&["u1"]);
+        insert_agg(
+            &pool,
+            1,
+            "app@1.0",
+            "prod",
+            4,
+            1,
+            0,
+            0,
+            Some(users),
+            Some(crashed),
+        )
+        .await;
+
+        let health = get_release_health(&pool, 1).await.unwrap();
+        assert_eq!(health[0].total_users, Some(4));
+        assert_eq!(health[0].crash_free_users, Some(75.0));
+    }
+
+    #[tokio::test]
+    async fn crash_free_users_none_when_aggregate_contributed() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        // Same release: one singular row with users, one aggregate row.
+        insert_agg(
+            &pool,
+            1,
+            "app@1.0",
+            "prod",
+            4,
+            1,
+            0,
+            0,
+            Some(hll_of(&["u1", "u2", "u3", "u4"])),
+            Some(hll_of(&["u1"])),
+        )
+        .await;
+        insert_agg(&pool, 1, "app@1.0", "staging", 100, 3, 0, 1, None, None).await;
+
+        let health = get_release_health(&pool, 1).await.unwrap();
+        assert_eq!(health.len(), 1, "environments summed under one release");
+        assert!(health[0].crash_free_users.is_none());
+        assert!(health[0].total_users.is_none());
+        // Sessions still summed: 104 total, 4 crashed.
+        assert_eq!(health[0].total_sessions, 104);
+        assert_eq!(health[0].crashed_count, 4);
+    }
+
+    #[tokio::test]
+    async fn snapshot_sums_across_days_into_one_release_row() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        let day1 = 1_609_459_200;
+        let day2 = day1 + 86400;
+        // Same release spread over two days: 60 + 40 = 100 total, 3 + 2 = 5 crashed.
+        insert_agg_day(&pool, 1, "app@1.0", "prod", day1, 60, 3, 0, 0, None, None).await;
+        insert_agg_day(&pool, 1, "app@1.0", "prod", day2, 40, 2, 0, 0, None, None).await;
+
+        let health = get_release_health(&pool, 1).await.unwrap();
+        assert_eq!(health.len(), 1, "one row per release across days");
+        assert_eq!(health[0].total_sessions, 100);
+        assert_eq!(health[0].crashed_count, 5);
+        assert_eq!(health[0].crash_free_rate, 95.0);
+    }
+
+    #[tokio::test]
+    async fn daily_groups_by_day_ordered_respecting_since() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        let day1 = 1_609_459_200;
+        let day2 = day1 + 86400;
+        let day3 = day2 + 86400;
+
+        // day1 has two env rows that should sum together.
+        insert_agg_day(&pool, 1, "app@1.0", "prod", day1, 10, 1, 2, 0, None, None).await;
+        insert_agg_day(&pool, 1, "app@1.0", "staging", day1, 5, 0, 1, 0, None, None).await;
+        insert_agg_day(&pool, 1, "app@1.0", "prod", day2, 7, 2, 0, 0, None, None).await;
+        insert_agg_day(&pool, 1, "app@1.0", "prod", day3, 9, 3, 1, 0, None, None).await;
+
+        // since = day2 -> day1 excluded.
+        let daily = get_release_health_daily(&pool, 1, day2).await.unwrap();
+        assert_eq!(daily.len(), 2);
+        assert_eq!(daily[0].day, day2);
+        assert_eq!(daily[0].total, 7);
+        assert_eq!(daily[0].crashed, 2);
+        assert_eq!(daily[1].day, day3);
+        assert_eq!(daily[1].total, 9);
+
+        // since = day1 -> all three, day1 env rows summed.
+        let daily = get_release_health_daily(&pool, 1, day1).await.unwrap();
+        assert_eq!(daily.len(), 3);
+        assert_eq!(daily[0].day, day1);
+        assert_eq!(daily[0].total, 15);
+        assert_eq!(daily[0].crashed, 1);
+        assert_eq!(daily[0].errored, 3);
+    }
 }

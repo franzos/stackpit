@@ -52,8 +52,8 @@ pub async fn create(
     if !["webhook", "slack", "email"].contains(&kind.as_str()) {
         return render_list(&state, Some("Invalid integration kind".into()), &csrf).await;
     }
-    // Email has no user-controlled endpoint (polymail owns it), so `url` stays
-    // NULL and there's no SSRF surface. A locked mailer ignores any submitted token.
+    // Email has no user-controlled endpoint, so `url` stays NULL and there's no
+    // SSRF surface. A locked mailer ignores any submitted token.
     let email_cfg = &state.config.email;
     let (url, config, ignore_secret) = if kind == "email" {
         if email_cfg.lock {
@@ -68,10 +68,8 @@ pub async fn create(
                     return render_list(&state, Some("Invalid email provider".into()), &csrf).await
                 }
             };
-            // Reject up front when neither the form nor the server config
-            // supplies the values needed to actually send mail. Creating a
-            // half-configured integration only surfaces the failure later, at
-            // dispatch time, when it's much harder to diagnose.
+            // Reject up front when neither form nor server config supplies the values
+            // needed to send mail; otherwise the failure only surfaces at dispatch time.
             let has_form_secret = form
                 .secret
                 .as_deref()
@@ -112,10 +110,8 @@ pub async fn create(
         if url.is_empty() {
             return render_list(&state, Some("URL is required".into()), &csrf).await;
         }
-        // Block webhooks pointing at private/internal addresses. We only
-        // validate here -- no HTTP request is made at creation time, so
-        // there's no TOCTOU concern. The actual request happens in the
-        // dispatcher which does its own pinned resolution.
+        // Block webhooks pointing at private/internal addresses. Validation only,
+        // no request here, so no TOCTOU; the dispatcher does its own pinned resolution.
         if let Err(msg) = crate::ssrf::check_ssrf(&url).await {
             return render_list(&state, Some(msg), &csrf).await;
         }
@@ -130,7 +126,7 @@ pub async fn create(
             .map(|s| s.trim().to_string())
     };
 
-    // Encrypt the secret if provided -- refuse to store plaintext
+    // Refuse to store plaintext: secrets are encrypted or not stored.
     let (secret, encrypted) = match raw_secret {
         Some(ref s) => match crate::crypto::encrypt_secret(s, state.encryptor.as_deref()) {
             Ok(val) => (Some(val), true),
@@ -188,7 +184,6 @@ pub async fn test_integration(
         Err(e) => return render_list(&state, Some(format!("Error: {e}")), &csrf).await,
     };
 
-    // Decrypt the secret if it was stored encrypted
     let secret = match (&integration.secret, integration.encrypted, &state.encryptor) {
         (Some(s), true, Some(enc)) => enc.decrypt(s),
         (Some(s), false, _) => Some(s.clone()),
@@ -229,7 +224,7 @@ pub async fn test_integration(
             }
         };
 
-        // Resolve DNS and pin it so reqwest can't re-resolve to a different (internal) IP
+        // Pin resolved DNS so reqwest can't re-resolve to a different (internal) IP.
         let resolved = match crate::ssrf::check_ssrf(url).await {
             Ok(r) => r,
             Err(msg) => return render_list(&state, Some(msg), &csrf).await,
@@ -285,12 +280,9 @@ struct NewEmailTemplate {
     default_provider: &'static str,
     from_placeholder: String,
     from_name_placeholder: String,
-    /// Whether `[email] token` is set in the server config. Drives whether the
-    /// API-token field is required (no server default) or optional.
+    /// Whether `[email] token` is set; if so the API-token form field is optional.
     has_default_token: bool,
-    /// Whether `[email] from_address` is set. Same idea — when set, leaving
-    /// the form field blank falls back to this. When not set, the user must
-    /// supply one (else outbound mail has no From address).
+    /// Whether `[email] from_address` is set; if so the From form field is optional.
     has_default_from: bool,
 }
 

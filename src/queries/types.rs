@@ -1,10 +1,10 @@
 use serde::{Deserialize, Serialize};
 
 use crate::event_data::{
-    Breadcrumb, ContextGroup, ExceptionData, RequestInfo, SummaryTag, Tag, UserInfo,
+    Breadcrumb, ContextGroup, ExceptionData, Measurement, RequestInfo, SummaryTag, Tag, UserInfo,
 };
 
-/// Project/key status -- no more magic strings floating around.
+/// Project/key status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
 pub enum ProjectStatus {
     #[default]
@@ -42,7 +42,7 @@ impl std::fmt::Display for ProjectStatus {
     }
 }
 
-/// Core project metadata -- name, status, source -- grabbed in one query.
+/// Core project metadata (name, status, source).
 pub struct ProjectInfo {
     pub name: Option<String>,
     pub status: ProjectStatus,
@@ -222,6 +222,8 @@ pub struct EventSummary {
     pub event_id: String,
     pub item_type: crate::models::ItemType,
     pub project_id: u64,
+    /// Set only by the cross-project firehose query; None for project-scoped lists.
+    pub project_name: Option<String>,
     pub fingerprint: Option<String>,
     pub timestamp: i64,
     pub level: Option<String>,
@@ -275,6 +277,17 @@ pub struct ReleaseHealth {
     pub crashed_count: u64,
     pub errored_count: u64,
     pub crash_free_rate: f64,
+    /// None when an identity-less aggregate contributed (users can't be counted).
+    pub crash_free_users: Option<f64>,
+    pub total_users: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DailySessions {
+    pub day: i64,
+    pub total: u64,
+    pub crashed: u64,
+    pub errored: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -472,6 +485,25 @@ pub struct UserReportData {
     pub timestamp: i64,
 }
 
+/// A user report rendered as its own event: the feedback fields plus a link
+/// back to the error event it references.
+#[derive(Debug)]
+pub struct UserFeedback {
+    pub name: Option<String>,
+    pub email: Option<String>,
+    pub comments: Option<String>,
+    pub event_id: Option<String>,
+}
+
+impl UserFeedback {
+    pub fn has_any(&self) -> bool {
+        self.name.is_some()
+            || self.email.is_some()
+            || self.comments.is_some()
+            || self.event_id.is_some()
+    }
+}
+
 /// Nav badge counts for project sub-pages. Loaded in one shot so we don't
 /// fire separate count queries from every HTML handler.
 #[derive(Debug, Clone, Default)]
@@ -503,8 +535,7 @@ pub struct BackfillRow {
     pub level: Option<String>,
 }
 
-/// Everything the event detail page needs beyond the event itself.
-/// Fetched in one call so we don't fall into N+1 territory.
+/// Event detail supplements, fetched in one call to avoid N+1 queries.
 #[derive(Default)]
 pub struct EventSupplements {
     pub event_nav: EventNav,
@@ -514,8 +545,7 @@ pub struct EventSupplements {
     pub repos: Vec<ProjectRepo>,
 }
 
-/// The full picture for event/issue detail pages -- DB supplements merged
-/// with parsed payload data, ready to hand off to templates.
+/// Event/issue detail data: DB supplements merged with parsed payload data.
 pub struct ExtractedEventData {
     pub summary_tags: Vec<SummaryTag>,
     pub exceptions: Vec<ExceptionData>,
@@ -527,6 +557,10 @@ pub struct ExtractedEventData {
     pub event_nav: EventNav,
     pub attachments: Vec<AttachmentInfo>,
     pub user_reports: Vec<UserReportData>,
+    /// Present when the event being viewed is itself a user report.
+    pub own_feedback: Option<UserFeedback>,
+    /// Web vitals / measurements pulled from a transaction payload.
+    pub measurements: Vec<Measurement>,
     pub raw_json: String,
 }
 
@@ -546,15 +580,78 @@ pub struct RawFilterRule {
 pub struct SpanSummary {
     pub span_id: String,
     pub trace_id: String,
-    pub parent_span_id: Option<String>,
     pub timestamp: i64,
+    pub op: Option<String>,
+    pub description: Option<String>,
+    pub duration_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TraceSpan {
+    pub span_id: String,
+    pub parent_span_id: Option<String>,
     pub op: Option<String>,
     pub description: Option<String>,
     pub status: Option<String>,
     pub duration_ms: Option<i64>,
+    pub start_ms: Option<i64>,
 }
 
-pub type TraceSpan = SpanSummary;
+/// One rendered row of a span waterfall. Geometry is pre-computed as
+/// percentages so the template only emits inline `margin-left`/`width`.
+#[derive(Debug, Clone)]
+pub struct WaterfallRow {
+    // Carried for test assertions on row ordering; not rendered.
+    #[allow(dead_code)]
+    pub span_id: String,
+    pub depth: usize,
+    pub op: Option<String>,
+    pub description: Option<String>,
+    pub status: Option<String>,
+    pub duration_ms: Option<i64>,
+    pub offset_pct: f64,
+    pub width_pct: f64,
+}
+
+impl WaterfallRow {
+    /// Bar color bucket: green = ok, red = failed, neutral otherwise.
+    pub fn bar_color(&self) -> &'static str {
+        match self.status.as_deref() {
+            Some("ok") => "#16a34a",
+            None | Some("cancelled" | "unknown") => "#9ca3af",
+            Some(_) => "#dc2626",
+        }
+    }
+
+    /// True when the span carries a non-ok, non-neutral status.
+    pub fn is_error(&self) -> bool {
+        matches!(self.status.as_deref(), Some(s) if !matches!(s, "ok" | "cancelled" | "unknown"))
+    }
+}
+
+/// The transaction a trace belongs to, used as the waterfall's root row.
+#[derive(Debug)]
+pub struct TraceRoot {
+    pub name: Option<String>,
+    pub duration_ms: Option<i64>,
+}
+
+#[derive(Debug, Default)]
+pub struct Waterfall {
+    pub rows: Vec<WaterfallRow>,
+    pub total_ms: i64,
+    pub span_count: usize,
+    pub truncated: bool,
+}
+
+/// Error event correlated to a trace via shared `trace_id`.
+#[derive(Debug)]
+pub struct TraceError {
+    pub event_id: String,
+    pub title: Option<String>,
+    pub level: Option<String>,
+    pub timestamp: i64,
+}
 
 #[derive(Debug)]
 pub struct TraceSummary {
@@ -565,6 +662,37 @@ pub struct TraceSummary {
     pub root_op: Option<String>,
     pub root_description: Option<String>,
     pub total_duration_ms: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TransactionSummary {
+    pub name: String,
+    pub tpm: f64,
+    pub throughput: String,
+    pub p50_ms: i64,
+    pub p75_ms: i64,
+    pub p95_ms: i64,
+    pub failure_rate: f64,
+    pub count: u64,
+    pub users: u64,
+    pub avg_ms: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TransactionInstance {
+    pub event_id: String,
+    pub trace_id: Option<String>,
+    pub duration_ms: Option<i64>,
+    pub timestamp: i64,
+    pub op: Option<String>,
+    pub status: Option<String>,
+}
+
+impl TransactionInstance {
+    /// True when the trace status is set and not a healthy terminal state.
+    pub fn is_failed(&self) -> bool {
+        matches!(self.status.as_deref(), Some(s) if !matches!(s, "ok" | "cancelled" | "unknown"))
+    }
 }
 
 #[derive(Debug, Serialize)]

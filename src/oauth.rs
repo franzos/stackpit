@@ -682,6 +682,56 @@ fn extract_login_claims(claims: &CoreIdTokenClaims) -> LoginClaims {
     }
 }
 
+impl OidcClient {
+    /// Test-only constructor: fills `Inner` with the given issuer/client_id/
+    /// jwks_cache and a stub `CoreClient` (never exercised by the logout-token
+    /// path). End-session/introspection endpoints are `None`.
+    #[cfg(test)]
+    pub(crate) fn for_test(issuer: String, client_id: String, jwks_cache: JwksCache) -> Self {
+        // A real CoreClient is required to satisfy the field type, but the
+        // back-channel logout path only reads issuer/client_id/jwks_cache. Build
+        // one from a minimal in-memory discovery doc (no network).
+        let metadata: CoreProviderMetadata = serde_json::from_value(serde_json::json!({
+            "issuer": issuer,
+            "authorization_endpoint": format!("{issuer}/oauth2/auth"),
+            "token_endpoint": format!("{issuer}/oauth2/token"),
+            "jwks_uri": format!("{issuer}/.well-known/jwks.json"),
+            "response_types_supported": ["code"],
+            "subject_types_supported": ["public"],
+            "id_token_signing_alg_values_supported": ["RS256"],
+        }))
+        .expect("stub discovery metadata parses");
+
+        let client = CoreClient::from_provider_metadata(
+            metadata,
+            ClientId::new(client_id.clone()),
+            Some(ClientSecret::new("test-secret".to_string())),
+        )
+        .set_redirect_uri(
+            RedirectUrl::new(format!("{issuer}/callback")).expect("stub redirect uri valid"),
+        );
+
+        let http = openidconnect::reqwest::Client::builder()
+            .build()
+            .expect("stub HTTP client builds");
+
+        Self {
+            inner: Arc::new(Inner {
+                issuer: issuer.clone(),
+                client_id,
+                client_secret: SecretString::from("test-secret".to_string()),
+                http,
+                client,
+                jwks_uri: format!("{issuer}/.well-known/jwks.json"),
+                jwks_cache,
+                end_session_endpoint: None,
+                introspection_endpoint: None,
+                web_audience: String::new(),
+            }),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

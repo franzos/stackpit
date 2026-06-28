@@ -204,8 +204,7 @@ pub async fn load(
         None => None,
     };
 
-    // csrf_token is populated at insert and backfilled for pre-008 rows at
-    // startup (see `backfill_csrf_tokens`), so it's always set here.
+    // always set: populated at insert, backfilled for pre-008 rows at startup
     let csrf_token: String = row.get("csrf_token");
 
     Ok(Some(GrantRecord {

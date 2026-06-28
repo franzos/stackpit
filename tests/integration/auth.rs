@@ -60,6 +60,24 @@ async fn wrong_token_is_rejected() {
 }
 
 #[tokio::test]
+async fn logout_succeeds_without_csrf_token() {
+    // Logout is exempt from the synchronizer check (non-destructive +
+    // SameSite=Strict), so an empty/wrong csrf_token must still log out.
+    let c = common::login().await;
+    let resp = c
+        .post(format!("{}/web/logout", common::admin_url()))
+        .form(&[("csrf_token", "0".repeat(32).as_str())])
+        .send()
+        .await
+        .expect("POST /web/logout");
+    assert_eq!(resp.status().as_u16(), 303, "logout should 303");
+    assert_eq!(
+        resp.headers().get("location").unwrap().to_str().unwrap(),
+        "/web/login"
+    );
+}
+
+#[tokio::test]
 async fn csrf_required_on_authenticated_post() {
     // Project 1 exists after seeding. Its settings page renders a csrf_token;
     // the rename endpoint enforces it.

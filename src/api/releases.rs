@@ -71,7 +71,7 @@ async fn create_inner(
         ));
     }
 
-    // Create release for each project in the list (must match the key's project)
+    // Each project must match the key's project.
     for project_val in &body.projects {
         let project_id: u64 = project_val
             .as_u64()
@@ -143,10 +143,9 @@ async fn update_inner(
     body: UpdateReleaseRequest,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let key_project_id = super::validate_api_key(&state.pool, &headers, "sourcemap").await?;
-    // Process commit refs — take the first ref's commit as the release commit
+    // First ref's commit becomes the release commit; only the key's project is updated.
     if let Some(ref_info) = body.refs.first() {
         if !ref_info.commit.is_empty() {
-            // Only update the release for the key's project
             let project_ids = crate::queries::releases::find_projects_by_version(&pool, &version)
                 .await
                 .map_err(internal_error)?;

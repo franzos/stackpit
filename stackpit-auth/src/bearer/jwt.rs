@@ -19,7 +19,6 @@ impl BearerGate {
         token: &str,
         required_scope: &str,
     ) -> BearerAuthOutcome {
-        // Issuer mismatch fails closed -- never falls through to introspection.
         let Some(unverified_iss) = unverified_iss(token) else {
             tracing::warn!("bearer rejected: JWT payload missing iss");
             return BearerAuthOutcome::InvalidToken;

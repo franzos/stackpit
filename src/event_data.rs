@@ -1,6 +1,5 @@
 //! Extraction helpers for pulling structured data out of raw Sentry JSON
-//! payloads. I've found that api, cli, and html all need the same logic —
-//! so it lives here instead of being buried in any one layer.
+//! payloads. Shared by the api, cli, and html layers.
 
 use crate::forge;
 use crate::queries::types::ProjectRepo;
@@ -90,6 +89,51 @@ pub struct RequestInfo {
     pub env: Vec<(String, String)>,
 }
 
+#[derive(Debug)]
+pub struct Measurement {
+    pub label: String,
+    pub value: String,
+    /// Core Web Vitals rating: "good" / "needs-improvement" / "poor", or None
+    /// for measurements without a standard threshold.
+    pub rating: Option<&'static str>,
+}
+
+impl Measurement {
+    /// CSS class for the rating color, matching release-health classes.
+    pub fn rating_class(&self) -> Option<&'static str> {
+        match self.rating {
+            Some("good") => Some("health-good"),
+            Some("needs-improvement") => Some("health-warn"),
+            Some("poor") => Some("health-bad"),
+            _ => None,
+        }
+    }
+}
+
+/// Core Web Vitals rating from the raw (lowercased) measurement key and numeric
+/// value. Units are ms except CLS, which is unitless. Returns None for keys
+/// without a standard threshold.
+fn vital_rating(key: &str, value: f64) -> Option<&'static str> {
+    let bucket = |good: f64, ni: f64| {
+        if value <= good {
+            "good"
+        } else if value <= ni {
+            "needs-improvement"
+        } else {
+            "poor"
+        }
+    };
+    Some(match key {
+        "lcp" => bucket(2500.0, 4000.0),
+        "fcp" | "fp" => bucket(1800.0, 3000.0),
+        "fid" => bucket(100.0, 300.0),
+        "inp" => bucket(200.0, 500.0),
+        "cls" => bucket(0.1, 0.25),
+        "ttfb" => bucket(800.0, 1800.0),
+        _ => return None,
+    })
+}
+
 #[derive(Debug, Default)]
 pub struct UserInfo {
     pub id: Option<String>,
@@ -154,7 +198,7 @@ pub fn extract_exceptions(
         let mut frames = Vec::new();
         if let Some(stacktrace) = exc.get("stacktrace").and_then(|s| s.get("frames")) {
             if let Some(frame_arr) = stacktrace.as_array() {
-                // Sentry sends frames bottom-to-top — we reverse for display
+                // Sentry sends frames bottom-to-top; reverse for display.
                 for frame in frame_arr.iter().rev() {
                     let filename = frame
                         .get("filename")
@@ -211,7 +255,6 @@ pub fn extract_exceptions(
                         })
                         .unwrap_or_default();
 
-                    // Try sourcemap resolution if no source context and we have a resolver
                     let (
                         mut filename,
                         mut function,
@@ -248,7 +291,6 @@ pub fn extract_exceptions(
                         }
                     }
 
-                    // Link back to the source if we've got a commit and line number
                     let source_links = match (commit_sha, lineno) {
                         (Some(sha), Some(ln)) => repos
                             .iter()
@@ -263,7 +305,7 @@ pub fn extract_exceptions(
                                     &filename,
                                     ln,
                                 )?;
-                                // Sanity check — only allow http/https
+                                // Only allow http/https.
                                 if !url.starts_with("http://") && !url.starts_with("https://") {
                                     return None;
                                 }
@@ -547,6 +589,59 @@ pub fn extract_user(payload: &serde_json::Value) -> UserInfo {
     }
 }
 
+/// Format a metric number: integer when whole, else up to 3 decimals with
+/// trailing zeros trimmed.
+fn fmt_num(n: f64) -> String {
+    if n.fract() == 0.0 {
+        format!("{}", n as i64)
+    } else {
+        let s = format!("{n:.3}");
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    }
+}
+
+/// Pull web-vital measurements out of a transaction payload. Each metric is
+/// `{value, unit}`; known vitals are ordered first, the rest alphabetically.
+pub fn extract_measurements(payload: &serde_json::Value) -> Vec<Measurement> {
+    const KNOWN_ORDER: &[&str] = &["lcp", "fcp", "fid", "inp", "cls", "ttfb", "fp", "duration"];
+
+    let obj = match payload.get("measurements").and_then(|m| m.as_object()) {
+        Some(o) if !o.is_empty() => o,
+        _ => return Vec::new(),
+    };
+
+    let mut keys: Vec<&String> = obj.keys().collect();
+    keys.sort_by(|a, b| {
+        let rank = |k: &str| KNOWN_ORDER.iter().position(|x| *x == k);
+        match (rank(a), rank(b)) {
+            (Some(ra), Some(rb)) => ra.cmp(&rb),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => a.cmp(b),
+        }
+    });
+
+    keys.into_iter()
+        .filter_map(|key| {
+            let metric = obj.get(key)?;
+            let value = metric.get("value").and_then(|v| v.as_f64())?;
+            let unit = metric.get("unit").and_then(|u| u.as_str()).unwrap_or("");
+            let formatted = match unit {
+                "millisecond" => format!("{} ms", fmt_num(value)),
+                "second" => format!("{} s", fmt_num(value)),
+                "byte" => format!("{} B", fmt_num(value)),
+                "" => fmt_num(value),
+                other => format!("{} {other}", fmt_num(value)),
+            };
+            Some(Measurement {
+                rating: vital_rating(&key.to_lowercase(), value),
+                label: key.to_uppercase(),
+                value: formatted,
+            })
+        })
+        .collect()
+}
+
 pub fn extract_summary_tags(tags: &[Tag], _contexts: &[ContextGroup]) -> Vec<SummaryTag> {
     tags.iter()
         .filter(|t| !t.value.is_empty())
@@ -604,8 +699,7 @@ fn try_resolve_with_debug_meta(
         return None;
     }
 
-    // Find the debug_id for this frame's filename.
-    // The frame's abs_path or filename should match the code_file from debug_meta.
+    // Match the frame's filename against code_file from debug_meta.
     for (code_file, debug_id) in &debug_map {
         if filename == code_file || code_file.ends_with(filename) || filename.ends_with(code_file) {
             if let Some(resolved) = resolver(debug_id, line, col) {
@@ -614,11 +708,86 @@ fn try_resolve_with_debug_meta(
         }
     }
 
-    // If only one sourcemap is available, use it (common for single-bundle apps)
+    // Single sourcemap: use it (common for single-bundle apps).
     if debug_map.len() == 1 {
         let (_, debug_id) = &debug_map[0];
         return resolver(debug_id, line, col);
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn fmt_num_formats() {
+        assert_eq!(fmt_num(3035.0), "3035");
+        assert_eq!(fmt_num(0.349), "0.349");
+        assert_eq!(fmt_num(98.0), "98");
+    }
+
+    #[test]
+    fn extract_measurements_sample() {
+        let payload = json!({"measurements": {
+            "duration": {"value": 3035, "unit": "millisecond"},
+            "lcp": {"value": 1116, "unit": "millisecond"},
+            "cls": {"value": 0.349, "unit": ""},
+            "ttfb": {"value": 188, "unit": "millisecond"},
+            "fid": {"value": 98, "unit": "millisecond"},
+            "fcp": {"value": 2183, "unit": "millisecond"},
+            "fp": {"value": 2447, "unit": "millisecond"},
+        }});
+        let m = extract_measurements(&payload);
+        let by_label: std::collections::HashMap<_, _> = m
+            .iter()
+            .map(|x| (x.label.as_str(), x.value.as_str()))
+            .collect();
+        assert_eq!(by_label["LCP"], "1116 ms");
+        assert_eq!(by_label["CLS"], "0.349");
+        assert_eq!(by_label["DURATION"], "3035 ms");
+        assert_eq!(by_label["FID"], "98 ms");
+
+        // Known vitals come first in fixed order: lcp, fcp, fid, cls, ttfb, fp, duration.
+        let labels: Vec<&str> = m.iter().map(|x| x.label.as_str()).collect();
+        let lcp = labels.iter().position(|l| *l == "LCP").unwrap();
+        let ttfb = labels.iter().position(|l| *l == "TTFB").unwrap();
+        let duration = labels.iter().position(|l| *l == "DURATION").unwrap();
+        assert!(lcp < ttfb, "lcp before ttfb: {labels:?}");
+        assert!(ttfb < duration, "ttfb before duration: {labels:?}");
+    }
+
+    #[test]
+    fn extract_measurements_empty() {
+        assert!(extract_measurements(&json!({})).is_empty());
+        assert!(extract_measurements(&json!({"measurements": {}})).is_empty());
+    }
+
+    #[test]
+    fn extract_measurements_unknown_unit() {
+        let payload = json!({"measurements": {
+            "frames_total": {"value": 42, "unit": "frame"},
+        }});
+        let m = extract_measurements(&payload);
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].label, "FRAMES_TOTAL");
+        assert_eq!(m[0].value, "42 frame");
+    }
+
+    #[test]
+    fn extract_measurements_byte_and_second() {
+        let payload = json!({"measurements": {
+            "memory": {"value": 2048, "unit": "byte"},
+            "wait": {"value": 1.5, "unit": "second"},
+        }});
+        let m = extract_measurements(&payload);
+        let by_label: std::collections::HashMap<_, _> = m
+            .iter()
+            .map(|x| (x.label.as_str(), x.value.as_str()))
+            .collect();
+        assert_eq!(by_label["MEMORY"], "2048 B");
+        assert_eq!(by_label["WAIT"], "1.5 s");
+    }
 }

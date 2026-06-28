@@ -15,7 +15,7 @@ use crate::server::AppState;
 #[allow(unused_imports)]
 use crate::html::filters;
 
-// — General settings tab
+// General settings tab
 
 #[derive(Template)]
 #[template(path = "project_settings.html")]
@@ -158,8 +158,7 @@ pub async fn archive_project(
             .await
         }
         Ok(_) => {
-            // Flush the auth cache for this project -- otherwise ingestion
-            // would keep working until the cache entry expires.
+            // Flush the auth cache or ingestion keeps working until the entry expires.
             crate::auth_service::invalidate_project(&state.auth_cache, project_id);
             render_general(&state, project_id, Some("Project archived".into()), &csrf).await
         }
@@ -234,7 +233,7 @@ async fn render_general(
     render_template(&tmpl)
 }
 
-// — SDK Setup tab (keys)
+// SDK Setup tab (keys)
 
 #[derive(Template)]
 #[template(path = "project_settings_keys.html")]
@@ -337,7 +336,7 @@ async fn render_keys(
     render_template(&tmpl)
 }
 
-// — Source Maps tab
+// Source Maps tab
 
 #[derive(Template)]
 #[template(path = "project_settings_sourcemaps.html")]

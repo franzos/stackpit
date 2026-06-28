@@ -20,7 +20,6 @@ pub async fn create_api_key(
     key_hash: &str,
     key_prefix: &str,
 ) -> Result<()> {
-    // One key per project per scope
     sqlx::query(sql!(
         "DELETE FROM api_keys WHERE project_id = ?1 AND scope = ?2"
     ))
@@ -42,10 +41,8 @@ pub async fn create_api_key(
     Ok(())
 }
 
-/// Look up an API key by its SHA-256 hash + expected scope. Used for auth
-/// validation. Pushing the scope into the SQL `WHERE` means a returned row
-/// is uniquely the credential we're looking for; no Rust-side scope compare
-/// is needed (and a string-eq compare wouldn't be constant-time anyway).
+/// Look up an API key by its SHA-256 hash and expected scope. Scope lives in
+/// the SQL `WHERE` so no (non-constant-time) Rust-side scope compare is needed.
 pub async fn get_api_key_by_hash(
     pool: &DbPool,
     key_hash: &str,
@@ -99,7 +96,6 @@ mod tests {
             .await
             .unwrap();
 
-        // Right hash + right scope: hit.
         let info = get_api_key_by_hash(&pool, &hash, "events:write")
             .await
             .unwrap();
@@ -116,7 +112,6 @@ mod tests {
             .await
             .unwrap();
 
-        // Right hash, wrong scope: miss (would have been a hit before the fix).
         let info = get_api_key_by_hash(&pool, &hash, "sourcemap")
             .await
             .unwrap();

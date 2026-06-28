@@ -138,7 +138,6 @@ pub async fn handler(
         return Ok(render_template(&tmpl));
     }
 
-    // Details tab -- show the latest event inline
     let latest = queries::events::get_latest_event_for_issue(&pool, &fingerprint)
         .await
         .ok()
@@ -235,7 +234,6 @@ pub async fn toggle_discard(
     State(state): State<AppState>,
     Path((project_id, fingerprint)): Path<(u64, String)>,
 ) -> axum::response::Response {
-    // Figure out if it's currently discarded so we know which way to toggle
     let is_discarded = queries::filters::is_fingerprint_discarded(&state.pool, &fingerprint)
         .await
         .unwrap_or(false);
@@ -288,7 +286,6 @@ pub async fn update_status(
         Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 
-    // 303 back to the issue page so the browser does a GET
     let redirect_url = format!("/web/projects/{project_id}/issues/{fingerprint}/");
     Redirect::to(&redirect_url).into_response()
 }

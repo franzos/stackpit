@@ -1,5 +1,4 @@
-/// Try all patterns against the text. Patterns are expected to be pre-lowercased
-/// at load time -- we only lowercase the input here.
+/// Match text against any pattern. Patterns must be pre-lowercased at load time; the input is lowercased here.
 pub fn glob_match_any(patterns: &[String], text: &str) -> bool {
     if patterns.is_empty() {
         return false;
@@ -14,8 +13,7 @@ pub fn glob_match_any(patterns: &[String], text: &str) -> bool {
     false
 }
 
-/// Classic two-pointer glob matcher. Both pattern and text must already be
-/// lowercased -- the caller handles that.
+/// Two-pointer glob matcher. Both pattern and text must already be lowercased.
 pub fn glob_match_impl(pattern: &[u8], text: &[u8]) -> bool {
     let mut pi = 0usize;
     let mut ti = 0usize;

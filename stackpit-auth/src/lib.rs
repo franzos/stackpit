@@ -1,17 +1,13 @@
 //! Reusable OIDC/OAuth auth primitives.
 //!
 //! The framework-agnostic core provides admin-token cookie hashing
-//! ([`hash_token_for_cookie`]), a TTL-bounded [`JwksCache`] with an RS256
-//! verify primitive ([`JwksCache::verify_rs256`]), the [`BearerGate`]
-//! dispatcher (admin-token break-glass, RS256/JWKS JWT arm, RFC 7662
-//! introspection arm, positive + revocation caches), and the [`AuthContext`]
-//! identity vocabulary every authenticated path resolves to. It compiles with
-//! no axum dependency.
+//! ([`hash_token_for_cookie`]), a TTL-bounded [`JwksCache`], the [`BearerGate`]
+//! dispatcher (admin-token break-glass, RS256/JWKS and RFC 7662 introspection
+//! arms, positive + revocation caches), and the [`AuthContext`] identity
+//! vocabulary. It compiles with no axum dependency.
 //!
-//! The `axum` feature -- on by default for now, since Stackpit is the only
-//! consumer -- layers in admin-token resolution ([`resolve_admin`]), a
-//! borrowing cookie reader ([`read_cookie`]), and the MCP `Response`-rendering
-//! wrapper.
+//! The `axum` feature adds admin-token resolution ([`resolve_admin`]), a
+//! borrowing cookie reader ([`read_cookie`]), and the MCP `Response` wrapper.
 
 pub mod admin_token;
 pub mod bearer;

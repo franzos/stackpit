@@ -16,7 +16,6 @@ pub async fn send(client: &reqwest::Client, url: &str, event: &NotificationEvent
     let title = event.title.as_deref().unwrap_or("(untitled)");
 
     let payload = if matches!(event.trigger, crate::notify::NotifyTrigger::Digest) {
-        // Digest gets its own layout — one section per project
         let mut blocks: Vec<serde_json::Value> = vec![serde_json::json!({
             "type": "header",
             "text": {

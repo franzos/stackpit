@@ -1,7 +1,7 @@
 //! JWKS fetch + cache, shared across the MCP JWT arm, id_token verifier,
 //! and back-channel logout verifier.
 //!
-//! One `JwkSet` per provider, TTL-bounded. `kid` miss or expired TTL
+//! One `JwkSet` per provider, TTL-bounded. A `kid` miss or expired TTL
 //! triggers refetch; transient failure leaves the previous set intact
 //! (stale-but-serving while the IdP recovers).
 
@@ -47,9 +47,9 @@ impl std::fmt::Display for JwksError {
 
 impl std::error::Error for JwksError {}
 
-/// Failure modes of [`JwksCache::verify_rs256`]. Distinguishes "couldn't even
-/// parse the JWT" from "no key for kid" from "signature/claims rejected" so
-/// callers can log precisely without leaking detail to the client.
+/// Failure modes of [`JwksCache::verify_rs256`], distinguishing parse failure,
+/// unknown kid, and signature/claim rejection so callers can log precisely
+/// without leaking detail to the client.
 #[derive(Debug)]
 pub enum VerifyError {
     /// JWT header undecodable.
@@ -83,7 +83,7 @@ impl std::error::Error for VerifyError {}
 
 struct CacheState {
     keys: JwkSet,
-    /// Verbatim JWKS body. Callers needing another JWK representation
+    /// Verbatim JWKS body; callers needing another JWK representation
     /// (e.g. openidconnect's `CoreJsonWebKey`) re-parse this.
     raw: String,
     fetched_at: Instant,
@@ -155,9 +155,8 @@ impl JwksCache {
     /// the signature and the claims expressed in `validation` (issuer,
     /// audience, exp, ...). Returns the deserialized claims.
     ///
-    /// The validator is caller-supplied so each token kind keeps its own
-    /// claim policy -- e.g. back-channel logout tokens disable `exp` and apply
-    /// their spec-specific checks on top of the returned claims. Pinning the
+    /// The validator is caller-supplied so each token kind keeps its own claim
+    /// policy (e.g. back-channel logout tokens disable `exp`). Pinning the
     /// validator's algorithm to RS256 is the caller's job; the header `alg`
     /// here is only checked to fail fast before the JWKS lookup.
     pub async fn verify_rs256<T: DeserializeOwned>(
@@ -321,8 +320,8 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    /// In-process server flips the JWKS `kid` after the first request --
-    /// proves refetch fires on kid miss.
+    /// In-process server flips the JWKS `kid` after the first request to prove
+    /// refetch fires on kid miss.
     #[tokio::test]
     async fn refetch_on_kid_miss_returns_rotated_key() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -447,7 +446,7 @@ mod tests {
     /// Known kids must survive a transient JWKS endpoint outage.
     #[tokio::test]
     async fn keep_stale_on_refetch_failure() {
-        // 127.0.0.1:1 is unbound -- guaranteed connection refused.
+        // 127.0.0.1:1 is unbound: guaranteed connection refused.
         let cache = JwksCache::_new_unchecked_ttl(
             reqwest::Client::new(),
             "http://127.0.0.1:1/jwks".to_string(),

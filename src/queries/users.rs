@@ -1,5 +1,5 @@
 //! User row helpers: composite key (iss, sub) for OIDC identity.
-//! Email/name refreshed on every login (JIT); no privilege split (admin_token separate).
+//! Email/name refreshed on every login (JIT); admin_token is a separate privilege path.
 
 use anyhow::Result;
 use sqlx::Row;
@@ -20,8 +20,8 @@ pub struct UserRow {
 }
 
 /// Look up a user by their OIDC `(iss, sub)` pair. Returns `None` if not
-/// provisioned. Both halves of the key come straight from the verified
-/// id_token claims -- never trust client-supplied values here.
+/// provisioned. Both halves of the key must come from verified id_token
+/// claims; never pass client-supplied values here.
 pub async fn find_by_iss_sub(pool: &DbPool, iss: &str, sub: &str) -> Result<Option<UserRow>> {
     let row = sqlx::query(sql!(
         "SELECT user_id, iss, sub, email, name FROM users WHERE iss = ?1 AND sub = ?2"
@@ -40,7 +40,9 @@ pub async fn find_by_iss_sub(pool: &DbPool, iss: &str, sub: &str) -> Result<Opti
     }))
 }
 
-/// Upsert by `(iss, sub)`. Pass `Some(addr)` only when `email_verified=true`; `None` never downgrades a stored verified email to NULL. Unique non-NULL email; conflicts bubble up so the caller refuses the login.
+/// Upsert by `(iss, sub)`. Pass `Some(addr)` only when `email_verified=true`;
+/// `None` never downgrades a stored verified email to NULL. Email is unique
+/// when non-NULL; conflicts bubble up so the caller refuses the login.
 pub async fn upsert_from_oidc(
     pool: &DbPool,
     iss: &str,
@@ -50,7 +52,7 @@ pub async fn upsert_from_oidc(
 ) -> Result<UserRow> {
     let now = chrono::Utc::now().timestamp();
 
-    // Atomic upsert -- collapses the find-then-insert race on concurrent first logins.
+    // Atomic upsert: collapses the find-then-insert race on concurrent first logins.
     sqlx::query(sql!(
         "INSERT INTO users (iss, sub, email, name, last_seen) \
          VALUES (?1, ?2, ?3, ?4, ?5) \
@@ -67,7 +69,7 @@ pub async fn upsert_from_oidc(
     .execute(pool)
     .await?;
 
-    // Round-trip for the user_id; avoids SQLite/Postgres LAST_INSERT_ROWID divergence.
+    // Round-trip the user_id to avoid SQLite/Postgres LAST_INSERT_ROWID divergence.
     let row = find_by_iss_sub(pool, iss, sub)
         .await?
         .ok_or_else(|| anyhow::anyhow!("user disappeared between upsert and read"))?;

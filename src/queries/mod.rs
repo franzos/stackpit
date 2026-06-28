@@ -2,6 +2,7 @@ pub mod alerts;
 pub mod api_keys;
 pub mod backfill;
 pub mod bulk;
+pub mod client_reports;
 pub mod event_supplements;
 pub mod event_sync;
 pub mod event_writes;
@@ -21,6 +22,7 @@ pub mod releases;
 pub mod replays;
 pub mod retention;
 pub mod spans;
+pub mod transactions;
 pub mod types;
 pub mod users;
 

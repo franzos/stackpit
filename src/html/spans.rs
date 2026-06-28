@@ -5,7 +5,9 @@ use crate::extractors::ReadPool;
 use crate::html::render_template;
 use crate::html::utils::{Csrf, ListParams};
 use crate::queries;
-use crate::queries::types::{Page, PagedResult, SpanSummary, TraceSpan, TraceSummary};
+use crate::queries::types::{
+    Page, PagedResult, SpanSummary, TraceError, TraceRoot, TraceSummary, Waterfall,
+};
 use crate::queries::ProjectNavCounts;
 
 use super::HtmlError;
@@ -28,7 +30,9 @@ struct SpanListTemplate {
 struct TraceDetailTemplate {
     project_id: u64,
     trace_id: String,
-    spans: Vec<TraceSpan>,
+    waterfall: Waterfall,
+    root: Option<TraceRoot>,
+    errors: Vec<TraceError>,
     nav: ProjectNavCounts,
     csrf_token: String,
 }
@@ -67,14 +71,27 @@ pub async fn trace_detail_handler(
     Csrf(csrf): Csrf,
     Path((project_id, trace_id)): Path<(u64, String)>,
 ) -> Result<axum::response::Response, HtmlError> {
-    let spans = queries::spans::get_trace_spans(&pool, &trace_id).await?;
+    let (spans, errors, root) = tokio::join!(
+        queries::spans::get_trace_spans(&pool, &trace_id),
+        queries::spans::get_trace_errors(&pool, project_id, &trace_id),
+        queries::spans::get_trace_root(&pool, project_id, &trace_id),
+    );
+    let spans = spans?;
+    let errors = errors?;
+    let root = root?;
+
+    let span_rows: Vec<queries::spans::SpanRow> = spans.iter().map(Into::into).collect();
+    let root_duration_ms = root.as_ref().and_then(|r| r.duration_ms).unwrap_or(0);
+    let waterfall = queries::spans::build_waterfall(&span_rows, root_duration_ms);
 
     let nav = queries::projects::get_nav_counts(&pool, project_id).await;
 
     let tmpl = TraceDetailTemplate {
         project_id,
         trace_id,
-        spans,
+        waterfall,
+        root,
+        errors,
         nav,
         csrf_token: csrf,
     };

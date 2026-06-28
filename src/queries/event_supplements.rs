@@ -9,9 +9,8 @@ use super::types::{
     Release, UserReportData,
 };
 
-/// Grab all the supplementary data an event detail page needs in one go --
-/// nav links, attachments, user reports, commit SHA, repos. All independent
-/// queries run concurrently via `tokio::join!`.
+/// Fetch all supplementary data for an event detail page (nav links,
+/// attachments, user reports, commit SHA, repos) concurrently via `tokio::join!`.
 pub async fn get_event_supplements(pool: &DbPool, event: &EventDetail) -> Result<EventSupplements> {
     let nav_fut = async {
         if let Some(fp) = event.fingerprint.as_deref() {
@@ -248,6 +247,12 @@ pub fn get_event_detail_data(
     let raw_json =
         serde_json::to_string_pretty(&event.payload).unwrap_or_else(|_| "{}".to_string());
 
+    let own_feedback = (event.item_type == crate::models::ItemType::UserReport)
+        .then(|| extract_user_feedback(&event.payload))
+        .filter(|f| f.has_any());
+
+    let measurements = crate::event_data::extract_measurements(&event.payload);
+
     ExtractedEventData {
         summary_tags,
         exceptions,
@@ -259,7 +264,27 @@ pub fn get_event_detail_data(
         event_nav: supplements.event_nav,
         attachments: supplements.attachments,
         user_reports: supplements.user_reports,
+        own_feedback,
+        measurements,
         raw_json,
+    }
+}
+
+/// Pull feedback fields from a user-report payload. Handles the classic
+/// top-level shape (`name`/`email`/`comments`/`event_id`) and falls back to the
+/// newer `contexts.feedback` shape.
+fn extract_user_feedback(payload: &serde_json::Value) -> crate::queries::types::UserFeedback {
+    let fb = payload.get("contexts").and_then(|c| c.get("feedback"));
+    let str_at = |obj: Option<&serde_json::Value>, key: &str| -> Option<String> {
+        obj.and_then(|o| o.get(key))
+            .and_then(|v| v.as_str())
+            .map(String::from)
+    };
+    crate::queries::types::UserFeedback {
+        name: str_at(Some(payload), "name").or_else(|| str_at(fb, "name")),
+        email: str_at(Some(payload), "email").or_else(|| str_at(fb, "contact_email")),
+        comments: str_at(Some(payload), "comments").or_else(|| str_at(fb, "message")),
+        event_id: str_at(Some(payload), "event_id").or_else(|| str_at(fb, "associated_event_id")),
     }
 }
 
@@ -305,4 +330,37 @@ async fn get_project_repos(pool: &DbPool, project_id: u64) -> Result<Vec<Project
             url_template: r.get("url_template"),
         })
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn extracts_classic_user_report_fields() {
+        let p = json!({"event_id":"abc","name":"Maria","email":"m@x.com","comments":"broken"});
+        let f = extract_user_feedback(&p);
+        assert_eq!(f.name.as_deref(), Some("Maria"));
+        assert_eq!(f.email.as_deref(), Some("m@x.com"));
+        assert_eq!(f.comments.as_deref(), Some("broken"));
+        assert_eq!(f.event_id.as_deref(), Some("abc"));
+        assert!(f.has_any());
+    }
+
+    #[test]
+    fn falls_back_to_feedback_context() {
+        let p = json!({"contexts":{"feedback":{
+            "name":"Bob","contact_email":"b@x.com","message":"hi","associated_event_id":"e1"}}});
+        let f = extract_user_feedback(&p);
+        assert_eq!(f.name.as_deref(), Some("Bob"));
+        assert_eq!(f.email.as_deref(), Some("b@x.com"));
+        assert_eq!(f.comments.as_deref(), Some("hi"));
+        assert_eq!(f.event_id.as_deref(), Some("e1"));
+    }
+
+    #[test]
+    fn empty_when_no_feedback_fields() {
+        assert!(!extract_user_feedback(&json!({"foo": "bar"})).has_any());
+    }
 }

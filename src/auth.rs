@@ -5,7 +5,7 @@ pub struct SentryAuth {
     pub sentry_key: String,
 }
 
-/// Pulls the sentry key out of request headers -- tries X-Sentry-Auth first, then Authorization.
+/// Extract the sentry key from request headers (X-Sentry-Auth, then Authorization).
 pub fn extract_from_header(headers: &HeaderMap) -> Option<SentryAuth> {
     let header_val = headers
         .get("X-Sentry-Auth")
@@ -24,7 +24,7 @@ pub fn extract_from_query(query: Option<&str>) -> Option<SentryAuth> {
         })
 }
 
-/// Cracks open a DSN string to get the auth key and project ID out of it.
+/// Parse a DSN string into its auth key and project ID.
 pub fn extract_from_dsn(dsn: &str) -> Option<(SentryAuth, u64)> {
     let without_scheme = dsn
         .strip_prefix("https://")

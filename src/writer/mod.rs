@@ -53,11 +53,11 @@ async fn writer_loop(
     let flush_interval = std::time::Duration::from_millis(AGGREGATION_FLUSH_INTERVAL_MS as u64);
     let mut tick = tokio::time::interval(flush_interval);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    // Skip the immediate first tick
+    // Interval fires immediately; skip that first tick.
     tick.tick().await;
 
     loop {
-        // Retry previously failed batch before accepting new work
+        // Retry a previously failed batch before accepting new work.
         if !retry_pending.is_empty() {
             if flush_batch(pool, &mut retry_pending, &mut accumulators, notify_tx).await {
                 retry_pending.clear();
@@ -71,7 +71,6 @@ async fn writer_loop(
             }
         }
 
-        // Wait for either a message or the periodic flush timer
         let first = tokio::select! {
             biased;
 
@@ -102,7 +101,6 @@ async fn writer_loop(
             Shutdown => continue,
         };
 
-        // Grab as many events as we can, up to BATCH_SIZE
         let mut batch = Vec::with_capacity(BATCH_SIZE);
         batch.push(first);
 
@@ -168,7 +166,6 @@ mod tests {
         let (handle, _join) = spawn(pool.clone(), None, test_stats()).await.unwrap();
 
         handle.send_event(make_event("w1")).unwrap();
-        // Give the writer task time to process
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         let _ = handle.shutdown();
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -730,5 +727,359 @@ mod tests {
 
         let _ = handle.shutdown();
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    // --- session aggregates ---
+
+    use crate::models::{ItemType, SessionBucket};
+
+    fn make_session_event(
+        event_id: &str,
+        release: &str,
+        buckets: Vec<SessionBucket>,
+    ) -> StorableEvent {
+        let mut e = StorableEvent::new(
+            event_id.to_string(),
+            ItemType::Session,
+            vec![0],
+            1,
+            "k".to_string(),
+        );
+        e.timestamp = 1000;
+        e.release = Some(release.to_string());
+        e.session_buckets = buckets;
+        e
+    }
+
+    fn bucket(crashed: u64, errored: u64, did: Option<&str>) -> SessionBucket {
+        SessionBucket {
+            release: "app@1.0".to_string(),
+            environment: "prod".to_string(),
+            started_ts: 1000,
+            total: 1,
+            crashed,
+            errored,
+            abnormal: 0,
+            did: did.map(String::from),
+            is_aggregate: false,
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn sessions_flush_creates_aggregate_row() {
+        let pool = test_pool().await;
+        let mut acc = Accumulators::new();
+
+        let s1 = make_session_event("s1", "app@1.0", vec![bucket(0, 0, Some("u1"))]);
+        let s2 = make_session_event("s2", "app@1.0", vec![bucket(1, 0, Some("u2"))]);
+        let s3 = make_session_event("s3", "app@1.0", vec![bucket(0, 1, Some("u1"))]);
+
+        for e in [&s1, &s2, &s3] {
+            insert_event(&pool, e).await.unwrap();
+            acc.accumulate(e);
+        }
+        flush_aggregation(&pool, &mut acc, None).await.unwrap();
+
+        use sqlx::Row;
+        let row = sqlx::query(
+            "SELECT sessions_total, sessions_crashed, sessions_errored, users_hll FROM session_aggregates WHERE project_id = 1 AND release = 'app@1.0' AND environment = 'prod'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.get::<i64, _>("sessions_total"), 3);
+        assert_eq!(row.get::<i64, _>("sessions_crashed"), 1);
+        assert_eq!(row.get::<i64, _>("sessions_errored"), 1);
+
+        let hll_blob: Vec<u8> = row.get("users_hll");
+        let hll: HyperLogLog<12> = HyperLogLog::with_registers(hll_blob);
+        // u1, u2 distinct
+        assert_eq!(hll.count() as u64, 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn sessions_across_days_flush_separate_rows() {
+        let pool = test_pool().await;
+        let mut acc = Accumulators::new();
+        let day1 = 1_609_459_200; // 2021-01-01 UTC
+        let day2 = day1 + 86400;
+
+        let mk = |id: &str, ts: i64, crashed: u64| {
+            let mut e = make_session_event(id, "app@day", vec![]);
+            e.timestamp = ts;
+            e.session_buckets = vec![SessionBucket {
+                release: "app@day".to_string(),
+                environment: "prod".to_string(),
+                started_ts: ts,
+                total: 1,
+                crashed,
+                errored: 0,
+                abnormal: 0,
+                did: None,
+                is_aggregate: false,
+            }];
+            e
+        };
+
+        let events = [
+            mk("dd1", day1 + 10, 0),
+            mk("dd2", day1 + 20, 1),
+            mk("dd3", day2 + 10, 0),
+        ];
+        for e in &events {
+            insert_event(&pool, e).await.unwrap();
+            acc.accumulate(e);
+        }
+        flush_aggregation(&pool, &mut acc, None).await.unwrap();
+
+        let rows: Vec<(i64, i64, i64)> = sqlx::query_as(
+            "SELECT day_bucket, sessions_total, sessions_crashed FROM session_aggregates WHERE release = 'app@day' ORDER BY day_bucket",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(rows.len(), 2, "one row per day");
+        assert_eq!(rows[0], (day1, 2, 1));
+        assert_eq!(rows[1], (day2, 1, 0));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn aggregate_sessions_set_has_aggregate_flag() {
+        let pool = test_pool().await;
+        let mut acc = Accumulators::new();
+
+        let mut e = make_session_event("agg1", "app@2.0", Vec::new());
+        e.item_type = ItemType::Sessions;
+        e.session_buckets = vec![SessionBucket {
+            release: "app@2.0".to_string(),
+            environment: "prod".to_string(),
+            started_ts: 1000,
+            total: 100,
+            crashed: 3,
+            errored: 5,
+            abnormal: 0,
+            did: None,
+            is_aggregate: true,
+        }];
+
+        insert_event(&pool, &e).await.unwrap();
+        acc.accumulate(&e);
+        flush_aggregation(&pool, &mut acc, None).await.unwrap();
+
+        let row: (i64, i64) = sqlx::query_as(
+            "SELECT sessions_total, has_aggregate FROM session_aggregates WHERE release = 'app@2.0'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0, 100);
+        assert_eq!(row.1, 1);
+    }
+
+    /// Regression: a batch containing only sessions (no fingerprints) must
+    /// still flush its aggregates -- the early-return guard previously skipped it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn session_only_batch_flushes() {
+        let pool = test_pool().await;
+        let mut acc = Accumulators::new();
+        acc.last_flush = std::time::Instant::now() - std::time::Duration::from_secs(2);
+
+        let s1 = make_session_event(
+            "only1",
+            "app@3.0",
+            vec![SessionBucket {
+                release: "app@3.0".to_string(),
+                environment: "prod".to_string(),
+                started_ts: 1000,
+                total: 1,
+                crashed: 0,
+                errored: 0,
+                abnormal: 0,
+                did: None,
+                is_aggregate: false,
+            }],
+        );
+
+        let mut batch = vec![WriteMsg::Event(s1)];
+        assert!(flush_batch(&pool, &mut batch, &mut acc, None).await);
+
+        let row: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM session_aggregates WHERE release = 'app@3.0'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(row.0, 1, "session-only batch must flush its aggregate row");
+    }
+
+    // --- transactions ---
+
+    fn make_transaction_event(event_id: &str, payload: &serde_json::Value) -> StorableEvent {
+        let raw = serde_json::to_vec(payload).unwrap();
+        let mut e = StorableEvent::new(
+            event_id.to_string(),
+            ItemType::Transaction,
+            raw.clone(),
+            1,
+            "k".to_string(),
+        );
+        crate::envelope::extract_fields_for_test(&raw, &ItemType::Transaction, &mut e);
+        e
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn transaction_yields_no_issue_but_rolls_up() {
+        let pool = test_pool().await;
+        let mut acc = Accumulators::new();
+
+        let payload = serde_json::json!({
+            "event_id": "txn1",
+            "type": "transaction",
+            "transaction": "/api/orders",
+            "start_timestamp": 1700000000.0,
+            "timestamp": 1700000000.5,
+            "measurements": {"duration": {"value": 500.0, "unit": "millisecond"}},
+            "contexts": {"trace": {"trace_id": "trace-abc", "span_id": "root", "status": "ok"}},
+            "spans": [
+                {"span_id": "c1", "trace_id": "trace-abc", "parent_span_id": "root",
+                 "op": "db.query", "description": "SELECT 1",
+                 "start_timestamp": 1700000000.1, "timestamp": 1700000000.2, "status": "ok"},
+                {"span_id": "c2", "trace_id": "trace-abc", "parent_span_id": "root",
+                 "op": "http.client", "description": "GET /x",
+                 "start_timestamp": 1700000000.2, "timestamp": 1700000000.4, "status": "ok"},
+                {"span_id": "c3", "parent_span_id": "root",
+                 "op": "cache.get", "description": "redis",
+                 "start_timestamp": 1700000000.3, "timestamp": 1700000000.35, "status": "ok"}
+            ]
+        });
+        let e = make_transaction_event("txn1", &payload);
+        assert!(e.fingerprint.is_none(), "transactions get no fingerprint");
+
+        let mut batch = vec![WriteMsg::Event(e)];
+        acc.last_flush = std::time::Instant::now() - std::time::Duration::from_secs(2);
+        assert!(flush_batch(&pool, &mut batch, &mut acc, None).await);
+
+        // No issue row produced.
+        let issues: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM issues")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(issues.0, 0);
+
+        // transaction_metrics populated.
+        let tm: (i64, i64, i64) = sqlx::query_as(
+            "SELECT count, sum_duration_ms, failed_count FROM transaction_metrics \
+             WHERE project_id = 1 AND transaction_name = '/api/orders'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(tm.0, 1);
+        assert_eq!(tm.1, 500);
+        assert_eq!(tm.2, 0);
+
+        // 3 child spans extracted, each with non-null start_ms and the trace_id
+        // (c3 inherits from the parent transaction).
+        let spans: Vec<(String, Option<String>, Option<i64>)> = sqlx::query_as(
+            "SELECT span_id, trace_id, start_ms FROM spans WHERE trace_id = 'trace-abc' ORDER BY span_id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(spans.len(), 3, "3 child spans, no synthesized root");
+        for (_, tid, start_ms) in &spans {
+            assert_eq!(tid.as_deref(), Some("trace-abc"));
+            assert!(start_ms.is_some(), "start_ms must be set for waterfalls");
+        }
+
+        // No root span row synthesized (root has no span_id of its own here).
+        let root: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM spans WHERE span_id = 'root'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(root.0, 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cross_hour_rows_merge_in_list() {
+        let pool = test_pool().await;
+        let mut acc = Accumulators::new();
+        acc.last_flush = std::time::Instant::now() - std::time::Duration::from_secs(2);
+
+        let now = chrono::Utc::now().timestamp();
+        // Two events in different hours, same transaction name.
+        let mk = |id: &str, ts: i64, dur: f64, status: &str| {
+            let payload = serde_json::json!({
+                "event_id": id, "type": "transaction", "transaction": "/api/x",
+                "start_timestamp": ts as f64, "timestamp": ts as f64 + dur / 1000.0,
+                "measurements": {"duration": {"value": dur, "unit": "millisecond"}},
+                "contexts": {"trace": {"trace_id": id, "status": status}},
+            });
+            let mut e = make_transaction_event(id, &payload);
+            e.timestamp = ts;
+            e
+        };
+        let mut batch = vec![
+            WriteMsg::Event(mk("t1", now - 4000, 100.0, "ok")),
+            WriteMsg::Event(mk("t2", now - 100, 200.0, "internal_error")),
+        ];
+        assert!(flush_batch(&pool, &mut batch, &mut acc, None).await);
+
+        let summaries =
+            crate::queries::transactions::list_transactions(&pool, 1, now - 86400, "count")
+                .await
+                .unwrap();
+        assert_eq!(summaries.len(), 1);
+        let s = &summaries[0];
+        assert_eq!(s.name, "/api/x");
+        assert_eq!(s.count, 2);
+        assert!(
+            (s.failure_rate - 50.0).abs() < 0.01,
+            "failure_rate={}",
+            s.failure_rate
+        );
+        assert!(s.p95_ms >= s.p50_ms);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn instances_sorted_by_duration_nulls_last() {
+        let pool = test_pool().await;
+        let mut acc = Accumulators::new();
+        acc.last_flush = std::time::Instant::now() - std::time::Duration::from_secs(2);
+
+        let mk = |id: &str, dur: Option<f64>| {
+            let mut payload = serde_json::json!({
+                "event_id": id, "type": "transaction", "transaction": "/api/y",
+                "start_timestamp": 1700000000.0, "timestamp": 1700000001.0,
+                "contexts": {"trace": {"trace_id": id, "status": "ok"}},
+            });
+            if let Some(d) = dur {
+                payload["measurements"] = serde_json::json!({"duration": {"value": d}});
+            } else {
+                // Strip timestamps so no duration can be derived.
+                payload["start_timestamp"] = serde_json::Value::Null;
+                payload["timestamp"] = serde_json::Value::Null;
+            }
+            let mut e = make_transaction_event(id, &payload);
+            e.timestamp = 1700000000;
+            e
+        };
+
+        let mut batch = vec![
+            WriteMsg::Event(mk("slow", Some(900.0))),
+            WriteMsg::Event(mk("fast", Some(50.0))),
+            WriteMsg::Event(mk("none", None)),
+        ];
+        assert!(flush_batch(&pool, &mut batch, &mut acc, None).await);
+
+        let page = crate::queries::types::Page::new(Some(0), Some(25));
+        let result =
+            crate::queries::transactions::list_transaction_instances(&pool, 1, "/api/y", &page)
+                .await
+                .unwrap();
+        assert_eq!(result.total, 3);
+        assert_eq!(result.items[0].event_id, "slow");
+        assert_eq!(result.items[1].event_id, "fast");
+        assert_eq!(result.items[2].event_id, "none");
+        assert!(result.items[2].duration_ms.is_none());
     }
 }

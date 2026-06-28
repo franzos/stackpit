@@ -19,7 +19,9 @@
   </div>
 
   <form class="filter-form" method="get" action="/web/releases/">
-    {% if !sort.is_empty() %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
+    {% if !sort.is_empty() %}
+      <input type="hidden" name="sort" value="{{ sort }}">
+    {% endif %}
     <input class="input"
            type="text"
            name="query"
@@ -107,7 +109,7 @@
 
     <nav class="pagination" aria-label="Pagination">
       <span>{{ result.total }} release
-        {% if result.total != 1 %}s{% endif %}
+        {%- if result.total != 1 %}s{% endif %}
       </span>
       <span class="flex gap-2">
         {% if result.has_prev() %}

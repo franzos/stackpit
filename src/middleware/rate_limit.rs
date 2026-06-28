@@ -36,9 +36,7 @@ fn check_rate_limit(
     limiter: &SharedRateLimiter,
     req: &axum::http::Request<axum::body::Body>,
 ) -> bool {
-    // Static assets (CSS, JS, fonts, icon) are embedded in the binary and
-    // cheap; a normal page load fans out into 5–6 of them. Counting each one
-    // against the human-facing bucket exhausts it after a handful of clicks.
+    // Static assets are cheap and fan out per page load; don't count them against the bucket.
     if req.uri().path().starts_with("/web/_assets/") {
         return true;
     }
@@ -56,10 +54,10 @@ fn check_rate_limit(
     let ip = crate::network::extract_client_ip(req.headers(), peer_addr)
         .unwrap_or_else(|| "unknown".to_string());
 
-    // `parking_lot::Mutex` doesn't poison -- a panic inside can't fail-closed the admin surface.
+    // `parking_lot::Mutex` doesn't poison: a panic inside can't fail-closed the admin surface.
     let mut inner = limiter.0.lock();
 
-    // Periodic cleanup: evict stale entries once per window
+    // Evict stale buckets once per window.
     if now.saturating_sub(inner.last_cleanup) >= ADMIN_RATE_WINDOW_SECS {
         inner
             .buckets

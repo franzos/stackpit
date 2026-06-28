@@ -1,5 +1,32 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- Release Health crash-free users (distinct-user crash rate via HLL)
+- Client Reports outcomes summary (dropped events by category and reason)
+- Transaction performance model: duration percentiles (p50/p75/p95), throughput, and failure rate, rolled up hourly
+- Transactions list and per-transaction instances view (slowest first), linking into trace detail
+- Embedded transaction child spans extracted into the spans table with absolute millisecond start times
+- Trace detail now renders a span waterfall (nested, time-positioned bars) with correlated error events
+- Release Health daily sessions trend chart
+- User report detail surfaces feedback fields (name, email, comments, related event) above the raw JSON
+- Event detail renders a Web Vitals card (LCP, FCP, CLS, TTFB, …) from transaction measurements
+- Transaction detail shows the trace op in its header and a per-instance trace status badge, with each instance linking to its event detail
+
+### Changed
+- Trace detail replaces the flat span table with the waterfall view
+- Transactions no longer create error-style issues; they feed a dedicated performance rollup
+- Transactions tab badge now counts distinct transaction names
+
+### Fixed
+- Release Health now counts aggregated `sessions` envelopes instead of dropping them
+- Crash-free rate no longer counts errored sessions as crashes
+- Session `release`/`environment` read from `attrs` (were silently null)
+- Sessions are dated by their own start time instead of the ingestion time
+- Tag facet bars now render as background fills instead of pushing the values out of line
+- Event/session charts scale to the full container width instead of a fixed 1400px
+
 ## [0.3.6] - 2026-06-19
 
 ### Added

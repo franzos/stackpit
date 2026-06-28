@@ -15,7 +15,7 @@ pub async fn list(ReadPool(pool): ReadPool) -> impl IntoResponse {
     json_or_500(queries::projects::list_projects(&pool, None, None, None).await)
 }
 
-/// GET /api/0/projects/{org}/{project_id}/ — sentry-cli validation endpoint.
+/// GET /api/0/projects/{org}/{project_id}/ (sentry-cli validation endpoint).
 pub async fn sentry_get(
     State(state): State<AppState>,
     Path((_org, project_slug)): Path<(String, String)>,

@@ -48,8 +48,7 @@ pub async fn list_issues(
 
     let sort = IssueSort::parse(filter.sort.as_deref());
 
-    // Build the shared WHERE clause once, then reuse for count and select.
-    // We push binds inline so QueryBuilder handles the `?` placeholders itself.
+    // Shared WHERE clause is built for both the count and select queries.
     let mut count_qb: QueryBuilder<'_, crate::db::Db> =
         QueryBuilder::new("SELECT COUNT(*) FROM issues WHERE project_id = ");
     count_qb.push_bind(project_id as i64);
@@ -106,8 +105,6 @@ fn push_issue_filter_conditions<'args>(
         qb.push_bind(item_type.as_str());
     }
     if let Some(ref release) = filter.release {
-        // The release subquery needs project_id -- we push it as a second bind here
-        // so we don't have to track the placeholder index from the outer query.
         qb.push(" AND EXISTS (SELECT 1 FROM events e WHERE e.fingerprint = issues.fingerprint AND e.project_id = issues.project_id AND e.release = ");
         qb.push_bind(release.as_str());
         qb.push(")");
@@ -225,7 +222,7 @@ fn map_issue_row(row: &crate::db::DbRow) -> Result<IssueSummary> {
         Some(buf) if buf.len() == HLL_REGISTER_COUNT => {
             HyperLogLog::<12>::with_registers(buf).count() as u64
         }
-        Some(_) => 0, // blob is corrupted, can't trust it
+        Some(_) => 0, // unexpected register length: treat as corrupt
         None => 0,
     };
 

@@ -64,7 +64,7 @@ struct Cli {
 enum Command {
     /// Fire up the HTTP server
     Serve {
-        /// Run ingest-only -- no admin UI or API
+        /// Run ingest-only (no admin UI or API)
         #[arg(long)]
         ingest_only: bool,
     },
@@ -112,7 +112,7 @@ enum Command {
         #[arg(long, value_delimiter = ',')]
         projects: Option<Vec<String>>,
 
-        /// Cap pages per project -- handy for testing
+        /// Cap pages per project (handy for testing)
         #[arg(long)]
         max_pages: Option<u32>,
     },
@@ -130,8 +130,8 @@ fn main() -> anyhow::Result<()> {
         return cli::init::run(&config_path);
     }
 
-    // An explicit --config that doesn't exist is a hard error; the default path
-    // missing falls back to built-in defaults (fresh checkout still boots).
+    // An explicit --config that doesn't exist is a hard error; a missing default
+    // path falls back to built-in defaults so a fresh checkout still boots.
     let config = config::Config::load(&config_path, cli.config.is_some())?;
     config.validate()?;
 
@@ -211,8 +211,6 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-// — Integration tests
-
 #[cfg(test)]
 mod integration_tests {
     use crate::db;
@@ -250,6 +248,10 @@ mod integration_tests {
             parent_event_id: None,
             user_identifier: Some("user-1".to_string()),
             tags: vec![("browser".to_string(), "Chrome".to_string())],
+            session_buckets: Vec::new(),
+            trace_id: None,
+            duration_ms: None,
+            trace_status: None,
         }
     }
 
@@ -257,7 +259,7 @@ mod integration_tests {
     async fn ingest_event_then_query_back() {
         let pool = db::open_test_pool().await;
 
-        // Need a project row in the DB for queries to work
+        // Queries need an existing project row.
         sqlx::query("INSERT INTO projects (project_id, name) VALUES (1, 'test-project')")
             .execute(&pool)
             .await
@@ -265,7 +267,6 @@ mod integration_tests {
         sqlx::query("INSERT INTO project_keys (public_key, project_id, status) VALUES ('test-key', 1, 'active')")
             .execute(&pool).await.unwrap();
 
-        // Spin up the writer
         let (writer, _join) = writer::spawn(
             pool.clone(),
             None,
@@ -275,18 +276,16 @@ mod integration_tests {
         .unwrap();
         let tx = writer.raw_sender();
 
-        // Push events through the raw channel
         let event1 = make_event("evt-001", 1, "fp-001");
         let event2 = make_event("evt-002", 1, "fp-001"); // same fingerprint, should land in same issue
 
         tx.try_send(WriteMsg::Event(event1)).unwrap();
         tx.try_send(WriteMsg::Event(event2)).unwrap();
 
-        // Shut down cleanly so everything gets flushed
+        // Shut down cleanly so everything flushes.
         let _ = writer.shutdown();
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
-        // Event should be queryable
         let detail = crate::queries::events::get_event_detail(&pool, "evt-001")
             .await
             .unwrap();
@@ -297,7 +296,6 @@ mod integration_tests {
         let detail = detail.unwrap();
         assert_eq!(detail.event_id, "evt-001");
 
-        // Issue should've been created from the fingerprint
         let issue = crate::queries::issues::get_issue(&pool, "fp-001")
             .await
             .unwrap();
@@ -309,7 +307,6 @@ mod integration_tests {
             "issue should have at least 2 events"
         );
 
-        // Both events should show up in the project listing
         let page = crate::queries::types::Page::new(None, None);
         let events = crate::queries::events::list_events(&pool, 1, &page)
             .await
@@ -343,15 +340,14 @@ mod integration_tests {
             .send_event(make_event("evt-status-1", 1, "fp-status-001"))
             .unwrap();
 
-        // Wait past the 1s flush interval, then send another event to
-        // trigger the aggregation flush that creates the issue row.
+        // Wait past the 1s flush interval, then send another event to trigger
+        // the aggregation flush that creates the issue row.
         tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
         writer
             .send_event(make_event("evt-status-2", 1, "fp-status-002"))
             .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        // Issue should exist now -- try updating its status
         let rows = crate::queries::issues::update_issue_status(
             &pool,
             "fp-status-001",
@@ -364,7 +360,6 @@ mod integration_tests {
         let _ = writer.shutdown();
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
-        // Confirm the status change stuck
         let issue = crate::queries::issues::get_issue(&pool, "fp-status-001")
             .await
             .unwrap();

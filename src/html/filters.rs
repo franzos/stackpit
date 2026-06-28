@@ -1,6 +1,6 @@
 use std::convert::Infallible;
 
-/// Turns a unix timestamp into something humans can actually read.
+/// Formats a unix timestamp as a human-readable UTC datetime.
 #[askama::filter_fn]
 pub fn format_ts(ts: &i64, _: &dyn askama::Values) -> askama::Result<String, Infallible> {
     Ok(chrono::DateTime::from_timestamp(*ts, 0)
@@ -8,7 +8,7 @@ pub fn format_ts(ts: &i64, _: &dyn askama::Values) -> askama::Result<String, Inf
         .unwrap_or_else(|| ts.to_string()))
 }
 
-/// Shows timestamps as relative time -- "3h ago", "2d ago", that kind of thing.
+/// Formats a timestamp as relative time (e.g. "3h ago", "2d ago").
 #[askama::filter_fn]
 pub fn format_relative(ts: &i64, _: &dyn askama::Values) -> askama::Result<String, Infallible> {
     let now = chrono::Utc::now().timestamp();
@@ -28,14 +28,14 @@ pub fn format_relative(ts: &i64, _: &dyn askama::Values) -> askama::Result<Strin
     } else if secs < 604800 {
         format!("{}d ago", secs / 86400)
     } else {
-        // Anything older than a week -- just show the date
+        // Older than a week: show the date.
         chrono::DateTime::from_timestamp(*ts, 0)
             .map(|dt| dt.format("%Y-%m-%d").to_string())
             .unwrap_or_else(|| ts.to_string())
     })
 }
 
-/// Chops long IDs down to 12 chars for display. Nobody wants to read a full UUID.
+/// Truncates long IDs to 12 chars for display.
 #[askama::filter_fn]
 pub fn truncate_id(s: &str, _: &dyn askama::Values) -> askama::Result<String, Infallible> {
     if s.len() > 12 {
@@ -45,7 +45,7 @@ pub fn truncate_id(s: &str, _: &dyn askama::Values) -> askama::Result<String, In
     }
 }
 
-/// Grabs the error type from a "Type: message" title -- everything before the first ": ".
+/// Returns the error type from a "Type: message" title (before the first ": ").
 #[askama::filter_fn]
 pub fn split_error_type(title: &str, _: &dyn askama::Values) -> askama::Result<String, Infallible> {
     Ok(title
@@ -54,7 +54,7 @@ pub fn split_error_type(title: &str, _: &dyn askama::Values) -> askama::Result<S
         .unwrap_or_else(|| title.to_string()))
 }
 
-/// Grabs the error message from a "Type: message" title -- everything after the first ": ".
+/// Returns the error message from a "Type: message" title (after the first ": ").
 #[askama::filter_fn]
 pub fn split_error_message(
     title: &str,
@@ -66,7 +66,7 @@ pub fn split_error_message(
         .unwrap_or_default())
 }
 
-/// Keeps URLs from blowing out the layout -- caps them at 40 chars.
+/// Truncates URLs to 40 chars to keep the layout intact.
 #[askama::filter_fn]
 pub fn truncate_url(url: &str, _: &dyn askama::Values) -> askama::Result<String, Infallible> {
     if url.len() <= 40 {
@@ -76,7 +76,7 @@ pub fn truncate_url(url: &str, _: &dyn askama::Values) -> askama::Result<String,
     }
 }
 
-/// Turns raw byte counts into something readable -- KB, MB, GB.
+/// Formats a byte count as B/KB/MB/GB.
 #[askama::filter_fn]
 pub fn filesizeformat(size: &usize, _: &dyn askama::Values) -> askama::Result<String, Infallible> {
     let s = *size as f64;

@@ -18,16 +18,19 @@ use super::parse_log::{
     compress_log_entry, extract_log_fields, extract_log_timestamp, parse_log_entries,
 };
 use super::parse_metric::parse_metric_payload;
-use super::parse_span::extract_span_fields;
+use super::parse_span::{extract_span_fields, extract_span_fields_from_value, SpanFields};
 
-/// Max events per multi-row INSERT chunk. 19 bind params per event;
-/// SQLite's SQLITE_MAX_VARIABLE_NUMBER is 32766, so 32766 / 19 = 1724.
-/// We use 1700 for a comfortable margin.
-const BULK_CHUNK_SIZE: usize = 1700;
+/// Max events per multi-row INSERT chunk. 21 bind params per event;
+/// SQLite's SQLITE_MAX_VARIABLE_NUMBER is 32766, so 32766 / 21 = 1560.
+/// We use 1500 for a comfortable margin.
+const BULK_CHUNK_SIZE: usize = 1500;
 
-/// Max spans per multi-row INSERT chunk. 13 bind params per span;
-/// 32766 / 13 = 2520, use 2300 for margin.
+/// Max spans per multi-row INSERT chunk. 14 bind params per span;
+/// 32766 / 14 = 2340, use 2300 for margin.
 const SPAN_BULK_CHUNK_SIZE: usize = 2300;
+
+/// Cap on embedded child spans extracted from a single transaction payload.
+const MAX_EMBEDDED_SPANS: usize = 1000;
 
 /// Max metrics per multi-row INSERT chunk. 8 bind params per metric;
 /// 32766 / 8 = 4095, use 4000 for margin.
@@ -51,11 +54,11 @@ where
     E: sqlx::Executor<'e, Database = crate::db::Db>,
 {
     #[cfg(feature = "sqlite")]
-    let query = sql!("INSERT OR IGNORE INTO events (event_id, item_type, payload, project_id, public_key, timestamp, level, platform, release, environment, server_name, transaction_name, title, sdk_name, sdk_version, fingerprint, monitor_slug, session_status, parent_event_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)");
+    let query = sql!("INSERT OR IGNORE INTO events (event_id, item_type, payload, project_id, public_key, timestamp, level, platform, release, environment, server_name, transaction_name, title, sdk_name, sdk_version, fingerprint, monitor_slug, session_status, parent_event_id, trace_id, duration_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)");
     #[cfg(not(feature = "sqlite"))]
-    let query = sql!("INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, level, platform, release, environment, server_name, transaction_name, title, sdk_name, sdk_version, fingerprint, monitor_slug, session_status, parent_event_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+    let query = sql!("INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, level, platform, release, environment, server_name, transaction_name, title, sdk_name, sdk_version, fingerprint, monitor_slug, session_status, parent_event_id, trace_id, duration_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
          ON CONFLICT (event_id) DO NOTHING");
 
     let result = sqlx::query(query)
@@ -78,6 +81,8 @@ where
         .bind(&event.monitor_slug)
         .bind(&event.session_status)
         .bind(&event.parent_event_id)
+        .bind(&event.trace_id)
+        .bind(event.duration_ms)
         .execute(executor)
         .await?;
 
@@ -145,6 +150,12 @@ pub async fn insert_event_rows_bulk(
     if !spans.is_empty() {
         bulk_insert_spans_table(tx, &spans).await?;
     }
+    // Transactions carry child spans inline; pull them into the spans table so
+    // the trace waterfall has rows to render.
+    let embedded = extract_embedded_spans(&regular);
+    if !embedded.is_empty() {
+        bulk_insert_span_rows(tx, &embedded).await?;
+    }
     if !metrics.is_empty() {
         bulk_insert_metrics_table(tx, &metrics).await?;
     }
@@ -161,7 +172,7 @@ async fn bulk_insert_events_table(
 ) -> Result<()> {
     let dialect = insert_ignore(
         "events",
-        "event_id, item_type, payload, project_id, public_key, timestamp, level, platform, release, environment, server_name, transaction_name, title, sdk_name, sdk_version, fingerprint, monitor_slug, session_status, parent_event_id",
+        "event_id, item_type, payload, project_id, public_key, timestamp, level, platform, release, environment, server_name, transaction_name, title, sdk_name, sdk_version, fingerprint, monitor_slug, session_status, parent_event_id, trace_id, duration_ms",
         Some("event_id"),
     );
 
@@ -188,6 +199,8 @@ async fn bulk_insert_events_table(
             b.push_bind(&event.monitor_slug);
             b.push_bind(&event.session_status);
             b.push_bind(&event.parent_event_id);
+            b.push_bind(&event.trace_id);
+            b.push_bind(event.duration_ms);
         });
 
         builder.push(&dialect.suffix);
@@ -198,51 +211,147 @@ async fn bulk_insert_events_table(
     Ok(())
 }
 
+struct SpanRow {
+    span_id: String,
+    payload: Vec<u8>,
+    project_id: i64,
+    public_key: String,
+    timestamp: i64,
+    release: Option<String>,
+    environment: Option<String>,
+    trace_id: Option<String>,
+    parent_span_id: Option<String>,
+    op: Option<String>,
+    description: Option<String>,
+    status: Option<String>,
+    duration_ms: Option<i64>,
+    start_ms: Option<i64>,
+}
+
+/// Build a SpanRow from already-extracted fields and its source event.
+/// `payload` and `trace_id_fallback` differ for standalone vs embedded spans.
+fn span_row_from_fields(
+    fields: SpanFields,
+    event: &StorableEvent,
+    payload: Vec<u8>,
+    timestamp: i64,
+    trace_id_fallback: Option<&str>,
+    default_span_id: String,
+) -> SpanRow {
+    SpanRow {
+        span_id: fields.span_id.unwrap_or(default_span_id),
+        payload,
+        project_id: event.project_id as i64,
+        public_key: event.public_key.clone(),
+        timestamp,
+        release: event.release.clone(),
+        environment: event.environment.clone(),
+        trace_id: fields
+            .trace_id
+            .or_else(|| trace_id_fallback.map(str::to_string)),
+        parent_span_id: fields.parent_span_id,
+        op: fields.op,
+        description: fields.description,
+        status: fields.status,
+        duration_ms: fields.duration_ms,
+        start_ms: fields.start_ms,
+    }
+}
+
 async fn bulk_insert_spans_table(
     tx: &mut sqlx::Transaction<'_, crate::db::Db>,
     spans: &[&&StorableEvent],
 ) -> Result<()> {
-    struct SpanRow {
-        span_id: String,
-        payload: Vec<u8>,
-        project_id: i64,
-        public_key: String,
-        timestamp: i64,
-        release: Option<String>,
-        environment: Option<String>,
-        trace_id: Option<String>,
-        parent_span_id: Option<String>,
-        op: Option<String>,
-        description: Option<String>,
-        status: Option<String>,
-        duration_ms: Option<i64>,
-    }
-
     let rows: Vec<SpanRow> = spans
         .iter()
         .map(|event| {
             let fields = extract_span_fields(&event.payload);
-            SpanRow {
-                span_id: fields.span_id.unwrap_or_else(|| event.event_id.clone()),
-                payload: event.payload.clone(),
-                project_id: event.project_id as i64,
-                public_key: event.public_key.clone(),
-                timestamp: event.timestamp,
-                release: event.release.clone(),
-                environment: event.environment.clone(),
-                trace_id: fields.trace_id,
-                parent_span_id: fields.parent_span_id,
-                op: fields.op,
-                description: fields.description,
-                status: fields.status,
-                duration_ms: fields.duration_ms,
-            }
+            let default_id = event.event_id.clone();
+            span_row_from_fields(
+                fields,
+                event,
+                event.payload.clone(),
+                event.timestamp,
+                None,
+                default_id,
+            )
         })
         .collect();
 
+    bulk_insert_span_rows(tx, &rows).await
+}
+
+/// Pull child spans out of each transaction payload (capped per transaction).
+/// Trace id falls back to the parent transaction's `contexts.trace.trace_id`.
+fn extract_embedded_spans(events: &[&&StorableEvent]) -> Vec<SpanRow> {
+    let mut rows = Vec::new();
+    for event in events {
+        if event.item_type != ItemType::Transaction {
+            continue;
+        }
+        let json: Option<serde_json::Value> = zstd::decode_all(event.payload.as_slice())
+            .ok()
+            .or_else(|| Some(event.payload.clone()))
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+
+        let Some(json) = json else { continue };
+        let Some(spans) = json.get("spans").and_then(|s| s.as_array()) else {
+            continue;
+        };
+
+        let parent_trace = json
+            .get("contexts")
+            .and_then(|c| c.get("trace"))
+            .and_then(|t| t.get("trace_id"))
+            .and_then(|v| v.as_str())
+            .or(event.trace_id.as_deref());
+
+        if spans.len() > MAX_EMBEDDED_SPANS {
+            tracing::warn!(
+                event_id = %event.event_id,
+                span_count = spans.len(),
+                "transaction has more than {MAX_EMBEDDED_SPANS} child spans; capping"
+            );
+        }
+
+        for child in spans.iter().take(MAX_EMBEDDED_SPANS) {
+            let fields = extract_span_fields_from_value(child);
+            // No span_id means we can't dedupe it -- skip rather than collide
+            // on the parent event_id.
+            let Some(span_id) = fields.span_id.clone() else {
+                continue;
+            };
+            let payload = serde_json::to_vec(child).unwrap_or_default();
+            let ts = child
+                .get("timestamp")
+                .and_then(serde_json::Value::as_f64)
+                .map(|f| f.round() as i64)
+                .unwrap_or(event.timestamp);
+            rows.push(span_row_from_fields(
+                fields,
+                event,
+                payload,
+                ts,
+                parent_trace,
+                span_id,
+            ));
+        }
+    }
+    rows
+}
+
+/// Shared chunked INSERT for span rows (standalone and embedded share this).
+async fn bulk_insert_span_rows(
+    tx: &mut sqlx::Transaction<'_, crate::db::Db>,
+    rows: &[SpanRow],
+) -> Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+
     let dialect = insert_ignore(
         "spans",
-        "span_id, payload, project_id, public_key, timestamp, release, environment, trace_id, parent_span_id, op, description, status, duration_ms",
+        "span_id, payload, project_id, public_key, timestamp, release, environment, trace_id, parent_span_id, op, description, status, duration_ms, start_ms",
         Some("span_id"),
     );
 
@@ -263,6 +372,7 @@ async fn bulk_insert_spans_table(
             b.push_bind(&row.description);
             b.push_bind(&row.status);
             b.push_bind(row.duration_ms);
+            b.push_bind(row.start_ms);
         });
 
         builder.push(&dialect.suffix);
@@ -460,7 +570,6 @@ pub async fn upsert_issue_from_event(pool: &DbPool, event: &StorableEvent) -> Re
         .execute(&mut *tx)
         .await?;
 
-    // Tag counts
     for (key, value) in event.tags.iter().take(MAX_TAGS_PER_EVENT) {
         sqlx::query(sql!(
             "INSERT INTO issue_tag_values (fingerprint, tag_key, tag_value, count)
@@ -475,7 +584,7 @@ pub async fn upsert_issue_from_event(pool: &DbPool, event: &StorableEvent) -> Re
         .await?;
     }
 
-    // User count via HLL — read-modify-write inside the transaction to prevent races
+    // HLL read-modify-write inside the transaction to avoid lost-update races.
     if let Some(ref user_id) = event.user_identifier {
         let existing: Option<(Vec<u8>,)> =
             sqlx::query_as(sql!("SELECT user_hll FROM issues WHERE fingerprint = ?1"))
@@ -566,4 +675,62 @@ where
         .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::ItemType;
+
+    fn txn_with_spans(n: usize) -> StorableEvent {
+        let spans: Vec<serde_json::Value> = (0..n)
+            .map(|i| {
+                serde_json::json!({
+                    "span_id": format!("s{i}"),
+                    "trace_id": "tr",
+                    "parent_span_id": "root",
+                    "op": "db.query",
+                    "start_timestamp": 1700000000.0 + i as f64 / 1000.0,
+                    "timestamp": 1700000000.5 + i as f64 / 1000.0,
+                    "status": "ok"
+                })
+            })
+            .collect();
+        let payload = serde_json::json!({
+            "type": "transaction",
+            "transaction": "/api/x",
+            "contexts": {"trace": {"trace_id": "tr"}},
+            "spans": spans,
+        });
+        let raw = serde_json::to_vec(&payload).unwrap();
+        StorableEvent::new(
+            "txn".to_string(),
+            ItemType::Transaction,
+            raw,
+            1,
+            "k".to_string(),
+        )
+    }
+
+    #[test]
+    fn embedded_spans_extracted_with_start_ms() {
+        let e = txn_with_spans(3);
+        let r = &e;
+        let refs: Vec<&&StorableEvent> = vec![&r];
+        let rows = extract_embedded_spans(&refs);
+        assert_eq!(rows.len(), 3);
+        for row in &rows {
+            assert_eq!(row.trace_id.as_deref(), Some("tr"));
+            assert!(row.start_ms.is_some());
+        }
+    }
+
+    #[test]
+    fn embedded_spans_capped_at_1000() {
+        let e = txn_with_spans(1500);
+        let r = &e;
+        let refs: Vec<&&StorableEvent> = vec![&r];
+        let rows = extract_embedded_spans(&refs);
+        assert_eq!(rows.len(), MAX_EMBEDDED_SPANS);
+    }
 }

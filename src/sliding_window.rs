@@ -64,7 +64,7 @@ mod tests {
         let mut w = SlidingWindow::new();
         w.advance(1000);
         w.increment(1000);
-        // 60+ seconds later, everything should've been zeroed out
+        // 60+ seconds later: every bucket zeroed
         w.advance(1061);
         assert_eq!(w.count(), 0);
     }

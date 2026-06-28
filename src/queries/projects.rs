@@ -93,7 +93,7 @@ pub async fn list_projects(
 
     let mut projects: Vec<ProjectSummary> = rows.iter().map(map_project_row).collect();
 
-    // Filter client-side by name/id -- simpler than wrestling with more dynamic SQL
+    // Filter client-side by name/id; simpler than more dynamic SQL.
     if let Some(q) = query {
         if !q.is_empty() {
             let q_lower = q.to_lowercase();
@@ -193,25 +193,23 @@ pub async fn get_project_repos(
 }
 
 /// Load nav badge counts for a project in one shot. Scans the events table
-/// once with conditional aggregation, plus EXISTS for logs/spans/metrics.
+/// once with conditional aggregation, plus a count each for logs/spans/metrics.
 pub async fn get_nav_counts(pool: &crate::db::DbPool, project_id: u64) -> ProjectNavCounts {
-    // Transactions live in the issues table; everything else comes from events
+    // Transactions live in transaction_metrics; everything else comes from events.
     let transaction_count = count_transactions(pool, project_id).await.unwrap_or(0);
     let label = project_label(pool, project_id).await;
 
-    // Single scan of the events table for all event-based flags, plus
-    // one EXISTS each for the separate logs/spans/metrics tables.
     let result = sqlx::query(sql!(
         "SELECT
-            COALESCE(MAX(CASE WHEN monitor_slug IS NOT NULL THEN 1 ELSE 0 END), 0),
-            COALESCE(MAX(CASE WHEN item_type IN ('session', 'sessions') AND session_status IS NOT NULL THEN 1 ELSE 0 END), 0),
-            COALESCE(MAX(CASE WHEN item_type = 'user_report' THEN 1 ELSE 0 END), 0),
-            COALESCE(MAX(CASE WHEN item_type = 'client_report' THEN 1 ELSE 0 END), 0),
-            CASE WHEN EXISTS(SELECT 1 FROM logs WHERE project_id = ?1) THEN 1 ELSE 0 END,
-            CASE WHEN EXISTS(SELECT 1 FROM spans WHERE project_id = ?1) THEN 1 ELSE 0 END,
-            CASE WHEN EXISTS(SELECT 1 FROM metrics WHERE project_id = ?1) THEN 1 ELSE 0 END,
-            COALESCE(MAX(CASE WHEN item_type IN ('profile', 'profile_chunk') THEN 1 ELSE 0 END), 0),
-            COALESCE(MAX(CASE WHEN item_type = 'replay_event' THEN 1 ELSE 0 END), 0)
+            COALESCE(SUM(CASE WHEN monitor_slug IS NOT NULL THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN item_type IN ('session', 'sessions') AND session_status IS NOT NULL THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN item_type = 'user_report' THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN item_type = 'client_report' THEN 1 ELSE 0 END), 0),
+            (SELECT COUNT(*) FROM logs WHERE project_id = ?1),
+            (SELECT COUNT(*) FROM spans WHERE project_id = ?1),
+            (SELECT COUNT(*) FROM metrics WHERE project_id = ?1),
+            COALESCE(SUM(CASE WHEN item_type IN ('profile', 'profile_chunk') THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN item_type = 'replay_event' THEN 1 ELSE 0 END), 0)
          FROM events
          WHERE project_id = ?1"
     ))
@@ -241,9 +239,9 @@ pub async fn get_nav_counts(pool: &crate::db::DbPool, project_id: u64) -> Projec
     }
 }
 
-/// Resolve the display label for a project: stored `name` if set,
-/// else `Project {id}`. Never errors -- falls back to the id-based label
-/// on any DB hiccup so the heading still renders.
+/// Resolve the display label for a project: stored `name` if set, else
+/// `Project {id}`. Never errors; falls back to the id-based label on any
+/// DB failure so the heading still renders.
 pub async fn project_label(pool: &crate::db::DbPool, project_id: u64) -> String {
     let stored = sqlx::query(sql!("SELECT name FROM projects WHERE project_id = ?1"))
         .bind(project_id as i64)
@@ -256,10 +254,10 @@ pub async fn project_label(pool: &crate::db::DbPool, project_id: u64) -> String 
     stored.unwrap_or_else(|| format!("Project {}", project_id))
 }
 
-/// Count transaction issues for a project's nav badge.
+/// Count distinct transaction names for a project's nav badge.
 pub async fn count_transactions(pool: &crate::db::DbPool, project_id: u64) -> Result<u64> {
     let row = sqlx::query(sql!(
-        "SELECT COUNT(*) FROM issues WHERE project_id = ?1 AND item_type = 'transaction'"
+        "SELECT COUNT(DISTINCT transaction_name) FROM transaction_metrics WHERE project_id = ?1"
     ))
     .bind(project_id as i64)
     .fetch_one(pool)
@@ -355,7 +353,6 @@ pub async fn create_project(
 ) -> Result<(u64, String)> {
     let mut tx = pool.begin().await?;
 
-    // next_project_id needs the pool, but we can inline it within the tx
     let row = sqlx::query(sql!(
         "SELECT MAX(id) FROM (
             SELECT MAX(project_id) AS id FROM projects
@@ -625,9 +622,11 @@ const PROJECT_SCOPED_TABLES: &[&str] = &[
     "api_keys",
     "sourcemaps",
     "upload_chunks",
+    "session_aggregates",
+    "transaction_metrics",
 ];
 
-/// Nuke a project and everything it owns -- events, issues, keys, repos, releases.
+/// Delete a project and everything it owns (events, issues, keys, repos, releases).
 pub async fn delete_project(pool: &crate::db::DbPool, project_id: u64) -> Result<()> {
     let mut tx = pool.begin().await?;
     let pid = project_id as i64;

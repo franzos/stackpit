@@ -8,8 +8,8 @@ use crate::server::AppState;
 
 use super::error_response;
 
-/// Pulls auth credentials from headers or query params, then validates against
-/// the DB. I'm using a DashMap cache here so we don't hammer the DB on every request.
+/// Extract auth credentials from headers or query params, then validate against
+/// the DB (results cached to avoid a DB hit per request).
 #[allow(clippy::result_large_err)]
 pub async fn authenticate(
     state: &AppState,

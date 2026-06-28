@@ -45,7 +45,7 @@ impl FilterField {
         }
     }
 
-    /// Quick validation -- is this a field name we actually know about?
+    /// Whether `s` is a known field name.
     pub fn is_valid(s: &str) -> bool {
         matches!(
             s,
@@ -107,7 +107,7 @@ impl FilterOperator {
         }
     }
 
-    /// Validation helper -- is this an operator we support?
+    /// Whether `s` is a supported operator.
     pub fn is_valid(s: &str) -> bool {
         matches!(
             s,
@@ -235,6 +235,10 @@ mod tests {
             parent_event_id: None,
             user_identifier: None,
             tags: vec![("browser".to_string(), "Chrome".to_string())],
+            session_buckets: Vec::new(),
+            trace_id: None,
+            duration_ms: None,
+            trace_status: None,
         };
 
         assert_eq!(FilterField::Level.extract(&event), Some("error"));

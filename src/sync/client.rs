@@ -217,7 +217,7 @@ impl SentryClient {
     }
 
     /// Fetches issues for an org, filtered by project ID.
-    /// We pass `query=` (empty) to get all statuses — not just unresolved.
+    /// Passes `query=` (empty) to get all statuses, not just unresolved.
     pub async fn list_issues(
         &self,
         org: &str,
@@ -356,8 +356,8 @@ impl SentryClient {
     }
 }
 
-/// Parses Sentry's `Link` header for cursor-based pagination. It turns out
-/// they pack the cursor and a `results` flag into the header — quite an unusual choice.
+/// Parses Sentry's `Link` header for cursor-based pagination; the cursor and
+/// a `results` flag are packed into the header.
 fn parse_link_header(headers: &reqwest::header::HeaderMap) -> (Option<String>, bool) {
     let header = match headers.get("link").and_then(|v| v.to_str().ok()) {
         Some(h) => h,
@@ -393,8 +393,8 @@ fn parse_link_header(headers: &reqwest::header::HeaderMap) -> (Option<String>, b
     (None, false)
 }
 
-/// Sentry can't make up its mind — IDs come back as strings in some
-/// deployments and numbers in others. This handles both.
+/// Sentry returns IDs as strings in some deployments and numbers in others;
+/// accept both.
 fn deserialize_id<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
     use serde::de;
 

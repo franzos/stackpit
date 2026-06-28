@@ -22,7 +22,7 @@ fn row_to_integration(row: &crate::db::DbRow) -> Result<Integration> {
     })
 }
 
-/// All configured integrations -- webhooks, Slack, email, etc.
+/// All configured integrations (webhooks, Slack, email, etc.).
 pub async fn list_integrations(pool: &DbPool) -> Result<Vec<Integration>> {
     let rows = sqlx::query(sql!(
         "SELECT id, name, kind, url, secret, encrypted, config, created_at
@@ -75,7 +75,7 @@ const PROJECT_INTEGRATION_SELECT: &str = "SELECT pi.id, pi.project_id, pi.integr
      FROM project_integrations pi
      JOIN integrations i ON i.id = pi.integration_id";
 
-/// All integrations linked to a project -- both active and inactive.
+/// All integrations linked to a project (active and inactive).
 pub async fn list_project_integrations(
     pool: &DbPool,
     project_id: u64,
@@ -89,8 +89,7 @@ pub async fn list_project_integrations(
     rows.iter().map(row_to_project_integration).collect()
 }
 
-/// Only the enabled integrations for a project -- this is what the notification
-/// dispatcher uses to figure out where to send alerts.
+/// Enabled integrations for a project, used by the notification dispatcher.
 pub async fn get_active_for_project(
     pool: &DbPool,
     project_id: u64,
@@ -106,7 +105,7 @@ pub async fn get_active_for_project(
     rows.iter().map(row_to_project_integration).collect()
 }
 
-/// Integrations not yet linked to a project -- candidates for the "add" dropdown.
+/// Integrations not yet linked to a project (candidates for the "add" dropdown).
 pub async fn list_available_for_project(
     pool: &DbPool,
     project_id: u64,

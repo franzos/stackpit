@@ -236,8 +236,8 @@ mod tests {
         ] {
             assert!(is_public_path(p), "{p} must be public");
         }
-        // Gated: logout needs the gate to run so the CSRF token is injected.
-        // A blanket `/web/auth/` match here is what once broke OIDC logout.
+        // Gated: logout still runs the gate to resolve + tear down the caller's
+        // own session. A blanket `/web/auth/` match here once broke OIDC logout.
         for p in [
             "/web/logout",
             "/web/auth/logout",

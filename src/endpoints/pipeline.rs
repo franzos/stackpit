@@ -28,8 +28,8 @@ pub async fn authenticate_and_prefilter(
     Ok(auth)
 }
 
-/// Runs the event through the filter engine. Returns `true` when the event
-/// gets dropped -- and records why in discard_stats so we can surface it later.
+/// Run the event through the filter engine. Returns `true` when dropped, and
+/// records the reason in discard_stats.
 pub fn check_event_filter(state: &AppState, event: &StorableEvent, project_id: u64) -> bool {
     if let FilterVerdict::Drop { reason } = state.filter_engine.check(event) {
         tracing::debug!("filtered event {}: {reason}", event.event_id);
@@ -41,9 +41,8 @@ pub fn check_event_filter(state: &AppState, event: &StorableEvent, project_id: u
     false
 }
 
-/// Lightweight checks we can do before parsing the body -- rate limits,
-/// user-agent blocks, IP blocks. Grabs the filter snapshot once and runs
-/// everything against it. Rejects early if anything trips.
+/// Pre-body checks (rate limits, user-agent blocks, IP blocks) against a
+/// single filter snapshot. Rejects early if anything trips.
 #[allow(clippy::result_large_err)]
 pub fn pre_filter(
     filter_engine: &FilterEngine,

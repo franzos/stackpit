@@ -84,7 +84,6 @@ pub fn source_url(
     path: &str,
     line: u64,
 ) -> Option<String> {
-    // Custom template takes priority
     if let Some(tmpl) = url_template {
         if !tmpl.is_empty() {
             let base = normalize_repo_url(repo_url);
@@ -130,7 +129,6 @@ fn normalize_repo_url(url: &str) -> String {
         return format!("https://{rest}");
     }
 
-    // Already an http(s) URL, just pass it through
     url.to_string()
 }
 

@@ -33,7 +33,6 @@ async fn run_async(database_url: &str, args: SyncArgs, token: &str) -> Result<()
     let pool = db::create_writer_pool(database_url).await?;
     db::run_migrations(&pool).await?;
 
-    // Find out what projects exist in this org
     println!("discovering projects for org '{}'...", args.org);
     let projects = client.list_projects(&args.org).await?;
 
@@ -41,7 +40,6 @@ async fn run_async(database_url: &str, args: SyncArgs, token: &str) -> Result<()
         bail!("no projects found in org '{}'", args.org);
     }
 
-    // Narrow down to the ones we care about, if specified
     let projects: Vec<_> = if let Some(ref filter) = args.projects {
         projects
             .into_iter()
@@ -61,7 +59,6 @@ async fn run_async(database_url: &str, args: SyncArgs, token: &str) -> Result<()
         );
     }
 
-    // Make sure we have the project metadata and keys stored locally
     sync_project_metadata(&pool, &projects, &args.org, &client).await?;
 
     for project in &projects {
@@ -108,8 +105,7 @@ async fn sync_project_metadata(
                 }
             }
             Err(e) => {
-                // Keys endpoint may fail if the token lacks project:read scope.
-                // Not fatal — the user can add keys manually via the settings UI.
+                // keys endpoint fails if the token lacks project:read scope; not fatal
                 println!("  [{}] warning: could not sync keys ({})", project.slug, e);
             }
         }

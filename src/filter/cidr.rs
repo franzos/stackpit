@@ -76,13 +76,11 @@ mod tests {
     #[test]
     fn cidr_ipv4_mapped_ipv6() {
         let block = CidrBlock::parse("192.168.1.0/24").unwrap();
-        // Mapped v4 should match the v4 CIDR
         let mapped: IpAddr = "::ffff:192.168.1.100".parse().unwrap();
         assert!(block.contains_addr(mapped));
-        // Different mapped v4 -- shouldn't match
         let other: IpAddr = "::ffff:10.0.0.1".parse().unwrap();
         assert!(!block.contains_addr(other));
-        // Pure v6 against a v4 CIDR -- nope
+        // Pure v6 must not match a v4 CIDR.
         let pure_v6: IpAddr = "2001:db8::1".parse().unwrap();
         assert!(!block.contains_addr(pure_v6));
     }

@@ -83,6 +83,7 @@ pub async fn list_checkins_for_monitor(
                 event_id: row.get("event_id"),
                 item_type: item_type_str.parse().unwrap_or_default(),
                 project_id: row.get::<i64, _>("project_id") as u64,
+                project_name: None,
                 fingerprint: row.get("fingerprint"),
                 timestamp: row.get("timestamp"),
                 level: row.get("level"),

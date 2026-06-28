@@ -7,7 +7,6 @@ use serde_json::Value;
 /// Parse the JSON payload and fill in `fingerprint` (if missing) and `title`.
 /// Skips re-parsing if both are already set (e.g. from `extract_fields`).
 pub fn enrich_event(event: &mut StorableEvent) {
-    // If extract_fields already computed both, no need to re-parse the payload
     if event.fingerprint.is_some() && event.title.is_some() {
         return;
     }
@@ -38,10 +37,8 @@ pub(crate) fn extract_title_from(
     extract_title(json, item_type, monitor_slug)
 }
 
-/// Pick a human-readable title for the event.
-///
-/// Special cases first (check-ins, sessions, user reports), then the usual
-/// chain: exception > message/logentry > transaction name.
+/// Pick a human-readable title: special cases (check-ins, sessions, user
+/// reports), then exception > message/logentry > transaction name.
 fn extract_title(json: &Value, item_type: &ItemType, monitor_slug: Option<&str>) -> Option<String> {
     if *item_type == ItemType::CheckIn {
         let slug = monitor_slug.or_else(|| json.get("monitor_slug").and_then(|v| v.as_str()));
@@ -131,6 +128,10 @@ mod tests {
             parent_event_id: None,
             user_identifier: None,
             tags: Vec::new(),
+            session_buckets: Vec::new(),
+            trace_id: None,
+            duration_ms: None,
+            trace_status: None,
         }
     }
 
@@ -175,7 +176,8 @@ mod tests {
         let json = serde_json::json!({"transaction": "/api/health"});
         let mut event = make_event(&json, ItemType::Transaction);
         enrich_event(&mut event);
-        assert!(event.fingerprint.is_some());
+        // transactions feed transaction_metrics, not issues: no fingerprint
+        assert!(event.fingerprint.is_none());
         assert_eq!(event.title.as_deref(), Some("/api/health"));
     }
 
@@ -193,7 +195,7 @@ mod tests {
         let mut event = make_event(&json, ItemType::Event);
         enrich_event(&mut event);
         assert!(event.title.is_none());
-        // Still fingerprinted though — random UUID fallback
+        // still fingerprinted: random UUID fallback
         assert!(event.fingerprint.is_some());
     }
 
@@ -204,7 +206,7 @@ mod tests {
         event.monitor_slug = Some("my-cron".to_string());
         enrich_event(&mut event);
         assert_eq!(event.title.as_deref(), Some("my-cron: ok"));
-        // Check-ins don't produce issues, so no fingerprint
+        // check-ins don't produce issues, so no fingerprint
         assert!(event.fingerprint.is_none());
     }
 
@@ -221,7 +223,7 @@ mod tests {
         let mut event = StorableEvent {
             event_id: "bad".to_string(),
             item_type: ItemType::Event,
-            payload: vec![0, 1, 2, 3], // garbage — not valid JSON
+            payload: vec![0, 1, 2, 3], // not valid JSON
             project_id: 1,
             public_key: "k".to_string(),
             timestamp: 0,
@@ -240,6 +242,10 @@ mod tests {
             parent_event_id: None,
             user_identifier: None,
             tags: Vec::new(),
+            session_buckets: Vec::new(),
+            trace_id: None,
+            duration_ms: None,
+            trace_status: None,
         };
         enrich_event(&mut event);
         assert!(event.fingerprint.is_none());

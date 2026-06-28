@@ -20,6 +20,13 @@
     <h1>Release health</h1>
   </div>
 
+  {% if !chart.is_empty() %}
+    <div class="card">
+      <h2 class="text-[14px] font-semibold">Sessions over time</h2>
+      <div class="event-chart">{{ chart|safe }}</div>
+    </div>
+  {% endif %}
+
   {% if releases.is_empty() %}
     <div class="card">
       <p class="empty">
@@ -37,7 +44,8 @@
               <th>OK</th>
               <th>Crashed</th>
               <th>Errored</th>
-              <th>Crash-free rate</th>
+              <th>Crash-free sessions</th>
+              <th>Crash-free users</th>
             </tr>
           </thead>
           <tbody>
@@ -60,8 +68,11 @@
                     0
                   {% endif %}
                 </td>
-                <td class="text-tabular font-semibold {% if r.crash_free_rate >= 99.0 %}health-good{% else if r.crash_free_rate >= 95.0 %}health-warn{% else %}health-bad{% endif %}">
-                  {{ r.crash_free_rate }}%
+                <td class="text-tabular font-semibold">
+                  {% match r.crash_free_sessions %}{% when Some with (cfs) %}<span class="{% if cfs.clone() >= 99.0 %}health-good{% else if cfs.clone() >= 95.0 %}health-warn{% else %}health-bad{% endif %}">{{ cfs }}%</span>{% when None %}<span class="text-muted">n/a</span>{% endmatch %}
+                </td>
+                <td class="text-tabular font-semibold">
+                  {% match r.crash_free_users %}{% when Some with (cfu) %}<span class="{% if cfu.clone() >= 99.0 %}health-good{% else if cfu.clone() >= 95.0 %}health-warn{% else %}health-bad{% endif %}">{{ cfu }}%</span>{% when None %}<span class="text-muted">n/a</span>{% endmatch %}
                 </td>
               </tr>
             {% endfor %}

@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-pub(super) struct SpanFields {
+pub(crate) struct SpanFields {
     pub span_id: Option<String>,
     pub trace_id: Option<String>,
     pub parent_span_id: Option<String>,
@@ -27,7 +27,7 @@ fn span_status_from_code(code: u64) -> String {
 }
 
 /// Decode a (possibly zstd-compressed) span payload and extract its fields.
-pub(super) fn extract_span_fields(payload: &[u8]) -> SpanFields {
+pub(crate) fn extract_span_fields(payload: &[u8]) -> SpanFields {
     let json: Option<Value> = zstd::decode_all(payload)
         .ok()
         .or_else(|| Some(payload.to_vec()))
@@ -50,7 +50,7 @@ pub(super) fn extract_span_fields(payload: &[u8]) -> SpanFields {
 
 /// Extract span fields from an already-parsed JSON object (standalone span or
 /// an embedded child span of a transaction).
-pub(super) fn extract_span_fields_from_value(v: &Value) -> SpanFields {
+pub(crate) fn extract_span_fields_from_value(v: &Value) -> SpanFields {
     let start_f = v.get("start_timestamp").and_then(Value::as_f64);
     let end_f = v.get("timestamp").and_then(Value::as_f64);
 

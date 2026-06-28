@@ -1,9 +1,7 @@
 use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::IntoResponse;
 
-use crate::auth;
-use crate::auth::SentryAuth;
-use crate::auth_service::{self, AuthError};
+use crate::ingest::auth::{self, AuthError, SentryAuth};
 use crate::server::AppState;
 
 use super::error_response;
@@ -28,7 +26,7 @@ pub async fn authenticate(
         }
     };
 
-    match auth_service::validate_project_key(state, &auth.sentry_key, project_id).await {
+    match auth::validate_project_key(state, &auth.sentry_key, project_id).await {
         Ok(()) => Ok(auth),
         Err(AuthError::Archived) => {
             Err(error_response(StatusCode::FORBIDDEN, "project is archived").into_response())

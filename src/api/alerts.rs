@@ -8,7 +8,7 @@ use crate::extractors::ReadPool;
 use crate::queries;
 use crate::server::AppState;
 
-use super::{internal_error, json_error, json_or_500};
+use super::ApiError;
 
 // -- Alert rules -------------------------------------------------------------
 
@@ -42,37 +42,35 @@ fn default_true() -> bool {
 }
 
 /// GET /api/v1/alerts/rules
-pub async fn list_rules(ReadPool(pool): ReadPool) -> impl IntoResponse {
-    json_or_500(
-        queries::alerts::list_alert_rules(&pool, None)
-            .await
-            .map(|rules| {
-                rules
-                    .iter()
-                    .map(|r| {
-                        serde_json::json!({
-                            "id": r.id,
-                            "project_id": r.project_id,
-                            "fingerprint": r.fingerprint,
-                            "trigger_kind": r.trigger_kind,
-                            "threshold_count": r.threshold_count,
-                            "window_secs": r.window_secs,
-                            "cooldown_secs": r.cooldown_secs,
-                            "enabled": r.enabled,
-                            "created_at": r.created_at,
-                        })
-                    })
-                    .collect::<Vec<_>>()
-            }),
-    )
+pub async fn list_rules(ReadPool(pool): ReadPool) -> Result<impl IntoResponse, ApiError> {
+    let rules = queries::alerts::list_alert_rules(&pool, None)
+        .await
+        .map_err(ApiError::internal)?;
+    let out = rules
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "id": r.id,
+                "project_id": r.project_id,
+                "fingerprint": r.fingerprint,
+                "trigger_kind": r.trigger_kind,
+                "threshold_count": r.threshold_count,
+                "window_secs": r.window_secs,
+                "cooldown_secs": r.cooldown_secs,
+                "enabled": r.enabled,
+                "created_at": r.created_at,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(out))
 }
 
 /// POST /api/v1/alerts/rules
 pub async fn create_rule(
     State(state): State<AppState>,
     Json(body): Json<CreateAlertRuleBody>,
-) -> impl IntoResponse {
-    match queries::alerts::create_alert_rule(
+) -> Result<impl IntoResponse, ApiError> {
+    let id = queries::alerts::create_alert_rule(
         &state.writer_pool,
         body.project_id,
         body.fingerprint.as_deref(),
@@ -82,10 +80,8 @@ pub async fn create_rule(
         body.cooldown_secs,
     )
     .await
-    {
-        Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
-        Err(e) => internal_error(e).into_response(),
-    }
+    .map_err(ApiError::internal)?;
+    Ok((StatusCode::CREATED, Json(serde_json::json!({ "id": id }))))
 }
 
 /// PUT /api/v1/alerts/rules/{id}
@@ -93,7 +89,7 @@ pub async fn update_rule(
     State(state): State<AppState>,
     Path(id): Path<i64>,
     Json(body): Json<UpdateAlertRuleBody>,
-) -> impl IntoResponse {
+) -> Result<impl IntoResponse, ApiError> {
     match queries::alerts::update_alert_rule(
         &state.writer_pool,
         id,
@@ -104,24 +100,21 @@ pub async fn update_rule(
     )
     .await
     {
-        Ok(0) => json_error(
-            StatusCode::NOT_FOUND,
-            &format!("not found: alert rule: {id}"),
-        ),
-        Ok(_) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => json_error(StatusCode::NOT_FOUND, &e.to_string()),
+        Ok(0) => Err(ApiError::not_found(format!("not found: alert rule: {id}"))),
+        Ok(_) => Ok(StatusCode::NO_CONTENT),
+        Err(e) => Err(ApiError::not_found(e.to_string())),
     }
 }
 
 /// DELETE /api/v1/alerts/rules/{id}
-pub async fn delete_rule(State(state): State<AppState>, Path(id): Path<i64>) -> impl IntoResponse {
+pub async fn delete_rule(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<impl IntoResponse, ApiError> {
     match queries::alerts::delete_alert_rule(&state.writer_pool, id).await {
-        Ok(0) => json_error(
-            StatusCode::NOT_FOUND,
-            &format!("not found: alert rule: {id}"),
-        ),
-        Ok(_) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => json_error(StatusCode::NOT_FOUND, &e.to_string()),
+        Ok(0) => Err(ApiError::not_found(format!("not found: alert rule: {id}"))),
+        Ok(_) => Ok(StatusCode::NO_CONTENT),
+        Err(e) => Err(ApiError::not_found(e.to_string())),
     }
 }
 
@@ -141,43 +134,39 @@ pub struct UpdateDigestBody {
 }
 
 /// GET /api/v1/digests
-pub async fn list_digests(ReadPool(pool): ReadPool) -> impl IntoResponse {
-    json_or_500(
-        queries::alerts::list_digest_schedules(&pool)
-            .await
-            .map(|schedules| {
-                schedules
-                    .iter()
-                    .map(|s| {
-                        serde_json::json!({
-                            "id": s.id,
-                            "project_id": s.project_id,
-                            "interval_secs": s.interval_secs,
-                            "last_sent": s.last_sent,
-                            "enabled": s.enabled,
-                            "created_at": s.created_at,
-                        })
-                    })
-                    .collect::<Vec<_>>()
-            }),
-    )
+pub async fn list_digests(ReadPool(pool): ReadPool) -> Result<impl IntoResponse, ApiError> {
+    let schedules = queries::alerts::list_digest_schedules(&pool)
+        .await
+        .map_err(ApiError::internal)?;
+    let out = schedules
+        .iter()
+        .map(|s| {
+            serde_json::json!({
+                "id": s.id,
+                "project_id": s.project_id,
+                "interval_secs": s.interval_secs,
+                "last_sent": s.last_sent,
+                "enabled": s.enabled,
+                "created_at": s.created_at,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(out))
 }
 
 /// POST /api/v1/digests
 pub async fn create_digest(
     State(state): State<AppState>,
     Json(body): Json<CreateDigestBody>,
-) -> impl IntoResponse {
-    match queries::alerts::create_digest_schedule(
+) -> Result<impl IntoResponse, ApiError> {
+    let id = queries::alerts::create_digest_schedule(
         &state.writer_pool,
         body.project_id,
         body.interval_secs,
     )
     .await
-    {
-        Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
-        Err(e) => internal_error(e).into_response(),
-    }
+    .map_err(ApiError::internal)?;
+    Ok((StatusCode::CREATED, Json(serde_json::json!({ "id": id }))))
 }
 
 /// PUT /api/v1/digests/{id}
@@ -185,7 +174,7 @@ pub async fn update_digest(
     State(state): State<AppState>,
     Path(id): Path<i64>,
     Json(body): Json<UpdateDigestBody>,
-) -> impl IntoResponse {
+) -> Result<impl IntoResponse, ApiError> {
     match queries::alerts::update_digest_schedule(
         &state.writer_pool,
         id,
@@ -194,12 +183,11 @@ pub async fn update_digest(
     )
     .await
     {
-        Ok(0) => json_error(
-            StatusCode::NOT_FOUND,
-            &format!("not found: digest schedule: {id}"),
-        ),
-        Ok(_) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => json_error(StatusCode::NOT_FOUND, &e.to_string()),
+        Ok(0) => Err(ApiError::not_found(format!(
+            "not found: digest schedule: {id}"
+        ))),
+        Ok(_) => Ok(StatusCode::NO_CONTENT),
+        Err(e) => Err(ApiError::not_found(e.to_string())),
     }
 }
 
@@ -207,13 +195,12 @@ pub async fn update_digest(
 pub async fn delete_digest(
     State(state): State<AppState>,
     Path(id): Path<i64>,
-) -> impl IntoResponse {
+) -> Result<impl IntoResponse, ApiError> {
     match queries::alerts::delete_digest_schedule(&state.writer_pool, id).await {
-        Ok(0) => json_error(
-            StatusCode::NOT_FOUND,
-            &format!("not found: digest schedule: {id}"),
-        ),
-        Ok(_) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => json_error(StatusCode::NOT_FOUND, &e.to_string()),
+        Ok(0) => Err(ApiError::not_found(format!(
+            "not found: digest schedule: {id}"
+        ))),
+        Ok(_) => Ok(StatusCode::NO_CONTENT),
+        Err(e) => Err(ApiError::not_found(e.to_string())),
     }
 }

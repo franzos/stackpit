@@ -51,7 +51,7 @@ fn check_rate_limit(
         .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
         .map(|ci| ci.0);
 
-    let ip = crate::network::extract_client_ip(req.headers(), peer_addr)
+    let ip = crate::util::network::extract_client_ip(req.headers(), peer_addr)
         .unwrap_or_else(|| "unknown".to_string());
 
     // `parking_lot::Mutex` doesn't poison: a panic inside can't fail-closed the admin surface.

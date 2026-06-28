@@ -1,5 +1,5 @@
 use crate::db::DbPool;
-use crate::models::StorableAttachment;
+use crate::ingest::models::StorableAttachment;
 use crate::queries;
 use crate::sync::client::{SentryClient, SentryProject};
 use anyhow::Result;

@@ -10,15 +10,16 @@ use simple_hll::HyperLogLog;
 use sqlx::QueryBuilder;
 
 use crate::db::{sql, DbPool};
-use crate::models::{
-    ItemType, StorableAttachment, StorableEvent, HLL_REGISTER_COUNT, MAX_TAGS_PER_EVENT,
+use crate::ingest::models::{
+    ItemType, StorableAttachment, StorableEvent, StorageBucket, HLL_REGISTER_COUNT,
+    MAX_TAGS_PER_EVENT,
 };
 
-use super::parse_log::{
+use crate::ingest::parse_log::{
     compress_log_entry, extract_log_fields, extract_log_timestamp, parse_log_entries,
 };
-use super::parse_metric::parse_metric_payload;
-use super::parse_span::{extract_span_fields, extract_span_fields_from_value, SpanFields};
+use crate::ingest::parse_metric::parse_metric_payload;
+use crate::ingest::parse_span::{extract_span_fields, extract_span_fields_from_value, SpanFields};
 
 /// Max events per multi-row INSERT chunk. 21 bind params per event;
 /// SQLite's SQLITE_MAX_VARIABLE_NUMBER is 32766, so 32766 / 21 = 1560.
@@ -45,6 +46,39 @@ const LOG_BULK_CHUNK_SIZE: usize = 2900;
 /// We use 8000 for a comfortable margin.
 const TAG_CHUNK_SIZE: usize = 8000;
 
+/// Single source of truth for the `events` insert column list. The bind order in
+/// `push_event_row` must match this exactly.
+const EVENT_COLUMNS: &str = "event_id, item_type, payload, project_id, public_key, timestamp, level, platform, release, environment, server_name, transaction_name, title, sdk_name, sdk_version, fingerprint, monitor_slug, session_status, parent_event_id, trace_id, duration_ms";
+
+/// Push one event row's bind values in `EVENT_COLUMNS` order. Shared by the
+/// single-row and bulk insert paths so the column/bind order lives in one place.
+fn push_event_row<'a>(
+    mut b: sqlx::query_builder::Separated<'_, 'a, crate::db::Db, &'static str>,
+    event: &'a StorableEvent,
+) {
+    b.push_bind(&event.event_id);
+    b.push_bind(event.item_type.as_str());
+    b.push_bind(&event.payload);
+    b.push_bind(event.project_id as i64);
+    b.push_bind(&event.public_key);
+    b.push_bind(event.timestamp);
+    b.push_bind(event.level.as_ref().map(|l| l.as_str()));
+    b.push_bind(&event.platform);
+    b.push_bind(&event.release);
+    b.push_bind(&event.environment);
+    b.push_bind(&event.server_name);
+    b.push_bind(&event.transaction_name);
+    b.push_bind(&event.title);
+    b.push_bind(&event.sdk_name);
+    b.push_bind(&event.sdk_version);
+    b.push_bind(&event.fingerprint);
+    b.push_bind(&event.monitor_slug);
+    b.push_bind(&event.session_status);
+    b.push_bind(&event.parent_event_id);
+    b.push_bind(&event.trace_id);
+    b.push_bind(event.duration_ms);
+}
+
 /// Insert an event row (INSERT OR IGNORE). Returns `true` if it was actually new.
 ///
 /// Accepts any sqlx executor -- `&DbPool`, `&mut PgConnection`, `&mut SqliteConnection`,
@@ -53,38 +87,13 @@ pub async fn insert_event_row<'e, E>(executor: E, event: &StorableEvent) -> Resu
 where
     E: sqlx::Executor<'e, Database = crate::db::Db>,
 {
-    #[cfg(feature = "sqlite")]
-    let query = sql!("INSERT OR IGNORE INTO events (event_id, item_type, payload, project_id, public_key, timestamp, level, platform, release, environment, server_name, transaction_name, title, sdk_name, sdk_version, fingerprint, monitor_slug, session_status, parent_event_id, trace_id, duration_ms)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)");
-    #[cfg(not(feature = "sqlite"))]
-    let query = sql!("INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, level, platform, release, environment, server_name, transaction_name, title, sdk_name, sdk_version, fingerprint, monitor_slug, session_status, parent_event_id, trace_id, duration_ms)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
-         ON CONFLICT (event_id) DO NOTHING");
+    let dialect = insert_ignore("events", EVENT_COLUMNS, Some("event_id"));
 
-    let result = sqlx::query(query)
-        .bind(&event.event_id)
-        .bind(event.item_type.as_str())
-        .bind(&event.payload)
-        .bind(event.project_id as i64)
-        .bind(&event.public_key)
-        .bind(event.timestamp)
-        .bind(event.level.as_ref().map(|l| l.as_str()))
-        .bind(&event.platform)
-        .bind(&event.release)
-        .bind(&event.environment)
-        .bind(&event.server_name)
-        .bind(&event.transaction_name)
-        .bind(&event.title)
-        .bind(&event.sdk_name)
-        .bind(&event.sdk_version)
-        .bind(&event.fingerprint)
-        .bind(&event.monitor_slug)
-        .bind(&event.session_status)
-        .bind(&event.parent_event_id)
-        .bind(&event.trace_id)
-        .bind(event.duration_ms)
-        .execute(executor)
-        .await?;
+    let mut builder = QueryBuilder::<crate::db::Db>::new(&dialect.prefix);
+    builder.push_values(std::iter::once(event), |b, event| push_event_row(b, event));
+    builder.push(&dialect.suffix);
+
+    let result = builder.build().execute(executor).await?;
 
     Ok(result.rows_affected() == 1)
 }
@@ -136,11 +145,11 @@ pub async fn insert_event_rows_bulk(
     let mut logs: Vec<&&StorableEvent> = Vec::new();
 
     for event in events {
-        match event.item_type {
-            ItemType::Span => spans.push(event),
-            ItemType::Metric => metrics.push(event),
-            ItemType::Log => logs.push(event),
-            _ => regular.push(event),
+        match event.item_type.storage_bucket() {
+            StorageBucket::Spans => spans.push(event),
+            StorageBucket::Metrics => metrics.push(event),
+            StorageBucket::Logs => logs.push(event),
+            StorageBucket::Events => regular.push(event),
         }
     }
 
@@ -170,38 +179,12 @@ async fn bulk_insert_events_table(
     tx: &mut sqlx::Transaction<'_, crate::db::Db>,
     events: &[&&StorableEvent],
 ) -> Result<()> {
-    let dialect = insert_ignore(
-        "events",
-        "event_id, item_type, payload, project_id, public_key, timestamp, level, platform, release, environment, server_name, transaction_name, title, sdk_name, sdk_version, fingerprint, monitor_slug, session_status, parent_event_id, trace_id, duration_ms",
-        Some("event_id"),
-    );
+    let dialect = insert_ignore("events", EVENT_COLUMNS, Some("event_id"));
 
     for chunk in events.chunks(BULK_CHUNK_SIZE) {
         let mut builder = QueryBuilder::<crate::db::Db>::new(&dialect.prefix);
 
-        builder.push_values(chunk.iter(), |mut b, event| {
-            b.push_bind(&event.event_id);
-            b.push_bind(event.item_type.as_str());
-            b.push_bind(&event.payload);
-            b.push_bind(event.project_id as i64);
-            b.push_bind(&event.public_key);
-            b.push_bind(event.timestamp);
-            b.push_bind(event.level.as_ref().map(|l| l.as_str()));
-            b.push_bind(&event.platform);
-            b.push_bind(&event.release);
-            b.push_bind(&event.environment);
-            b.push_bind(&event.server_name);
-            b.push_bind(&event.transaction_name);
-            b.push_bind(&event.title);
-            b.push_bind(&event.sdk_name);
-            b.push_bind(&event.sdk_version);
-            b.push_bind(&event.fingerprint);
-            b.push_bind(&event.monitor_slug);
-            b.push_bind(&event.session_status);
-            b.push_bind(&event.parent_event_id);
-            b.push_bind(&event.trace_id);
-            b.push_bind(event.duration_ms);
-        });
+        builder.push_values(chunk.iter(), |b, event| push_event_row(b, event));
 
         builder.push(&dialect.suffix);
 
@@ -680,7 +663,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::ItemType;
+    use crate::ingest::models::ItemType;
 
     fn txn_with_spans(n: usize) -> StorableEvent {
         let spans: Vec<serde_json::Value> = (0..n)

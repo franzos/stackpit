@@ -9,9 +9,9 @@ use sha2::{Digest, Sha256};
 use sqlx::Row;
 use zeroize::Zeroize;
 
-use crate::crypto::SecretEncryptor;
 use crate::db::{sql, DbPool};
 use crate::oidc::cookies::grant_cookie_name;
+use crate::util::crypto::SecretEncryptor;
 
 /// 32-byte opaque handle. Cookie carries the hex encoding (64 chars).
 #[derive(Debug, Clone)]
@@ -81,7 +81,7 @@ pub struct GrantRecord {
 
 /// Generate a fresh 16-byte hex CSRF token from the OS RNG.
 fn generate_csrf_token() -> String {
-    crate::crypto::random_hex::<16>()
+    crate::util::crypto::random_hex::<16>()
 }
 
 impl GrantRecord {

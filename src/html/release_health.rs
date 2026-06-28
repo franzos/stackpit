@@ -1,13 +1,10 @@
 use askama::Template;
-use axum::extract::{Path, State};
 
-use crate::extractors::ReadPool;
+use crate::extractors::ProjectPageCtx;
 use crate::html::render_template;
-use crate::html::utils::Csrf;
 use crate::queries;
 use crate::queries::types::ReleaseHealth;
 use crate::queries::ProjectNavCounts;
-use crate::server::AppState;
 
 use super::charts;
 use super::HtmlError;
@@ -74,32 +71,26 @@ fn crash_free_pct(total: u64, crashed: u64) -> Option<f64> {
     Some(pct.clamp(0.0, 100.0))
 }
 
-pub async fn handler(
-    State(_state): State<AppState>,
-    ReadPool(pool): ReadPool,
-    Csrf(csrf): Csrf,
-    Path(project_id): Path<u64>,
-) -> Result<axum::response::Response, HtmlError> {
-    let releases: Vec<ReleaseHealthRow> = queries::releases::get_release_health(&pool, project_id)
-        .await?
-        .into_iter()
-        .map(ReleaseHealthRow::from)
-        .collect();
+pub async fn handler(ctx: ProjectPageCtx) -> Result<axum::response::Response, HtmlError> {
+    let releases: Vec<ReleaseHealthRow> =
+        queries::releases::get_release_health(&ctx.pool, ctx.project_id)
+            .await?
+            .into_iter()
+            .map(ReleaseHealthRow::from)
+            .collect();
 
     let since_ts = ((chrono::Utc::now().timestamp() - 86400 * 30) / 86400) * 86400;
-    let daily = queries::releases::get_release_health_daily(&pool, project_id, since_ts)
+    let daily = queries::releases::get_release_health_daily(&ctx.pool, ctx.project_id, since_ts)
         .await
         .unwrap_or_default();
     let chart = charts::render_session_chart(&daily).unwrap_or_default();
 
-    let nav = queries::projects::get_nav_counts(&pool, project_id).await;
-
     let tmpl = ReleaseHealthTemplate {
-        project_id,
+        project_id: ctx.project_id,
         releases,
         chart,
-        nav,
-        csrf_token: csrf,
+        nav: ctx.nav,
+        csrf_token: ctx.csrf_token,
     };
     Ok(render_template(&tmpl))
 }

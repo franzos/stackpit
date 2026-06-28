@@ -3,9 +3,9 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::Sender;
 
-use crate::models::{StorableAttachment, StorableEvent};
-use crate::stats::IngestStats;
-use crate::throttle::Throttle;
+use crate::ingest::models::{StorableAttachment, StorableEvent};
+use crate::util::stats::IngestStats;
+use crate::util::throttle::Throttle;
 
 use super::msg::WriteMsg;
 
@@ -29,7 +29,7 @@ impl WriterHandle {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "integration-tests"))]
     pub fn raw_sender(&self) -> &Sender<WriteMsg> {
         &self.tx
     }

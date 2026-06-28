@@ -1,4 +1,6 @@
 mod accumulator;
+mod aggregation;
+mod alerting;
 mod flush;
 mod handle;
 pub(crate) mod msg;
@@ -7,7 +9,7 @@ pub use handle::WriterHandle;
 pub use msg::WriteMsg;
 
 use crate::db::DbPool;
-use crate::stats::IngestStats;
+use crate::util::stats::IngestStats;
 use anyhow::Result;
 use std::sync::Arc;
 
@@ -143,7 +145,7 @@ async fn writer_loop(
 mod tests {
     use super::*;
     use crate::db;
-    use crate::models::{StorableAttachment, StorableEvent};
+    use crate::ingest::models::{StorableAttachment, StorableEvent};
     use accumulator::Accumulators;
     use flush::{flush_aggregation, flush_batch, insert_event};
     use simple_hll::HyperLogLog;
@@ -731,7 +733,7 @@ mod tests {
 
     // --- session aggregates ---
 
-    use crate::models::{ItemType, SessionBucket};
+    use crate::ingest::models::{ItemType, SessionBucket};
 
     fn make_session_event(
         event_id: &str,
@@ -922,7 +924,7 @@ mod tests {
             1,
             "k".to_string(),
         );
-        crate::envelope::extract_fields_for_test(&raw, &ItemType::Transaction, &mut e);
+        crate::ingest::envelope::extract_fields_for_test(&raw, &ItemType::Transaction, &mut e);
         e
     }
 

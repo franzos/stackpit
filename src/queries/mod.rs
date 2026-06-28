@@ -13,9 +13,6 @@ pub mod issues;
 pub mod logs;
 pub mod metrics;
 pub mod monitors;
-pub mod parse_log;
-pub mod parse_metric;
-pub mod parse_span;
 pub mod profiles;
 pub mod projects;
 pub mod releases;
@@ -27,6 +24,20 @@ pub mod types;
 pub mod users;
 
 pub use types::*;
+
+// Public functions here (e.g. `issues::update_issue_status`) take `IssueStatus`
+// by value, so the type needs a reachable public path.
+pub use crate::domain::IssueStatus;
+
+/// Wrap a search term as a `%term%` LIKE pattern, escaping the LIKE
+/// metacharacters with `\`. Callers must keep the matching `ESCAPE '\\'` clause.
+pub(crate) fn like_contains(needle: &str) -> String {
+    let escaped = needle
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    format!("%{escaped}%")
+}
 
 #[cfg(test)]
 pub(crate) mod test_helpers {

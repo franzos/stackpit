@@ -17,7 +17,7 @@ where
     Ok(Option::<String>::deserialize(de)?.filter(|s| !s.trim().is_empty()))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub server: ServerConfig,
@@ -399,14 +399,7 @@ impl Config {
                 "config file not found at {}, using defaults",
                 path.display()
             );
-            Ok(Self {
-                server: ServerConfig::default(),
-                storage: StorageConfig::default(),
-                filter: FilterConfig::default(),
-                notifications: NotificationsConfig::default(),
-                email: EmailConfig::default(),
-                auth: AuthConfig::default(),
-            })
+            Ok(Self::default())
         }
     }
 }

@@ -20,6 +20,14 @@ integration-tests = []
 [workspace]
 members = ["stackpit-auth"]
 
+[lib]
+name = "stackpit"
+path = "src/lib.rs"
+
+[[bin]]
+name = "stackpit"
+path = "src/main.rs"
+
 [dependencies]
 stackpit-auth = { path = "stackpit-auth", version = "0.1.0", features = ["axum"] }
 anyhow = "1"
@@ -105,4 +113,10 @@ strip = "symbols"
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
+required-features = ["integration-tests"]
+
+# Reaches crate internals (test-only helpers exposed under `integration-tests`).
+[[test]]
+name = "ingestion"
+path = "tests/ingestion.rs"
 required-features = ["integration-tests"]

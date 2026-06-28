@@ -30,20 +30,11 @@ impl Config {
             )
         })?;
 
-        if let Some(ref url) = self.server.external_url {
-            if !url.starts_with("http://") && !url.starts_with("https://") {
-                anyhow::bail!(
-                    "server.external_url must start with http:// or https://, got '{url}'"
-                );
-            }
-        }
-        if let Some(ref url) = self.server.external_ingest_url {
-            if !url.starts_with("http://") && !url.starts_with("https://") {
-                anyhow::bail!(
-                    "server.external_ingest_url must start with http:// or https://, got '{url}'"
-                );
-            }
-        }
+        validate_absolute_http_url("server.external_url", self.server.external_url.as_deref())?;
+        validate_absolute_http_url(
+            "server.external_ingest_url",
+            self.server.external_ingest_url.as_deref(),
+        )?;
 
         // OIDC redirect URIs: misconfig would become an open redirect at
         // logout. Reject anything that isn't an absolute http(s) URL.

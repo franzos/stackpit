@@ -159,7 +159,7 @@ pub async fn archive_project(
         }
         Ok(_) => {
             // Flush the auth cache or ingestion keeps working until the entry expires.
-            crate::auth_service::invalidate_project(&state.auth_cache, project_id);
+            crate::ingest::auth::invalidate_project(&state.auth_cache, project_id);
             render_general(&state, project_id, Some("Project archived".into()), &csrf).await
         }
         Err(e) => render_general(&state, project_id, Some(format!("Error: {e}")), &csrf).await,
@@ -210,7 +210,7 @@ async fn render_general(
     let project_status = info
         .as_ref()
         .map(|i| i.status)
-        .unwrap_or(crate::queries::types::ProjectStatus::Active)
+        .unwrap_or(crate::domain::ProjectStatus::Active)
         .to_string();
     let project_source = info
         .as_ref()
@@ -296,7 +296,7 @@ pub async fn delete_key(
             .await
         }
         Ok(_) => {
-            crate::auth_service::invalidate_key(&state.auth_cache, &public_key);
+            crate::ingest::auth::invalidate_key(&state.auth_cache, &public_key);
             render_keys(&state, project_id, Some("Key deleted".into()), &csrf).await
         }
         Err(e) => render_keys(&state, project_id, Some(format!("Error: {e}")), &csrf).await,
@@ -364,7 +364,7 @@ pub async fn generate_sourcemap_key(
     Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
 ) -> axum::response::Response {
-    let raw_key = format!("spk_{}", crate::crypto::random_hex::<16>());
+    let raw_key = format!("spk_{}", crate::util::crypto::random_hex::<16>());
 
     let hash = {
         use sha2::{Digest, Sha256};

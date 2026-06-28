@@ -1,12 +1,12 @@
 use askama::Template;
-use axum::extract::{Path, Query};
+use axum::extract::Query;
 use serde::Deserialize;
 
-use crate::extractors::ReadPool;
+use crate::extractors::ProjectPageCtx;
 use crate::html::render_template;
-use crate::html::utils::{build_filter_qs, Csrf};
+use crate::html::utils::build_filter_qs;
 use crate::queries;
-use crate::queries::types::{LogEntry, LogFilter, Page, PagedResult};
+use crate::queries::types::{LogEntry, LogFilter, PagedResult, Pagination};
 use crate::queries::ProjectNavCounts;
 
 use super::HtmlError;
@@ -18,8 +18,8 @@ use crate::html::filters;
 pub struct LogListParams {
     pub query: Option<String>,
     pub level: Option<String>,
-    pub limit: Option<u64>,
-    pub offset: Option<u64>,
+    #[serde(flatten)]
+    pub page: Pagination,
 }
 
 #[derive(Template)]
@@ -35,9 +35,7 @@ struct LogListTemplate {
 }
 
 pub async fn list_handler(
-    ReadPool(pool): ReadPool,
-    Csrf(csrf): Csrf,
-    Path(project_id): Path<u64>,
+    ctx: ProjectPageCtx,
     Query(params): Query<LogListParams>,
 ) -> Result<axum::response::Response, HtmlError> {
     let query_str = params.query.clone().unwrap_or_default();
@@ -48,21 +46,19 @@ pub async fn list_handler(
         query: params.query.filter(|s| !s.is_empty()),
         trace_id: None,
     };
-    let page = Page::new(params.offset, params.limit);
+    let page = params.page.page();
 
-    let result = queries::logs::list_logs(&pool, project_id, &filter, &page).await?;
-
-    let nav = queries::projects::get_nav_counts(&pool, project_id).await;
+    let result = queries::logs::list_logs(&ctx.pool, ctx.project_id, &filter, &page).await?;
 
     let (filter_qs, _) = build_filter_qs(&[("query", &query_str), ("level", &level_str)], "");
 
     Ok(render_template(&LogListTemplate {
-        project_id,
+        project_id: ctx.project_id,
         result,
         query: query_str,
         level: level_str,
         filter_qs,
-        nav,
-        csrf_token: csrf,
+        nav: ctx.nav,
+        csrf_token: ctx.csrf_token,
     }))
 }

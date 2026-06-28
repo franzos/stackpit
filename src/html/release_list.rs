@@ -5,7 +5,7 @@ use crate::extractors::ReadPool;
 use crate::html::render_template;
 use crate::html::utils::{build_filter_qs, period_to_timestamp, Csrf, ListParams};
 use crate::queries;
-use crate::queries::types::{Page, PagedResult, ReleaseFilter};
+use crate::queries::types::{PagedResult, ReleaseFilter};
 use crate::server::AppState;
 
 use super::HtmlError;
@@ -44,7 +44,7 @@ pub async fn handler(
         query: params.query.filter(|s| !s.is_empty()),
         sort: params.sort.filter(|s| !s.is_empty()),
     };
-    let page = Page::new(params.offset, params.limit);
+    let page = params.page.page();
 
     let result =
         queries::releases::list_all_releases(&pool, &filter, &page, adoption_since).await?;

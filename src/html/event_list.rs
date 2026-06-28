@@ -8,7 +8,7 @@ use crate::html::utils::{
     build_filter_qs, defaults_redirect_url, event_filter_from_params, Csrf, ListParams,
 };
 use crate::queries;
-use crate::queries::types::{Page, PagedResult};
+use crate::queries::types::PagedResult;
 use crate::server::AppState;
 
 use super::HtmlError;
@@ -53,7 +53,7 @@ pub async fn handler(
     let sort_str = params.sort.clone().unwrap_or_default();
 
     let filter = event_filter_from_params(&params);
-    let page = Page::new(params.offset, params.limit);
+    let page = params.page.page();
 
     let result = queries::events::list_all_events(&pool, &filter, &page).await?;
 

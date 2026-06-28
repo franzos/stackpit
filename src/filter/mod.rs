@@ -1,3 +1,4 @@
+pub mod admin;
 pub mod cidr;
 pub mod data;
 mod engine;

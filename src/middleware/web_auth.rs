@@ -77,7 +77,7 @@ pub async fn web_auth_middleware(
             let (salt, set_salt) =
                 match crate::middleware::cookie::read_cookie(req.headers(), salt_cookie) {
                     Some(s) => (s.to_string(), false),
-                    None => (crate::crypto::random_hex::<32>(), true),
+                    None => (crate::util::crypto::random_hex::<32>(), true),
                 };
             let csrf = derive_admin_csrf_token(expected.expose_secret(), &salt);
             req.extensions_mut().insert(ctx);

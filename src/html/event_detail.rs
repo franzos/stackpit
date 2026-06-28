@@ -3,7 +3,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 
-use crate::event_data::*;
+use crate::domain::*;
 use crate::extractors::ReadPool;
 use crate::html::render_template;
 use crate::html::utils::Csrf;
@@ -64,11 +64,13 @@ pub async fn handler(
 
     let sourcemaps: std::collections::HashMap<String, ::sourcemap::SourceMap> =
         event_supplements::preload_sourcemaps(&pool, &event.payload).await;
-    let resolver =
-        move |debug_id: &str, line: u32, col: u32| -> Option<crate::sourcemap::ResolvedFrame> {
-            let sm = sourcemaps.get(debug_id)?;
-            crate::sourcemap::resolve_frame(sm, line, col)
-        };
+    let resolver = move |debug_id: &str,
+                         line: u32,
+                         col: u32|
+          -> Option<crate::ingest::sourcemap::ResolvedFrame> {
+        let sm = sourcemaps.get(debug_id)?;
+        crate::ingest::sourcemap::resolve_frame(sm, line, col)
+    };
 
     let ExtractedEventData {
         summary_tags,

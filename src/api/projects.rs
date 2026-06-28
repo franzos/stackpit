@@ -1,5 +1,5 @@
 use axum::extract::{Path, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::HeaderMap;
 use axum::response::IntoResponse;
 use axum::Json;
 use serde_json::json;
@@ -7,12 +7,15 @@ use serde_json::json;
 use crate::queries;
 use crate::server::AppState;
 
-use super::json_or_500;
+use super::ApiError;
 use crate::extractors::ReadPool;
 
 /// GET /api/0/projects/
-pub async fn list(ReadPool(pool): ReadPool) -> impl IntoResponse {
-    json_or_500(queries::projects::list_projects(&pool, None, None, None).await)
+pub async fn list(ReadPool(pool): ReadPool) -> Result<impl IntoResponse, ApiError> {
+    let projects = queries::projects::list_projects(&pool, None, None, None)
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(Json(projects))
 }
 
 /// GET /api/0/projects/{org}/{project_id}/ (sentry-cli validation endpoint).
@@ -20,20 +23,20 @@ pub async fn sentry_get(
     State(state): State<AppState>,
     Path((_org, project_slug)): Path<(String, String)>,
     headers: HeaderMap,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let key_project_id = super::validate_api_key(&state.pool, &headers, "sourcemap").await?;
 
     let project_id: u64 = project_slug
         .parse()
-        .map_err(|_| super::api_error(StatusCode::NOT_FOUND, "project not found"))?;
+        .map_err(|_| ApiError::not_found("project not found"))?;
 
     if project_id != key_project_id {
-        return Err(super::api_error(StatusCode::NOT_FOUND, "project not found"));
+        return Err(ApiError::not_found("project not found"));
     }
 
     let info = queries::projects::get_project_info(&state.pool, project_id)
         .await
-        .map_err(super::internal_error)?;
+        .map_err(ApiError::internal)?;
 
     match info {
         Some(info) => Ok(Json(json!({
@@ -42,6 +45,6 @@ pub async fn sentry_get(
             "name": info.name.unwrap_or_else(|| format!("Project {project_id}")),
             "status": info.status.as_str(),
         }))),
-        None => Err(super::api_error(StatusCode::NOT_FOUND, "project not found")),
+        None => Err(ApiError::not_found("project not found")),
     }
 }

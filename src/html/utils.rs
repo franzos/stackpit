@@ -8,6 +8,7 @@ use crate::db::DbPool;
 use crate::html::{render_template, HtmlError};
 use crate::middleware::CsrfToken;
 use crate::queries;
+use crate::queries::types::Pagination;
 use crate::queries::ProjectNavCounts;
 
 /// Pulls the per-session CSRF token from request extensions. Infallible:
@@ -106,8 +107,8 @@ pub struct ListParams {
     #[serde(default, deserialize_with = "empty_string_as_none")]
     pub project_id: Option<u64>,
     pub item_type: Option<String>,
-    pub limit: Option<u64>,
-    pub offset: Option<u64>,
+    #[serde(flatten)]
+    pub page: Pagination,
 }
 
 /// Empty-string-to-`None` filtering shared by the list-page filter builders.

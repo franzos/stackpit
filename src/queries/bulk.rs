@@ -1,7 +1,9 @@
 use anyhow::Result;
 use sqlx::Row;
 
-use super::types::{EventFilter, IssueFilter, IssueStatus};
+use crate::domain::IssueStatus;
+
+use super::types::{EventFilter, IssueFilter};
 
 use crate::db::DbPool;
 
@@ -26,12 +28,8 @@ async fn fingerprints_by_filter(
         qb.push_bind(status.as_str());
     }
     if let Some(ref query) = filter.query {
-        let escaped = query
-            .replace('\\', "\\\\")
-            .replace('%', "\\%")
-            .replace('_', "\\_");
         qb.push(" AND title LIKE ");
-        qb.push_bind(format!("%{escaped}%"));
+        qb.push_bind(super::like_contains(query));
         qb.push(" ESCAPE '\\'");
     }
     if let Some(ref item_type) = filter.item_type {
@@ -144,13 +142,9 @@ pub async fn bulk_delete_events(
                     $qb.push_bind(pid as i64);
                 }
                 if let Some(ref query) = $f.query {
-                    let escaped = query
-                        .replace('\\', "\\\\")
-                        .replace('%', "\\%")
-                        .replace('_', "\\_");
                     push_sep!();
                     $qb.push("title LIKE ");
-                    $qb.push_bind(format!("%{escaped}%"));
+                    $qb.push_bind(super::like_contains(query));
                     $qb.push(" ESCAPE '\\'");
                 }
                 if let Some(ref item_type) = $f.item_type {

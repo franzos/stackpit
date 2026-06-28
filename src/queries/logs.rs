@@ -1,6 +1,8 @@
 use anyhow::Result;
 use sqlx::Row;
 
+use crate::db::DbRowExt;
+
 use super::types::{LogEntry, LogFilter, Page, PagedResult};
 
 fn push_log_filter_conditions<'args>(
@@ -20,12 +22,8 @@ fn push_log_filter_conditions<'args>(
         qb.push_bind(trace_id.as_str());
     }
     if let Some(ref query) = filter.query {
-        let escaped = query
-            .replace('\\', "\\\\")
-            .replace('%', "\\%")
-            .replace('_', "\\_");
         qb.push(" AND body LIKE ");
-        qb.push_bind(format!("%{escaped}%"));
+        qb.push_bind(super::like_contains(query));
         qb.push(" ESCAPE '\\'");
     }
 }
@@ -62,7 +60,7 @@ pub async fn list_logs(
 fn map_log_row(row: &crate::db::DbRow) -> LogEntry {
     LogEntry {
         id: row.get("id"),
-        project_id: row.get::<i64, _>("project_id") as u64,
+        project_id: row.get_u64("project_id"),
         timestamp: row.get("timestamp"),
         level: row.get("level"),
         body: row.get("body"),

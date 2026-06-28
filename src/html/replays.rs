@@ -4,7 +4,7 @@ use axum::extract::{Path, Query};
 use crate::extractors::ReadPool;
 use crate::html::utils::{render_project_detail, render_project_list, Csrf, ListParams};
 use crate::queries;
-use crate::queries::types::{Page, PagedResult, ReplaySummary};
+use crate::queries::types::{PagedResult, ReplaySummary};
 use crate::queries::ProjectNavCounts;
 
 use super::HtmlError;
@@ -27,7 +27,7 @@ pub async fn list_handler(
     Path(project_id): Path<u64>,
     Query(params): Query<ListParams>,
 ) -> Result<axum::response::Response, HtmlError> {
-    let page = Page::new(params.offset, params.limit);
+    let page = params.page.page();
     let result = queries::replays::list_replays(&pool, project_id, &page).await?;
 
     Ok(render_project_list(

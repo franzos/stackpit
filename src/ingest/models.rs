@@ -145,7 +145,58 @@ pub enum ItemType {
     Unknown,
 }
 
+/// Default item size limit: 1MB for most types.
+pub(crate) const MAX_ITEM_PAYLOAD_BYTES: usize = 1_048_576;
+
+/// Profiles and replay recordings can be much larger.
+pub(crate) const MAX_LARGE_ITEM_PAYLOAD_BYTES: usize = 50 * 1_048_576; // 50MB
+
+/// Storage table an item routes to. Keeps the per-variant routing in one
+/// exhaustive place so a new `ItemType` forces a routing decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StorageBucket {
+    Events,
+    Spans,
+    Metrics,
+    Logs,
+}
+
 impl ItemType {
+    /// Per-item payload size cap. Profiles and replay recordings get the large
+    /// limit; everything else the default.
+    pub fn max_payload_bytes(&self) -> usize {
+        match self {
+            Self::Profile | Self::ProfileChunk | Self::ReplayRecording | Self::ReplayVideo => {
+                MAX_LARGE_ITEM_PAYLOAD_BYTES
+            }
+            _ => MAX_ITEM_PAYLOAD_BYTES,
+        }
+    }
+
+    /// Storage table this item writes to. Exhaustive on purpose: spans, metrics
+    /// and logs get dedicated tables, everything else lands in the events table.
+    pub fn storage_bucket(&self) -> StorageBucket {
+        match self {
+            Self::Span => StorageBucket::Spans,
+            Self::Metric => StorageBucket::Metrics,
+            Self::Log => StorageBucket::Logs,
+            Self::Event
+            | Self::Transaction
+            | Self::Session
+            | Self::Sessions
+            | Self::Attachment
+            | Self::ClientReport
+            | Self::CheckIn
+            | Self::Profile
+            | Self::ProfileChunk
+            | Self::ReplayEvent
+            | Self::ReplayRecording
+            | Self::ReplayVideo
+            | Self::UserReport
+            | Self::Unknown => StorageBucket::Events,
+        }
+    }
+
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Event => "event",

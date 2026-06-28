@@ -196,7 +196,7 @@ pub async fn handle_login(
         let hashed = crate::middleware::hash_token_for_cookie(&token);
         let cookie = format!("{name}={hashed}; Path=/; SameSite=Strict; HttpOnly{secure_flag}");
         // Fresh per-login salt so the CSRF token isn't a fixed function of admin_token.
-        let salt = crate::crypto::random_hex::<32>();
+        let salt = crate::util::crypto::random_hex::<32>();
         let salt_cookie = build_csrf_salt_cookie(&salt, secure);
         let mut resp = axum::response::Redirect::to("/web/projects/").into_response();
         if let Ok(val) = cookie.parse() {

@@ -7,7 +7,7 @@ use crate::endpoints::{
     authenticate_and_prefilter, check_event_filter, error_response, overloaded_response,
     sentry_response, sentry_response_with_discarded,
 };
-use crate::envelope;
+use crate::ingest::envelope;
 use crate::server::AppState;
 
 pub async fn handle(
@@ -43,7 +43,7 @@ pub async fn handle(
     let mut pending_attachments = parsed.attachments;
 
     for mut event in parsed.events {
-        crate::enrich::enrich_event(&mut event);
+        crate::ingest::enrich::enrich_event(&mut event);
 
         if check_event_filter(&state, &event, project_id) {
             filtered += 1;

@@ -1,44 +1,41 @@
 use serde::{Deserialize, Serialize};
 
-use crate::event_data::{
-    Breadcrumb, ContextGroup, ExceptionData, Measurement, RequestInfo, SummaryTag, Tag, UserInfo,
+use crate::domain::{
+    Breadcrumb, ContextGroup, ExceptionData, IntegrationKind, IssueStatus, Measurement,
+    ProjectStatus, RequestInfo, SummaryTag, Tag, UserInfo,
 };
 
-/// Project/key status.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
-pub enum ProjectStatus {
-    #[default]
-    Active,
-    Archived,
+/// Shared `limit`/`offset` query params. Embed via `#[serde(flatten)]` in
+/// per-page param structs, then call `.page()` to get the clamped [`Page`].
+///
+/// Fields parse through a string so `flatten` works under serde_urlencoded
+/// (its flatten buffer hands every value to the field as a string, so a plain
+/// `Option<u64>` would fail even on `"50"`). A present non-numeric value still
+/// errors, matching a bare `Option<u64>`; an absent key defaults to `None`.
+#[derive(Debug, Default, Deserialize)]
+pub struct Pagination {
+    #[serde(default, deserialize_with = "opt_u64_from_str")]
+    pub limit: Option<u64>,
+    #[serde(default, deserialize_with = "opt_u64_from_str")]
+    pub offset: Option<u64>,
 }
 
-impl std::str::FromStr for ProjectStatus {
-    type Err = std::convert::Infallible;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(match s {
-            "archived" => Self::Archived,
-            _ => Self::Active,
-        })
+impl Pagination {
+    pub fn page(&self) -> Page {
+        Page::new(self.offset, self.limit)
     }
 }
 
-impl ProjectStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Active => "active",
-            Self::Archived => "archived",
-        }
-    }
-
-    pub fn is_archived(&self) -> bool {
-        matches!(self, Self::Archived)
-    }
-}
-
-impl std::fmt::Display for ProjectStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
+/// Parses an optional unsigned int from a (possibly flatten-buffered) string.
+/// A present value must parse; an absent one yields `None`.
+fn opt_u64_from_str<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s: Option<String> = Option::deserialize(deserializer)?;
+    match s {
+        None => Ok(None),
+        Some(v) => v.parse().map(Some).map_err(serde::de::Error::custom),
     }
 }
 
@@ -47,55 +44,6 @@ pub struct ProjectInfo {
     pub name: Option<String>,
     pub status: ProjectStatus,
     pub source: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum IssueStatus {
-    #[default]
-    Unresolved,
-    Resolved,
-    Ignored,
-}
-
-impl std::str::FromStr for IssueStatus {
-    type Err = std::convert::Infallible;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(match s {
-            "resolved" => Self::Resolved,
-            "ignored" => Self::Ignored,
-            _ => Self::Unresolved,
-        })
-    }
-}
-
-impl IssueStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Unresolved => "unresolved",
-            Self::Resolved => "resolved",
-            Self::Ignored => "ignored",
-        }
-    }
-}
-
-impl std::fmt::Display for IssueStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl PartialEq<str> for IssueStatus {
-    fn eq(&self, other: &str) -> bool {
-        self.as_str() == other
-    }
-}
-
-impl PartialEq<&str> for IssueStatus {
-    fn eq(&self, other: &&str) -> bool {
-        self.as_str() == *other
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -213,14 +161,14 @@ pub struct IssueSummary {
     pub last_seen: i64,
     pub event_count: u64,
     pub status: IssueStatus,
-    pub item_type: crate::models::ItemType,
+    pub item_type: crate::ingest::models::ItemType,
     pub user_count: u64,
 }
 
 #[derive(Debug, Serialize)]
 pub struct EventSummary {
     pub event_id: String,
-    pub item_type: crate::models::ItemType,
+    pub item_type: crate::ingest::models::ItemType,
     pub project_id: u64,
     /// Set only by the cross-project firehose query; None for project-scoped lists.
     pub project_name: Option<String>,
@@ -243,7 +191,7 @@ pub struct EventNav {
 #[derive(Debug, Serialize)]
 pub struct EventDetail {
     pub event_id: String,
-    pub item_type: crate::models::ItemType,
+    pub item_type: crate::ingest::models::ItemType,
     pub project_id: u64,
     pub fingerprint: Option<String>,
     pub timestamp: i64,
@@ -331,57 +279,6 @@ pub struct ProjectKey {
     pub status: ProjectStatus,
     pub label: Option<String>,
     pub created_at: i64,
-}
-
-/// Integration transport -- parsed once at the DB boundary so the dispatcher
-/// can match exhaustively instead of comparing raw strings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum IntegrationKind {
-    Webhook,
-    Slack,
-    Email,
-}
-
-impl std::str::FromStr for IntegrationKind {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "webhook" => Ok(Self::Webhook),
-            "slack" => Ok(Self::Slack),
-            "email" => Ok(Self::Email),
-            other => anyhow::bail!("unknown integration kind: {other}"),
-        }
-    }
-}
-
-impl IntegrationKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Webhook => "webhook",
-            Self::Slack => "slack",
-            Self::Email => "email",
-        }
-    }
-}
-
-impl std::fmt::Display for IntegrationKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl PartialEq<str> for IntegrationKind {
-    fn eq(&self, other: &str) -> bool {
-        self.as_str() == other
-    }
-}
-
-impl PartialEq<&str> for IntegrationKind {
-    fn eq(&self, other: &&str) -> bool {
-        self.as_str() == *other
-    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -755,4 +652,52 @@ pub struct ReplayDetail {
     pub release: Option<String>,
     pub environment: Option<String>,
     pub payload: serde_json::Value,
+}
+
+#[cfg(test)]
+mod pagination_tests {
+    use super::*;
+
+    #[derive(Debug, Deserialize)]
+    struct Probe {
+        query: Option<String>,
+        #[serde(flatten)]
+        page: Pagination,
+    }
+
+    fn parse<T: serde::de::DeserializeOwned>(qs: &str) -> Result<T, ()> {
+        let uri: axum::http::Uri = format!("/x?{qs}").parse().unwrap();
+        axum::extract::Query::try_from_uri(&uri)
+            .map(|axum::extract::Query(v)| v)
+            .map_err(|_| ())
+    }
+
+    #[test]
+    fn flatten_works_with_serde_urlencoded() {
+        let p: Probe = parse("query=foo&limit=50&offset=10").unwrap();
+        assert_eq!(p.query.as_deref(), Some("foo"));
+        assert_eq!(p.page.limit, Some(50));
+        assert_eq!(p.page.offset, Some(10));
+    }
+
+    #[test]
+    fn flatten_absent_pagination_is_none() {
+        let p: Probe = parse("query=foo").unwrap();
+        assert_eq!(p.page.limit, None);
+        assert_eq!(p.page.offset, None);
+    }
+
+    #[test]
+    fn present_non_numeric_still_rejects() {
+        // Matches a bare `Option<u64>`: a present unparseable value is a 400.
+        assert!(parse::<Probe>("limit=abc").is_err());
+        assert!(parse::<Probe>("limit=").is_err());
+    }
+
+    #[test]
+    fn direct_query_pagination() {
+        let p: Pagination = parse("limit=5&offset=2").unwrap();
+        assert_eq!(p.page().limit, 5);
+        assert_eq!(p.page().offset, 2);
+    }
 }

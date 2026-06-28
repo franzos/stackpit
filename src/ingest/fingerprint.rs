@@ -1,6 +1,6 @@
 //! Fingerprinting for issue grouping (priority: SDK > exception > message > transaction > UUID).
 
-use crate::models::ItemType;
+use crate::ingest::models::ItemType;
 use serde_json::Value;
 
 /// FNV-1a 64-bit: fast, deterministic, sufficient for fingerprinting.

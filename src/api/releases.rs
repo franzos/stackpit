@@ -6,7 +6,7 @@ use serde_json::json;
 
 use crate::server::AppState;
 
-use super::{api_error, internal_error};
+use super::ApiError;
 use crate::extractors::ReadPool;
 
 #[derive(Deserialize)]
@@ -41,7 +41,7 @@ pub async fn create_project_scoped(
     Path((_org, _project)): Path<(String, String)>,
     headers: HeaderMap,
     Json(body): Json<CreateReleaseRequest>,
-) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     create_inner(state, headers, body).await
 }
 
@@ -51,7 +51,7 @@ pub async fn create(
     Path(_org): Path<String>,
     headers: HeaderMap,
     Json(body): Json<CreateReleaseRequest>,
-) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     create_inner(state, headers, body).await
 }
 
@@ -59,13 +59,16 @@ async fn create_inner(
     state: AppState,
     headers: HeaderMap,
     body: CreateReleaseRequest,
-) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let key_project_id = super::validate_api_key(&state.pool, &headers, "sourcemap").await?;
     if body.version.is_empty() {
-        return Err(api_error(StatusCode::BAD_REQUEST, "version is required"));
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "version is required",
+        ));
     }
     if body.projects.is_empty() {
-        return Err(api_error(
+        return Err(ApiError::new(
             StatusCode::BAD_REQUEST,
             "at least one project is required",
         ));
@@ -77,14 +80,14 @@ async fn create_inner(
             .as_u64()
             .or_else(|| project_val.as_str().and_then(|s| s.parse().ok()))
             .ok_or_else(|| {
-                api_error(
+                ApiError::new(
                     StatusCode::BAD_REQUEST,
-                    &format!("invalid project id: {project_val}"),
+                    format!("invalid project id: {project_val}"),
                 )
             })?;
 
         if project_id != key_project_id {
-            return Err(api_error(
+            return Err(ApiError::new(
                 StatusCode::FORBIDDEN,
                 "API key not valid for this project",
             ));
@@ -100,7 +103,7 @@ async fn create_inner(
         };
         crate::queries::releases::upsert_release(&state.writer_pool, project_id, &info)
             .await
-            .map_err(internal_error)?;
+            .map_err(ApiError::internal)?;
     }
 
     let now = chrono::Utc::now().to_rfc3339();
@@ -120,7 +123,7 @@ pub async fn update_project_scoped(
     Path((_org, _project, version)): Path<(String, String, String)>,
     headers: HeaderMap,
     Json(body): Json<UpdateReleaseRequest>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     update_inner(state, pool, version, headers, body).await
 }
 
@@ -131,7 +134,7 @@ pub async fn update(
     Path((_org, version)): Path<(String, String)>,
     headers: HeaderMap,
     Json(body): Json<UpdateReleaseRequest>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     update_inner(state, pool, version, headers, body).await
 }
 
@@ -141,14 +144,14 @@ async fn update_inner(
     version: String,
     headers: HeaderMap,
     body: UpdateReleaseRequest,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let key_project_id = super::validate_api_key(&state.pool, &headers, "sourcemap").await?;
     // First ref's commit becomes the release commit; only the key's project is updated.
     if let Some(ref_info) = body.refs.first() {
         if !ref_info.commit.is_empty() {
             let project_ids = crate::queries::releases::find_projects_by_version(&pool, &version)
                 .await
-                .map_err(internal_error)?;
+                .map_err(ApiError::internal)?;
 
             for project_id in project_ids.into_iter().filter(|&id| id == key_project_id) {
                 let info = crate::queries::releases::ReleaseUpsert {
@@ -161,7 +164,7 @@ async fn update_inner(
                 };
                 crate::queries::releases::upsert_release(&state.writer_pool, project_id, &info)
                     .await
-                    .map_err(internal_error)?;
+                    .map_err(ApiError::internal)?;
             }
         }
     }

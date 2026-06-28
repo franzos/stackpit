@@ -1,20 +1,20 @@
 use crate::api;
-use crate::auth_service::AuthCache;
 use crate::config::Config;
-use crate::crypto::SecretEncryptor;
 use crate::db::{self, DbPool};
 use crate::endpoints;
 use crate::filter::FilterEngine;
 use crate::html;
+use crate::ingest::auth::AuthCache;
 use crate::mcp::{McpRuntime, ResourceMetadata};
 use crate::middleware;
-use crate::oauth::OidcClient;
+use crate::oidc::client::OidcClient;
 use crate::queries::filters::load_filter_data;
-use crate::stats::{DiscardStats, IngestStats};
+use crate::util::crypto::SecretEncryptor;
+use crate::util::stats::{DiscardStats, IngestStats};
 use crate::writer::{self, WriterHandle};
 use anyhow::Result;
 use axum::extract::Request;
-use axum::routing::{get, post};
+use axum::routing::get;
 use axum::{Router, ServiceExt};
 use stackpit_auth::{BearerGate, BearerGateConfig, JwksCache, JwtVerifierConfig};
 use std::sync::Arc;
@@ -306,39 +306,11 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
         .with_state(state.clone());
 
     // Tight limits for ingestion: compressed → decompress → decompressed.
-    let ingest_routes = Router::new()
-        .route(
-            "/api/{project_id}/envelope/",
-            post(endpoints::envelope::handle),
-        )
-        .route(
-            "/api/{project_id}/envelope",
-            post(endpoints::envelope::handle),
-        )
-        .route("/api/{project_id}/store/", post(endpoints::store::handle))
-        .route("/api/{project_id}/store", post(endpoints::store::handle))
-        .route(
-            "/api/{project_id}/security/",
-            post(endpoints::security::handle),
-        )
-        .route(
-            "/api/{project_id}/security",
-            post(endpoints::security::handle),
-        )
-        .route(
-            "/api/{project_id}/minidump/",
-            post(endpoints::minidump::handle),
-        )
-        .route(
-            "/api/{project_id}/minidump",
-            post(endpoints::minidump::handle),
-        )
-        .layer(RequestBodyLimitLayer::new(config.server.max_body_size))
-        .layer(RequestDecompressionLayer::new())
-        .layer(RequestBodyLimitLayer::new(
-            config.server.compressed_body_limit(),
-        ))
-        .with_state(state.clone());
+    let ingest_routes = endpoints::routes(
+        config.server.max_body_size,
+        config.server.compressed_body_limit(),
+    )
+    .with_state(state.clone());
 
     // Origin stays wildcard -- ingest is genuinely cross-origin from arbitrary
     // customer apps -- but methods and headers are narrowed to the SDK surface.

@@ -65,7 +65,7 @@ pub async fn upsert_backfill_issue(
     title: Option<&str>,
     level: Option<&str>,
     timestamp: i64,
-    item_type: &crate::models::ItemType,
+    item_type: &crate::ingest::models::ItemType,
 ) -> Result<()> {
     super::issues::upsert_issue(
         pool,

@@ -16,7 +16,7 @@ use anyhow::{Context, Result};
 use jsonwebtoken::{Algorithm, Validation};
 use serde::Deserialize;
 
-use crate::oauth::OidcClient;
+use crate::oidc::client::OidcClient;
 use crate::oidc::revocations;
 
 /// Conservative `iat` window: the spec doesn't pin a value, but common
@@ -546,7 +546,7 @@ mod tests {
 
     // --- Signature-binding tests (real key fixture; JwksCache test seam) ---
 
-    use crate::oauth::OidcClient;
+    use crate::oidc::client::OidcClient;
     use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
     use stackpit_auth::JwksCache;
 

@@ -1,15 +1,13 @@
 use askama::Template;
-use axum::extract::{Path, Query, State};
-use serde::Deserialize;
+use axum::extract::{Path, Query};
 
-use crate::extractors::ReadPool;
+use crate::extractors::{ProjectPageCtx, ReadPool};
 use crate::html::render_template;
 use crate::html::utils::Csrf;
 use crate::queries;
-use crate::queries::types::{Page, PagedResult};
+use crate::queries::types::{PagedResult, Pagination};
 use crate::queries::MonitorSummary;
 use crate::queries::ProjectNavCounts;
-use crate::server::AppState;
 
 use super::HtmlError;
 
@@ -25,29 +23,16 @@ struct MonitorListTemplate {
     csrf_token: String,
 }
 
-pub async fn list_handler(
-    State(_state): State<AppState>,
-    ReadPool(pool): ReadPool,
-    Csrf(csrf): Csrf,
-    Path(project_id): Path<u64>,
-) -> Result<axum::response::Response, HtmlError> {
-    let monitors = queries::monitors::list_monitors(&pool, project_id).await?;
-
-    let nav = queries::projects::get_nav_counts(&pool, project_id).await;
+pub async fn list_handler(ctx: ProjectPageCtx) -> Result<axum::response::Response, HtmlError> {
+    let monitors = queries::monitors::list_monitors(&ctx.pool, ctx.project_id).await?;
 
     let tmpl = MonitorListTemplate {
-        project_id,
+        project_id: ctx.project_id,
         monitors,
-        nav,
-        csrf_token: csrf,
+        nav: ctx.nav,
+        csrf_token: ctx.csrf_token,
     };
     Ok(render_template(&tmpl))
-}
-
-#[derive(Deserialize)]
-pub struct PageParams {
-    pub limit: Option<u64>,
-    pub offset: Option<u64>,
 }
 
 #[derive(Template)]
@@ -61,13 +46,12 @@ struct MonitorDetailTemplate {
 }
 
 pub async fn detail_handler(
-    State(_state): State<AppState>,
     ReadPool(pool): ReadPool,
     Csrf(csrf): Csrf,
     Path((project_id, slug)): Path<(u64, String)>,
-    Query(params): Query<PageParams>,
+    Query(params): Query<Pagination>,
 ) -> Result<axum::response::Response, HtmlError> {
-    let page = Page::new(params.offset, params.limit);
+    let page = params.page();
     let checkins =
         queries::monitors::list_checkins_for_monitor(&pool, project_id, &slug, &page).await?;
 

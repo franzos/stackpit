@@ -88,9 +88,5 @@ pub async fn send(
         );
     }
 
-    let resp = req.send().await?;
-    if !resp.status().is_success() {
-        anyhow::bail!("webhook returned {}", resp.status());
-    }
-    Ok(())
+    super::send_and_check(req, "webhook").await
 }

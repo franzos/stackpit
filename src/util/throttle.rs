@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Once-per-interval gate over a shared timestamp. `allow` returns `true` for
 /// exactly one caller per `interval_secs` window, claiming the slot atomically.
+#[derive(Default)]
 pub struct Throttle(AtomicU64);
 
 impl Throttle {

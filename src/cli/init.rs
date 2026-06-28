@@ -2,7 +2,7 @@ use anyhow::{bail, Result};
 use std::path::Path;
 
 fn generate_admin_token() -> String {
-    crate::crypto::random_hex::<32>()
+    crate::util::crypto::random_hex::<32>()
 }
 
 const CONFIG_TEMPLATE: &str = r#"[server]

@@ -112,7 +112,7 @@ pub async fn create(
         }
         // Block webhooks pointing at private/internal addresses. Validation only,
         // no request here, so no TOCTOU; the dispatcher does its own pinned resolution.
-        if let Err(msg) = crate::ssrf::check_ssrf(&url).await {
+        if let Err(msg) = crate::util::ssrf::check_ssrf(&url).await {
             return render_list(&state, Some(msg), &csrf).await;
         }
         (Some(url), None, false)
@@ -128,7 +128,7 @@ pub async fn create(
 
     // Refuse to store plaintext: secrets are encrypted or not stored.
     let (secret, encrypted) = match raw_secret {
-        Some(ref s) => match crate::crypto::encrypt_secret(s, state.encryptor.as_deref()) {
+        Some(ref s) => match crate::util::crypto::encrypt_secret(s, state.encryptor.as_deref()) {
             Ok(val) => (Some(val), true),
             Err(e) => {
                 tracing::warn!("refusing to store plaintext secret: {e}");
@@ -225,7 +225,7 @@ pub async fn test_integration(
         };
 
         // Pin resolved DNS so reqwest can't re-resolve to a different (internal) IP.
-        let resolved = match crate::ssrf::check_ssrf(url).await {
+        let resolved = match crate::util::ssrf::check_ssrf(url).await {
             Ok(r) => r,
             Err(msg) => return render_list(&state, Some(msg), &csrf).await,
         };

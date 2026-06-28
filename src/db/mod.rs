@@ -8,6 +8,26 @@ use anyhow::Result;
 
 pub use pool::{run_migrations, Db, DbPool, DbRow};
 
+use sqlx::Row;
+
+/// Conveniences over the two recurring row-mapping idioms in the query mappers.
+pub(crate) trait DbRowExt {
+    /// `get::<i64, _>(col) as u64` for id/count columns stored as `i64`.
+    fn get_u64(&self, col: &str) -> u64;
+    /// `get::<Option<String>, _>(col)` for nullable text columns.
+    fn get_opt_string(&self, col: &str) -> Option<String>;
+}
+
+impl DbRowExt for DbRow {
+    fn get_u64(&self, col: &str) -> u64 {
+        self.get::<i64, _>(col) as u64
+    }
+
+    fn get_opt_string(&self, col: &str) -> Option<String> {
+        self.get::<Option<String>, _>(col)
+    }
+}
+
 /// Translate a static SQL string's ?N placeholders to $N for PostgreSQL.
 /// For SQLite this is a zero-cost pass-through.
 ///
@@ -98,7 +118,6 @@ pub async fn sqlite_pragma(pool: &DbPool, pragma: &str) -> Result<()> {
 /// Fetch a single raw event row by ID. Test-only helper.
 #[cfg(test)]
 pub(crate) async fn get_event(pool: &DbPool, event_id: &str) -> Result<Option<EventRow>> {
-    use sqlx::Row;
     let row = sqlx::query(sql!(
         "SELECT event_id, item_type, project_id, timestamp, level, title, release, environment, received_at, payload
          FROM events WHERE event_id = ?1",
@@ -142,8 +161,8 @@ pub(crate) struct EventRow {
     pub payload: Vec<u8>,
 }
 
-#[cfg(test)]
-pub(crate) async fn open_test_pool() -> DbPool {
+#[cfg(any(test, feature = "integration-tests"))]
+pub async fn open_test_pool() -> DbPool {
     #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
     let url = "sqlite::memory:";
 
@@ -156,24 +175,31 @@ pub(crate) async fn open_test_pool() -> DbPool {
     let pool = pool::create_write_pool(url).await.unwrap();
     pool::run_migrations(&pool).await.unwrap();
 
-    // Postgres tests share a real database; TRUNCATE CASCADE clears it between tests.
+    // Postgres tests share a real database; TRUNCATE CASCADE clears it between
+    // tests. The table list is derived from the live schema so a newly added
+    // table can't silently leak state. Exclude `_sqlx_migrations` so migration
+    // state survives the wipe.
     #[cfg(all(feature = "postgres", not(feature = "sqlite")))]
     {
-        sqlx::query(
-            "TRUNCATE events, issues, logs, spans, metrics, attachments, \
-             issue_tag_values, integrations, project_integrations, \
-             alert_rules, alert_state, digest_schedules, \
-             project_keys, projects, releases, sourcemaps, upload_chunks, \
-             discard_stats, discarded_fingerprints, inbound_filters, \
-             message_filters, rate_limits, environment_filters, \
-             release_filters, user_agent_filters, filter_rules, \
-             ip_blocklist, project_repos, sync_state, api_keys, \
-             session_aggregates, transaction_metrics \
-             CASCADE",
+        let tables: Vec<String> = sqlx::query_scalar(
+            "SELECT tablename FROM pg_catalog.pg_tables \
+             WHERE schemaname = 'public' AND tablename <> '_sqlx_migrations'",
         )
-        .execute(&pool)
+        .fetch_all(&pool)
         .await
         .unwrap();
+
+        if !tables.is_empty() {
+            let list = tables
+                .iter()
+                .map(|t| format!("\"{t}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            sqlx::query(&format!("TRUNCATE {list} CASCADE"))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
     }
 
     pool
@@ -202,27 +228,69 @@ mod tests {
         .unwrap();
     }
 
+    /// Every table the migrations are expected to leave live after a fresh
+    /// `run_migrations`. Asserted individually rather than by count so adding a
+    /// table can't pass on a stale magic number, and a missing one names itself.
+    /// Cross-tree parity (sqlite vs postgres) is covered by `tests/migration_parity.rs`.
+    #[cfg(feature = "sqlite")]
+    const EXPECTED_TABLES: &[&str] = &[
+        "events",
+        "logs",
+        "attachments",
+        "issues",
+        "project_repos",
+        "releases",
+        "sync_state",
+        "organizations",
+        "projects",
+        "issue_tag_values",
+        "project_keys",
+        "discarded_fingerprints",
+        "inbound_filters",
+        "message_filters",
+        "rate_limits",
+        "environment_filters",
+        "release_filters",
+        "user_agent_filters",
+        "filter_rules",
+        "ip_blocklist",
+        "discard_stats",
+        "integrations",
+        "project_integrations",
+        "alert_rules",
+        "alert_state",
+        "digest_schedules",
+        "spans",
+        "metrics",
+        "sourcemaps",
+        "upload_chunks",
+        "api_keys",
+        "users",
+        "oidc_grants",
+        "oidc_revocations",
+        "oidc_logout_jti",
+        "transaction_metrics",
+        "session_aggregates",
+    ];
+
     #[cfg(feature = "sqlite")]
     #[tokio::test]
     async fn open_creates_schema() {
         let pool = setup().await;
-        let row: (i32,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN (
-                'events','logs','attachments','issues','project_repos','releases','projects','sync_state','project_keys',
-                'discarded_fingerprints','inbound_filters','message_filters',
-                'rate_limits','environment_filters','release_filters','user_agent_filters',
-                'filter_rules','ip_blocklist','discard_stats',
-                'issue_tag_values',
-                'integrations','project_integrations',
-                'alert_rules','alert_state','digest_schedules',
-                'organizations',
-                'sourcemaps','upload_chunks'
-            )",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert_eq!(row.0, 28);
+        let present: std::collections::HashSet<String> =
+            sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'table'")
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+                .into_iter()
+                .collect();
+
+        for table in EXPECTED_TABLES {
+            assert!(
+                present.contains(*table),
+                "migrations did not create expected table `{table}`"
+            );
+        }
     }
 
     #[tokio::test]

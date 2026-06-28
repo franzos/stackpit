@@ -4,38 +4,13 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use serde::Deserialize;
 
-use crate::db::DbPool;
-use crate::filter::FilterEngine;
+use crate::filter::admin;
 use crate::html::render_template;
 use crate::html::utils::Csrf;
 use crate::queries;
-use crate::queries::filters::load_filter_data;
 use crate::server::AppState;
 
 use super::HtmlError;
-
-/// Tracks consecutive filter reload failures so we can escalate logging.
-static FILTER_RELOAD_FAILURES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-
-async fn reload_filter(pool: &DbPool, filter_engine: &FilterEngine) {
-    match load_filter_data(pool).await {
-        Ok(data) => {
-            let prev = FILTER_RELOAD_FAILURES.swap(0, std::sync::atomic::Ordering::Relaxed);
-            if prev > 0 {
-                tracing::info!("filter engine recovered after {prev} consecutive reload failures");
-            }
-            filter_engine.apply_data(data);
-        }
-        Err(e) => {
-            let count =
-                FILTER_RELOAD_FAILURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-            tracing::error!(
-                consecutive_failures = count,
-                "filter engine reload failed: {e} — filter rules may be stale"
-            );
-        }
-    }
-}
 
 /// Runs a filter write, reloads the engine on success, then renders.
 async fn write_then_render(
@@ -45,11 +20,8 @@ async fn write_then_render(
     result: anyhow::Result<()>,
     success_msg: &str,
 ) -> axum::response::Response {
-    match result {
-        Ok(()) => {
-            reload_filter(&state.writer_pool, &state.filter_engine).await;
-            render_filters(state, project_id, Some(success_msg.into()), csrf).await
-        }
+    match admin::persist_and_reload(&state.writer_pool, &state.filter_engine, result).await {
+        Ok(()) => render_filters(state, project_id, Some(success_msg.into()), csrf).await,
         Err(e) => render_filters(state, project_id, Some(format!("Error: {e}")), csrf).await,
     }
 }
@@ -76,10 +48,27 @@ async fn delete_then_render(
             .await
         }
         Ok(_) => {
-            reload_filter(&state.writer_pool, &state.filter_engine).await;
+            admin::reload(&state.writer_pool, &state.filter_engine).await;
             render_filters(state, project_id, Some(success_msg.into()), csrf).await
         }
         Err(e) => render_filters(state, project_id, Some(format!("Error: {e}")), csrf).await,
+    }
+}
+
+/// Trims `value`, returning it when non-empty, otherwise an error response
+/// rendering `msg` as a 422 on the filters page.
+async fn require_nonempty(
+    value: &str,
+    msg: &str,
+    state: &AppState,
+    project_id: u64,
+    csrf: &str,
+) -> Result<String, axum::response::Response> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        Err(validation_error(state, project_id, msg, csrf).await)
+    } else {
+        Ok(trimmed.to_string())
     }
 }
 
@@ -247,7 +236,7 @@ pub async fn set_inbound_filters(
             return render_filters(&state, project_id, Some(format!("Error: {e}")), &csrf).await;
         }
     }
-    reload_filter(&state.writer_pool, &state.filter_engine).await;
+    admin::reload(&state.writer_pool, &state.filter_engine).await;
 
     render_filters(
         &state,
@@ -264,10 +253,18 @@ pub async fn add_message_filter(
     Path(project_id): Path<u64>,
     Form(form): Form<PatternForm>,
 ) -> axum::response::Response {
-    let pattern = form.pattern.trim().to_string();
-    if pattern.is_empty() {
-        return validation_error(&state, project_id, "Pattern is required", &csrf).await;
-    }
+    let pattern = match require_nonempty(
+        &form.pattern,
+        "Pattern is required",
+        &state,
+        project_id,
+        &csrf,
+    )
+    .await
+    {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
     let result =
         queries::filters::create_message_filter(&state.writer_pool, project_id, &pattern).await;
     write_then_render(&state, project_id, &csrf, result, "Message filter added").await
@@ -312,10 +309,18 @@ pub async fn add_environment_filter(
     Path(project_id): Path<u64>,
     Form(form): Form<EnvironmentForm>,
 ) -> axum::response::Response {
-    let env = form.environment.trim().to_string();
-    if env.is_empty() {
-        return validation_error(&state, project_id, "Environment is required", &csrf).await;
-    }
+    let env = match require_nonempty(
+        &form.environment,
+        "Environment is required",
+        &state,
+        project_id,
+        &csrf,
+    )
+    .await
+    {
+        Ok(e) => e,
+        Err(resp) => return resp,
+    };
     let result =
         queries::filters::add_environment_filter(&state.writer_pool, project_id, &env).await;
     write_then_render(&state, project_id, &csrf, result, "Environment excluded").await
@@ -344,10 +349,18 @@ pub async fn add_release_filter(
     Path(project_id): Path<u64>,
     Form(form): Form<PatternForm>,
 ) -> axum::response::Response {
-    let pattern = form.pattern.trim().to_string();
-    if pattern.is_empty() {
-        return validation_error(&state, project_id, "Pattern is required", &csrf).await;
-    }
+    let pattern = match require_nonempty(
+        &form.pattern,
+        "Pattern is required",
+        &state,
+        project_id,
+        &csrf,
+    )
+    .await
+    {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
     let result =
         queries::filters::add_release_filter(&state.writer_pool, project_id, &pattern).await;
     write_then_render(&state, project_id, &csrf, result, "Release filter added").await
@@ -376,10 +389,18 @@ pub async fn add_ua_filter(
     Path(project_id): Path<u64>,
     Form(form): Form<PatternForm>,
 ) -> axum::response::Response {
-    let pattern = form.pattern.trim().to_string();
-    if pattern.is_empty() {
-        return validation_error(&state, project_id, "Pattern is required", &csrf).await;
-    }
+    let pattern = match require_nonempty(
+        &form.pattern,
+        "Pattern is required",
+        &state,
+        project_id,
+        &csrf,
+    )
+    .await
+    {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
     let result =
         queries::filters::add_user_agent_filter(&state.writer_pool, project_id, &pattern).await;
     write_then_render(&state, project_id, &csrf, result, "User-agent filter added").await
@@ -475,10 +496,11 @@ pub async fn add_ip_block(
     Path(project_id): Path<u64>,
     Form(form): Form<CidrForm>,
 ) -> axum::response::Response {
-    let cidr = form.cidr.trim().to_string();
-    if cidr.is_empty() {
-        return validation_error(&state, project_id, "CIDR is required", &csrf).await;
-    }
+    let cidr =
+        match require_nonempty(&form.cidr, "CIDR is required", &state, project_id, &csrf).await {
+            Ok(c) => c,
+            Err(resp) => return resp,
+        };
     if crate::filter::cidr::CidrBlock::parse(&cidr).is_none() {
         return validation_error(&state, project_id, "Invalid CIDR format", &csrf).await;
     }

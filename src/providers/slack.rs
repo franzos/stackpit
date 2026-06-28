@@ -103,15 +103,10 @@ pub async fn send(client: &reqwest::Client, url: &str, event: &NotificationEvent
         })
     };
 
-    let resp = client
+    let req = client
         .post(url)
         .header("Content-Type", "application/json")
-        .json(&payload)
-        .send()
-        .await?;
+        .json(&payload);
 
-    if !resp.status().is_success() {
-        anyhow::bail!("slack webhook returned {}", resp.status());
-    }
-    Ok(())
+    super::send_and_check(req, "slack webhook").await
 }

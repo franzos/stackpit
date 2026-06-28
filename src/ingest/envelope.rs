@@ -1,6 +1,6 @@
-use crate::auth;
-use crate::auth::SentryAuth;
-use crate::models::{ItemType, StorableAttachment, StorableEvent};
+use crate::ingest::auth;
+use crate::ingest::auth::SentryAuth;
+use crate::ingest::models::{ItemType, StorableAttachment, StorableEvent};
 use anyhow::{bail, Result};
 use serde_json::Value;
 
@@ -19,16 +19,10 @@ pub struct ParsedEnvelope {
 /// Sentry SDKs can send hundreds of spans per envelope, so we allow up to 500.
 const MAX_ENVELOPE_ITEMS: usize = 500;
 
-/// Default item size limit: 1MB for most types.
-const MAX_ITEM_PAYLOAD_BYTES: usize = 1_048_576;
-
-/// Profiles and replay recordings can be much larger
-const MAX_LARGE_ITEM_PAYLOAD_BYTES: usize = 50 * 1_048_576; // 50MB
-
 /// Cumulative cap across all accepted item payloads in one envelope. Bounds
 /// decompression amplification even if an operator raises `max_body_size`
 /// above the per-item large limit. A few large items' worth of headroom.
-const MAX_ENVELOPE_TOTAL_BYTES: usize = 4 * MAX_LARGE_ITEM_PAYLOAD_BYTES; // 200MB
+const MAX_ENVELOPE_TOTAL_BYTES: usize = 4 * crate::ingest::models::MAX_LARGE_ITEM_PAYLOAD_BYTES; // 200MB
 
 /// Parse a Sentry envelope. Wire format: `header\n(item_header\npayload\n)*`.
 pub fn parse(body: &[u8], project_id: u64, auth: &SentryAuth) -> Result<ParsedEnvelope> {
@@ -177,13 +171,7 @@ pub fn parse(body: &[u8], project_id: u64, auth: &SentryAuth) -> Result<ParsedEn
             continue;
         }
 
-        let size_limit = match item_type {
-            ItemType::Profile
-            | ItemType::ProfileChunk
-            | ItemType::ReplayRecording
-            | ItemType::ReplayVideo => MAX_LARGE_ITEM_PAYLOAD_BYTES,
-            _ => MAX_ITEM_PAYLOAD_BYTES,
-        };
+        let size_limit = item_type.max_payload_bytes();
         if payload_bytes.len() > size_limit {
             tracing::warn!(
                 "envelope item exceeds max size ({} > {size_limit}), skipping",
@@ -309,8 +297,8 @@ fn extract_fields(
         .or_else(|| json.get("severity_text"))
         .and_then(|v| v.as_str())
         .map(|s| {
-            s.parse::<crate::models::Level>()
-                .unwrap_or(crate::models::Level::Unknown)
+            s.parse::<crate::ingest::models::Level>()
+                .unwrap_or(crate::ingest::models::Level::Unknown)
         });
     event.platform = json
         .get("platform")
@@ -388,10 +376,13 @@ fn extract_fields(
 
     // Compute fingerprint and title from the already-parsed JSON so
     // enrich_event won't need to re-parse the payload
-    event.fingerprint =
-        crate::fingerprint::compute_fingerprint_from_value(event.project_id, item_type, &json);
+    event.fingerprint = crate::ingest::fingerprint::compute_fingerprint_from_value(
+        event.project_id,
+        item_type,
+        &json,
+    );
     event.title =
-        crate::enrich::extract_title_from(&json, item_type, event.monitor_slug.as_deref());
+        crate::ingest::enrich::extract_title_from(&json, item_type, event.monitor_slug.as_deref());
 
     event_id
 }
@@ -481,17 +472,19 @@ fn extract_session_bucket(json: &Value, event: &mut StorableEvent) {
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
         .map_or(event.timestamp, |dt| dt.timestamp());
 
-    event.session_buckets.push(crate::models::SessionBucket {
-        release,
-        environment,
-        started_ts,
-        total,
-        crashed,
-        errored,
-        abnormal,
-        did,
-        is_aggregate: false,
-    });
+    event
+        .session_buckets
+        .push(crate::ingest::models::SessionBucket {
+            release,
+            environment,
+            started_ts,
+            total,
+            crashed,
+            errored,
+            abnormal,
+            did,
+            is_aggregate: false,
+        });
 }
 
 /// Parse a `sessions` aggregate item into one SessionBucket per `aggregates[]` entry.
@@ -514,17 +507,19 @@ fn extract_session_aggregates(json: &Value, event: &mut StorableEvent) {
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
             .map_or(event.timestamp, |dt| dt.timestamp());
 
-        event.session_buckets.push(crate::models::SessionBucket {
-            release: release.clone(),
-            environment: environment.clone(),
-            started_ts,
-            total,
-            crashed,
-            errored,
-            abnormal,
-            did: None,
-            is_aggregate: true,
-        });
+        event
+            .session_buckets
+            .push(crate::ingest::models::SessionBucket {
+                release: release.clone(),
+                environment: environment.clone(),
+                started_ts,
+                total,
+                crashed,
+                errored,
+                abnormal,
+                did: None,
+                is_aggregate: true,
+            });
     }
 }
 
@@ -632,7 +627,7 @@ pub fn parse_security_body(
         project_id,
         auth.sentry_key.clone(),
     );
-    event.level = Some(crate::models::Level::Warning);
+    event.level = Some(crate::ingest::models::Level::Warning);
     event.platform = Some("other".to_string());
     Ok(event)
 }
@@ -653,11 +648,14 @@ pub fn parse_minidump(event_id: &str, project_id: u64, public_key: &str) -> Resu
         project_id,
         public_key.to_string(),
     );
-    event.level = Some(crate::models::Level::Error);
+    event.level = Some(crate::ingest::models::Level::Error);
     event.platform = Some("native".to_string());
     event.title = Some("Minidump".to_string());
-    event.fingerprint =
-        crate::fingerprint::compute_fingerprint_from_value(project_id, &ItemType::Event, &wrapper);
+    event.fingerprint = crate::ingest::fingerprint::compute_fingerprint_from_value(
+        project_id,
+        &ItemType::Event,
+        &wrapper,
+    );
     Ok(event)
 }
 
@@ -684,7 +682,7 @@ mod tests {
         assert_eq!(result.events[0].item_type, ItemType::Event);
         assert_eq!(result.events[0].project_id, 1);
         // Title comes from enrichment, not from parse
-        crate::enrich::enrich_event(&mut result.events[0]);
+        crate::ingest::enrich::enrich_event(&mut result.events[0]);
         assert_eq!(result.events[0].title.as_deref(), Some("hello"));
     }
 
@@ -780,7 +778,7 @@ mod tests {
         assert_eq!(event.event_id, "store1");
         assert_eq!(event.item_type, ItemType::Event);
         assert_eq!(event.project_id, 7);
-        assert_eq!(event.level, Some(crate::models::Level::Error));
+        assert_eq!(event.level, Some(crate::ingest::models::Level::Error));
         assert_eq!(event.timestamp, 5000);
         // Title is computed in extract_fields (same JSON parse).
         assert_eq!(event.title.as_deref(), Some("boom"));
@@ -800,7 +798,7 @@ mod tests {
         let mut event = parse_security_body(body, 3, &test_auth()).unwrap();
         assert_eq!(event.item_type, ItemType::Event);
         assert_eq!(event.project_id, 3);
-        assert_eq!(event.level, Some(crate::models::Level::Warning));
+        assert_eq!(event.level, Some(crate::ingest::models::Level::Warning));
         assert_eq!(event.platform.as_deref(), Some("other"));
 
         // Payload is still raw JSON before finalize
@@ -813,7 +811,7 @@ mod tests {
 
         // After enrich: title extracted, payload stays raw JSON
         // (compression happens in the writer task).
-        crate::enrich::enrich_event(&mut event);
+        crate::ingest::enrich::enrich_event(&mut event);
         assert_eq!(event.title.as_deref(), Some("CSP: script-src"));
         let json2: Value = serde_json::from_slice(&event.payload).unwrap();
         assert!(json2.get("csp").is_some());
@@ -827,8 +825,8 @@ mod tests {
             br#"{"csp-report":{"violated-directive":"script-src","blocked-uri":"https://b.com"}}"#;
         let mut event1 = parse_security_body(body1, 3, &test_auth()).unwrap();
         let mut event2 = parse_security_body(body2, 3, &test_auth()).unwrap();
-        crate::enrich::enrich_event(&mut event1);
-        crate::enrich::enrich_event(&mut event2);
+        crate::ingest::enrich::enrich_event(&mut event1);
+        crate::ingest::enrich::enrich_event(&mut event2);
         // Same directive, different blocked URI: should group together.
         assert_eq!(event1.fingerprint, event2.fingerprint);
         // Still distinct events though
@@ -843,8 +841,8 @@ mod tests {
             br#"{"csp-report":{"violated-directive":"style-src","blocked-uri":"https://a.com"}}"#;
         let mut event1 = parse_security_body(body1, 3, &test_auth()).unwrap();
         let mut event2 = parse_security_body(body2, 3, &test_auth()).unwrap();
-        crate::enrich::enrich_event(&mut event1);
-        crate::enrich::enrich_event(&mut event2);
+        crate::ingest::enrich::enrich_event(&mut event1);
+        crate::ingest::enrich::enrich_event(&mut event2);
         assert_ne!(event1.fingerprint, event2.fingerprint);
     }
 
@@ -1028,7 +1026,7 @@ mod tests {
         let body =
             br#"{"exception":{"values":[{"type":"TypeError","value":"null is not an object"}]}}"#;
         let mut event = parse_store_body(body, 1, &test_auth()).unwrap();
-        crate::enrich::enrich_event(&mut event);
+        crate::ingest::enrich::enrich_event(&mut event);
         assert_eq!(
             event.title.as_deref(),
             Some("TypeError: null is not an object")
@@ -1039,7 +1037,7 @@ mod tests {
     fn title_from_exception_no_value() {
         let body = br#"{"exception":{"values":[{"type":"RuntimeError"}]}}"#;
         let mut event = parse_store_body(body, 1, &test_auth()).unwrap();
-        crate::enrich::enrich_event(&mut event);
+        crate::ingest::enrich::enrich_event(&mut event);
         assert_eq!(event.title.as_deref(), Some("RuntimeError"));
     }
 
@@ -1047,7 +1045,7 @@ mod tests {
     fn title_from_message_fallback() {
         let body = br#"{"message":"something broke"}"#;
         let mut event = parse_store_body(body, 1, &test_auth()).unwrap();
-        crate::enrich::enrich_event(&mut event);
+        crate::ingest::enrich::enrich_event(&mut event);
         assert_eq!(event.title.as_deref(), Some("something broke"));
     }
 
@@ -1055,7 +1053,7 @@ mod tests {
     fn title_from_logentry() {
         let body = br#"{"logentry":{"message":"log msg"}}"#;
         let mut event = parse_store_body(body, 1, &test_auth()).unwrap();
-        crate::enrich::enrich_event(&mut event);
+        crate::ingest::enrich::enrich_event(&mut event);
         assert_eq!(event.title.as_deref(), Some("log msg"));
     }
 
@@ -1063,7 +1061,7 @@ mod tests {
     fn title_from_transaction_fallback() {
         let body = br#"{"transaction":"/api/health"}"#;
         let mut event = parse_store_body(body, 1, &test_auth()).unwrap();
-        crate::enrich::enrich_event(&mut event);
+        crate::ingest::enrich::enrich_event(&mut event);
         assert_eq!(event.title.as_deref(), Some("/api/health"));
     }
 
@@ -1071,7 +1069,7 @@ mod tests {
     fn title_none_when_no_fields() {
         let body = br#"{"level":"info"}"#;
         let mut event = parse_store_body(body, 1, &test_auth()).unwrap();
-        crate::enrich::enrich_event(&mut event);
+        crate::ingest::enrich::enrich_event(&mut event);
         assert!(event.title.is_none());
     }
 }

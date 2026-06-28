@@ -5,7 +5,7 @@ use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 use crate::db::DbPool;
-use crate::stats::DiscardStats;
+use crate::util::stats::DiscardStats;
 
 /// Log panics; do not restart (visibility over silent retry).
 pub fn supervise<F>(name: &'static str, fut: F)
@@ -42,14 +42,14 @@ pub fn spawn_retention_task(pool: DbPool, retention_days: u32, cancel: Cancellat
                 Ok(_) => {}
                 Err(e) => tracing::warn!("retention cleanup error: {e}"),
             }
-            match crate::sourcemap::cleanup_stale_chunks(&pool, 86400).await {
+            match crate::ingest::sourcemap::cleanup_stale_chunks(&pool, 86400).await {
                 Ok(n) if n > 0 => tracing::info!("chunk cleanup: deleted {n} stale chunks"),
                 Ok(_) => {}
                 Err(e) => tracing::warn!("chunk cleanup error: {e}"),
             }
             // Same retention window as events.
             let sm_max_age = retention_days as i64 * 86400;
-            match crate::sourcemap::cleanup_old_sourcemaps(&pool, sm_max_age).await {
+            match crate::ingest::sourcemap::cleanup_old_sourcemaps(&pool, sm_max_age).await {
                 Ok(n) if n > 0 => tracing::info!("sourcemap cleanup: deleted {n} old sourcemaps"),
                 Ok(_) => {}
                 Err(e) => tracing::warn!("sourcemap cleanup error: {e}"),

@@ -1,11 +1,11 @@
 use axum::http::{HeaderMap, Uri};
 use axum::response::IntoResponse;
 
-use crate::auth::SentryAuth;
 use crate::filter::{FilterEngine, FilterVerdict, PreFilterReject};
-use crate::models::StorableEvent;
-use crate::network;
+use crate::ingest::auth::SentryAuth;
+use crate::ingest::models::StorableEvent;
 use crate::server::AppState;
+use crate::util::network;
 
 use super::responses::{rate_limited_response_with_retry, sentry_response};
 

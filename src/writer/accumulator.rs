@@ -1,4 +1,4 @@
-use crate::models::{ItemType, Level, StorableEvent, MAX_TAGS_PER_EVENT};
+use crate::ingest::models::{ItemType, Level, StorableEvent, MAX_TAGS_PER_EVENT};
 use simple_hll::HyperLogLog;
 use std::collections::HashMap;
 use std::time::Instant;
@@ -305,7 +305,7 @@ mod tests {
         assert_eq!(day_bucket(1_609_502_400), 1_609_459_200);
     }
 
-    use crate::models::SessionBucket;
+    use crate::ingest::models::SessionBucket;
 
     fn session_event(event_id: &str, ts: i64, bucket: SessionBucket) -> StorableEvent {
         let mut e = StorableEvent::new(

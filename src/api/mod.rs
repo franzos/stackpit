@@ -93,12 +93,12 @@ pub fn routes() -> Router<AppState> {
 }
 
 /// Validate an API key from the Authorization header.
-/// Returns the associated project_id on success, or a 401 response.
+/// Returns the associated project_id on success, or a 401 error.
 pub async fn validate_api_key(
     pool: &DbPool,
     headers: &HeaderMap,
     scope: &str,
-) -> Result<u64, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<u64, ApiError> {
     let token = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
@@ -113,7 +113,7 @@ pub async fn validate_api_key(
     let token = match token {
         Some(t) => t,
         None => {
-            return Err(api_error(
+            return Err(ApiError::new(
                 StatusCode::UNAUTHORIZED,
                 "authentication required",
             ))
@@ -143,51 +143,44 @@ pub async fn validate_api_key(
             // Wrong hash or wrong scope: the SQL filter rejects both. Match the
             // hit path's compare cost.
             let _equal: bool = hash_bytes.as_slice().ct_eq(dummy.as_slice()).into();
-            Err(api_error(StatusCode::UNAUTHORIZED, "invalid API key"))
+            Err(ApiError::new(StatusCode::UNAUTHORIZED, "invalid API key"))
         }
         Err(_) => {
             let _equal: bool = hash_bytes.as_slice().ct_eq(dummy.as_slice()).into();
-            Err(api_error(StatusCode::UNAUTHORIZED, "invalid API key"))
+            Err(ApiError::new(StatusCode::UNAUTHORIZED, "invalid API key"))
         }
     }
 }
 
-/// Build the canonical `{"detail": ...}` error tuple. Tuple form so it can be
-/// used directly in `Result<_, (StatusCode, Json)>` returns and `.map_err`.
-pub fn api_error(status: StatusCode, detail: &str) -> (StatusCode, Json<serde_json::Value>) {
-    (status, Json(json!({ "detail": detail })))
+/// JSON API error. Serializes to the canonical `{"detail": ...}` body with a
+/// status code and implements `IntoResponse`, so handlers return
+/// `Result<_, ApiError>` and use `?`.
+pub struct ApiError {
+    status: StatusCode,
+    detail: String,
 }
 
-/// Same shape as `api_error`, already converted to a `Response`.
-pub fn json_error(status: StatusCode, detail: &str) -> axum::response::Response {
-    use axum::response::IntoResponse;
-    api_error(status, detail).into_response()
-}
+impl ApiError {
+    pub fn new(status: StatusCode, detail: impl Into<String>) -> Self {
+        Self {
+            status,
+            detail: detail.into(),
+        }
+    }
 
-/// Return a generic 500 error to the client while logging the real cause.
-pub fn internal_error(e: impl std::fmt::Display) -> (StatusCode, Json<serde_json::Value>) {
-    tracing::error!("API internal error: {e}");
-    api_error(StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
-}
+    pub fn not_found(detail: impl Into<String>) -> Self {
+        Self::new(StatusCode::NOT_FOUND, detail)
+    }
 
-/// Convert a query result into a JSON response, mapping errors to a logged 500.
-pub fn json_or_500<T: serde::Serialize>(result: anyhow::Result<T>) -> axum::response::Response {
-    use axum::response::IntoResponse;
-    match result {
-        Ok(value) => Json(value).into_response(),
-        Err(e) => internal_error(e).into_response(),
+    /// Generic 500 to the client; logs the real cause.
+    pub fn internal(e: impl std::fmt::Display) -> Self {
+        tracing::error!("API internal error: {e}");
+        Self::new(StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
     }
 }
 
-/// Convert an `Option`-returning query result into a JSON response,
-/// mapping `None` to a 404 with `not_found_msg` and errors to a 500.
-pub fn json_or_404<T: serde::Serialize>(
-    result: anyhow::Result<Option<T>>,
-    not_found_msg: &str,
-) -> axum::response::Response {
-    match result {
-        Ok(Some(value)) => json_or_500(Ok(value)),
-        Ok(None) => json_error(StatusCode::NOT_FOUND, not_found_msg),
-        Err(e) => json_or_500::<()>(Err(e)),
+impl axum::response::IntoResponse for ApiError {
+    fn into_response(self) -> axum::response::Response {
+        (self.status, Json(json!({ "detail": self.detail }))).into_response()
     }
 }

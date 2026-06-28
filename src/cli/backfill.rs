@@ -3,8 +3,8 @@ use std::str::FromStr;
 use anyhow::Result;
 
 use crate::db::DbPool;
-use crate::fingerprint;
-use crate::models;
+use crate::ingest::fingerprint;
+use crate::ingest::models;
 use crate::queries::backfill;
 use crate::queries::BackfillRow;
 

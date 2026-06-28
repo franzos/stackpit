@@ -1,7 +1,7 @@
 //! Post-parse enrichment: fingerprinting and title extraction (business logic separate from parser).
 
-use crate::fingerprint;
-use crate::models::{ItemType, StorableEvent};
+use crate::ingest::fingerprint;
+use crate::ingest::models::{ItemType, StorableEvent};
 use serde_json::Value;
 
 /// Parse the JSON payload and fill in `fingerprint` (if missing) and `title`.

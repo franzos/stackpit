@@ -7,7 +7,7 @@ use crate::endpoints::pipeline::{authenticate_and_prefilter, check_event_filter}
 use crate::endpoints::responses::{
     error_response, overloaded_response, sentry_response, sentry_response_with_discarded,
 };
-use crate::envelope;
+use crate::ingest::envelope;
 use crate::server::AppState;
 
 pub async fn handle(
@@ -31,7 +31,7 @@ pub async fn handle(
                 .into_response();
         }
     };
-    crate::enrich::enrich_event(&mut event);
+    crate::ingest::enrich::enrich_event(&mut event);
 
     if check_event_filter(&state, &event, project_id) {
         return sentry_response_with_discarded(&event.event_id, 1).into_response();

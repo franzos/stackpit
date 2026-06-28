@@ -1,10 +1,10 @@
 pub mod rate_limit;
 
 use crate::config::Config;
-use crate::crypto::SecretEncryptor;
 use crate::db::DbPool;
 use crate::providers;
 use crate::queries;
+use crate::util::crypto::SecretEncryptor;
 use dashmap::DashMap;
 use rate_limit::NotifyRateLimiter;
 use std::net::SocketAddr;
@@ -109,7 +109,7 @@ where
 /// Fetch (or build and cache) a client pinned to `resolved.addr` for its host.
 fn pinned_client(
     cache: &ClientCache,
-    resolved: &crate::ssrf::ResolvedWebhook,
+    resolved: &crate::util::ssrf::ResolvedWebhook,
 ) -> Result<reqwest::Client, reqwest::Error> {
     let key = (resolved.hostname.clone(), resolved.addr);
     if let Some(client) = cache.get(&key) {
@@ -129,10 +129,10 @@ fn passes_min_level(event_level: Option<&str>, min_level: Option<&str>) -> bool 
         (_, None) => true,
         (None, Some(_)) => true, // event has no level: let it through rather than silently drop it
         (Some(ev), Some(min)) => {
-            let ev_level: crate::models::Level =
-                ev.parse().unwrap_or(crate::models::Level::Unknown);
-            let min_level: crate::models::Level =
-                min.parse().unwrap_or(crate::models::Level::Unknown);
+            let ev_level: crate::ingest::models::Level =
+                ev.parse().unwrap_or(crate::ingest::models::Level::Unknown);
+            let min_level: crate::ingest::models::Level =
+                min.parse().unwrap_or(crate::ingest::models::Level::Unknown);
             ev_level.rank() >= min_level.rank()
         }
     }
@@ -251,7 +251,7 @@ pub async fn run_dispatcher(
                 let kind_label = kind.as_str();
 
                 // Email has no client/url/SSRF surface; polymail owns the endpoint.
-                if let crate::queries::types::IntegrationKind::Email = kind {
+                if let crate::domain::IntegrationKind::Email = kind {
                     send_with_one_retry(&name, kind_label, || {
                         providers::email::send(
                             &config.email,
@@ -274,7 +274,7 @@ pub async fn run_dispatcher(
                 };
 
                 // Resolve DNS and block webhooks pointing at private/internal addresses.
-                let resolved = match crate::ssrf::check_ssrf(&url).await {
+                let resolved = match crate::util::ssrf::check_ssrf(&url).await {
                     Ok(r) => r,
                     Err(msg) => {
                         tracing::warn!("notify: {name} blocked by SSRF check: {msg}");

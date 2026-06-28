@@ -4,9 +4,9 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::models::StorableEvent;
-use crate::sliding_window::SlidingWindow;
-use crate::throttle::Throttle;
+use crate::ingest::models::StorableEvent;
+use crate::util::sliding_window::SlidingWindow;
+use crate::util::throttle::Throttle;
 
 use super::cidr::CidrBlock;
 
@@ -217,7 +217,8 @@ impl FilterEngine {
                         }
                         FilterAction::Sample => {
                             if let Some(rate) = rule.sample_rate {
-                                let hash = crate::fingerprint::fnv1a_64(event.event_id.as_bytes());
+                                let hash =
+                                    crate::ingest::fingerprint::fnv1a_64(event.event_id.as_bytes());
                                 let normalized = (hash as f64) / (u64::MAX as f64);
                                 if normalized > rate {
                                     return FilterVerdict::Drop {
@@ -442,7 +443,7 @@ impl FilterEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::StorableEvent;
+    use crate::ingest::models::StorableEvent;
 
     fn make_test_event() -> StorableEvent {
         StorableEvent {
@@ -727,10 +728,10 @@ mod tests {
         let engine = FilterEngine::new(data, 0, vec![], vec![]);
 
         let mut event = make_test_event();
-        event.level = Some(crate::models::Level::Debug);
+        event.level = Some(crate::ingest::models::Level::Debug);
         assert!(engine.check(&event).is_drop());
 
-        event.level = Some(crate::models::Level::Error);
+        event.level = Some(crate::ingest::models::Level::Error);
         assert!(!engine.check(&event).is_drop());
     }
 }

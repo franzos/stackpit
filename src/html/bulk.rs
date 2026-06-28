@@ -3,11 +3,11 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect};
 
+use crate::domain::IssueStatus;
 use crate::html::html_error;
 use crate::html::utils::period_to_timestamp;
 use crate::queries;
 use crate::queries::types::{EventFilter, IssueFilter};
-use crate::queries::IssueStatus;
 use crate::server::AppState;
 
 pub struct BulkForm {

@@ -2,10 +2,12 @@ use anyhow::Result;
 use sqlx::Row;
 
 use crate::db::sql;
-use crate::models::HLL_REGISTER_COUNT;
+use crate::ingest::models::HLL_REGISTER_COUNT;
 use simple_hll::HyperLogLog;
 
-use super::types::{IssueFilter, IssueStatus, IssueSummary, Page, PagedResult};
+use crate::domain::IssueStatus;
+
+use super::types::{IssueFilter, IssueSummary, Page, PagedResult};
 
 /// Closed set of allowed ORDER BY columns; the rendered ident is always
 /// `&'static str`, so user input can't reach the SQL string.
@@ -91,13 +93,8 @@ fn push_issue_filter_conditions<'args>(
         qb.push_bind(status.as_str());
     }
     if let Some(ref query) = filter.query {
-        let escaped = query
-            .replace('\\', "\\\\")
-            .replace('%', "\\%")
-            .replace('_', "\\_");
-        let pattern = format!("%{escaped}%");
         qb.push(" AND title LIKE ");
-        qb.push_bind(pattern);
+        qb.push_bind(super::like_contains(query));
         qb.push(" ESCAPE '\\'");
     }
     if let Some(ref item_type) = filter.item_type {

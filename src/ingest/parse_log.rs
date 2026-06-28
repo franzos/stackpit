@@ -1,6 +1,6 @@
 //! Structured-log payload parsing (OTEL-style entries) -> per-entry fields.
 
-pub(super) struct LogFields {
+pub(crate) struct LogFields {
     pub level: Option<String>,
     pub body: Option<String>,
     pub trace_id: Option<String>,
@@ -18,7 +18,7 @@ fn normalize_log_level(level: &str) -> String {
     }
 }
 
-pub(super) fn extract_log_timestamp(v: &serde_json::Value) -> Option<i64> {
+pub(crate) fn extract_log_timestamp(v: &serde_json::Value) -> Option<i64> {
     v.get("timestamp").and_then(|ts| {
         if let Some(f) = ts.as_f64() {
             // magnitude distinguishes ns / us / ms / s, normalised to seconds
@@ -39,7 +39,7 @@ pub(super) fn extract_log_timestamp(v: &serde_json::Value) -> Option<i64> {
     })
 }
 
-pub(super) fn extract_log_fields(v: &serde_json::Value) -> LogFields {
+pub(crate) fn extract_log_fields(v: &serde_json::Value) -> LogFields {
     LogFields {
         level: v
             .get("level")
@@ -60,7 +60,7 @@ pub(super) fn extract_log_fields(v: &serde_json::Value) -> LogFields {
     }
 }
 
-pub(super) fn parse_log_entries(payload: &[u8]) -> Vec<serde_json::Value> {
+pub(crate) fn parse_log_entries(payload: &[u8]) -> Vec<serde_json::Value> {
     let json: Option<serde_json::Value> = zstd::decode_all(std::io::Cursor::new(payload))
         .ok()
         .or_else(|| Some(payload.to_vec()))
@@ -83,7 +83,7 @@ pub(super) fn parse_log_entries(payload: &[u8]) -> Vec<serde_json::Value> {
 }
 
 /// Compress a single log entry to its own zstd blob.
-pub(super) fn compress_log_entry(entry: &serde_json::Value) -> Vec<u8> {
+pub(crate) fn compress_log_entry(entry: &serde_json::Value) -> Vec<u8> {
     let json_bytes = serde_json::to_vec(entry).unwrap_or_default();
     zstd::encode_all(std::io::Cursor::new(&json_bytes), 3).unwrap_or(json_bytes)
 }

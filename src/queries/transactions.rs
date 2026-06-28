@@ -6,7 +6,7 @@ use simple_hll::HyperLogLog;
 use sqlx::Row;
 
 use crate::db::sql;
-use crate::models::HLL_REGISTER_COUNT;
+use crate::ingest::models::HLL_REGISTER_COUNT;
 
 use super::types::{Page, PagedResult, TransactionInstance, TransactionSummary};
 

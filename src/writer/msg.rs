@@ -1,4 +1,4 @@
-use crate::models::{StorableAttachment, StorableEvent};
+use crate::ingest::models::{StorableAttachment, StorableEvent};
 
 pub enum WriteMsg {
     Event(StorableEvent),

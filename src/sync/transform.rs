@@ -1,5 +1,5 @@
-use crate::fingerprint;
-use crate::models::{ItemType, StorableEvent};
+use crate::ingest::fingerprint;
+use crate::ingest::models::{ItemType, StorableEvent};
 use crate::sync::client::SentryEvent;
 use anyhow::Result;
 use serde_json::Value;
@@ -25,15 +25,14 @@ pub fn to_storable_event(sentry_event: &SentryEvent, project_id: u64) -> Result<
         .unwrap_or_else(|| chrono::Utc::now().timestamp());
 
     // The events list API omits most fields at the top level; they live in tags.
-    let level = json
-        .get("level")
-        .and_then(|v| v.as_str())
-        .or_else(|| json.get("tags").and_then(|t| find_tag(t, "level")))
-        .map(|s| s.parse::<crate::models::Level>().unwrap());
+    let level =
+        field_or_tag(json, "level").map(|s| s.parse::<crate::ingest::models::Level>().unwrap());
     let platform = json
         .get("platform")
         .and_then(|v| v.as_str())
         .map(String::from);
+    // Release also accepts an object with a `version` field, so it can't share
+    // the field_or_tag string-only helper.
     let release = json
         .get("release")
         .and_then(|v| match v {
@@ -49,29 +48,9 @@ pub fn to_storable_event(sentry_event: &SentryEvent, project_id: u64) -> Result<
                 .and_then(|t| find_tag(t, "release"))
                 .map(String::from)
         });
-    let environment = json
-        .get("environment")
-        .and_then(|v| v.as_str())
-        .map(String::from)
-        .or_else(|| {
-            json.get("tags")
-                .and_then(|t| find_tag(t, "environment"))
-                .map(String::from)
-        });
-    let server_name = json
-        .get("server_name")
-        .and_then(|v| v.as_str())
-        .or_else(|| json.get("tags").and_then(|t| find_tag(t, "server_name")))
-        .map(String::from);
-    let transaction_name = json
-        .get("transaction")
-        .and_then(|v| v.as_str())
-        .map(String::from)
-        .or_else(|| {
-            json.get("tags")
-                .and_then(|t| find_tag(t, "transaction"))
-                .map(String::from)
-        });
+    let environment = field_or_tag(json, "environment").map(String::from);
+    let server_name = field_or_tag(json, "server_name").map(String::from);
+    let transaction_name = field_or_tag(json, "transaction").map(String::from);
 
     let api_title = json.get("title").and_then(|v| v.as_str()).map(String::from);
 
@@ -109,7 +88,8 @@ pub fn to_storable_event(sentry_event: &SentryEvent, project_id: u64) -> Result<
 
     // Recompute the title; the API often returns poor ones (e.g. "error" instead
     // of "Error: actual message").
-    let title = crate::enrich::extract_title_from(&payload_json, &item_type, None).or(api_title);
+    let title =
+        crate::ingest::enrich::extract_title_from(&payload_json, &item_type, None).or(api_title);
     let fp = fingerprint::compute_fingerprint_from_value(project_id, &item_type, &payload_json);
     let compressed = zstd::encode_all(serde_json::to_vec(&payload_json)?.as_slice(), 3)?;
 
@@ -380,6 +360,13 @@ fn extract_tags_from_api(json: &Value) -> Vec<(String, String)> {
     result
 }
 
+/// Read a top-level string field, falling back to the same key in `tags`.
+fn field_or_tag<'a>(json: &'a Value, key: &str) -> Option<&'a str> {
+    json.get(key)
+        .and_then(|v| v.as_str())
+        .or_else(|| json.get("tags").and_then(|t| find_tag(t, key)))
+}
+
 fn find_tag<'a>(tags: &'a Value, key: &str) -> Option<&'a str> {
     // Sentry tags come in two shapes: array of objects or flat object.
     match tags {
@@ -422,7 +409,7 @@ mod tests {
 
         assert_eq!(storable.event_id, "abc123");
         assert_eq!(storable.project_id, 42);
-        assert_eq!(storable.level, Some(crate::models::Level::Error));
+        assert_eq!(storable.level, Some(crate::ingest::models::Level::Error));
         assert_eq!(storable.platform.as_deref(), Some("javascript"));
         assert_eq!(
             storable.title.as_deref(),

@@ -5,8 +5,8 @@ use axum::Json;
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::ingest::sourcemap;
 use crate::server::AppState;
-use crate::sourcemap;
 
 // Request limits (sync with chunk_upload_config maxRequestSize)
 const MAX_CHUNK_FIELDS: usize = 128;
@@ -17,7 +17,7 @@ pub async fn chunk_upload_config(
     State(state): State<AppState>,
     Path(org): Path<String>,
     req: axum::http::Request<axum::body::Body>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<impl IntoResponse, super::ApiError> {
     super::validate_api_key(&state.pool, req.headers(), "sourcemap").await?;
     Ok(Json(json!({
         "url": format!("/api/0/organizations/{org}/chunk-upload/"),
@@ -48,7 +48,7 @@ pub async fn chunk_upload(
     State(state): State<AppState>,
     headers: HeaderMap,
     mut multipart: Multipart,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<impl IntoResponse, super::ApiError> {
     let key_project_id = super::validate_api_key(&state.pool, &headers, "sourcemap").await?;
     let pool = &state.sourcemap_pool;
     let mut count = 0u32;
@@ -61,16 +61,16 @@ pub async fn chunk_upload(
                     tracing::warn!(
                         "chunk-upload field limit reached ({MAX_CHUNK_FIELDS}), rejecting request"
                     );
-                    return Err((
+                    return Err(super::ApiError::new(
                         StatusCode::PAYLOAD_TOO_LARGE,
-                        Json(json!({ "detail": "too many multipart fields" })),
+                        "too many multipart fields",
                     ));
                 }
 
                 let data = field.bytes().await.map_err(|e| {
-                    (
+                    super::ApiError::new(
                         StatusCode::BAD_REQUEST,
-                        Json(json!({ "detail": format!("failed to read chunk: {e}") })),
+                        format!("failed to read chunk: {e}"),
                     )
                 })?;
 
@@ -79,9 +79,9 @@ pub async fn chunk_upload(
                     tracing::warn!(
                         "chunk-upload byte limit reached ({total_bytes} > {MAX_CHUNK_TOTAL_BYTES})"
                     );
-                    return Err((
+                    return Err(super::ApiError::new(
                         StatusCode::PAYLOAD_TOO_LARGE,
-                        Json(json!({ "detail": "request body too large" })),
+                        "request body too large",
                     ));
                 }
 
@@ -90,7 +90,7 @@ pub async fn chunk_upload(
                     .await
                     .map_err(|e| {
                         tracing::error!("store chunk: {e}");
-                        super::internal_error(e)
+                        super::ApiError::internal(e)
                     })?;
 
                 count += 1;
@@ -98,9 +98,9 @@ pub async fn chunk_upload(
             Ok(None) => break,
             Err(e) => {
                 tracing::warn!("multipart parse error: {e}");
-                return Err((
+                return Err(super::ApiError::new(
                     StatusCode::BAD_REQUEST,
-                    Json(json!({ "detail": format!("failed to read chunk: {e}") })),
+                    format!("failed to read chunk: {e}"),
                 ));
             }
         }
@@ -125,7 +125,7 @@ pub async fn assemble(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(body): Json<AssembleRequest>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<impl IntoResponse, super::ApiError> {
     let key_project_id = super::validate_api_key(&state.pool, &headers, "sourcemap").await?;
     let pool = &state.sourcemap_pool;
 
@@ -133,7 +133,7 @@ pub async fn assemble(
         0 => key_project_id,
         id if id == key_project_id => id,
         _ => {
-            return Err(super::api_error(
+            return Err(super::ApiError::new(
                 StatusCode::FORBIDDEN,
                 "API key not valid for this project",
             ))
@@ -142,11 +142,14 @@ pub async fn assemble(
 
     // Chunk checksums must be 40-char hex SHA1.
     if body.chunks.len() > 128 {
-        return Err(super::api_error(StatusCode::BAD_REQUEST, "too many chunks"));
+        return Err(super::ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "too many chunks",
+        ));
     }
     for checksum in &body.chunks {
         if checksum.len() != 40 || !checksum.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Err(super::api_error(
+            return Err(super::ApiError::new(
                 StatusCode::BAD_REQUEST,
                 "invalid chunk checksum",
             ));
@@ -158,7 +161,7 @@ pub async fn assemble(
         .await
         .map_err(|e| {
             tracing::error!("check missing chunks: {e}");
-            super::internal_error(e)
+            super::ApiError::internal(e)
         })?;
 
     if !missing.is_empty() {
@@ -172,13 +175,13 @@ pub async fn assemble(
         .await
         .map_err(|e| {
             tracing::error!("assemble chunks: {e}");
-            super::internal_error(e)
+            super::ApiError::internal(e)
         })?;
 
     if let Some(ref expected) = body.checksum {
         let actual = sha1_hex(&zip_data);
         if actual != *expected {
-            return Err(super::api_error(
+            return Err(super::ApiError::new(
                 StatusCode::BAD_REQUEST,
                 "bundle checksum mismatch",
             ));
@@ -190,7 +193,7 @@ pub async fn assemble(
         .await
         .map_err(|e| {
             tracing::error!("parse artifact bundle: {e}");
-            super::internal_error(e)
+            super::ApiError::internal(e)
         })?;
 
     let stored = entries.len();

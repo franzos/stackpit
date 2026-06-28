@@ -1,5 +1,5 @@
-use crate::sliding_window::SlidingWindow;
-use crate::throttle::Throttle;
+use crate::util::sliding_window::SlidingWindow;
+use crate::util::throttle::Throttle;
 use dashmap::DashMap;
 use parking_lot::Mutex;
 

@@ -28,10 +28,10 @@
 
 use anyhow::Result;
 
-use crate::crypto::SecretEncryptor;
 use crate::db::DbPool;
-use crate::oauth::{OidcClient, RefreshError};
+use crate::oidc::client::{OidcClient, RefreshError};
 use crate::oidc::grants::{self, GrantRecord};
+use crate::util::crypto::SecretEncryptor;
 
 #[allow(clippy::large_enum_variant)]
 pub enum RefreshOutcome {

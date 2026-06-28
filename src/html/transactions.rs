@@ -1,12 +1,12 @@
 use askama::Template;
-use axum::extract::{Path, Query};
+use axum::extract::Query;
 use serde::Deserialize;
 
-use crate::extractors::ReadPool;
+use crate::extractors::ProjectPageCtx;
 use crate::html::render_template;
-use crate::html::utils::{period_to_timestamp, Csrf, ListParams};
+use crate::html::utils::{period_to_timestamp, ListParams};
 use crate::queries;
-use crate::queries::types::{Page, PagedResult, TransactionInstance, TransactionSummary};
+use crate::queries::types::{PagedResult, Pagination, TransactionInstance, TransactionSummary};
 use crate::queries::ProjectNavCounts;
 
 use super::HtmlError;
@@ -39,53 +39,49 @@ struct TransactionDetailTemplate {
 #[derive(Deserialize)]
 pub struct DetailParams {
     pub name: Option<String>,
-    pub limit: Option<u64>,
-    pub offset: Option<u64>,
+    #[serde(flatten)]
+    pub page: Pagination,
 }
 
 pub async fn list_handler(
-    ReadPool(pool): ReadPool,
-    Csrf(csrf): Csrf,
-    Path(project_id): Path<u64>,
+    ctx: ProjectPageCtx,
     Query(params): Query<ListParams>,
 ) -> Result<axum::response::Response, HtmlError> {
     let sort = params.sort.clone().unwrap_or_else(|| "p95".to_string());
     let period = params.period.clone().unwrap_or_else(|| "7d".to_string());
     let since = period_to_timestamp(&period).unwrap_or(0);
 
-    let items = queries::transactions::list_transactions(&pool, project_id, since, &sort).await?;
-    let nav = queries::projects::get_nav_counts(&pool, project_id).await;
+    let items =
+        queries::transactions::list_transactions(&ctx.pool, ctx.project_id, since, &sort).await?;
 
     Ok(render_template(&TransactionListTemplate {
-        project_id,
+        project_id: ctx.project_id,
         items,
         sort,
         period,
-        nav,
-        csrf_token: csrf,
+        nav: ctx.nav,
+        csrf_token: ctx.csrf_token,
     }))
 }
 
 pub async fn detail_handler(
-    ReadPool(pool): ReadPool,
-    Csrf(csrf): Csrf,
-    Path(project_id): Path<u64>,
+    ctx: ProjectPageCtx,
     Query(params): Query<DetailParams>,
 ) -> Result<axum::response::Response, HtmlError> {
     let name = params.name.unwrap_or_default();
-    let page = Page::new(params.offset, params.limit);
+    let page = params.page.page();
 
     let result =
-        queries::transactions::list_transaction_instances(&pool, project_id, &name, &page).await?;
-    let nav = queries::projects::get_nav_counts(&pool, project_id).await;
+        queries::transactions::list_transaction_instances(&ctx.pool, ctx.project_id, &name, &page)
+            .await?;
     let op = result.items.first().and_then(|i| i.op.clone());
 
     Ok(render_template(&TransactionDetailTemplate {
-        project_id,
+        project_id: ctx.project_id,
         name,
         op,
         result,
-        nav,
-        csrf_token: csrf,
+        nav: ctx.nav,
+        csrf_token: ctx.csrf_token,
     }))
 }

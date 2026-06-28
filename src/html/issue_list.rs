@@ -10,7 +10,7 @@ use crate::html::utils::{
     ListParams,
 };
 use crate::queries;
-use crate::queries::types::{Page, PagedResult};
+use crate::queries::types::PagedResult;
 use crate::queries::ProjectNavCounts;
 
 use super::charts;
@@ -76,7 +76,7 @@ async fn issue_or_transaction_handler(
     let since = period_to_timestamp(&period_str);
 
     let filter = issue_filter_from_params(&params, item_type);
-    let page = Page::new(params.offset, params.limit);
+    let page = params.page.page();
 
     let result = queries::issues::list_issues(pool, project_id, &filter, &page, since).await?;
 

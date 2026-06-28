@@ -1,7 +1,7 @@
 use askama::Template;
 use axum::extract::{Path, Query};
 
-use crate::extractors::ReadPool;
+use crate::extractors::{ProjectPageCtx, ReadPool};
 use crate::html::render_template;
 use crate::html::utils::{Csrf, ListParams};
 use crate::queries;
@@ -38,30 +38,26 @@ struct TraceDetailTemplate {
 }
 
 pub async fn list_handler(
-    ReadPool(pool): ReadPool,
-    Csrf(csrf): Csrf,
-    Path(project_id): Path<u64>,
+    ctx: ProjectPageCtx,
     Query(params): Query<ListParams>,
 ) -> Result<axum::response::Response, HtmlError> {
-    let page = Page::new(params.offset, params.limit);
+    let page = params.page.page();
     let trace_page = Page::new(Some(0), Some(25));
 
     let (span_result, trace_result) = tokio::join!(
-        queries::spans::list_spans(&pool, project_id, &page),
-        queries::spans::list_traces(&pool, project_id, &trace_page),
+        queries::spans::list_spans(&ctx.pool, ctx.project_id, &page),
+        queries::spans::list_traces(&ctx.pool, ctx.project_id, &trace_page),
     );
 
     let result = span_result?;
     let traces = trace_result?;
 
-    let nav = queries::projects::get_nav_counts(&pool, project_id).await;
-
     let tmpl = SpanListTemplate {
-        project_id,
+        project_id: ctx.project_id,
         result,
         traces,
-        nav,
-        csrf_token: csrf,
+        nav: ctx.nav,
+        csrf_token: ctx.csrf_token,
     };
     Ok(render_template(&tmpl))
 }

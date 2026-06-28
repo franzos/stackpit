@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use sqlx::Row;
 
 use crate::db::sql;
+use crate::db::DbRowExt;
 
 use super::types::{
     EventDetail, EventFilter, EventSummary, Page, PagedResult, TagFacet, TagFacetValue, TailEvent,
@@ -64,13 +65,9 @@ fn push_event_filter_conditions<'args>(
         qb.push_bind(project_id as i64);
     }
     if let Some(ref query) = filter.query {
-        let escaped = query
-            .replace('\\', "\\\\")
-            .replace('%', "\\%")
-            .replace('_', "\\_");
         push_conjunction(qb);
         qb.push("events.title LIKE ");
-        qb.push_bind(format!("%{escaped}%"));
+        qb.push_bind(super::like_contains(query));
         qb.push(" ESCAPE '\\'");
     }
     if let Some(ref item_type) = filter.item_type {
@@ -348,10 +345,10 @@ pub async fn tail_events(
         .map(|row| {
             Ok(TailEvent {
                 item_type: row.get::<String, _>("item_type"),
-                project_id: row.get::<i64, _>("project_id") as u64,
+                project_id: row.get_u64("project_id"),
                 timestamp: row.get::<i64, _>("timestamp"),
-                level: row.get::<Option<String>, _>("level"),
-                title: row.get::<Option<String>, _>("title"),
+                level: row.get_opt_string("level"),
+                title: row.get_opt_string("title"),
                 received_at: row.get::<i64, _>("received_at"),
             })
         })
@@ -436,7 +433,7 @@ fn map_event_summary(row: &crate::db::DbRow) -> Result<EventSummary> {
     Ok(EventSummary {
         event_id: row.get("event_id"),
         item_type: item_type_str.parse().unwrap_or_default(),
-        project_id: row.get::<i64, _>("project_id") as u64,
+        project_id: row.get_u64("project_id"),
         project_name: row.try_get("project_name").ok().flatten(),
         fingerprint: row.get("fingerprint"),
         timestamp: row.get("timestamp"),
@@ -457,7 +454,7 @@ fn map_event_detail_row(row: &crate::db::DbRow) -> Result<(EventDetail, Vec<u8>)
         EventDetail {
             event_id: row.get("event_id"),
             item_type: item_type_str.parse().unwrap_or_default(),
-            project_id: row.get::<i64, _>("project_id") as u64,
+            project_id: row.get_u64("project_id"),
             fingerprint: row.get("fingerprint"),
             timestamp: row.get("timestamp"),
             level: row.get("level"),

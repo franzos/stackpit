@@ -2,6 +2,7 @@ use anyhow::Result;
 use sqlx::Row;
 
 use crate::db::sql;
+use crate::db::DbRowExt;
 
 use super::types::{
     Page, PagedResult, SpanSummary, TraceError, TraceSpan, TraceSummary, Waterfall, WaterfallRow,
@@ -34,7 +35,7 @@ pub async fn list_spans(
         .iter()
         .map(|row| SpanSummary {
             span_id: row.get("span_id"),
-            trace_id: row.get::<Option<String>, _>("trace_id").unwrap_or_default(),
+            trace_id: row.get_opt_string("trace_id").unwrap_or_default(),
             timestamp: row.get("timestamp"),
             op: row.get("op"),
             description: row.get("description"),
@@ -300,18 +301,18 @@ pub async fn list_traces(
         std::collections::HashMap::new();
     let mut items: Vec<TraceSummary> = Vec::with_capacity(rows.len());
     for row in &rows {
-        let trace_id: String = row.get::<Option<String>, _>("trace_id").unwrap_or_default();
+        let trace_id: String = row.get_opt_string("trace_id").unwrap_or_default();
         let span_extent_ms = row
             .get::<Option<i64>, _>("span_extent_ms")
             .unwrap_or(0)
             .max(0);
         let root_duration_ms = row.get::<Option<i64>, _>("root_duration_ms").unwrap_or(0);
-        if let Some(name) = row.get::<Option<String>, _>("root_txn_name") {
+        if let Some(name) = row.get_opt_string("root_txn_name") {
             fallback_names.insert(trace_id.clone(), name);
         }
         items.push(TraceSummary {
             trace_id,
-            span_count: row.get::<i64, _>("span_count") as u64,
+            span_count: row.get_u64("span_count"),
             first_timestamp: row.get("first_timestamp"),
             last_timestamp: row.get("last_timestamp"),
             root_op: None,
@@ -335,7 +336,7 @@ pub async fn list_traces(
         let mut root_map: std::collections::HashMap<String, (Option<String>, Option<String>)> =
             std::collections::HashMap::new();
         for row in &root_rows {
-            let tid: String = row.get::<Option<String>, _>("trace_id").unwrap_or_default();
+            let tid: String = row.get_opt_string("trace_id").unwrap_or_default();
             root_map
                 .entry(tid)
                 .or_insert_with(|| (row.get("op"), row.get("description")));
@@ -375,7 +376,7 @@ pub async fn list_traces(
         let mut op_map: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
         for row in &txn_rows {
-            let tid: String = row.get::<Option<String>, _>("trace_id").unwrap_or_default();
+            let tid: String = row.get_opt_string("trace_id").unwrap_or_default();
             if op_map.contains_key(&tid) {
                 continue;
             }

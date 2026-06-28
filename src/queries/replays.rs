@@ -2,6 +2,7 @@ use anyhow::Result;
 use sqlx::Row;
 
 use crate::db::sql;
+use crate::db::DbRowExt;
 
 use super::types::{Page, PagedResult, ReplayDetail, ReplaySummary};
 
@@ -34,7 +35,7 @@ pub async fn list_replays(
         .iter()
         .map(|row| ReplaySummary {
             event_id: row.get("event_id"),
-            project_id: row.get::<i64, _>("project_id") as u64,
+            project_id: row.get_u64("project_id"),
             timestamp: row.get("timestamp"),
             replay_type: row.get("item_type"),
             release: row.get("release"),
@@ -80,7 +81,7 @@ pub async fn get_replay(
             };
             Ok(Some(ReplayDetail {
                 event_id: row.get("event_id"),
-                project_id: row.get::<i64, _>("project_id") as u64,
+                project_id: row.get_u64("project_id"),
                 timestamp: row.get("timestamp"),
                 replay_type: item_type,
                 release: row.get("release"),

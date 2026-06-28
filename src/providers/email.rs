@@ -1,5 +1,5 @@
-use crate::encoding::escape_html;
 use crate::notify::NotificationEvent;
+use crate::util::encoding::escape_html;
 use anyhow::Result;
 use polymail::{Address, Body, Email, Mailer};
 use secrecy::ExposeSecret;

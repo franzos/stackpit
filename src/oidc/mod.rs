@@ -2,6 +2,7 @@
 //! holding the IdP tokens encrypted at rest. Every authed request
 //! introspects the access token via [`stackpit_auth::BearerGate`].
 
+pub mod client;
 pub mod cookies;
 pub mod grants;
 pub mod login_state;

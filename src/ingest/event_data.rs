@@ -1,114 +1,13 @@
 //! Extraction helpers for pulling structured data out of raw Sentry JSON
 //! payloads. Shared by the api, cli, and html layers.
 
+use crate::domain::{
+    Breadcrumb, ContextGroup, ExceptionData, Measurement, RequestInfo, SourceLink, StackFrame,
+    SummaryTag, Tag, UserInfo,
+};
 use crate::forge;
+use crate::ingest::sourcemap::ResolvedFrame;
 use crate::queries::types::ProjectRepo;
-use crate::sourcemap::ResolvedFrame;
-
-// Structs
-
-#[derive(Debug)]
-pub struct SummaryTag {
-    pub label: String,
-    pub value: String,
-}
-
-#[derive(Debug)]
-pub struct ExceptionData {
-    pub exc_type: String,
-    pub exc_value: String,
-    pub mechanism_handled: Option<bool>,
-    pub mechanism_type: Option<String>,
-    pub frames: Vec<StackFrame>,
-}
-
-#[derive(Debug)]
-pub struct SourceLink {
-    pub label: String,
-    pub url: String,
-}
-
-#[derive(Debug)]
-pub struct StackFrame {
-    pub filename: String,
-    pub function: String,
-    pub lineno: Option<u64>,
-    pub colno: Option<u64>,
-    pub context_line: Option<String>,
-    pub pre_context: Vec<String>,
-    pub post_context: Vec<String>,
-    pub in_app: bool,
-    pub vars: Vec<(String, String)>,
-    pub source_links: Vec<SourceLink>,
-}
-
-impl StackFrame {
-    pub fn has_detail(&self) -> bool {
-        self.context_line.is_some()
-            || !self.pre_context.is_empty()
-            || !self.post_context.is_empty()
-            || !self.vars.is_empty()
-    }
-
-    pub fn context_start_line(&self) -> u64 {
-        self.lineno
-            .unwrap_or(1)
-            .saturating_sub(self.pre_context.len() as u64)
-            .max(1)
-    }
-}
-
-#[derive(Debug)]
-pub struct Breadcrumb {
-    pub timestamp: String,
-    pub level: String,
-    pub category: String,
-    pub message: String,
-    pub data: String,
-}
-
-#[derive(Debug)]
-pub struct Tag {
-    pub key: String,
-    pub value: String,
-}
-
-#[derive(Debug)]
-pub struct ContextGroup {
-    pub name: String,
-    pub entries: Vec<(String, String)>,
-}
-
-#[derive(Debug)]
-pub struct RequestInfo {
-    pub method: String,
-    pub url: String,
-    pub headers: Vec<(String, String)>,
-    pub query_string: String,
-    pub body: String,
-    pub env: Vec<(String, String)>,
-}
-
-#[derive(Debug)]
-pub struct Measurement {
-    pub label: String,
-    pub value: String,
-    /// Core Web Vitals rating: "good" / "needs-improvement" / "poor", or None
-    /// for measurements without a standard threshold.
-    pub rating: Option<&'static str>,
-}
-
-impl Measurement {
-    /// CSS class for the rating color, matching release-health classes.
-    pub fn rating_class(&self) -> Option<&'static str> {
-        match self.rating {
-            Some("good") => Some("health-good"),
-            Some("needs-improvement") => Some("health-warn"),
-            Some("poor") => Some("health-bad"),
-            _ => None,
-        }
-    }
-}
 
 /// Core Web Vitals rating from the raw (lowercased) measurement key and numeric
 /// value. Units are ms except CLS, which is unitless. Returns None for keys
@@ -132,23 +31,6 @@ fn vital_rating(key: &str, value: f64) -> Option<&'static str> {
         "ttfb" => bucket(800.0, 1800.0),
         _ => return None,
     })
-}
-
-#[derive(Debug, Default)]
-pub struct UserInfo {
-    pub id: Option<String>,
-    pub email: Option<String>,
-    pub username: Option<String>,
-    pub ip_address: Option<String>,
-}
-
-impl UserInfo {
-    pub fn has_any(&self) -> bool {
-        self.id.is_some()
-            || self.email.is_some()
-            || self.username.is_some()
-            || self.ip_address.is_some()
-    }
 }
 
 // Extraction functions

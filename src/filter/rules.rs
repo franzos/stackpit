@@ -1,4 +1,4 @@
-use crate::models::StorableEvent;
+use crate::ingest::models::StorableEvent;
 
 use super::{contains_ignore_ascii_case, starts_with_ignore_ascii_case};
 
@@ -166,7 +166,7 @@ impl FilterRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::ItemType;
+    use crate::ingest::models::ItemType;
 
     #[test]
     fn operator_equals() {
@@ -220,7 +220,7 @@ mod tests {
             project_id: 1,
             public_key: "key".to_string(),
             timestamp: 0,
-            level: Some(crate::models::Level::Error),
+            level: Some(crate::ingest::models::Level::Error),
             platform: Some("python".to_string()),
             release: Some("1.0.0".to_string()),
             environment: Some("production".to_string()),

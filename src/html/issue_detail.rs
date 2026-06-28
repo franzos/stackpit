@@ -4,15 +4,14 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect};
 use serde::Deserialize;
 
-use crate::event_data::{
-    Breadcrumb, ContextGroup, ExceptionData, RequestInfo, SummaryTag, Tag, UserInfo,
+use crate::domain::{
+    Breadcrumb, ContextGroup, ExceptionData, IssueStatus, RequestInfo, SummaryTag, Tag, UserInfo,
 };
 use crate::extractors::ReadPool;
 use crate::html::render_template;
 use crate::html::utils::Csrf;
 use crate::queries;
-use crate::queries::types::{AttachmentInfo, EventNav, Page, PagedResult, TagFacet};
-use crate::queries::IssueStatus;
+use crate::queries::types::{AttachmentInfo, EventNav, PagedResult, Pagination, TagFacet};
 use crate::server::AppState;
 
 use crate::queries::event_supplements;
@@ -25,9 +24,9 @@ use crate::html::filters;
 
 #[derive(Deserialize)]
 pub struct PageParams {
-    pub limit: Option<u64>,
-    pub offset: Option<u64>,
     pub tab: Option<String>,
+    #[serde(flatten)]
+    pub page: Pagination,
 }
 
 #[derive(Deserialize)]
@@ -108,7 +107,7 @@ pub async fn handler(
             .unwrap_or_default();
 
     if tab == "events" {
-        let page = Page::new(params.offset, params.limit);
+        let page = params.page.page();
         let events = queries::events::list_events_for_issue(&pool, &fingerprint, &page).await?;
 
         let tmpl = IssueDetailTemplate {
@@ -161,11 +160,13 @@ pub async fn handler(
             .unwrap_or_default();
         let sourcemaps: std::collections::HashMap<String, ::sourcemap::SourceMap> =
             event_supplements::preload_sourcemaps(&pool, &ev.payload).await;
-        let resolver =
-            move |debug_id: &str, line: u32, col: u32| -> Option<crate::sourcemap::ResolvedFrame> {
-                let sm = sourcemaps.get(debug_id)?;
-                crate::sourcemap::resolve_frame(sm, line, col)
-            };
+        let resolver = move |debug_id: &str,
+                             line: u32,
+                             col: u32|
+              -> Option<crate::ingest::sourcemap::ResolvedFrame> {
+            let sm = sourcemaps.get(debug_id)?;
+            crate::ingest::sourcemap::resolve_frame(sm, line, col)
+        };
         let d = event_supplements::get_event_detail_data(ev, supplements, Some(&resolver));
         (
             d.summary_tags,

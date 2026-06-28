@@ -1,7 +1,7 @@
 //! Metric payload parsing (JSON buckets + statsd lines) -> normalized rows.
 
 /// (mri, metric_type, value, tags, values_json, bucket_timestamp).
-pub(super) type MetricRow = (
+pub(crate) type MetricRow = (
     String,
     String,
     f64,
@@ -14,7 +14,7 @@ const MAX_METRIC_ENTRIES: usize = 10_000;
 
 /// Parse a metric payload into normalized rows. `bucket_timestamp` is `Some`
 /// when the bucket includes its own timestamp.
-pub(super) fn parse_metric_payload(payload: &[u8]) -> Vec<MetricRow> {
+pub(crate) fn parse_metric_payload(payload: &[u8]) -> Vec<MetricRow> {
     let decoded_bytes = match zstd::decode_all(std::io::Cursor::new(payload)) {
         Ok(bytes) => bytes,
         Err(_) => payload.to_vec(),

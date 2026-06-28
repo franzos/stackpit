@@ -159,7 +159,7 @@ pub async fn list_releases_for_project(pool: &DbPool, project_id: u64) -> Result
 /// environments. User-level crash-free merges HLL sketches and is None when an
 /// identity-less aggregate contributed to the release.
 pub async fn get_release_health(pool: &DbPool, project_id: u64) -> Result<Vec<ReleaseHealth>> {
-    use crate::models::HLL_REGISTER_COUNT;
+    use crate::ingest::models::HLL_REGISTER_COUNT;
     use simple_hll::HyperLogLog;
 
     let rows = sqlx::query(sql!(
@@ -357,12 +357,8 @@ pub async fn list_all_releases(
         count_qb.push_bind(project_id as i64);
     }
     if let Some(ref query) = filter.query {
-        let escaped = query
-            .replace('\\', "\\\\")
-            .replace('%', "\\%")
-            .replace('_', "\\_");
         count_qb.push(" AND e.release LIKE ");
-        count_qb.push_bind(format!("%{escaped}%"));
+        count_qb.push_bind(super::like_contains(query));
         count_qb.push(" ESCAPE '\\'");
     }
 
@@ -414,12 +410,8 @@ pub async fn list_all_releases(
         qb.push_bind(project_id as i64);
     }
     if let Some(ref query) = filter.query {
-        let escaped = query
-            .replace('\\', "\\\\")
-            .replace('%', "\\%")
-            .replace('_', "\\_");
         qb.push(" AND e.release LIKE ");
-        qb.push_bind(format!("%{escaped}%"));
+        qb.push_bind(super::like_contains(query));
         qb.push(" ESCAPE '\\'");
     }
 

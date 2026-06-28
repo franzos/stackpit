@@ -1,5 +1,6 @@
 /// Tracks event throughput and failure modes on the ingestion hot path.
 /// All counters are monotonically increasing -- take deltas for rates.
+#[derive(Default)]
 pub struct IngestStats {
     pub events_accepted: std::sync::atomic::AtomicU64,
     pub events_rejected: std::sync::atomic::AtomicU64,
@@ -18,6 +19,7 @@ impl IngestStats {
 
 /// Running count of discarded events by reason, decoupled from the filter:
 /// bump counters in memory and flush to the DB periodically.
+#[derive(Default)]
 pub struct DiscardStats {
     buffer: dashmap::DashMap<(u64, String, Option<i64>, String), u64>,
 }

@@ -6,7 +6,7 @@ use crate::extractors::ReadPool;
 use crate::html::render_template;
 use crate::html::utils::{render_project_list, Csrf, ListParams};
 use crate::queries;
-use crate::queries::types::{MetricBucket, MetricInfo, Page, PagedResult};
+use crate::queries::types::{MetricBucket, MetricInfo, PagedResult};
 use crate::queries::ProjectNavCounts;
 
 use super::HtmlError;
@@ -29,7 +29,7 @@ pub async fn list_handler(
     Path(project_id): Path<u64>,
     Query(params): Query<ListParams>,
 ) -> Result<axum::response::Response, HtmlError> {
-    let page = Page::new(params.offset, params.limit);
+    let page = params.page.page();
     let result = queries::metrics::list_metrics(&pool, project_id, &page).await?;
 
     Ok(render_project_list(

@@ -3,7 +3,9 @@ use sqlx::Row;
 
 use crate::db::sql;
 
-use super::types::{ProjectKey, ProjectNavCounts, ProjectRepo, ProjectStatus, ProjectSummary};
+use crate::domain::ProjectStatus;
+
+use super::types::{ProjectKey, ProjectNavCounts, ProjectRepo, ProjectSummary};
 
 // --- Read queries ---
 
@@ -147,7 +149,7 @@ pub async fn get_project_info(
             // Unknown status strings default rather than panicking the handler.
             status: status_str
                 .and_then(|s| s.parse().ok())
-                .unwrap_or(super::types::ProjectStatus::Active),
+                .unwrap_or(ProjectStatus::Active),
             source: row.get("source"),
         }
     }))
@@ -365,7 +367,7 @@ pub async fn create_project(
     let max: Option<i64> = row.get(0);
     let project_id = max.unwrap_or(0) as u64 + 1;
 
-    let public_key = crate::crypto::random_hex::<16>();
+    let public_key = crate::util::crypto::random_hex::<16>();
     let name_val: Option<&str> = if name.is_empty() { None } else { Some(name) };
     sqlx::query(sql!(
         "INSERT INTO projects (project_id, name, status, source) VALUES (?1, ?2, 'active', 'manual')"
@@ -455,7 +457,7 @@ pub async fn create_project_key(
     project_id: u64,
     label: Option<&str>,
 ) -> Result<String> {
-    let public_key = crate::crypto::random_hex::<16>();
+    let public_key = crate::util::crypto::random_hex::<16>();
     sqlx::query(sql!(
         "INSERT INTO project_keys (public_key, project_id, status, label) VALUES (?1, ?2, 'active', ?3)"
     ))

@@ -6,7 +6,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
-use crate::crypto::SecretEncryptor;
+use crate::util::crypto::SecretEncryptor;
 
 /// Domain-separator AAD: prevents cross-context blob reuse.
 const AAD: &[u8] = b"stackpit:oidc-login:v1";

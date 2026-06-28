@@ -211,7 +211,7 @@ pub async fn preload_sourcemaps(
             continue;
         }
 
-        match crate::sourcemap::load_sourcemap(pool, &debug_id).await {
+        match crate::ingest::sourcemap::load_sourcemap(pool, &debug_id).await {
             Ok(Some(sm)) => {
                 map.insert(debug_id, sm);
             }
@@ -230,28 +230,28 @@ pub async fn preload_sourcemaps(
 pub fn get_event_detail_data(
     event: &EventDetail,
     supplements: EventSupplements,
-    sourcemap_resolver: Option<&crate::event_data::FrameResolver>,
+    sourcemap_resolver: Option<&crate::ingest::event_data::FrameResolver>,
 ) -> ExtractedEventData {
-    let exceptions = crate::event_data::extract_exceptions(
+    let exceptions = crate::ingest::event_data::extract_exceptions(
         &event.payload,
         supplements.commit_sha.as_deref(),
         &supplements.repos,
         sourcemap_resolver,
     );
-    let breadcrumbs = crate::event_data::extract_breadcrumbs(&event.payload);
-    let tags = crate::event_data::extract_tags(&event.payload);
-    let contexts = crate::event_data::extract_contexts(&event.payload);
-    let request = crate::event_data::extract_request(&event.payload);
-    let user = crate::event_data::extract_user(&event.payload);
-    let summary_tags = crate::event_data::extract_summary_tags(&tags, &contexts);
+    let breadcrumbs = crate::ingest::event_data::extract_breadcrumbs(&event.payload);
+    let tags = crate::ingest::event_data::extract_tags(&event.payload);
+    let contexts = crate::ingest::event_data::extract_contexts(&event.payload);
+    let request = crate::ingest::event_data::extract_request(&event.payload);
+    let user = crate::ingest::event_data::extract_user(&event.payload);
+    let summary_tags = crate::ingest::event_data::extract_summary_tags(&tags, &contexts);
     let raw_json =
         serde_json::to_string_pretty(&event.payload).unwrap_or_else(|_| "{}".to_string());
 
-    let own_feedback = (event.item_type == crate::models::ItemType::UserReport)
+    let own_feedback = (event.item_type == crate::ingest::models::ItemType::UserReport)
         .then(|| extract_user_feedback(&event.payload))
         .filter(|f| f.has_any());
 
-    let measurements = crate::event_data::extract_measurements(&event.payload);
+    let measurements = crate::ingest::event_data::extract_measurements(&event.payload);
 
     ExtractedEventData {
         summary_tags,

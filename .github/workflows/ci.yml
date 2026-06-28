@@ -28,6 +28,12 @@ jobs:
       - name: Test
         run: cargo test --no-default-features --features sqlite
 
+      # DB-backed integration suite (tests/ingestion.rs). The HTTP black-box
+      # suite (tests/integration.rs) needs a live, seeded server and stays on
+      # `make test-integration`; see the note in ci.yml's postgres job.
+      - name: Integration tests (DB-backed)
+        run: cargo test --no-default-features --features sqlite,integration-tests --test ingestion
+
   audit:
     name: cargo-deny advisories
     runs-on: ubuntu-latest
@@ -81,3 +87,16 @@ jobs:
 
       - name: Test
         run: cargo test --no-default-features --features postgres -- --test-threads=1
+
+      # DB-backed integration suite against the Postgres service above. Single
+      # threaded: every test shares one database and resets it with the dynamic
+      # TRUNCATE in db::open_test_pool, so they must not interleave.
+      #
+      # The HTTP black-box suite (tests/integration.rs) is intentionally not run
+      # here: it needs a live `stackpit serve` plus a Python-seeded dataset and
+      # an admin token from stackpit.toml. Wiring that into CI means building the
+      # binary, generating a config + master key, starting the server on two
+      # ports, and running scripts/generate-fake-data.py before the suite. It
+      # stays on `make test-integration` for now.
+      - name: Integration tests (DB-backed)
+        run: cargo test --no-default-features --features postgres,integration-tests --test ingestion -- --test-threads=1

@@ -38,7 +38,7 @@ pub mod transactions;
 pub mod utils;
 
 pub fn routes() -> Router<AppState> {
-    Router::new()
+    let mut router = Router::new()
         .route(
             "/",
             get(|| async { axum::response::Redirect::permanent("/web/projects/") }),
@@ -328,38 +328,6 @@ pub fn routes() -> Router<AppState> {
         // -- global views --
         .route("/web/events/", get(event_list::handler))
         .route("/web/releases/", get(release_list::handler))
-        .route("/web/_assets/style.css", get(serve_css))
-        .route("/web/_assets/icon.svg", get(serve_icon))
-        .route("/web/_assets/bulk.js", get(serve_bulk_js))
-        .route("/web/_assets/confirm.js", get(serve_confirm_js))
-        .route(
-            "/web/_assets/stop-propagation.js",
-            get(serve_stop_propagation_js),
-        )
-        .route(
-            "/web/_assets/fonts/Inter-Regular.woff2",
-            get(serve_font_inter_regular),
-        )
-        .route(
-            "/web/_assets/fonts/Inter-Medium.woff2",
-            get(serve_font_inter_medium),
-        )
-        .route(
-            "/web/_assets/fonts/Inter-SemiBold.woff2",
-            get(serve_font_inter_semibold),
-        )
-        .route(
-            "/web/_assets/fonts/Inter-Bold.woff2",
-            get(serve_font_inter_bold),
-        )
-        .route(
-            "/web/_assets/fonts/JetBrainsMono-Regular.woff2",
-            get(serve_font_jbm_regular),
-        )
-        .route(
-            "/web/_assets/fonts/JetBrainsMono-Medium.woff2",
-            get(serve_font_jbm_medium),
-        )
         // -- login --
         .route(
             "/web/login",
@@ -378,103 +346,109 @@ pub fn routes() -> Router<AppState> {
             "/web/",
             get(|| async { axum::response::Redirect::permanent("/web/projects/") }),
         )
-        .route("/web/{project_id}/", get(redirect_old_project))
+        .route("/web/{project_id}/", get(redirect_old_project));
+
+    // Static assets share one handler driven by the asset table below.
+    for asset in ASSET_TABLE {
+        router = router.route(asset.path, get(move || async move { serve_asset(asset) }));
+    }
+    router
 }
 
 async fn redirect_old_project(Path(project_id): Path<u64>) -> impl IntoResponse {
     axum::response::Redirect::permanent(&format!("/web/projects/{project_id}/"))
 }
 
-async fn serve_css() -> impl IntoResponse {
-    (
-        [
-            (header::CONTENT_TYPE, "text/css"),
-            (header::CACHE_CONTROL, "public, max-age=86400"),
-        ],
-        include_str!("../../templates/style.css"),
-    )
+/// One bundled static asset: route path, content type, body, and the
+/// `Cache-Control` value (short for code, immutable+1yr for hashed fonts).
+struct Asset {
+    path: &'static str,
+    content_type: &'static str,
+    body: &'static [u8],
+    cache_control: &'static str,
 }
 
-async fn serve_icon() -> impl IntoResponse {
+const CACHE_DAY: &str = "public, max-age=86400";
+const CACHE_IMMUTABLE: &str = "public, max-age=31536000, immutable";
+const JS_CONTENT_TYPE: &str = "application/javascript; charset=utf-8";
+
+static ASSET_TABLE: &[Asset] = &[
+    Asset {
+        path: "/web/_assets/style.css",
+        content_type: "text/css",
+        body: include_bytes!("../../templates/style.css"),
+        cache_control: CACHE_DAY,
+    },
+    Asset {
+        path: "/web/_assets/icon.svg",
+        content_type: "image/svg+xml",
+        body: include_bytes!("../../assets/icon.svg"),
+        cache_control: CACHE_DAY,
+    },
+    Asset {
+        path: "/web/_assets/bulk.js",
+        content_type: JS_CONTENT_TYPE,
+        body: include_bytes!("../../static/bulk.js"),
+        cache_control: CACHE_DAY,
+    },
+    Asset {
+        path: "/web/_assets/confirm.js",
+        content_type: JS_CONTENT_TYPE,
+        body: include_bytes!("../../static/confirm.js"),
+        cache_control: CACHE_DAY,
+    },
+    Asset {
+        path: "/web/_assets/stop-propagation.js",
+        content_type: JS_CONTENT_TYPE,
+        body: include_bytes!("../../static/stop-propagation.js"),
+        cache_control: CACHE_DAY,
+    },
+    Asset {
+        path: "/web/_assets/fonts/Inter-Regular.woff2",
+        content_type: "font/woff2",
+        body: include_bytes!("../../assets/fonts/Inter-Regular.woff2"),
+        cache_control: CACHE_IMMUTABLE,
+    },
+    Asset {
+        path: "/web/_assets/fonts/Inter-Medium.woff2",
+        content_type: "font/woff2",
+        body: include_bytes!("../../assets/fonts/Inter-Medium.woff2"),
+        cache_control: CACHE_IMMUTABLE,
+    },
+    Asset {
+        path: "/web/_assets/fonts/Inter-SemiBold.woff2",
+        content_type: "font/woff2",
+        body: include_bytes!("../../assets/fonts/Inter-SemiBold.woff2"),
+        cache_control: CACHE_IMMUTABLE,
+    },
+    Asset {
+        path: "/web/_assets/fonts/Inter-Bold.woff2",
+        content_type: "font/woff2",
+        body: include_bytes!("../../assets/fonts/Inter-Bold.woff2"),
+        cache_control: CACHE_IMMUTABLE,
+    },
+    Asset {
+        path: "/web/_assets/fonts/JetBrainsMono-Regular.woff2",
+        content_type: "font/woff2",
+        body: include_bytes!("../../assets/fonts/JetBrainsMono-Regular.woff2"),
+        cache_control: CACHE_IMMUTABLE,
+    },
+    Asset {
+        path: "/web/_assets/fonts/JetBrainsMono-Medium.woff2",
+        content_type: "font/woff2",
+        body: include_bytes!("../../assets/fonts/JetBrainsMono-Medium.woff2"),
+        cache_control: CACHE_IMMUTABLE,
+    },
+];
+
+fn serve_asset(asset: &Asset) -> impl IntoResponse {
     (
         [
-            (header::CONTENT_TYPE, "image/svg+xml"),
-            (header::CACHE_CONTROL, "public, max-age=86400"),
+            (header::CONTENT_TYPE, asset.content_type),
+            (header::CACHE_CONTROL, asset.cache_control),
         ],
-        include_str!("../../assets/icon.svg"),
+        asset.body,
     )
-}
-
-async fn serve_bulk_js() -> impl IntoResponse {
-    (
-        [
-            (
-                header::CONTENT_TYPE,
-                "application/javascript; charset=utf-8",
-            ),
-            (header::CACHE_CONTROL, "public, max-age=86400"),
-        ],
-        include_str!("../../static/bulk.js"),
-    )
-}
-
-async fn serve_confirm_js() -> impl IntoResponse {
-    (
-        [
-            (
-                header::CONTENT_TYPE,
-                "application/javascript; charset=utf-8",
-            ),
-            (header::CACHE_CONTROL, "public, max-age=86400"),
-        ],
-        include_str!("../../static/confirm.js"),
-    )
-}
-
-async fn serve_stop_propagation_js() -> impl IntoResponse {
-    (
-        [
-            (
-                header::CONTENT_TYPE,
-                "application/javascript; charset=utf-8",
-            ),
-            (header::CACHE_CONTROL, "public, max-age=86400"),
-        ],
-        include_str!("../../static/stop-propagation.js"),
-    )
-}
-
-fn font_response(bytes: &'static [u8]) -> impl IntoResponse {
-    (
-        [
-            (header::CONTENT_TYPE, "font/woff2"),
-            (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
-        ],
-        bytes,
-    )
-}
-
-async fn serve_font_inter_regular() -> impl IntoResponse {
-    font_response(include_bytes!("../../assets/fonts/Inter-Regular.woff2"))
-}
-async fn serve_font_inter_medium() -> impl IntoResponse {
-    font_response(include_bytes!("../../assets/fonts/Inter-Medium.woff2"))
-}
-async fn serve_font_inter_semibold() -> impl IntoResponse {
-    font_response(include_bytes!("../../assets/fonts/Inter-SemiBold.woff2"))
-}
-async fn serve_font_inter_bold() -> impl IntoResponse {
-    font_response(include_bytes!("../../assets/fonts/Inter-Bold.woff2"))
-}
-async fn serve_font_jbm_regular() -> impl IntoResponse {
-    font_response(include_bytes!(
-        "../../assets/fonts/JetBrainsMono-Regular.woff2"
-    ))
-}
-async fn serve_font_jbm_medium() -> impl IntoResponse {
-    font_response(include_bytes!(
-        "../../assets/fonts/JetBrainsMono-Medium.woff2"
-    ))
 }
 
 /// Error type for HTML handlers. Renders through `html_error` so the page
@@ -496,7 +470,7 @@ impl From<anyhow::Error> for HtmlError {
 /// Minimal styled error page. Uses the same shell language as base.html but
 /// without a sidebar so the page renders standalone.
 pub fn html_error(status: axum::http::StatusCode, detail: &str) -> axum::response::Response {
-    let escaped_detail = crate::encoding::escape_html(detail);
+    let escaped_detail = crate::util::encoding::escape_html(detail);
     let body = format!(
         r#"<!DOCTYPE html>
 <html lang="en">

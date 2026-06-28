@@ -5,7 +5,9 @@ use std::str::FromStr;
 use crate::db::sql;
 use crate::db::DbPool;
 
-use super::types::{Integration, IntegrationKind, ProjectIntegration};
+use crate::domain::IntegrationKind;
+
+use super::types::{Integration, ProjectIntegration};
 
 // --- Read queries ---
 

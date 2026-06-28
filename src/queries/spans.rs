@@ -651,6 +651,132 @@ mod tests {
         .unwrap();
     }
 
+    #[allow(clippy::too_many_arguments)]
+    async fn insert_span(
+        pool: &crate::db::DbPool,
+        span_id: &str,
+        trace_id: &str,
+        parent: Option<&str>,
+        project_id: i64,
+        timestamp: i64,
+        start_ms: i64,
+        duration_ms: i64,
+        op: Option<&str>,
+        description: Option<&str>,
+    ) {
+        let compressed = zstd::encode_all([0u8; 0].as_slice(), 3).unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO spans (span_id, payload, project_id, public_key, timestamp, trace_id, parent_span_id, op, description, status, duration_ms, start_ms)
+             VALUES (?1, ?2, ?3, 'testkey', ?4, ?5, ?6, ?7, ?8, 'ok', ?9, ?10)"
+        ))
+        .bind(span_id)
+        .bind(&compressed)
+        .bind(project_id)
+        .bind(timestamp)
+        .bind(trace_id)
+        .bind(parent)
+        .bind(op)
+        .bind(description)
+        .bind(duration_ms)
+        .bind(start_ms)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn insert_txn(
+        pool: &crate::db::DbPool,
+        event_id: &str,
+        project_id: i64,
+        trace_id: &str,
+        timestamp: i64,
+        transaction_name: &str,
+        duration_ms: i64,
+        op: &str,
+    ) {
+        let payload = serde_json::json!({ "contexts": { "trace": { "op": op } } });
+        let compressed =
+            zstd::encode_all(serde_json::to_vec(&payload).unwrap().as_slice(), 3).unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, trace_id, transaction_name, duration_ms, level)
+             VALUES (?1, 'transaction', ?2, ?3, 'testkey', ?4, ?5, ?6, ?7, 'info')"
+        ))
+        .bind(event_id)
+        .bind(&compressed)
+        .bind(project_id)
+        .bind(timestamp)
+        .bind(trace_id)
+        .bind(transaction_name)
+        .bind(duration_ms)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    // Guards the feature-spans fixes: with no stored root span, the trace row's
+    // op/description must fall back to the owning transaction (name -> description,
+    // payload contexts.trace.op -> root_op) instead of rendering blank, and the
+    // duration must follow the transaction when it exceeds the child-span extent.
+    #[tokio::test]
+    async fn list_traces_root_falls_back_to_transaction_name_and_payload_op() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        // Child spans only (both orphaned), so no parent_span_id IS NULL root span.
+        // Child extent is 0..400ms = 400ms.
+        insert_span(
+            &pool,
+            "s1",
+            "t1",
+            Some("ghost"),
+            1,
+            100,
+            0,
+            200,
+            Some("db.query"),
+            Some("SELECT 1"),
+        )
+        .await;
+        insert_span(
+            &pool,
+            "s2",
+            "t1",
+            Some("ghost"),
+            1,
+            100,
+            100,
+            300,
+            None,
+            None,
+        )
+        .await;
+        // Owning transaction lasts 1000ms.
+        insert_txn(
+            &pool,
+            "tx1",
+            1,
+            "t1",
+            110,
+            "GET /checkout",
+            1000,
+            "http.server",
+        )
+        .await;
+
+        let page = Page {
+            offset: 0,
+            limit: 50,
+        };
+        let res = list_traces(&pool, 1, &page).await.unwrap();
+        assert_eq!(res.items.len(), 1);
+        let t = &res.items[0];
+        assert_eq!(t.trace_id, "t1");
+        assert_eq!(t.span_count, 2);
+        // Duration follows the 1000ms transaction, not the 400ms child extent.
+        assert_eq!(t.total_duration_ms, Some(1000));
+        assert_eq!(t.root_description.as_deref(), Some("GET /checkout"));
+        assert_eq!(t.root_op.as_deref(), Some("http.server"));
+    }
+
     #[tokio::test]
     async fn trace_errors_only_event_rows_for_trace() {
         let pool = crate::queries::test_helpers::open_test_db().await;

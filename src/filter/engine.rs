@@ -571,6 +571,34 @@ mod tests {
         assert!(engine.check_rate_limit("testkey", 1).is_err());
     }
 
+    // Per-project and per-key limits drive the same eviction path as the global
+    // limit; guard the reentrant-deadlock fix on those branches too.
+    #[test]
+    fn rate_limit_eviction_does_not_deadlock_per_project() {
+        let mut data = FilterData::default();
+        data.rate_limits.insert("project:1".to_string(), 5);
+        let mut engine = FilterEngine::new(data, 0, vec![], vec![]);
+        engine.backdate_eviction_throttle(0);
+
+        for _ in 0..5 {
+            assert!(engine.check_rate_limit("anykey", 1).is_ok());
+        }
+        assert!(engine.check_rate_limit("anykey", 1).is_err());
+    }
+
+    #[test]
+    fn rate_limit_eviction_does_not_deadlock_per_key() {
+        let mut data = FilterData::default();
+        data.rate_limits.insert("key:testkey".to_string(), 5);
+        let mut engine = FilterEngine::new(data, 0, vec![], vec![]);
+        engine.backdate_eviction_throttle(0);
+
+        for _ in 0..5 {
+            assert!(engine.check_rate_limit("testkey", 1).is_ok());
+        }
+        assert!(engine.check_rate_limit("testkey", 1).is_err());
+    }
+
     #[test]
     fn rate_limiter_zero_means_unlimited() {
         let engine = empty_engine();

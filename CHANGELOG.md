@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.8] - 2026-06-28
+
+### Fixed
+- PostgreSQL: release-health daily sessions chart crashed on a column decode error
+- Docker images failed to build after the library-crate split
+
 ## [0.3.7] - 2026-06-28
 
 ### Added

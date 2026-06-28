@@ -15,7 +15,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY stackpit-auth/Cargo.toml stackpit-auth/
 RUN mkdir src stackpit-auth/src \
     && echo "fn main() {}" > src/main.rs \
-    && touch stackpit-auth/src/lib.rs \
+    && touch src/lib.rs stackpit-auth/src/lib.rs \
     && cargo build --release --no-default-features --features "$DB_FEATURE" \
     && rm -rf src stackpit-auth/src
 COPY . .

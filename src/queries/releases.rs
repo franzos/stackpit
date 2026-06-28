@@ -272,9 +272,9 @@ pub async fn get_release_health_daily(
 ) -> Result<Vec<DailySessions>> {
     let rows = sqlx::query(sql!(
         "SELECT day_bucket, \
-                SUM(sessions_total) AS total, \
-                SUM(sessions_crashed) AS crashed, \
-                SUM(sessions_errored) AS errored \
+                CAST(SUM(sessions_total) AS BIGINT) AS total, \
+                CAST(SUM(sessions_crashed) AS BIGINT) AS crashed, \
+                CAST(SUM(sessions_errored) AS BIGINT) AS errored \
          FROM session_aggregates \
          WHERE project_id = ?1 AND day_bucket >= ?2 \
          GROUP BY day_bucket \

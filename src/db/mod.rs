@@ -199,6 +199,16 @@ pub async fn open_test_pool() -> DbPool {
                 .execute(&pool)
                 .await
                 .unwrap();
+
+            // TRUNCATE wiped the migration-seeded default org; restore it so the
+            // production invariant (org 1 always exists) holds in tests too.
+            sqlx::query(
+                "INSERT INTO organizations (org_id, slug, name) VALUES (1, 'default', 'Default') \
+                 ON CONFLICT (org_id) DO NOTHING",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
         }
     }
 

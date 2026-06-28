@@ -130,6 +130,8 @@ pub async fn validate_api_key(
     // which dominates and isn't constant-time; keys are 256-bit `sk_` randoms,
     // so a compare-timing oracle isn't practically exploitable regardless.
     let dummy = Sha256::digest(b"stackpit-dummy-api-key-for-timing");
+    let hash_slice: &[u8] = hash_bytes.as_ref();
+    let dummy_slice: &[u8] = dummy.as_ref();
 
     let row = crate::queries::api_keys::get_api_key_by_hash(pool, &hash_hex, scope).await;
 
@@ -142,11 +144,11 @@ pub async fn validate_api_key(
         Ok(None) => {
             // Wrong hash or wrong scope: the SQL filter rejects both. Match the
             // hit path's compare cost.
-            let _equal: bool = hash_bytes.as_slice().ct_eq(dummy.as_slice()).into();
+            let _equal: bool = hash_slice.ct_eq(dummy_slice).into();
             Err(ApiError::new(StatusCode::UNAUTHORIZED, "invalid API key"))
         }
         Err(_) => {
-            let _equal: bool = hash_bytes.as_slice().ct_eq(dummy.as_slice()).into();
+            let _equal: bool = hash_slice.ct_eq(dummy_slice).into();
             Err(ApiError::new(StatusCode::UNAUTHORIZED, "invalid API key"))
         }
     }

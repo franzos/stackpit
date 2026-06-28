@@ -70,12 +70,12 @@ impl SecretEncryptor {
     pub fn encrypt_bytes_with_aad(&self, plaintext: &[u8], aad: &[u8]) -> Option<Vec<u8>> {
         let mut nonce_bytes = [0u8; NONCE_LEN];
         getrandom::fill(&mut nonce_bytes).expect("OS RNG must be available");
-        let nonce = Nonce::from_slice(&nonce_bytes);
+        let nonce = Nonce::from(nonce_bytes);
 
         let ciphertext = self
             .cipher
             .encrypt(
-                nonce,
+                &nonce,
                 Payload {
                     msg: plaintext,
                     aad,
@@ -96,10 +96,11 @@ impl SecretEncryptor {
             return None;
         }
         let (nonce_bytes, ciphertext) = blob.split_at(NONCE_LEN);
-        let nonce = Nonce::from_slice(nonce_bytes);
+        let nonce_arr: [u8; NONCE_LEN] = nonce_bytes.try_into().ok()?;
+        let nonce = Nonce::from(nonce_arr);
         self.cipher
             .decrypt(
-                nonce,
+                &nonce,
                 Payload {
                     msg: ciphertext,
                     aad,

@@ -5,6 +5,9 @@ use crate::domain::{
     ProjectStatus, RequestInfo, SummaryTag, Tag, UserInfo,
 };
 
+// cap offset so a huge value can't force an expensive scan-and-discard
+const MAX_OFFSET: u64 = 1_000_000;
+
 /// Shared `limit`/`offset` query params. Embed via `#[serde(flatten)]` in
 /// per-page param structs, then call `.page()` to get the clamped [`Page`].
 ///
@@ -55,7 +58,7 @@ pub struct Page {
 impl Page {
     pub fn new(offset: Option<u64>, limit: Option<u64>) -> Self {
         Self {
-            offset: offset.unwrap_or(0),
+            offset: offset.unwrap_or(0).min(MAX_OFFSET),
             limit: limit.unwrap_or(25).min(100),
         }
     }
@@ -81,13 +84,13 @@ impl<T> PagedResult<T> {
     }
 
     pub fn has_next(&self) -> bool {
-        self.offset + self.limit < self.total
+        self.offset.saturating_add(self.limit) < self.total
     }
     pub fn has_prev(&self) -> bool {
         self.offset > 0
     }
     pub fn next_offset(&self) -> u64 {
-        self.offset + self.limit
+        self.offset.saturating_add(self.limit)
     }
     pub fn prev_offset(&self) -> u64 {
         self.offset.saturating_sub(self.limit)
@@ -699,5 +702,22 @@ mod pagination_tests {
         let p: Pagination = parse("limit=5&offset=2").unwrap();
         assert_eq!(p.page().limit, 5);
         assert_eq!(p.page().offset, 2);
+    }
+
+    #[test]
+    fn offset_is_clamped() {
+        assert_eq!(Page::new(Some(5_000_000), Some(10)).offset, MAX_OFFSET);
+    }
+
+    #[test]
+    fn paged_result_arithmetic_does_not_overflow() {
+        let r = PagedResult {
+            items: Vec::<u8>::new(),
+            total: 0,
+            offset: u64::MAX,
+            limit: 100,
+        };
+        assert_eq!(r.next_offset(), u64::MAX);
+        assert!(!r.has_next());
     }
 }

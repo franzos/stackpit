@@ -210,8 +210,9 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
         }
 
         tracing::warn!(
-            "STACKPIT_MASTER_KEY is not set — integration secrets will be stored in plaintext. \
-             Set a 64-character hex key to enable encryption."
+            "STACKPIT_MASTER_KEY is not set: integration secrets cannot be stored. \
+             Creating an integration that needs a secret will be rejected. \
+             Set a 64-character hex key to enable secret storage."
         );
     }
 

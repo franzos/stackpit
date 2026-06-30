@@ -9,6 +9,7 @@ use std::io::Read;
 
 const MAX_BUNDLE_ENTRIES: usize = 10_000;
 const MAX_BUNDLE_ENTRY_BYTES: usize = 64 * 1024 * 1024; // 64 MiB per entry
+const MAX_BUNDLE_TOTAL_BYTES: usize = 512 * 1024 * 1024; // 512 MiB total, zip-bomb guard
 
 // Types
 
@@ -51,6 +52,7 @@ fn parse_artifact_bundle_sync(zip_data: &[u8]) -> Result<Vec<SourcemapEntry>> {
     // Manifest may be at the root or under artifact-bundle/.
     let manifest: serde_json::Value = try_read_manifest(&mut archive)?;
 
+    let mut total_bytes: usize = 0;
     let mut entries = Vec::new();
 
     if let Some(files) = manifest.get("files").and_then(|f| f.as_object()) {
@@ -79,6 +81,13 @@ fn parse_artifact_bundle_sync(zip_data: &[u8]) -> Result<Vec<SourcemapEntry>> {
                     continue;
                 }
             };
+
+            total_bytes = total_bytes.saturating_add(data.len());
+            if total_bytes > MAX_BUNDLE_TOTAL_BYTES {
+                anyhow::bail!(
+                    "bundle exceeds total decompressed size limit ({total_bytes} > {MAX_BUNDLE_TOTAL_BYTES})"
+                );
+            }
 
             entries.push(SourcemapEntry {
                 debug_id,
@@ -159,6 +168,7 @@ fn read_zip_entry(
 fn scan_for_sourcemaps(
     archive: &mut zip::ZipArchive<std::io::Cursor<&[u8]>>,
 ) -> Result<Vec<SourcemapEntry>> {
+    let mut total_bytes: usize = 0;
     let mut entries = Vec::new();
     let names: Vec<String> = (0..archive.len())
         .filter_map(|i| archive.by_index(i).ok().map(|f| f.name().to_string()))
@@ -172,6 +182,13 @@ fn scan_for_sourcemaps(
             Ok(d) => d,
             Err(_) => continue,
         };
+
+        total_bytes = total_bytes.saturating_add(data.len());
+        if total_bytes > MAX_BUNDLE_TOTAL_BYTES {
+            anyhow::bail!(
+                "bundle exceeds total decompressed size limit ({total_bytes} > {MAX_BUNDLE_TOTAL_BYTES})"
+            );
+        }
 
         if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&data) {
             let debug_id = val

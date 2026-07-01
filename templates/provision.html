@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>Set up organisations — Stackpit</title>
+    <link rel="preload"
+          href="/web/_assets/fonts/Inter-Regular.woff2"
+          as="font"
+          type="font/woff2"
+          crossorigin>
+    <link rel="preload"
+          href="/web/_assets/fonts/Inter-SemiBold.woff2"
+          as="font"
+          type="font/woff2"
+          crossorigin>
+    <link rel="stylesheet" href="/web/_assets/style.css">
+    <link rel="icon" type="image/svg+xml" href="/web/_assets/icon.svg">
+  </head>
+  <body class="min-h-screen flex items-center justify-center px-4">
+    <div class="w-full max-w-md">
+      <div class="flex flex-col items-center mb-6">
+        <div class="flex items-center gap-2 mb-4">
+          <img src="/web/_assets/icon.svg" alt="" width="28" height="28">
+          <span class="text-xl font-semibold tracking-tight">Stackpit</span>
+        </div>
+        <h1 class="page-h1">Set up organisations</h1>
+        <p class="text-muted mt-1 text-[13px]">
+          The following organisations are available from your identity provider.
+          Select the ones you want to create in Stackpit.
+        </p>
+      </div>
+
+      <div class="card card-pad space-y-4">
+        <form method="POST" action="/web/provision" class="space-y-3">
+          {% for org in orgs %}
+            <label class="flex items-center gap-3 cursor-pointer">
+              <input type="checkbox"
+                     name="org_ids"
+                     value="{{ org.id }}"
+                     checked
+                     class="w-4 h-4">
+              <span class="flex-1">
+                <span class="font-medium text-[13px]">{{ org.name.as_deref().unwrap_or(org.slug.as_str()) }}</span>
+                <span class="text-muted text-[12px] ml-1">({{ org.slug }})</span>
+              </span>
+            </label>
+          {% endfor %}
+
+          <div class="flex gap-2 pt-2">
+            <button type="submit"
+                    class="btn btn-primary flex-1 justify-center h-10">
+              Create selected
+            </button>
+            <a href="/web/"
+               class="btn btn-secondary justify-center h-10 px-4">
+              Skip
+            </a>
+          </div>
+        </form>
+      </div>
+    </div>
+  </body>
+</html>

@@ -7,6 +7,7 @@ Everything beyond getting the binary and starting it: the full configuration ref
 - [Configuration](#configuration)
 - [PostgreSQL](#postgresql)
 - [Authentication](#authentication)
+- [Organizations & Roles](#organizations--roles)
 - [Secret encryption](#secret-encryption)
 - [Connecting SDKs](#connecting-sdks)
 - [Notifications & Alerts](#notifications--alerts)
@@ -43,6 +44,7 @@ retention_days = 90               # auto-delete events older than this (0 = keep
 mode = "open"                     # "open" = auto-provision new projects on first ingest; "closed" = pre-register everything
 rate_limit = 0                    # global max events per minute (0 = unlimited)
 max_projects = 1000               # max auto-registered projects in open mode
+max_native_orgs_per_user = 10     # max organizations a single user can create
 excluded_environments = []        # environment names to reject globally
 blocked_user_agents = []          # user-agent glob patterns to block globally
 
@@ -108,13 +110,15 @@ hydra create oauth2-client \
   --name "stackpit" \
   --grant-type authorization_code,refresh_token \
   --response-type code \
-  --scope "openid email profile offline_access" \
+  --scope "openid email profile offline_access orgs" \
   --token-endpoint-auth-method client_secret_post \
   --audience stackpit-web \
   --redirect-uri https://stackpit.example.com/web/auth/callback
 ```
 
 The `--audience` allow-list entry matters: stackpit sends `audience=stackpit-web` on the authorization request so Hydra binds it into the access token's `aud`, and the web gate then checks for it. Hydra only honours audiences that appear on the client's allow-list — leave it off and the token comes back without the `aud`, and every web session is rejected with `InvalidAudience`. (Hydra uses a non-standard `audience=` parameter for this; RFC 8707 `resource=` isn't wired in Hydra yet.)
+
+The `orgs` scope in the example is optional. It's what lets stackpit map organizations and roles from your IdP; leave it off and you get personal-orgs-only. See [Organizations & Roles](#organizations--roles) for the full picture. It only works if the IdP is actually registered to grant the scope, so keep it on the client's allow-list too.
 
 Then wire it into `stackpit.toml`:
 
@@ -139,11 +143,44 @@ web_audience  = "stackpit.example.com"                  # required — must matc
 
 If neither validator is available — no JWKS and no introspection URL — the web gate can't be built and SSO is disabled (stackpit logs an error at startup). If only JWKS is available (no introspection), stackpit logs a warning that opaque tokens will be rejected; this is fine for the JWT default but a misconfiguration if your IdP issues opaque tokens.
 
-User rows are provisioned just-in-time on first login, linked by the OIDC `(iss, sub)` pair. Every authenticated user sees everything — there is no admin/user privilege split in the UI today. The `admin_token` is a separate break-glass code path (CLI, headless ops) and doesn't flow through the users table at all. Email is stored only when the IdP reports `email_verified=true`; unverified emails are ignored to keep an attacker-controlled string out of identity decisions.
+User rows are provisioned just-in-time on first login, linked by the OIDC `(iss, sub)` pair. What a user can see and do is scoped by organization and role, covered in the next section; the `admin_token` is a separate break-glass code path (CLI, headless ops), doesn't flow through the users table at all, and acts as a superuser above every org. Email is stored only when the IdP reports `email_verified=true`; unverified emails are ignored to keep an attacker-controlled string out of identity decisions.
 
 A "Sign in with SSO" button appears on `/web/login` whenever `[auth.oauth]` is configured. The admin_token path keeps working alongside as a break-glass.
 
-The full set of OAuth knobs (`post_logout_redirect_uri`, `access_token_max_ttl_secs`, `introspection_cache_ttl_secs`, etc.) is documented inline in the config that `stackpit init` writes — read that file for the authoritative reference.
+The full set of OAuth knobs (`post_logout_redirect_uri`, `access_token_max_ttl_secs`, `introspection_cache_ttl_secs`, `session_max_ttl_secs`, etc.) is documented inline in the config that `stackpit init` writes — read that file for the authoritative reference.
+
+## Organizations & Roles
+
+**This is an OIDC feature.** stackpit has no local user registration, no password signup: a user only exists once someone authenticates through your IdP (the `users` table is keyed on the OIDC `(iss, sub)` pair). So organizations, roles, membership, and invites are only meaningful when [OAuth / SSO](#oauth--sso) is configured. On an admin-token-only deployment the `admin_token` acts as a superuser that sees every org, and the org layer stays dormant: there are no member users to invite or scope.
+
+With OIDC on, every logged-in user belongs to at least one organization, and data is scoped per org: you see the projects, issues, events, and settings for your active org, and nothing from other orgs. This replaces the old "everyone sees everything" behaviour, so a multi-user stackpit is now genuinely multi-tenant. Ingestion is unaffected: SDKs authenticate with a project key, and the project's org is what ties the incoming data to a tenant.
+
+**Personal orgs, native orgs, and invites.** On first login you get your own personal organization and you're its owner. Beyond that, any logged-in user can create additional organizations from the **Organizations** page in the sidebar, up to a configurable per-user limit (`max_native_orgs_per_user`, default 10); you become the owner of whatever you create. To collaborate, an owner generates an invite link (with a role and an expiry) and whoever opens it while logged in joins that org. Invites cover personal and stackpit-native orgs. Orgs that come from your IdP (below) get their membership from claims instead, so they don't use invite links.
+
+**Roles.** Within an org you're either an `owner` or a `member`:
+
+- `owner` runs the org: create and delete projects, manage members and invites, edit filters, integrations, alerts, source-map keys, and settings.
+- `member` is read-only across the org's projects, issues, and events. Members browse but don't change status, settings, or keys.
+
+The `admin_token` sits above all of this as a superuser. It sees every org (including the system org below) and can do anything, which is why it stays the break-glass path.
+
+**Active org and switching.** You have one active org per session. The **Organizations** page (in the sidebar) lists every org you belong to and lets you switch which one is active; every read and write is then scoped to whatever's active. The active org lives in a signed cookie, but your role is looked up live on each request, so a demotion or an IdP change takes effect without you having to clear anything.
+
+**Auto-registered projects (open mode).** In `open` mode a brand-new DSN auto-creates its project, but there's no user or org in that request, so the project lands in a built-in system org called "Unassigned". Normal users never see it; only the `admin_token` superuser does, through the Unassigned view, where each project can be reassigned into a real org. New DSNs flow into a holding area you triage, rather than leaking into someone's org.
+
+### Mapping orgs and roles from your IdP
+
+If your IdP reports organization membership on its claims, stackpit maps those orgs and roles in on login, so you don't manage membership in two places. This is built around [Forseti](https://git.gofranz.com/franz/forseti)'s `orgs` claim, and any IdP that emits the same shape works.
+
+To turn it on, grant stackpit's client the `orgs` scope (alongside `openid email profile offline_access`) and make sure the IdP is registered to grant it. Without the scope the claim never arrives, and stackpit logs a warning and falls back to personal-orgs-only.
+
+On each login stackpit reads the full `orgs` claim (the user's memberships, each with a role) and reconciles:
+
+- The IdP's **default org** maps to your personal stackpit org. Nobody ever joins the default org itself.
+- For a **non-default org**, an owner is prompted to create the matching stackpit org the first time they log in. Once it exists, other members of that same IdP org join it automatically on their next login, with the role the claim gives them. Members can't create the org; they wait for an owner.
+- The IdP is authoritative: removals and demotions propagate on the next login. Each mapped org has a per-org "sync roles" toggle if you'd rather freeze roles locally after the initial join.
+
+A few safety rules keep this from misfiring. An absent or empty `orgs` claim never removes anything, so a scope misconfiguration can't evict everyone. A truncated membership list disables removals for that login. The last owner of an org is never demoted or removed by sync. And because the claim is snapshotted at consent time, stackpit forces a full re-login past `session_max_ttl_secs` (default 8h) so a demotion can't linger indefinitely behind a long-lived refresh token.
 
 ## Secret encryption
 
@@ -184,7 +221,7 @@ The host:port in the DSN comes from `external_ingest_url`, falling back to `exte
 
 ## Notifications & Alerts
 
-stackpit can notify you when things go wrong. Integrations (email, Slack, webhooks) are configured in the web UI under **Settings → Integrations**, and each project can enable or disable specific triggers.
+stackpit can notify you when things go wrong. Integrations (email, Slack, webhooks) are configured in the web UI under **Settings → Integrations**, and each project can enable or disable specific triggers. Integrations, alert rules, and digest schedules all belong to your active organization (see [Organizations & Roles](#organizations--roles)); an "org-wide" alert or digest covers the projects in that org, not the whole instance.
 
 Email goes through [polymail](https://github.com/franzos/polymail-rs) and supports **Lettermint**, **Postmark**, and **SendGrid**. By default you pick the provider per integration when you add it, then drop in that provider's API token and a from address; `[email] provider`/`from_address`/`from_name` set the defaults, and an integration that leaves a field blank inherits them. Per-integration tokens are stored encrypted (see [Secret encryption](#secret-encryption)).
 

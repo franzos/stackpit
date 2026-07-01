@@ -105,6 +105,8 @@ pub struct FilterConfig {
     pub blocked_user_agents: Vec<String>,
     #[serde(default = "default_max_projects")]
     pub max_projects: usize,
+    #[serde(default = "default_max_native_orgs")]
+    pub max_native_orgs_per_user: u32,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -206,10 +208,19 @@ pub struct OAuthConfig {
     /// discovery (prefers client_secret_basic). Accepts `client_secret_basic`
     /// (alias `basic`) or `client_secret_post` (alias `post`).
     pub token_endpoint_auth_method: Option<String>,
+    /// Hard ceiling on browser-session age (seconds). Forces full re-login past this age,
+    /// ensuring Forseti demotions propagate via the OIDC callback's org reconciliation.
+    /// `0` disables the cap. Default 8h.
+    #[serde(default = "default_session_max_ttl")]
+    pub session_max_ttl_secs: u64,
 }
 
 fn default_access_token_max_ttl() -> u64 {
     24 * 3600
+}
+
+fn default_session_max_ttl() -> u64 {
+    8 * 3600
 }
 
 fn default_refresh_token_max_ttl() -> u64 {
@@ -266,6 +277,9 @@ fn default_retention_days() -> u32 {
 }
 fn default_max_projects() -> usize {
     DEFAULT_MAX_PROJECTS
+}
+fn default_max_native_orgs() -> u32 {
+    10
 }
 fn default_max_body_size() -> usize {
     DEFAULT_MAX_BODY_SIZE

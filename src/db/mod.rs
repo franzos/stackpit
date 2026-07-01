@@ -203,7 +203,7 @@ pub async fn open_test_pool() -> DbPool {
             // TRUNCATE wiped the migration-seeded default org; restore it so the
             // production invariant (org 1 always exists) holds in tests too.
             sqlx::query(
-                "INSERT INTO organizations (org_id, slug, name) VALUES (1, 'default', 'Default') \
+                "INSERT INTO organizations (org_id, slug, name) VALUES (1, '__system__', 'Unassigned') \
                  ON CONFLICT (org_id) DO NOTHING",
             )
             .execute(&pool)
@@ -281,6 +281,8 @@ mod tests {
         "oidc_logout_jti",
         "transaction_metrics",
         "session_aggregates",
+        "organization_members",
+        "invites",
     ];
 
     #[cfg(feature = "sqlite")]

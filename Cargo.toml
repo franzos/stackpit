@@ -90,6 +90,8 @@ reqwest = { version = "0.12", default-features = false, features = ["cookies"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 # reuse the real cookie-hash instead of reimplementing it in the auth test.
 stackpit-auth = { path = "stackpit-auth" }
+# same crate axum's Form uses, for round-tripping form structs in unit tests.
+serde_urlencoded = "0.7"
 
 [package.metadata.generate-rpm]
 assets = [

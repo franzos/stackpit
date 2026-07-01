@@ -2,6 +2,7 @@ use askama::Template;
 use axum::extract::{Path, Query};
 
 use crate::extractors::{ProjectPageCtx, ReadPool};
+use crate::orgs::extractor::ActiveOrg;
 use crate::html::render_template;
 use crate::html::utils::Csrf;
 use crate::queries;
@@ -46,11 +47,15 @@ struct MonitorDetailTemplate {
 }
 
 pub async fn detail_handler(
+    active: ActiveOrg,
     ReadPool(pool): ReadPool,
     Csrf(csrf): Csrf,
     Path((project_id, slug)): Path<(u64, String)>,
     Query(params): Query<Pagination>,
 ) -> Result<axum::response::Response, HtmlError> {
+    crate::orgs::extractor::require_project_scope(&active, &pool, project_id as i64)
+        .await
+        .map_err(|_| HtmlError(axum::http::StatusCode::NOT_FOUND, "Not found".into()))?;
     let page = params.page();
     let checkins =
         queries::monitors::list_checkins_for_monitor(&pool, project_id, &slug, &page).await?;

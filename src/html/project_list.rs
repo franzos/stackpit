@@ -5,6 +5,7 @@ use axum::response::IntoResponse;
 use crate::extractors::{BrowserDefaults, ReadPool};
 use crate::html::render_template;
 use crate::html::utils::{defaults_redirect_url, period_to_timestamp, Csrf, ListParams};
+use crate::orgs::extractor::ActiveOrg;
 use crate::queries;
 use crate::server::AppState;
 
@@ -30,6 +31,7 @@ pub async fn handler(
     ReadPool(pool): ReadPool,
     Csrf(csrf): Csrf,
     Query(params): Query<ListParams>,
+    active_org: ActiveOrg,
 ) -> Result<axum::response::Response, HtmlError> {
     if let Some(url) =
         defaults_redirect_url("/web/projects/", raw_qs.as_deref(), &defaults, &["period"])
@@ -44,6 +46,7 @@ pub async fn handler(
 
     let projects = queries::projects::list_projects(
         &pool,
+        active_org.org_id,
         params.sort.as_deref().filter(|s| !s.is_empty()),
         params.query.as_deref().filter(|s| !s.is_empty()),
         since,

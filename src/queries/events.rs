@@ -43,6 +43,7 @@ impl EventSort {
 fn push_event_filter_conditions<'args>(
     qb: &mut sqlx::QueryBuilder<'args, crate::db::Db>,
     filter: &'args EventFilter,
+    org_id: Option<i64>,
 ) {
     let mut has_where = false;
     let mut push_conjunction = |qb: &mut sqlx::QueryBuilder<'args, crate::db::Db>| {
@@ -75,13 +76,21 @@ fn push_event_filter_conditions<'args>(
         qb.push("events.item_type = ");
         qb.push_bind(item_type.as_str());
     }
+    if let Some(oid) = org_id {
+        push_conjunction(qb);
+        qb.push("events.project_id IN (SELECT project_id FROM projects WHERE org_id = ");
+        qb.push_bind(oid);
+        qb.push(")");
+    }
 }
 
 /// List events across all projects -- filters and pagination are optional.
+/// Pass `org_id = Some(id)` to scope to that org; `None` returns all (superuser).
 pub async fn list_all_events(
     pool: &crate::db::DbPool,
     filter: &EventFilter,
     page: &Page,
+    org_id: Option<i64>,
 ) -> Result<PagedResult<EventSummary>> {
     use sqlx::QueryBuilder;
 
@@ -89,7 +98,7 @@ pub async fn list_all_events(
 
     let mut count_qb: QueryBuilder<'_, crate::db::Db> =
         QueryBuilder::new("SELECT COUNT(*) FROM events");
-    push_event_filter_conditions(&mut count_qb, filter);
+    push_event_filter_conditions(&mut count_qb, filter, org_id);
 
     let total: i64 = count_qb.build_query_scalar().fetch_one(pool).await?;
 
@@ -100,7 +109,7 @@ pub async fn list_all_events(
          events.release, events.environment \
          FROM events LEFT JOIN projects p ON p.project_id = events.project_id",
     );
-    push_event_filter_conditions(&mut select_qb, filter);
+    push_event_filter_conditions(&mut select_qb, filter, org_id);
     select_qb.push(" ORDER BY ");
     select_qb.push(sort.as_sql_ident());
     select_qb.push(" LIMIT ");
@@ -476,7 +485,9 @@ fn map_event_detail_row(row: &crate::db::DbRow) -> Result<(EventDetail, Vec<u8>)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::sql;
     use crate::queries::test_helpers::*;
+    use sqlx::Row;
 
     #[tokio::test]
     async fn list_events_empty() {
@@ -729,5 +740,76 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("neither valid zstd nor valid JSON"));
+    }
+
+    async fn insert_org(pool: &crate::db::DbPool, slug: &str) -> i64 {
+        sqlx::query(sql!("INSERT INTO organizations (slug, name) VALUES (?1, ?1)"))
+            .bind(slug)
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query(sql!("SELECT org_id FROM organizations WHERE slug = ?1"))
+            .bind(slug)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+            .get("org_id")
+    }
+
+    async fn insert_project(pool: &crate::db::DbPool, project_id: i64, org_id: i64) {
+        sqlx::query(sql!(
+            "INSERT INTO projects (project_id, org_id) VALUES (?1, ?2)"
+        ))
+        .bind(project_id)
+        .bind(org_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn list_all_events_org_scoped_returns_only_that_org() {
+        let pool = open_test_db().await;
+        let org_a = insert_org(&pool, "ev-org-a").await;
+        let org_b = insert_org(&pool, "ev-org-b").await;
+        insert_project(&pool, 101, org_a).await;
+        insert_project(&pool, 102, org_b).await;
+        insert_test_event(&pool, "ea1", 101, 100, Some("fpa"), Some("error"), Some("A")).await;
+        insert_test_event(&pool, "eb1", 102, 200, Some("fpb"), Some("error"), Some("B")).await;
+
+        let filter = EventFilter::default();
+        let page = Page::new(None, None);
+
+        let scoped = list_all_events(&pool, &filter, &page, Some(org_a))
+            .await
+            .unwrap();
+        assert_eq!(scoped.total, 1);
+        assert_eq!(scoped.items[0].event_id, "ea1");
+
+        let all = list_all_events(&pool, &filter, &page, None)
+            .await
+            .unwrap();
+        assert_eq!(all.total, 2);
+    }
+
+    #[tokio::test]
+    async fn list_all_events_org_b_scoped_excludes_org_a() {
+        let pool = open_test_db().await;
+        let org_a = insert_org(&pool, "ev2-org-a").await;
+        let org_b = insert_org(&pool, "ev2-org-b").await;
+        insert_project(&pool, 201, org_a).await;
+        insert_project(&pool, 202, org_b).await;
+        insert_test_event(&pool, "ec1", 201, 100, Some("fpc"), Some("error"), Some("C")).await;
+        insert_test_event(&pool, "ec2", 201, 150, Some("fpc2"), Some("error"), Some("C2")).await;
+        insert_test_event(&pool, "ed1", 202, 200, Some("fpd"), Some("error"), Some("D")).await;
+
+        let filter = EventFilter::default();
+        let page = Page::new(None, None);
+
+        let scoped_b = list_all_events(&pool, &filter, &page, Some(org_b))
+            .await
+            .unwrap();
+        assert_eq!(scoped_b.total, 1);
+        assert_eq!(scoped_b.items[0].event_id, "ed1");
     }
 }

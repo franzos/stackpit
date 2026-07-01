@@ -12,6 +12,7 @@ pub(crate) mod html;
 pub mod ingest;
 pub(crate) mod mcp;
 pub(crate) mod middleware;
+pub mod orgs;
 pub(crate) mod notify;
 pub(crate) mod oidc;
 pub(crate) mod providers;

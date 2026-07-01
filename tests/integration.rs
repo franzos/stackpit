@@ -25,3 +25,6 @@ mod api;
 
 #[path = "integration/security.rs"]
 mod security;
+
+#[path = "integration/orgs.rs"]
+mod orgs;

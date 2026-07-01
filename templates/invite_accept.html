@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>Organisation invite - Stackpit</title>
+    <link rel="preload"
+          href="/web/_assets/fonts/Inter-Regular.woff2"
+          as="font"
+          type="font/woff2"
+          crossorigin>
+    <link rel="preload"
+          href="/web/_assets/fonts/Inter-SemiBold.woff2"
+          as="font"
+          type="font/woff2"
+          crossorigin>
+    <link rel="stylesheet" href="/web/_assets/style.css">
+    <link rel="icon" type="image/svg+xml" href="/web/_assets/icon.svg">
+  </head>
+  <body class="min-h-screen flex items-center justify-center px-4">
+    <div class="w-full max-w-md">
+      <div class="flex flex-col items-center mb-6">
+        <div class="flex items-center gap-2 mb-4">
+          <img src="/web/_assets/icon.svg" alt="" width="28" height="28">
+          <span class="text-xl font-semibold tracking-tight">Stackpit</span>
+        </div>
+        <h1 class="page-h1">Organisation invite</h1>
+      </div>
+
+      <div class="card card-pad space-y-4">
+        {% if let Some(err) = error %}
+          <div class="badge badge-error w-full justify-start h-auto py-1.5 normal-case tracking-normal text-[12px]">
+            {{ err }}
+          </div>
+          <a href="/web/" class="btn btn-secondary w-full justify-center h-10">Back to projects</a>
+        {% else %}
+          <p class="text-[13px]">
+            You have been invited to join
+            <strong class="text-on-surface">{{ org_name }}</strong>
+            as <strong class="text-on-surface">{{ role }}</strong>.
+          </p>
+          <form method="POST" action="/web/invite/{{ token }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit"
+                    class="btn btn-primary w-full justify-center h-10">
+              Accept invite
+            </button>
+          </form>
+          <a href="/web/" class="btn btn-secondary w-full justify-center h-10">Decline</a>
+        {% endif %}
+      </div>
+    </div>
+  </body>
+</html>

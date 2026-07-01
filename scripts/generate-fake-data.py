@@ -150,6 +150,25 @@ def discover_admin(config_path):
     return f"http://{host}:{port}", token
 
 
+def parse_dsn(dsn):
+    """Parse Sentry DSN 'scheme://<key>@host[:port]/<pid>' into {"id","key","base"}; raises ValueError if malformed."""
+    from urllib.parse import urlparse
+    u = urlparse(dsn)
+    if not u.username:
+        raise ValueError(f"DSN missing key: {dsn}")
+    if not u.hostname:
+        raise ValueError(f"DSN missing host: {dsn}")
+    pid_str = u.path.lstrip("/")
+    if not pid_str:
+        raise ValueError(f"DSN missing project id: {dsn}")
+    try:
+        pid = int(pid_str)
+    except ValueError:
+        raise ValueError(f"DSN project id not an integer: {dsn}")
+    host = u.hostname if u.port is None else f"{u.hostname}:{u.port}"
+    return {"id": pid, "key": u.username, "base": f"{u.scheme}://{host}"}
+
+
 # ---------------------------------------------------------------------------
 # Project definitions: ~500 projects generated from prefix-suffix combos
 # ---------------------------------------------------------------------------
@@ -3274,6 +3293,9 @@ def main():
     parser.add_argument("--base-url", default=None, help="override base URL (skips config discovery)")
     parser.add_argument("--admin-base", default=None, help="admin/UI base URL (defaults to bind in stackpit.toml)")
     parser.add_argument("--admin-token", default=None, help="admin token (defaults to admin_token in stackpit.toml)")
+    parser.add_argument("--dsn", action="append", default=None,
+                        help="target an existing project by DSN "
+                             "(repeatable); skips synthetic projects and setup")
     parser.add_argument("--no-setup", action="store_true", help="skip the post-ingest rename + release seeding pass")
     parser.add_argument("--count", type=int, default=100000, help="total number of items to generate")
     parser.add_argument("--seed", type=int, default=None, help="random seed for reproducibility")
@@ -3284,6 +3306,27 @@ def main():
 
     if args.seed is not None:
         random.seed(args.seed)
+
+    if args.dsn:
+        global PROJECTS
+        rng = random.Random(args.seed or 42)
+        platforms = list(_PLATFORM_WEIGHTS.keys())
+        pweights = [_PLATFORM_WEIGHTS[p] for p in platforms]
+        dsn_projects = []
+        dsn_base = None
+        for d in args.dsn:
+            parsed = parse_dsn(d)
+            dsn_base = dsn_base or parsed["base"]
+            dsn_projects.append({
+                "id": parsed["id"],
+                "key": parsed["key"],
+                "name": f"dsn-project-{parsed['id']}",
+                "platform": rng.choices(platforms, weights=pweights)[0],
+            })
+        PROJECTS = dsn_projects
+        if args.base_url is None:
+            args.base_url = dsn_base
+        args.no_setup = True
 
     base = (args.base_url or discover_base_url(args.config)).rstrip("/")
     discovered_admin, discovered_token = discover_admin(args.config)

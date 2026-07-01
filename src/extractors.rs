@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 
 use axum::extract::{FromRequestParts, Path};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 
 use crate::db::DbPool;
 use crate::html::utils::{self, Csrf};
+use crate::orgs::extractor::ActiveOrg;
 use crate::queries::ProjectNavCounts;
 use crate::server::AppState;
 
@@ -51,6 +53,15 @@ pub struct ProjectPageCtx {
     pub csrf_token: String,
 }
 
+/// None = extension absent (fail closed), Ok(None) = superuser bypass, Ok(Some) = must check.
+fn org_gate(active: Option<&ActiveOrg>) -> Result<Option<i64>, ()> {
+    match active {
+        None => Err(()),
+        Some(a) if a.role.is_none() => Ok(None),
+        Some(a) => Ok(Some(a.org_id)),
+    }
+}
+
 impl FromRequestParts<AppState> for ProjectPageCtx {
     type Rejection = Response;
 
@@ -67,6 +78,16 @@ impl FromRequestParts<AppState> for ProjectPageCtx {
             .map(|c| c.0)
             .unwrap_or_default();
         let pool = state.pool.clone();
+        // Enforce org scope before nav to avoid leaking counts for foreign projects.
+        match org_gate(parts.extensions.get::<ActiveOrg>()) {
+            Err(()) => return Err(StatusCode::NOT_FOUND.into_response()),
+            Ok(Some(org_id)) => {
+                crate::queries::orgs::assert_project_in_org(&pool, project_id as i64, org_id)
+                    .await
+                    .map_err(|_| StatusCode::NOT_FOUND.into_response())?;
+            }
+            Ok(None) => {}
+        }
         let nav = crate::queries::projects::get_nav_counts(&pool, project_id).await;
         Ok(ProjectPageCtx {
             pool,
@@ -74,5 +95,91 @@ impl FromRequestParts<AppState> for ProjectPageCtx {
             nav,
             csrf_token,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::orgs::Role;
+    use crate::queries::orgs::assert_project_in_org;
+
+    fn make_active(org_id: i64, role: Option<Role>) -> ActiveOrg {
+        ActiveOrg { org_id, role }
+    }
+
+    #[test]
+    fn org_gate_missing_extension_denies() {
+        assert!(org_gate(None).is_err());
+    }
+
+    #[test]
+    fn org_gate_superuser_bypasses() {
+        let a = make_active(1, None);
+        assert_eq!(org_gate(Some(&a)), Ok(None));
+    }
+
+    #[test]
+    fn org_gate_scoped_user_returns_org_id() {
+        let a = make_active(42, Some(Role::Member));
+        assert_eq!(org_gate(Some(&a)), Ok(Some(42)));
+        let b = make_active(7, Some(Role::Owner));
+        assert_eq!(org_gate(Some(&b)), Ok(Some(7)));
+    }
+
+    #[tokio::test]
+    async fn org_gate_plus_assert_denies_foreign_org() {
+        use crate::db::sql;
+        use sqlx::Row;
+
+        let pool = crate::db::open_test_pool().await;
+
+        // Insert org A and org B.
+        sqlx::query(sql!("INSERT INTO organizations (slug, name) VALUES (?1, 'Org A')"))
+            .bind("extractor-org-a")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let org_a: i64 = sqlx::query(sql!("SELECT org_id FROM organizations WHERE slug = ?1"))
+            .bind("extractor-org-a")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get("org_id");
+
+        sqlx::query(sql!("INSERT INTO organizations (slug, name) VALUES (?1, 'Org B')"))
+            .bind("extractor-org-b")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let org_b: i64 = sqlx::query(sql!("SELECT org_id FROM organizations WHERE slug = ?1"))
+            .bind("extractor-org-b")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get("org_id");
+
+        // Project belongs to org A.
+        sqlx::query(sql!("INSERT INTO projects (project_id, org_id) VALUES (?1, ?2)"))
+            .bind(9001i64)
+            .bind(org_a)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Caller is a member of org B (foreign).
+        let caller = make_active(org_b, Some(Role::Member));
+        let needed_org = org_gate(Some(&caller)).unwrap().unwrap();
+        // The DB check must deny.
+        assert!(assert_project_in_org(&pool, 9001, needed_org).await.is_err());
+
+        // Same caller in org A must be allowed.
+        let caller_a = make_active(org_a, Some(Role::Member));
+        let needed_org_a = org_gate(Some(&caller_a)).unwrap().unwrap();
+        assert!(assert_project_in_org(&pool, 9001, needed_org_a).await.is_ok());
+
+        // Superuser always bypasses (org_gate returns Ok(None) regardless of project's org).
+        let superuser = make_active(org_b, None);
+        assert_eq!(org_gate(Some(&superuser)), Ok(None));
     }
 }

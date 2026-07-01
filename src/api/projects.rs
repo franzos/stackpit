@@ -4,6 +4,7 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde_json::json;
 
+use crate::orgs::extractor::ActiveOrg;
 use crate::queries;
 use crate::server::AppState;
 
@@ -11,8 +12,11 @@ use super::ApiError;
 use crate::extractors::ReadPool;
 
 /// GET /api/0/projects/
-pub async fn list(ReadPool(pool): ReadPool) -> Result<impl IntoResponse, ApiError> {
-    let projects = queries::projects::list_projects(&pool, None, None, None)
+pub async fn list(
+    ReadPool(pool): ReadPool,
+    active_org: ActiveOrg,
+) -> Result<impl IntoResponse, ApiError> {
+    let projects = queries::projects::list_projects(&pool, active_org.org_id, None, None, None)
         .await
         .map_err(ApiError::internal)?;
     Ok(Json(projects))

@@ -151,13 +151,16 @@ pub fn issue_filter_from_params(
     }
 }
 
-/// Treats empty strings as `None` for numeric query params (browsers send those).
-pub fn empty_string_as_none<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+/// Treats empty or whitespace-only strings as `None` for optional numeric
+/// form/query fields (browsers submit a blank input as `field=`).
+pub fn empty_string_as_none<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
 {
     let s: Option<String> = Option::deserialize(deserializer)?;
-    match s.as_deref() {
+    match s.as_deref().map(str::trim) {
         None | Some("") => Ok(None),
         Some(v) => v.parse().map(Some).map_err(serde::de::Error::custom),
     }

@@ -31,12 +31,12 @@
 
       <div class="card card-pad space-y-4">
         {% if let Some(error) = error %}
-          <div class="badge badge-error w-full justify-start h-auto py-1.5 normal-case tracking-normal text-[12px]">
+          <div class="badge badge-error w-full justify-start h-auto py-1.5 normal-case tracking-normal text-[12px] whitespace-normal break-words">
             {{ error }}
           </div>
         {% endif %}
         {% if let Some(info) = info %}
-          <div class="badge badge-info w-full justify-start h-auto py-1.5 normal-case tracking-normal text-[12px]">
+          <div class="badge badge-info w-full justify-start h-auto py-1.5 normal-case tracking-normal text-[12px] whitespace-normal break-words">
             {{ info }}
           </div>
         {% endif %}

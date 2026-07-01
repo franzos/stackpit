@@ -1,0 +1,262 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+
+{% block title %}{{ org_name }} Members - Stackpit{% endblock %}
+
+{% block sidebar_nav %}
+  {% call m::top_sidebar("") %}
+  {% endcall %}
+{% endblock %}
+
+{% block breadcrumbs %}
+  <span class="breadcrumb-sep">/</span>
+  <a href="/web/organizations" class="breadcrumb-link">Organizations</a>
+  <span class="breadcrumb-sep">/</span>
+  <span class="breadcrumb-current">{{ org_name }} Members</span>
+{% endblock %}
+
+{% block content %}
+  <div class="page-header">
+    <div>
+      <h1>{{ org_name }}</h1>
+      <p class="text-muted text-[13px] mt-1">{{ kind }} organization</p>
+    </div>
+  </div>
+
+  {% if can_rename %}
+    <div class="card card-pad mb-6">
+      <h2 class="page-h2 mb-1">Slug</h2>
+      <p class="text-muted text-[13px] mb-4">Identifies this organization in URLs. Must be unique.</p>
+      <form class="settings-form" method="post" action="/web/organizations/{{ org_id }}/slug">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div>
+          <label class="field-label" for="org-slug">Slug</label>
+          <input id="org-slug"
+                 name="slug"
+                 type="text"
+                 class="input"
+                 value="{{ current_slug }}"
+                 required>
+        </div>
+        <div>
+          <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+      </form>
+    </div>
+  {% endif %}
+
+  {% if is_native %}
+    <div class="card overflow-hidden">
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Email</th>
+              <th>Role</th>
+              <th>Joined</th>
+              {% if can_manage %}
+                <th></th>
+              {% endif %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for member in members %}
+              <tr>
+                <td class="font-semibold">{{ member.name }}</td>
+                <td class="text-muted">
+                  {% match member.email %}
+                    {% when Some with (email) %}
+                      {{ email }}
+                    {% when None %}
+                      -
+                  {% endmatch %}
+                </td>
+                <td class="text-muted">{{ member.role }}</td>
+                <td class="text-muted">{{ member.joined_at|format_ts }}</td>
+                {% if can_manage %}
+                  <td class="flex gap-2">
+                    {% if member.role == "member" %}
+                      <form method="post"
+                            action="/web/organizations/{{ org_id }}/members/{{ member.user_id }}/role">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <input type="hidden" name="role" value="owner">
+                        <button type="submit" class="btn btn-secondary">Promote</button>
+                      </form>
+                    {% endif %}
+                    {% if member.role == "owner" %}
+                      {% if member.can_demote %}
+                        <form method="post"
+                              action="/web/organizations/{{ org_id }}/members/{{ member.user_id }}/role">
+                          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                          <input type="hidden" name="role" value="member">
+                          <button type="submit" class="btn btn-secondary">Demote</button>
+                        </form>
+                      {% endif %}
+                    {% endif %}
+                    {% if member.can_remove %}
+                      <form method="post"
+                            action="/web/organizations/{{ org_id }}/members/{{ member.user_id }}/remove">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <button type="submit" class="btn btn-danger">Remove</button>
+                      </form>
+                    {% endif %}
+                  </td>
+                {% endif %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    {% if can_manage %}
+      <div class="card card-pad mt-6">
+        <h2 class="page-h2 mb-4">Invites</h2>
+        {% if !invites.is_empty() %}
+          <div class="table-wrap mb-6">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Email</th>
+                  <th>Role</th>
+                  <th>Created</th>
+                  <th>Expires</th>
+                  <th>Status</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for invite in invites %}
+                  <tr>
+                    <td class="text-muted">
+                      {% match invite.email %}
+                        {% when Some with (email) %}
+                          {{ email }}
+                        {% when None %}
+                          -
+                      {% endmatch %}
+                    </td>
+                    <td class="text-muted">{{ invite.role }}</td>
+                    <td class="text-muted">{{ invite.created_at|format_ts }}</td>
+                    <td class="text-muted">{{ invite.expires_at|format_ts }}</td>
+                    <td class="text-muted">{{ invite.status }}</td>
+                    <td>
+                      {% if invite.status == "pending" %}
+                        <form method="post"
+                              action="/web/organizations/{{ org_id }}/invites/{{ invite.invite_id }}/revoke">
+                          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                          <button type="submit" class="btn btn-secondary">Revoke</button>
+                        </form>
+                      {% endif %}
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% endif %}
+
+        <h3 class="page-h2 mb-1">Create invite</h3>
+        <p class="text-muted text-[13px] mb-4">Generates a single-use invite link.</p>
+        <form class="settings-form" method="post" action="/web/organizations/{{ org_id }}/invites">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <div>
+            <label class="field-label" for="inv-role">Role</label>
+            <select id="inv-role" name="role" class="input">
+              <option value="member">member</option>
+              <option value="owner">owner</option>
+            </select>
+          </div>
+          <div>
+            <label class="field-label" for="inv-email">
+              Email <span class="text-muted normal-case tracking-normal font-normal">(optional)</span>
+            </label>
+            <input id="inv-email"
+                   name="email"
+                   type="email"
+                   class="input"
+                   placeholder="user@example.com">
+          </div>
+          <div>
+            <label class="field-label" for="inv-ttl">
+              Expiry (seconds)
+              <span class="text-muted normal-case tracking-normal font-normal">(optional, default 7 days)</span>
+            </label>
+            <input id="inv-ttl"
+                   name="ttl_secs"
+                   type="number"
+                   class="input"
+                   placeholder="604800">
+          </div>
+          <div>
+            <button type="submit" class="btn btn-primary">Create invite</button>
+          </div>
+        </form>
+      </div>
+    {% endif %}
+  {% else %}
+    <div class="card overflow-hidden">
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Email</th>
+              <th>Role</th>
+              <th>Joined</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for member in members %}
+              <tr>
+                <td class="font-semibold">{{ member.name }}</td>
+                <td class="text-muted">
+                  {% match member.email %}
+                    {% when Some with (email) %}
+                      {{ email }}
+                    {% when None %}
+                      -
+                  {% endmatch %}
+                </td>
+                <td class="text-muted">{{ member.role }}</td>
+                <td class="text-muted">{{ member.joined_at|format_ts }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card card-pad mt-6">
+      {% if kind == "Forseti" %}
+        <p class="text-muted text-[13px]">Membership for this organization is managed externally.</p>
+      {% else %}
+        <p class="text-muted text-[13px]">This is a personal organization. Membership is not configurable.</p>
+      {% endif %}
+    </div>
+  {% endif %}
+
+  {% if can_delete %}
+    <div class="card card-pad mt-6">
+      <h2 class="page-h2 mb-1">Danger zone</h2>
+      <p class="text-muted text-[13px] mb-4">
+        Deleting removes {{ project_count }} project(s), {{ member_count }} member(s),
+        and all events, issues, keys, alerts and integrations. This cannot be undone.
+      </p>
+      <form class="settings-form" method="post" action="/web/organizations/{{ org_id }}/delete">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div>
+          <label class="field-label" for="confirm-slug">Type <code>{{ slug }}</code> to confirm</label>
+          <input id="confirm-slug" name="confirm_slug" type="text" class="input" autocomplete="off" required>
+        </div>
+        <div>
+          <button type="submit"
+                  class="btn btn-danger"
+                  data-confirm="Delete this organization and ALL its data. This cannot be undone.">
+            Delete organization
+          </button>
+        </div>
+      </form>
+    </div>
+  {% endif %}
+{% endblock %}

@@ -7,6 +7,7 @@ use serde::Deserialize;
 use crate::filter::admin;
 use crate::html::render_template;
 use crate::html::utils::Csrf;
+use crate::orgs::extractor::{require_owner, require_project_scope, ActiveOrg};
 use crate::queries;
 use crate::server::AppState;
 
@@ -96,9 +97,13 @@ struct ProjectFiltersTemplate {
 
 pub async fn handler(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
 ) -> axum::response::Response {
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
     render_filters(&state, project_id, None, &csrf).await
 }
 
@@ -221,10 +226,17 @@ pub struct RuleForm {
 
 pub async fn set_inbound_filters(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
     Form(form): Form<InboundFilterForm>,
 ) -> axum::response::Response {
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
     let browser = form.browser_extensions.is_some();
     let localhost = form.localhost.is_some();
 
@@ -249,10 +261,17 @@ pub async fn set_inbound_filters(
 
 pub async fn add_message_filter(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
     Form(form): Form<PatternForm>,
 ) -> axum::response::Response {
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
     let pattern = match require_nonempty(
         &form.pattern,
         "Pattern is required",
@@ -272,10 +291,17 @@ pub async fn add_message_filter(
 
 pub async fn delete_message_filter(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Csrf(csrf): Csrf,
     Path((project_id, id)): Path<(u64, i64)>,
 ) -> axum::response::Response {
-    let result = queries::filters::delete_message_filter(&state.writer_pool, id).await;
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
+    let result = queries::filters::delete_message_filter(&state.writer_pool, id, project_id).await;
     delete_then_render(
         &state,
         project_id,
@@ -289,10 +315,17 @@ pub async fn delete_message_filter(
 
 pub async fn set_rate_limit(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
     Form(form): Form<RateLimitForm>,
 ) -> axum::response::Response {
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
     let result = queries::filters::set_rate_limit(
         &state.writer_pool,
         project_id,
@@ -305,10 +338,17 @@ pub async fn set_rate_limit(
 
 pub async fn add_environment_filter(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
     Form(form): Form<EnvironmentForm>,
 ) -> axum::response::Response {
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
     let env = match require_nonempty(
         &form.environment,
         "Environment is required",
@@ -328,10 +368,18 @@ pub async fn add_environment_filter(
 
 pub async fn delete_environment_filter(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Csrf(csrf): Csrf,
     Path((project_id, id)): Path<(u64, i64)>,
 ) -> axum::response::Response {
-    let result = queries::filters::delete_environment_filter(&state.writer_pool, id).await;
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
+    let result =
+        queries::filters::delete_environment_filter(&state.writer_pool, id, project_id).await;
     delete_then_render(
         &state,
         project_id,
@@ -345,10 +393,17 @@ pub async fn delete_environment_filter(
 
 pub async fn add_release_filter(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
     Form(form): Form<PatternForm>,
 ) -> axum::response::Response {
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
     let pattern = match require_nonempty(
         &form.pattern,
         "Pattern is required",
@@ -368,10 +423,17 @@ pub async fn add_release_filter(
 
 pub async fn delete_release_filter(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Csrf(csrf): Csrf,
     Path((project_id, id)): Path<(u64, i64)>,
 ) -> axum::response::Response {
-    let result = queries::filters::delete_release_filter(&state.writer_pool, id).await;
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
+    let result = queries::filters::delete_release_filter(&state.writer_pool, id, project_id).await;
     delete_then_render(
         &state,
         project_id,
@@ -385,10 +447,17 @@ pub async fn delete_release_filter(
 
 pub async fn add_ua_filter(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
     Form(form): Form<PatternForm>,
 ) -> axum::response::Response {
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
     let pattern = match require_nonempty(
         &form.pattern,
         "Pattern is required",
@@ -408,10 +477,18 @@ pub async fn add_ua_filter(
 
 pub async fn delete_ua_filter(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Csrf(csrf): Csrf,
     Path((project_id, id)): Path<(u64, i64)>,
 ) -> axum::response::Response {
-    let result = queries::filters::delete_user_agent_filter(&state.writer_pool, id).await;
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
+    let result =
+        queries::filters::delete_user_agent_filter(&state.writer_pool, id, project_id).await;
     delete_then_render(
         &state,
         project_id,
@@ -425,10 +502,17 @@ pub async fn delete_ua_filter(
 
 pub async fn add_filter_rule(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
     Form(form): Form<RuleForm>,
 ) -> axum::response::Response {
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
     use crate::filter::rules::{FilterAction, FilterField, FilterOperator};
 
     if !FilterField::is_valid(&form.field) {
@@ -475,10 +559,17 @@ pub async fn add_filter_rule(
 
 pub async fn delete_filter_rule(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Csrf(csrf): Csrf,
     Path((project_id, id)): Path<(u64, i64)>,
 ) -> axum::response::Response {
-    let result = queries::filters::delete_filter_rule(&state.writer_pool, id).await;
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
+    let result = queries::filters::delete_filter_rule(&state.writer_pool, id, project_id).await;
     delete_then_render(
         &state,
         project_id,
@@ -492,10 +583,17 @@ pub async fn delete_filter_rule(
 
 pub async fn add_ip_block(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
     Form(form): Form<CidrForm>,
 ) -> axum::response::Response {
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
     let cidr =
         match require_nonempty(&form.cidr, "CIDR is required", &state, project_id, &csrf).await {
             Ok(c) => c,
@@ -510,10 +608,17 @@ pub async fn add_ip_block(
 
 pub async fn delete_ip_block(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Csrf(csrf): Csrf,
     Path((project_id, id)): Path<(u64, i64)>,
 ) -> axum::response::Response {
-    let result = queries::filters::delete_ip_block(&state.writer_pool, id).await;
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
+    let result = queries::filters::delete_ip_block(&state.writer_pool, id, project_id).await;
     delete_then_render(
         &state,
         project_id,

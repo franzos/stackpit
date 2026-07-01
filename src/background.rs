@@ -156,6 +156,7 @@ async fn run_digest_cycle(
             pool,
             period_start,
             period_end,
+            schedule.org_id,
             schedule.project_id,
         )
         .await

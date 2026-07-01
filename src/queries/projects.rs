@@ -9,10 +9,31 @@ use super::types::{ProjectKey, ProjectNavCounts, ProjectRepo, ProjectSummary};
 
 // --- Read queries ---
 
-/// List all projects with their event/issue counts and time ranges.
+/// List projects visible in the given org, with event/issue counts.
 /// Optionally narrow by name/id search and a `since` timestamp.
 pub async fn list_projects(
     pool: &crate::db::DbPool,
+    org_id: i64,
+    sort: Option<&str>,
+    query: Option<&str>,
+    since: Option<i64>,
+) -> Result<Vec<ProjectSummary>> {
+    list_projects_inner(pool, Some(org_id), sort, query, since).await
+}
+
+/// List all projects across every org (CLI / superuser context).
+pub async fn list_all_projects(
+    pool: &crate::db::DbPool,
+    sort: Option<&str>,
+    query: Option<&str>,
+    since: Option<i64>,
+) -> Result<Vec<ProjectSummary>> {
+    list_projects_inner(pool, None, sort, query, since).await
+}
+
+async fn list_projects_inner(
+    pool: &crate::db::DbPool,
+    org_id: Option<i64>,
     sort: Option<&str>,
     query: Option<&str>,
     since: Option<i64>,
@@ -26,10 +47,21 @@ pub async fn list_projects(
         _ => "e.last_seen",
     };
 
-    let time_filter = if since.is_some() {
-        "WHERE timestamp >= ?1"
+    // When org_id is given, promote to INNER JOIN with org filter as ?1.
+    // The time filter shifts to ?2 so its bind slot doesn't collide with org_id.
+    let (project_join, time_param) = if org_id.is_some() {
+        (
+            "JOIN projects p ON e.project_id = p.project_id AND p.org_id = ?1",
+            "?2",
+        )
     } else {
-        ""
+        ("LEFT JOIN projects p ON e.project_id = p.project_id", "?1")
+    };
+
+    let time_filter = if since.is_some() {
+        format!("WHERE timestamp >= {time_param}")
+    } else {
+        String::new()
     };
 
     #[cfg(feature = "sqlite")]
@@ -82,15 +114,16 @@ pub async fn list_projects(
                 SELECT MAX(id) FROM releases GROUP BY project_id
             )
          ) lr ON e.project_id = lr.project_id
-         LEFT JOIN projects p ON e.project_id = p.project_id
+         {project_join}
          ORDER BY {order_expr} DESC"
     );
 
     let sql = crate::db::translate_sql(&sql);
-    let rows = if let Some(ts) = since {
-        sqlx::query(&sql).bind(ts).fetch_all(pool).await?
-    } else {
-        sqlx::query(&sql).fetch_all(pool).await?
+    let rows = match (org_id, since) {
+        (Some(oid), Some(ts)) => sqlx::query(&sql).bind(oid).bind(ts).fetch_all(pool).await?,
+        (Some(oid), None) => sqlx::query(&sql).bind(oid).fetch_all(pool).await?,
+        (None, Some(ts)) => sqlx::query(&sql).bind(ts).fetch_all(pool).await?,
+        (None, None) => sqlx::query(&sql).fetch_all(pool).await?,
     };
 
     let mut projects: Vec<ProjectSummary> = rows.iter().map(map_project_row).collect();
@@ -350,6 +383,7 @@ pub async fn get_project_status(
 /// Create a new project with its first key. Returns (project_id, public_key).
 pub async fn create_project(
     pool: &crate::db::DbPool,
+    org_id: i64,
     name: &str,
     platform: Option<&str>,
 ) -> Result<(u64, String)> {
@@ -370,10 +404,11 @@ pub async fn create_project(
     let public_key = crate::util::crypto::random_hex::<16>();
     let name_val: Option<&str> = if name.is_empty() { None } else { Some(name) };
     sqlx::query(sql!(
-        "INSERT INTO projects (project_id, name, status, source) VALUES (?1, ?2, 'active', 'manual')"
+        "INSERT INTO projects (project_id, name, status, source, org_id) VALUES (?1, ?2, 'active', 'manual', ?3)"
     ))
     .bind(project_id as i64)
     .bind(name_val)
+    .bind(org_id)
     .execute(&mut *tx)
     .await?;
     sqlx::query(sql!(
@@ -469,12 +504,19 @@ pub async fn create_project_key(
     Ok(public_key)
 }
 
-/// Delete a project key. Returns 0 if it wasn't found.
-pub async fn delete_project_key(pool: &crate::db::DbPool, public_key: &str) -> Result<u64> {
-    let result = sqlx::query(sql!("DELETE FROM project_keys WHERE public_key = ?1"))
-        .bind(public_key)
-        .execute(pool)
-        .await?;
+/// Delete a project key scoped to the given project. Returns 0 if not found.
+pub async fn delete_project_key(
+    pool: &crate::db::DbPool,
+    project_id: u64,
+    public_key: &str,
+) -> Result<u64> {
+    let result = sqlx::query(sql!(
+        "DELETE FROM project_keys WHERE public_key = ?1 AND project_id = ?2"
+    ))
+    .bind(public_key)
+    .bind(project_id as i64)
+    .execute(pool)
+    .await?;
     Ok(result.rows_affected())
 }
 
@@ -513,6 +555,43 @@ pub async fn delete_project_repo(
     ))
     .bind(repo_id)
     .bind(project_id as i64)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
+pub struct UnassignedProject {
+    pub project_id: i64,
+    pub name: Option<String>,
+    pub source: Option<String>,
+}
+
+/// Projects still in org_id=1 (system/unassigned); shown in the superuser triage view.
+pub async fn list_unassigned_projects(pool: &crate::db::DbPool) -> Result<Vec<UnassignedProject>> {
+    let rows = sqlx::query(sql!(
+        "SELECT project_id, name, source FROM projects WHERE org_id = ?1 ORDER BY project_id"
+    ))
+    .bind(crate::orgs::SYSTEM_ORG_ID)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| UnassignedProject {
+            project_id: r.get("project_id"),
+            name: r.get("name"),
+            source: r.get("source"),
+        })
+        .collect())
+}
+
+/// Move a project from its current org into `org_id`. Returns rows affected.
+pub async fn reassign_project(pool: &crate::db::DbPool, project_id: i64, org_id: i64) -> Result<u64> {
+    let result = sqlx::query(sql!(
+        "UPDATE projects SET org_id = ?2 WHERE project_id = ?1"
+    ))
+    .bind(project_id)
+    .bind(org_id)
     .execute(pool)
     .await?;
     Ok(result.rows_affected())
@@ -628,19 +707,20 @@ const PROJECT_SCOPED_TABLES: &[&str] = &[
     "transaction_metrics",
 ];
 
-/// Delete a project and everything it owns (events, issues, keys, repos, releases).
-pub async fn delete_project(pool: &crate::db::DbPool, project_id: u64) -> Result<()> {
-    let mut tx = pool.begin().await?;
-    let pid = project_id as i64;
+/// Delete a project and all it owns, reusing the caller's transaction.
+pub async fn delete_project_in_tx(
+    tx: &mut sqlx::Transaction<'_, crate::db::Db>,
+    project_id: i64,
+) -> Result<()> {
+    let pid = project_id;
 
-    // Child tables reached via subquery -- must run before their parents.
     sqlx::query(sql!(
         "DELETE FROM attachments WHERE event_id IN (
             SELECT event_id FROM events WHERE project_id = ?1
         )"
     ))
     .bind(pid)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
 
     sqlx::query(sql!(
@@ -649,7 +729,7 @@ pub async fn delete_project(pool: &crate::db::DbPool, project_id: u64) -> Result
         )"
     ))
     .bind(pid)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
 
     sqlx::query(sql!(
@@ -658,20 +738,27 @@ pub async fn delete_project(pool: &crate::db::DbPool, project_id: u64) -> Result
         )"
     ))
     .bind(pid)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
 
     for table in PROJECT_SCOPED_TABLES {
         let raw = format!("DELETE FROM {table} WHERE project_id = ?1");
         let stmt = crate::db::translate_sql(&raw);
-        sqlx::query(&stmt).bind(pid).execute(&mut *tx).await?;
+        sqlx::query(&stmt).bind(pid).execute(&mut **tx).await?;
     }
 
     sqlx::query(sql!("DELETE FROM projects WHERE project_id = ?1"))
         .bind(pid)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
 
+    Ok(())
+}
+
+/// Delete a project and everything it owns (events, issues, keys, repos, releases).
+pub async fn delete_project(pool: &crate::db::DbPool, project_id: u64) -> Result<()> {
+    let mut tx = pool.begin().await?;
+    delete_project_in_tx(&mut tx, project_id as i64).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -681,16 +768,42 @@ mod tests {
     use super::*;
     use crate::queries::test_helpers::*;
 
+    const ORG_A: i64 = 1;
+    const ORG_B: i64 = 2;
+
+    // Ensure the org row exists, then upsert the project with the given org_id.
+    async fn set_project_org(pool: &crate::db::DbPool, project_id: i64, org_id: i64) {
+        sqlx::query(
+            "INSERT INTO organizations (org_id, slug, name) VALUES (?1, ?1, ?1)
+             ON CONFLICT(org_id) DO NOTHING",
+        )
+        .bind(org_id)
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO projects (project_id, status, source, org_id) VALUES (?1, 'active', 'auto', ?2)
+             ON CONFLICT(project_id) DO UPDATE SET org_id = excluded.org_id",
+        )
+        .bind(project_id)
+        .bind(org_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
     #[tokio::test]
     async fn list_projects_empty() {
         let pool = open_test_db().await;
-        let projects = list_projects(&pool, None, None, None).await.unwrap();
+        let projects = list_projects(&pool, ORG_A, None, None, None).await.unwrap();
         assert!(projects.is_empty());
     }
 
     #[tokio::test]
     async fn list_projects_multiple() {
         let pool = open_test_db().await;
+        set_project_org(&pool, 1, ORG_A).await;
+        set_project_org(&pool, 2, ORG_A).await;
         insert_test_event(
             &pool,
             "e1",
@@ -747,7 +860,7 @@ mod tests {
         )
         .await;
 
-        let projects = list_projects(&pool, None, None, None).await.unwrap();
+        let projects = list_projects(&pool, ORG_A, None, None, None).await.unwrap();
         assert_eq!(projects.len(), 2);
 
         // Newest activity first, so project 1 (last_seen=200) comes first
@@ -765,12 +878,124 @@ mod tests {
     #[tokio::test]
     async fn list_projects_no_issues() {
         let pool = open_test_db().await;
+        set_project_org(&pool, 1, ORG_A).await;
         insert_test_event(&pool, "e1", 1, 100, None, Some("error"), Some("Error")).await;
 
-        let projects = list_projects(&pool, None, None, None).await.unwrap();
+        let projects = list_projects(&pool, ORG_A, None, None, None).await.unwrap();
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].issue_count, 0);
         assert_eq!(projects[0].event_count, 1);
+    }
+
+    #[tokio::test]
+    async fn list_projects_is_scoped_to_org() {
+        let pool = open_test_db().await;
+        set_project_org(&pool, 1, ORG_A).await;
+        set_project_org(&pool, 2, ORG_B).await;
+        insert_test_event(&pool, "e1", 1, 100, Some("fp1"), Some("error"), Some("A")).await;
+        insert_test_event(&pool, "e2", 2, 100, Some("fp2"), Some("error"), Some("B")).await;
+        let only_a = list_projects(&pool, ORG_A, None, None, None).await.unwrap();
+        assert_eq!(only_a.len(), 1);
+        assert_eq!(only_a[0].project_id, 1);
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn create_project_stores_org_id() {
+        let pool = open_test_db().await;
+        sqlx::query("INSERT INTO organizations (org_id, slug, name) VALUES (5, 'test-org', 'Test Org')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (project_id, _key) = create_project(&pool, 5, "My Project", Some("rust"))
+            .await
+            .unwrap();
+        let row = sqlx::query("SELECT org_id FROM projects WHERE project_id = ?1")
+            .bind(project_id as i64)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let stored_org: i64 = row.get(0);
+        assert_eq!(stored_org, 5);
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn reassign_project_changes_org_id() {
+        use sqlx::Row;
+        let pool = open_test_db().await;
+        set_project_org(&pool, 500, ORG_A).await;
+        sqlx::query("INSERT INTO organizations (org_id, slug, name) VALUES (?1, ?1, ?1)")
+            .bind(ORG_B)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let affected = reassign_project(&pool, 500, ORG_B).await.unwrap();
+        assert_eq!(affected, 1);
+
+        let row = sqlx::query("SELECT org_id FROM projects WHERE project_id = 500")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let stored: i64 = row.get(0);
+        assert_eq!(stored, ORG_B);
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn list_unassigned_projects_returns_system_org_only() {
+        use crate::orgs::SYSTEM_ORG_ID;
+        let pool = open_test_db().await;
+        // project 600 stays in SYSTEM_ORG_ID=1 (the default)
+        sqlx::query("INSERT INTO projects (project_id, status, source, org_id) VALUES (600, 'active', 'auto', ?1)")
+            .bind(SYSTEM_ORG_ID)
+            .execute(&pool)
+            .await
+            .unwrap();
+        // project 601 belongs to a real org (org_id=99) -- must be excluded
+        sqlx::query("INSERT OR IGNORE INTO organizations (org_id, slug, name) VALUES (99, 'real-org-99', 'Real Org 99')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO projects (project_id, status, source, org_id) VALUES (601, 'active', 'auto', 99)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let unassigned = list_unassigned_projects(&pool).await.unwrap();
+        let ids: Vec<i64> = unassigned.iter().map(|p| p.project_id).collect();
+        assert!(ids.contains(&600), "project 600 must appear");
+        assert!(!ids.contains(&601), "project 601 must be excluded");
+    }
+
+    /// Ensures delete_project_key won't cross project boundaries.
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn delete_project_key_respects_project_scope() {
+        use sqlx::Row;
+        let pool = open_test_db().await;
+        set_project_org(&pool, 10, ORG_A).await;
+        set_project_org(&pool, 20, ORG_B).await;
+        let key_a = create_project_key(&pool, 10, None).await.unwrap();
+        let key_b = create_project_key(&pool, 20, None).await.unwrap();
+
+        // Cross-org attempt: project 10 tries to delete key_b (owned by project 20).
+        let affected = delete_project_key(&pool, 10, &key_b).await.unwrap();
+        assert_eq!(affected, 0, "cross-project delete must affect 0 rows");
+
+        // key_b must still exist.
+        let count: i64 = sqlx::query("SELECT COUNT(*) FROM project_keys WHERE public_key = ?1")
+            .bind(&key_b)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(count, 1, "key_b must still exist after rejected cross-project delete");
+
+        // Legitimate delete still works.
+        let affected = delete_project_key(&pool, 10, &key_a).await.unwrap();
+        assert_eq!(affected, 1);
     }
 
     /// Fails if a new `project_id`-bearing table is added without being wired

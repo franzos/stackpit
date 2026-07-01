@@ -4,6 +4,7 @@ use serde::Deserialize;
 
 use crate::html::render_template;
 use crate::html::utils::{self, Csrf};
+use crate::orgs::extractor::{require_owner, require_project_scope, ActiveOrg};
 use crate::queries;
 use crate::queries::types::{Integration, ProjectIntegration};
 use crate::queries::ProjectNavCounts;
@@ -25,10 +26,14 @@ struct ProjectIntegrationsTemplate {
 
 pub async fn handler(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
 ) -> axum::response::Response {
-    render_page(&state, project_id, None, &csrf).await
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    render_page(&state, project_id, None, &csrf, active.org_id).await
 }
 
 #[derive(Deserialize)]
@@ -45,16 +50,34 @@ pub struct ActivateForm {
 
 pub async fn activate(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
     Form(form): Form<ActivateForm>,
 ) -> axum::response::Response {
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
+    // Reject cross-org links: the integration must belong to the active org.
+    match queries::integrations::get_integration(&state.pool, form.integration_id, Some(active.org_id)).await {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return render_page(&state, project_id, Some("Integration not found".into()), &csrf, active.org_id).await;
+        }
+        Err(e) => {
+            return render_page(&state, project_id, Some(format!("Error: {e}")), &csrf, active.org_id).await;
+        }
+    }
     let config = form
         .to_address
         .filter(|s| !s.trim().is_empty())
         .map(|s| serde_json::json!({ "to": s.trim() }).to_string());
 
     let s = state.clone();
+    let org_id = active.org_id;
     utils::query_then_render(
         queries::integrations::activate_project_integration(
             &state.writer_pool,
@@ -72,7 +95,7 @@ pub async fn activate(
         )
         .await,
         "Integration activated",
-        move |msg| async move { render_page(&s, project_id, msg, &csrf).await },
+        move |msg| async move { render_page(&s, project_id, msg, &csrf, org_id).await },
     )
     .await
 }
@@ -90,10 +113,17 @@ pub struct UpdateForm {
 
 pub async fn update(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Csrf(csrf): Csrf,
     Path((project_id, id)): Path<(u64, i64)>,
     Form(form): Form<UpdateForm>,
 ) -> axum::response::Response {
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
     let config = form
         .to_address
         .filter(|s| !s.trim().is_empty())
@@ -101,6 +131,7 @@ pub async fn update(
 
     let msg = match queries::integrations::update_project_integration(
         &state.writer_pool,
+        project_id as i64,
         id,
         form.notify_new_issues.is_some(),
         form.notify_regressions.is_some(),
@@ -118,21 +149,28 @@ pub async fn update(
         Ok(_) => "Integration updated".to_string(),
         Err(e) => format!("Error: {e}"),
     };
-    render_page(&state, project_id, Some(msg), &csrf).await
+    render_page(&state, project_id, Some(msg), &csrf, active.org_id).await
 }
 
 pub async fn deactivate(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Csrf(csrf): Csrf,
     Path((project_id, id)): Path<(u64, i64)>,
 ) -> axum::response::Response {
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
     let msg =
-        match queries::integrations::deactivate_project_integration(&state.writer_pool, id).await {
+        match queries::integrations::deactivate_project_integration(&state.writer_pool, project_id as i64, id).await {
             Ok(0) => format!("Error: not found: project integration: {id}"),
             Ok(_) => "Integration deactivated".to_string(),
             Err(e) => format!("Error: {e}"),
         };
-    render_page(&state, project_id, Some(msg), &csrf).await
+    render_page(&state, project_id, Some(msg), &csrf, active.org_id).await
 }
 
 async fn render_page(
@@ -140,11 +178,12 @@ async fn render_page(
     project_id: u64,
     message: Option<String>,
     csrf: &str,
+    org_id: i64,
 ) -> axum::response::Response {
     let active = queries::integrations::list_project_integrations(&state.pool, project_id)
         .await
         .unwrap_or_default();
-    let available = queries::integrations::list_available_for_project(&state.pool, project_id)
+    let available = queries::integrations::list_available_for_project(&state.pool, project_id, org_id)
         .await
         .unwrap_or_default();
 

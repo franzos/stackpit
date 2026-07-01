@@ -7,6 +7,7 @@ use axum::Router;
 
 use crate::server::AppState;
 
+pub mod admin;
 pub mod alerts;
 pub mod auth;
 pub mod browser_defaults;
@@ -25,7 +26,9 @@ pub mod logs;
 pub mod metrics;
 pub mod monitors;
 pub mod new_project;
+pub mod orgs;
 pub mod profiles;
+pub mod provision;
 pub mod project_filters;
 pub mod project_integrations;
 pub mod project_list;
@@ -328,6 +331,44 @@ pub fn routes() -> Router<AppState> {
         // -- global views --
         .route("/web/events/", get(event_list::handler))
         .route("/web/releases/", get(release_list::handler))
+        // -- org switcher --
+        .route("/web/organizations", get(orgs::orgs_index).post(orgs::create_org))
+        .route("/web/organizations/switch", post(orgs::switch_org))
+        // -- org delete --
+        .route(
+            "/web/organizations/{org_id}/delete",
+            post(orgs::delete_org),
+        )
+        // -- org members --
+        .route("/web/organizations/{org_id}/members", get(orgs::org_members))
+        .route("/web/organizations/{org_id}/slug", post(orgs::set_org_slug))
+        // -- org member mutations --
+        .route(
+            "/web/organizations/{org_id}/members/{user_id}/remove",
+            post(orgs::remove_org_member),
+        )
+        .route(
+            "/web/organizations/{org_id}/members/{user_id}/role",
+            post(orgs::set_org_member_role),
+        )
+        // -- org invites --
+        .route(
+            "/web/organizations/{org_id}/invites",
+            post(orgs::create_org_invite),
+        )
+        .route(
+            "/web/organizations/{org_id}/invites/{invite_id}/revoke",
+            post(orgs::revoke_org_invite),
+        )
+        .route(
+            "/web/invite/{token}",
+            get(orgs::get_invite_accept).post(orgs::post_invite_accept),
+        )
+        // -- forseti org provisioning interstitial --
+        .route(
+            "/web/provision",
+            get(provision::provision_form).post(provision::provision_submit),
+        )
         // -- login --
         .route(
             "/web/login",
@@ -340,6 +381,12 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/web/auth/backchannel-logout",
             post(auth::backchannel_logout),
+        )
+        // -- superuser admin --
+        .route("/web/admin/unassigned", get(admin::unassigned_view))
+        .route(
+            "/web/admin/projects/{id}/assign",
+            post(admin::assign_project),
         )
         // -- legacy redirects --
         .route(

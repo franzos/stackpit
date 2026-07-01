@@ -32,6 +32,7 @@ I got tired of paying for Sentry on smaller projects and self-hosting the offici
 - **Source maps** — upload via `sentry-cli` so minified traces resolve to original source.
 - **Monitors** — cron check-in tracking via Sentry's protocol.
 - **Auth your way** — a shared admin token for solo use, or OAuth/OIDC SSO for teams.
+- **Organizations & roles.** Every user gets a personal org and can create more, invite others as owners or members, and manage membership and org slugs from the UI; data is scoped per org, mutations are owner-gated, and if your IdP emits org claims (Forseti-style), those orgs and roles map straight in.
 - **Migrate in** — pull historical events, issues, and releases from an existing Sentry instance.
 
 ## Stackpit vs Sentry
@@ -53,6 +54,7 @@ Stackpit covers the everyday error-tracking workflow and a useful slice of perfo
 | Profiling | View-only | Full |
 | Alerts (email, Slack, webhook, digests, thresholds) | Yes | Yes |
 | Auth / SSO | Admin token + OAuth/OIDC | Yes |
+| Organizations & roles | Self-serve orgs, per-org scoping, owner/member, invites, IdP claim mapping | Yes |
 | Deployment | Single binary, one SQLite file | Many services (PostgreSQL, ClickHouse, Kafka, Redis) |
 | Storage backend | SQLite or PostgreSQL | PostgreSQL + ClickHouse + Kafka |
 | License | MIT, self-hosted | SaaS or heavy self-host |

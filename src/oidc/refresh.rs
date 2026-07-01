@@ -97,6 +97,7 @@ pub async fn refresh(
                 refresh_exp: new_tokens.refresh_exp.or(grant.refresh_exp),
                 id_token: grant.id_token.clone(),
                 csrf_token: grant.csrf_token.clone(),
+                created_at: grant.created_at,
             };
             Ok(RefreshOutcome::Refreshed(updated))
         }

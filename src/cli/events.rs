@@ -8,7 +8,7 @@ pub async fn run(pool: &crate::db::DbPool, project_id: Option<u64>, limit: u32) 
         ..Default::default()
     };
     let page = Page::new(Some(0), Some(limit as u64));
-    let events = queries::events::list_all_events(pool, &filter, &page)
+    let events = queries::events::list_all_events(pool, &filter, &page, None)
         .await?
         .items;
 

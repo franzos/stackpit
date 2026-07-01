@@ -13,6 +13,7 @@ pub mod issues;
 pub mod logs;
 pub mod metrics;
 pub mod monitors;
+pub mod orgs;
 pub mod profiles;
 pub mod projects;
 pub mod releases;

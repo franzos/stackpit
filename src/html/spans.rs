@@ -2,6 +2,7 @@ use askama::Template;
 use axum::extract::{Path, Query};
 
 use crate::extractors::{ProjectPageCtx, ReadPool};
+use crate::orgs::extractor::ActiveOrg;
 use crate::html::render_template;
 use crate::html::utils::{Csrf, ListParams};
 use crate::queries;
@@ -63,10 +64,14 @@ pub async fn list_handler(
 }
 
 pub async fn trace_detail_handler(
+    active: ActiveOrg,
     ReadPool(pool): ReadPool,
     Csrf(csrf): Csrf,
     Path((project_id, trace_id)): Path<(u64, String)>,
 ) -> Result<axum::response::Response, HtmlError> {
+    crate::orgs::extractor::require_project_scope(&active, &pool, project_id as i64)
+        .await
+        .map_err(|_| HtmlError(axum::http::StatusCode::NOT_FOUND, "Not found".into()))?;
     let (spans, errors, root) = tokio::join!(
         queries::spans::get_trace_spans(&pool, &trace_id),
         queries::spans::get_trace_errors(&pool, project_id, &trace_id),

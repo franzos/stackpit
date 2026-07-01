@@ -106,3 +106,37 @@ pub fn unique_project_id() -> u64 {
         .as_millis() as u64;
     900_000 + (ms % 90_000)
 }
+
+/// Execute a write statement against `stackpit.db` via the sqlite3 CLI.
+pub fn db_exec(sql: &str) {
+    Command::new("sqlite3")
+        .arg("stackpit.db")
+        .arg(sql)
+        .output()
+        .expect("run sqlite3 (is it on PATH?)");
+}
+
+/// Insert a native org directly into the DB and return its org_id (_c unused).
+pub async fn seed_native_org(_c: &reqwest::Client, slug: &str) -> i64 {
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    db_exec(&format!(
+        "INSERT INTO organizations (slug, name, is_personal, created_at) \
+         VALUES ('{slug}', '{slug}', 0, {ts})"
+    ));
+    db_query(&format!(
+        "SELECT org_id FROM organizations WHERE slug = '{slug}' \
+         ORDER BY org_id DESC LIMIT 1"
+    ))
+    .parse::<i64>()
+    .expect("org_id parse")
+}
+
+/// Return true if an org row with the given id still exists.
+pub async fn org_exists(org_id: i64) -> bool {
+    db_query(&format!(
+        "SELECT COUNT(*) FROM organizations WHERE org_id = {org_id}"
+    )) == "1"
+}

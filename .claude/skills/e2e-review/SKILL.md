@@ -5,13 +5,13 @@ description: End-to-end review of the stackpit stack. Prompts the operator to ch
 
 # e2e-review
 
-The canonical, numbered list of test cases lives in **`docs/checklist-testing.md`** (§0–§8). This skill is the *driver*: it picks a tier, brings up the stack, and walks that checklist. When a step here cites a `§`, it refers to that file. Keep the two in sync — if you add a surface, add its `§` to `docs/checklist-testing.md` first.
+The canonical, numbered list of test cases lives in **`docs/checklist-testing.md`** (§0–§9). This skill is the *driver*: it picks a tier, brings up the stack, and walks that checklist. When a step here cites a `§`, it refers to that file. Keep the two in sync — if you add a surface, add its `§` to `docs/checklist-testing.md` first.
 
 Goal: take stackpit from "fresh clone" to "every flow verified" — admin UI, public ingest, both auth paths, security middleware, and the two API surfaces. Three tiers, operator picks:
 
 1. **Rust tests** — `cargo test --no-default-features --features sqlite` covers the unit + integration suite (~1 min after the first build). Best for "did my data-layer change break anything".
 2. **Curl-driven API probes** — seeds 5k+ events via `scripts/generate-fake-data.py`, then drives `/web/login`, CSRF, ingest, JSON API, and security-header checks via `curl`. ~30s once the server is up. Catches the "endpoint moved or status code drifted" class.
-3. **Interactive Chrome-MCP walkthrough** — drives a real browser via the `claude-in-chrome` MCP through `docs/checklist-testing.md` (§§3–8). Slow (~30 min), exhaustive, catches what (1) and (2) miss. Wipes state. Best for new features, post-release verification, or when the operator wants eyes on the UX.
+3. **Interactive Chrome-MCP walkthrough** — drives a real browser via the `claude-in-chrome` MCP through `docs/checklist-testing.md` (§§3–9). Slow (~30 min), exhaustive, catches what (1) and (2) miss. Wipes state. Best for new features, post-release verification, or when the operator wants eyes on the UX.
 
 Tiers (1) and (2) are fire-and-forget; tier (3) is destructive and chatty — every visible step prompts the operator and waits for a "looks right?" sign-off.
 
@@ -224,7 +224,7 @@ If that's all green, Tier 2 is done. Hand the operator a one-line summary and st
 
 ## Tier 3 — Interactive Chrome-MCP walkthrough
 
-Drives a real browser through `docs/checklist-testing.md` §§3–8. The §0.5 UX rubric (next-step obvious, error messages actionable, success feedback, empty states useful, keyboard-only, screen-reader sanity, narrow viewport, destructive POSTs guarded, copy reads naturally, console clean) applies to every screen.
+Drives a real browser through `docs/checklist-testing.md` §§3–9. The §0.5 UX rubric (next-step obvious, error messages actionable, success feedback, empty states useful, keyboard-only, screen-reader sanity, narrow viewport, destructive POSTs guarded, copy reads naturally, console clean) applies to every screen.
 
 ### 3.1 Confirm a wipe (if not already done in Tier 2)
 
@@ -259,7 +259,8 @@ Suggested order:
 9. **§4.9 Per-project integrations** — activate a global integration, set min level + env filter, trigger an event matching the rule, watch for the notification.
 10. **§4.10 Cross-project / global pages** — `/web/events/` firehose, `/web/releases/` (now non-empty thanks to the fake-data setup pass).
 11. **§4.11 Static assets** — covered in §2.6.
-12. **§8 Security middleware** — headers + rate limits covered in §2.3 / §2.7.
+12. **§9 Organizations, roles & isolation** — the multi-tenant surface: create orgs + switcher, personal-org neutral slug, members/invites (blank-expiry defaults, not 400), owner slug rename (conflict → 409), the member-vs-owner role-gate matrix, the cross-org isolation matrix (cross-org access → 404, firehoses active-org-scoped), and the admin_token superuser (unassigned view, reassignment, switch-any-org, direct-access bypass). Needs the §7 OIDC stack and **two** distinct OIDC users (an owner + an invited member); seed extra volume into a created project with `generate-fake-data.py --dsn <project-dsn>`.
+13. **§8 Security middleware** — headers + rate limits covered in §2.3 / §2.7.
 
 For each picked step:
 * Drive the browser via MCP (`navigate`, `find`, `form_input`, `javascript_tool`, `read_page`).

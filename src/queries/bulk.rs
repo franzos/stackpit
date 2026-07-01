@@ -55,12 +55,41 @@ async fn fingerprints_by_filter(
         .collect())
 }
 
-/// Delete events by explicit IDs or by filter. Returns how many were removed.
+/// Returns the subset of `fingerprints` that belong to `project_id`.
+/// Prevents callers from supplying foreign fingerprints to bypass project scope.
+async fn filter_fingerprints_to_project(
+    pool: &DbPool,
+    fingerprints: &[String],
+    project_id: u64,
+) -> Result<Vec<String>> {
+    if fingerprints.is_empty() {
+        return Ok(vec![]);
+    }
+    let mut fps = Vec::new();
+    for chunk in fingerprints.chunks(500) {
+        let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new(
+            "SELECT fingerprint FROM issues WHERE project_id = ",
+        );
+        qb.push_bind(project_id as i64);
+        qb.push(" AND fingerprint IN (");
+        let mut sep = qb.separated(", ");
+        for fp in chunk {
+            sep.push_bind(fp.as_str());
+        }
+        qb.push(")");
+        let rows = qb.build().fetch_all(pool).await?;
+        fps.extend(rows.into_iter().map(|r| r.get::<String, _>(0)));
+    }
+    Ok(fps)
+}
+
+/// Delete events by IDs or filter; `org_id` constrains to org's projects (None = superuser only).
 pub async fn bulk_delete_events(
     pool: &DbPool,
     ids: Option<&[String]>,
     filter: Option<&EventFilter>,
     project_id: Option<u64>,
+    org_id: Option<i64>,
 ) -> Result<u64> {
     if let Some(ids) = ids {
         if ids.is_empty() {
@@ -80,6 +109,14 @@ pub async fn bulk_delete_events(
                 sep.push_bind(id.as_str());
             }
             qb.push(")");
+            if let Some(oid) = org_id {
+                qb.push(" AND project_id IN (SELECT project_id FROM projects WHERE org_id = ");
+                qb.push_bind(oid);
+                qb.push(")");
+            } else if let Some(pid) = project_id {
+                qb.push(" AND project_id = ");
+                qb.push_bind(pid as i64);
+            }
             let rows = qb.build().fetch_all(&mut *tx).await?;
             affected_fps.extend(rows.into_iter().map(|row| row.get::<String, _>(0)));
         }
@@ -91,6 +128,14 @@ pub async fn bulk_delete_events(
             sep.push_bind(id.as_str());
         }
         qb.push(")");
+        if let Some(oid) = org_id {
+            qb.push(" AND project_id IN (SELECT project_id FROM projects WHERE org_id = ");
+            qb.push_bind(oid);
+            qb.push(")");
+        } else if let Some(pid) = project_id {
+            qb.push(" AND project_id = ");
+            qb.push_bind(pid as i64);
+        }
         let deleted = qb.build().execute(&mut *tx).await?.rows_affected();
         tx.commit().await?;
 
@@ -155,16 +200,36 @@ pub async fn bulk_delete_events(
             }};
         }
 
-        // Check if filters produce any conditions (refuse to delete everything).
-        if f.level.is_none() && f.project_id.is_none() && f.query.is_none() && f.item_type.is_none()
+        // Refuse to delete everything when no constraints apply at all.
+        if f.level.is_none()
+            && f.project_id.is_none()
+            && f.query.is_none()
+            && f.item_type.is_none()
+            && org_id.is_none()
         {
             return Ok(0);
         }
+
+        // Tracks whether push_filter emitted WHERE/AND, to pick the right connector for org constraint.
+        let has_field_filter =
+            f.level.is_some() || f.project_id.is_some() || f.query.is_some() || f.item_type.is_some();
 
         // Collect distinct fingerprints that will be affected before deleting.
         let mut sel_qb =
             sqlx::QueryBuilder::<crate::db::Db>::new("SELECT DISTINCT fingerprint FROM events");
         push_filter!(sel_qb, f);
+        if let Some(oid) = org_id {
+            if f.project_id.is_none() {
+                if has_field_filter {
+                    sel_qb.push(" AND ");
+                } else {
+                    sel_qb.push(" WHERE ");
+                }
+                sel_qb.push("project_id IN (SELECT project_id FROM projects WHERE org_id = ");
+                sel_qb.push_bind(oid);
+                sel_qb.push(")");
+            }
+        }
         let affected_fps: Vec<String> = sel_qb
             .build()
             .fetch_all(&mut *tx)
@@ -175,6 +240,18 @@ pub async fn bulk_delete_events(
 
         let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new("DELETE FROM events");
         push_filter!(qb, f);
+        if let Some(oid) = org_id {
+            if f.project_id.is_none() {
+                if has_field_filter {
+                    qb.push(" AND ");
+                } else {
+                    qb.push(" WHERE ");
+                }
+                qb.push("project_id IN (SELECT project_id FROM projects WHERE org_id = ");
+                qb.push_bind(oid);
+                qb.push(")");
+            }
+        }
 
         let deleted = qb.build().execute(&mut *tx).await?.rows_affected();
         tx.commit().await?;
@@ -198,7 +275,8 @@ pub async fn bulk_delete_issues(
     since: Option<i64>,
 ) -> Result<u64> {
     let fps: Vec<String> = if let Some(fps) = fingerprints {
-        fps.to_vec()
+        // Constrain to project_id before acting; prevents cross-project id injection.
+        filter_fingerprints_to_project(pool, fps, project_id).await?
     } else if let Some(filter) = filter {
         fingerprints_by_filter(pool, project_id, filter, since).await?
     } else {
@@ -212,8 +290,11 @@ pub async fn bulk_delete_issues(
     let mut tx = pool.begin().await?;
 
     for chunk in fps.chunks(500) {
-        let mut qb =
-            sqlx::QueryBuilder::<crate::db::Db>::new("DELETE FROM events WHERE fingerprint IN (");
+        let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new(
+            "DELETE FROM events WHERE project_id = ",
+        );
+        qb.push_bind(project_id as i64);
+        qb.push(" AND fingerprint IN (");
         let mut sep = qb.separated(", ");
         for fp in chunk {
             sep.push_bind(fp.as_str());
@@ -236,8 +317,11 @@ pub async fn bulk_delete_issues(
 
     let mut deleted: u64 = 0;
     for chunk in fps.chunks(500) {
-        let mut qb =
-            sqlx::QueryBuilder::<crate::db::Db>::new("DELETE FROM issues WHERE fingerprint IN (");
+        let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new(
+            "DELETE FROM issues WHERE project_id = ",
+        );
+        qb.push_bind(project_id as i64);
+        qb.push(" AND fingerprint IN (");
         let mut sep = qb.separated(", ");
         for fp in chunk {
             sep.push_bind(fp.as_str());
@@ -282,7 +366,9 @@ pub async fn bulk_update_issue_status(
     for chunk in fps.chunks(500) {
         let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new("UPDATE issues SET status = ");
         qb.push_bind(status.as_str());
-        qb.push(" WHERE fingerprint IN (");
+        qb.push(" WHERE project_id = ");
+        qb.push_bind(project_id as i64);
+        qb.push(" AND fingerprint IN (");
         let mut sep = qb.separated(", ");
         for fp in chunk {
             sep.push_bind(fp.as_str());
@@ -296,8 +382,35 @@ pub async fn bulk_update_issue_status(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::sql;
     use crate::queries::test_helpers::*;
     use sqlx::Row;
+
+    async fn insert_test_org(pool: &DbPool, slug: &str) -> i64 {
+        sqlx::query(sql!("INSERT INTO organizations (slug, name) VALUES (?1, ?2)"))
+            .bind(slug)
+            .bind(slug)
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query(sql!("SELECT org_id FROM organizations WHERE slug = ?1"))
+            .bind(slug)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+            .get(0)
+    }
+
+    async fn insert_test_project(pool: &DbPool, project_id: i64, org_id: i64) {
+        sqlx::query(sql!(
+            "INSERT INTO projects (project_id, org_id) VALUES (?1, ?2)"
+        ))
+        .bind(project_id)
+        .bind(org_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
 
     #[tokio::test]
     async fn bulk_delete_events_by_ids() {
@@ -309,6 +422,7 @@ mod tests {
         let deleted = bulk_delete_events(
             &pool,
             Some(&["e1".to_string(), "e2".to_string()]),
+            None,
             None,
             None,
         )
@@ -336,7 +450,7 @@ mod tests {
             project_id: Some(1),
             ..Default::default()
         };
-        let deleted = bulk_delete_events(&pool, None, Some(&filter), None)
+        let deleted = bulk_delete_events(&pool, None, Some(&filter), None, None)
             .await
             .unwrap();
         assert_eq!(deleted, 1);
@@ -451,9 +565,145 @@ mod tests {
     #[tokio::test]
     async fn bulk_delete_empty_ids() {
         let pool = open_test_db().await;
-        let deleted = bulk_delete_events(&pool, Some(&[]), None, None)
+        let deleted = bulk_delete_events(&pool, Some(&[]), None, None, None)
             .await
             .unwrap();
         assert_eq!(deleted, 0);
+    }
+
+    // Security: supplied event_ids must not reach across orgs.
+    #[tokio::test]
+    async fn bulk_delete_events_org_scope_ids_cannot_cross_org() {
+        let pool = open_test_db().await;
+        let org_a = insert_test_org(&pool, "bulk-sec-org-a").await;
+        let org_b = insert_test_org(&pool, "bulk-sec-org-b").await;
+        insert_test_project(&pool, 901, org_a).await;
+        insert_test_project(&pool, 902, org_b).await;
+
+        // e1 belongs to org_a/project 901; e2 belongs to org_b/project 902.
+        insert_test_event(&pool, "sec-e1", 901, 100, None, Some("error"), Some("A")).await;
+        insert_test_event(&pool, "sec-e2", 902, 200, None, Some("error"), Some("B")).await;
+
+        // Scoped to org_a but supplying org_b's event id.
+        let deleted = bulk_delete_events(
+            &pool,
+            Some(&["sec-e2".to_string()]),
+            None,
+            None,
+            Some(org_a),
+        )
+        .await
+        .unwrap();
+        assert_eq!(deleted, 0, "cross-org id must not delete");
+
+        let count: i64 = sqlx::query("SELECT COUNT(*) FROM events WHERE event_id = 'sec-e2'")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(count, 1, "org_b event must survive");
+    }
+
+    // Security: filter-path must not reach across orgs.
+    #[tokio::test]
+    async fn bulk_delete_events_org_scope_filter_cannot_cross_org() {
+        let pool = open_test_db().await;
+        let org_a = insert_test_org(&pool, "bulk-sec-filter-org-a").await;
+        let org_b = insert_test_org(&pool, "bulk-sec-filter-org-b").await;
+        insert_test_project(&pool, 911, org_a).await;
+        insert_test_project(&pool, 912, org_b).await;
+
+        insert_test_event(&pool, "sf-e1", 911, 100, None, Some("error"), Some("A")).await;
+        insert_test_event(&pool, "sf-e2", 912, 200, None, Some("error"), Some("B")).await;
+
+        // All-matching delete scoped to org_a; org_b event must survive.
+        let filter = EventFilter {
+            level: Some("error".to_string()),
+            ..Default::default()
+        };
+        let deleted = bulk_delete_events(&pool, None, Some(&filter), None, Some(org_a))
+            .await
+            .unwrap();
+        assert_eq!(deleted, 1, "only org_a event deleted");
+
+        let count: i64 = sqlx::query("SELECT COUNT(*) FROM events WHERE event_id = 'sf-e2'")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(count, 1, "org_b event must survive");
+    }
+
+    // Security: supplied fingerprints must not reach across projects.
+    #[tokio::test]
+    async fn bulk_delete_issues_project_scope_ids_cannot_cross_project() {
+        let pool = open_test_db().await;
+
+        // Project 801: own issue with fp "sec-fp-a".
+        // Project 802: foreign issue with fp "sec-fp-b".
+        insert_test_issue(&pool, "sec-fp-a", 801, Some("A"), Some("error"), 1, 1, 1, "unresolved")
+            .await;
+        insert_test_issue(&pool, "sec-fp-b", 802, Some("B"), Some("error"), 1, 1, 1, "unresolved")
+            .await;
+
+        // Try to delete project 802's fingerprint while scoped to project 801.
+        let deleted = bulk_delete_issues(
+            &pool,
+            Some(&["sec-fp-b".to_string()]),
+            None,
+            801,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(deleted, 0, "cross-project fingerprint must not delete");
+
+        let count: i64 =
+            sqlx::query("SELECT COUNT(*) FROM issues WHERE fingerprint = 'sec-fp-b'")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+                .get(0);
+        assert_eq!(count, 1, "project 802 issue must survive");
+    }
+
+    // Security: supplied fingerprints must not update status across projects.
+    #[tokio::test]
+    async fn bulk_update_issue_status_project_scope_ids_cannot_cross_project() {
+        let pool = open_test_db().await;
+
+        insert_test_issue(
+            &pool,
+            "upd-fp-b",
+            802,
+            Some("B"),
+            Some("error"),
+            1,
+            1,
+            1,
+            "unresolved",
+        )
+        .await;
+
+        // Attempt to resolve project 802's issue while scoped to project 801.
+        let updated = bulk_update_issue_status(
+            &pool,
+            Some(&["upd-fp-b".to_string()]),
+            None,
+            801,
+            None,
+            IssueStatus::Resolved,
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated, 0, "cross-project fingerprint must not update status");
+
+        let status: String =
+            sqlx::query("SELECT status FROM issues WHERE fingerprint = 'upd-fp-b'")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+                .get(0);
+        assert_eq!(status, "unresolved", "project 802 issue status must not change");
     }
 }

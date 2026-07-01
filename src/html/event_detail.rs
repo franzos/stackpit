@@ -5,6 +5,7 @@ use axum::response::IntoResponse;
 
 use crate::domain::*;
 use crate::extractors::ReadPool;
+use crate::orgs::extractor::ActiveOrg;
 use crate::html::render_template;
 use crate::html::utils::Csrf;
 use crate::queries;
@@ -39,11 +40,15 @@ struct EventDetailTemplate {
 }
 
 pub async fn handler(
+    active: ActiveOrg,
     State(_state): State<AppState>,
     ReadPool(pool): ReadPool,
     Csrf(csrf): Csrf,
     Path((project_id, event_id)): Path<(u64, String)>,
 ) -> Result<axum::response::Response, HtmlError> {
+    crate::orgs::extractor::require_project_scope(&active, &pool, project_id as i64)
+        .await
+        .map_err(|_| HtmlError(StatusCode::NOT_FOUND, "Not found".into()))?;
     let event = match queries::events::get_event_detail(&pool, &event_id).await? {
         Some(e) => e,
         None => return Err(HtmlError(StatusCode::NOT_FOUND, "Event not found".into())),
@@ -112,6 +117,7 @@ pub async fn handler(
 
 /// Serves an attachment; forces `application/octet-stream` to avoid stored XSS via attacker-set content_type.
 pub async fn download_attachment(
+    active: ActiveOrg,
     State(_state): State<AppState>,
     ReadPool(pool): ReadPool,
     Path((project_id, event_id, filename)): Path<(u64, String, String)>,
@@ -120,6 +126,11 @@ pub async fn download_attachment(
         Ok(v) => v,
         Err(_) => return html_error(StatusCode::NOT_FOUND, "Attachment not found"),
     };
+    if let Err(resp) =
+        crate::orgs::extractor::require_project_scope(&active, &pool, project_id_i64).await
+    {
+        return resp;
+    }
     match queries::event_supplements::get_attachment_data(
         &pool,
         project_id_i64,

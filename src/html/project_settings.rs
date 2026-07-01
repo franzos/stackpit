@@ -6,6 +6,7 @@ use serde::Deserialize;
 use crate::forge;
 use crate::html::render_template;
 use crate::html::utils::{self, Csrf};
+use crate::orgs::extractor::{require_owner, require_project_scope, ActiveOrg};
 use crate::queries;
 use crate::queries::types::{ProjectKey, ProjectRepo};
 use crate::queries::ProjectNavCounts;
@@ -32,9 +33,13 @@ struct ProjectSettingsTemplate {
 
 pub async fn handler(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
 ) -> axum::response::Response {
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
     render_general(&state, project_id, None, &csrf).await
 }
 
@@ -47,10 +52,18 @@ const MAX_FIELD_LENGTH: usize = 255;
 
 pub async fn set_name(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
     Form(form): Form<SetNameForm>,
 ) -> axum::response::Response {
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
+
     let name = form.name.trim().to_string();
     if name.len() > MAX_FIELD_LENGTH {
         return render_general(
@@ -81,10 +94,18 @@ pub struct AddRepoForm {
 
 pub async fn add_repo(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
     Form(form): Form<AddRepoForm>,
 ) -> axum::response::Response {
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
+
     let repo_url = form.repo_url.trim().to_string();
     if repo_url.is_empty() {
         return render_general(
@@ -129,9 +150,17 @@ pub async fn add_repo(
 
 pub async fn delete_repo(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Csrf(csrf): Csrf,
     Path((project_id, repo_id)): Path<(u64, i64)>,
 ) -> axum::response::Response {
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
+
     let msg = match queries::projects::delete_project_repo(&state.writer_pool, project_id, repo_id)
         .await
     {
@@ -144,9 +173,17 @@ pub async fn delete_repo(
 
 pub async fn archive_project(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
 ) -> axum::response::Response {
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
+
     match queries::projects::archive_project(&state.writer_pool, project_id).await {
         Ok(0) => {
             render_general(
@@ -168,9 +205,17 @@ pub async fn archive_project(
 
 pub async fn unarchive_project(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
 ) -> axum::response::Response {
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
+
     let msg = match queries::projects::unarchive_project(&state.writer_pool, project_id).await {
         Ok(0) => format!("Error: not found: project: {project_id}"),
         Ok(_) => "Project unarchived".to_string(),
@@ -181,9 +226,17 @@ pub async fn unarchive_project(
 
 pub async fn delete_project(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
 ) -> axum::response::Response {
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
+
     match queries::projects::delete_project(&state.writer_pool, project_id).await {
         Ok(()) => axum::response::Redirect::to("/web/projects/").into_response(),
         Err(e) => render_general(&state, project_id, Some(format!("Error: {e}")), &csrf).await,
@@ -248,9 +301,13 @@ struct ProjectKeysTemplate {
 
 pub async fn keys_handler(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
 ) -> axum::response::Response {
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
     render_keys(&state, project_id, None, &csrf).await
 }
 
@@ -261,10 +318,18 @@ pub struct CreateKeyForm {
 
 pub async fn create_key(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
     Form(form): Form<CreateKeyForm>,
 ) -> axum::response::Response {
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
+
     let label = form
         .label
         .filter(|s| !s.trim().is_empty())
@@ -282,10 +347,18 @@ pub async fn create_key(
 
 pub async fn delete_key(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Csrf(csrf): Csrf,
     Path((project_id, public_key)): Path<(u64, String)>,
 ) -> axum::response::Response {
-    match queries::projects::delete_project_key(&state.writer_pool, &public_key).await {
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
+
+    match queries::projects::delete_project_key(&state.writer_pool, project_id, &public_key).await {
         Ok(0) => {
             render_keys(
                 &state,
@@ -353,17 +426,29 @@ struct SourceMapsTemplate {
 
 pub async fn sourcemaps_handler(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
 ) -> axum::response::Response {
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
     render_sourcemaps(&state, project_id, String::new(), None, &csrf).await
 }
 
 pub async fn generate_sourcemap_key(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
 ) -> axum::response::Response {
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
+
     let raw_key = format!("spk_{}", crate::util::crypto::random_hex::<16>());
 
     let hash = {

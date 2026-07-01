@@ -4,6 +4,7 @@ use serde::Deserialize;
 
 use crate::html::render_template;
 use crate::html::utils::Csrf;
+use crate::orgs::extractor::{require_owner, ActiveOrg};
 use crate::queries;
 use crate::server::AppState;
 
@@ -42,8 +43,13 @@ pub struct CreateProjectForm {
 pub async fn create(
     State(state): State<AppState>,
     Csrf(csrf): Csrf,
+    active_org: ActiveOrg,
     Form(form): Form<CreateProjectForm>,
 ) -> axum::response::Response {
+    if let Err(resp) = require_owner(&active_org) {
+        return resp;
+    }
+
     let name = form.name.trim().to_string();
     if name.is_empty() {
         let tmpl = NewProjectTemplate {
@@ -61,6 +67,7 @@ pub async fn create(
 
     let result = queries::projects::create_project(
         &state.writer_pool,
+        active_org.org_id,
         &name,
         if platform.is_empty() {
             None

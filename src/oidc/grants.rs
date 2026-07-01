@@ -77,6 +77,8 @@ pub struct GrantRecord {
     /// Synchronizer CSRF token; compared against form field at every
     /// mutating /web/ request. Per-grant so it dies with the session.
     pub csrf_token: String,
+    /// Unix timestamp when the grant row was first inserted.
+    pub created_at: i64,
 }
 
 /// Generate a fresh 16-byte hex CSRF token from the OS RNG.
@@ -163,7 +165,7 @@ pub async fn load(
 ) -> Result<Option<GrantRecord>> {
     let db_key = handle.db_key();
     let row = sqlx::query(sql!(
-        "SELECT user_id, iss, sub, sid, access_token, access_exp, refresh_token, refresh_exp, id_token, csrf_token \
+        "SELECT user_id, iss, sub, sid, access_token, access_exp, refresh_token, refresh_exp, id_token, csrf_token, created_at \
          FROM oidc_grants WHERE handle = ?1"
     ))
     .bind(db_key.as_slice())
@@ -219,6 +221,7 @@ pub async fn load(
         refresh_exp: row.get("refresh_exp"),
         id_token,
         csrf_token,
+        created_at: row.get("created_at"),
     }))
 }
 

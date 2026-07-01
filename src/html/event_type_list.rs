@@ -43,7 +43,8 @@ pub async fn user_reports_handler(
     };
     let page = params.page.page();
 
-    let result = queries::events::list_all_events(&ctx.pool, &filter, &page).await?;
+    // project_id already pins scope; ProjectPageCtx enforces org membership
+    let result = queries::events::list_all_events(&ctx.pool, &filter, &page, None).await?;
 
     let tmpl = UserReportListTemplate {
         project_id: ctx.project_id,
@@ -65,7 +66,8 @@ pub async fn client_reports_handler(
     };
     let page = params.page.page();
 
-    let result = queries::events::list_all_events(&ctx.pool, &filter, &page).await?;
+    // project_id already pins scope; ProjectPageCtx enforces org membership
+    let result = queries::events::list_all_events(&ctx.pool, &filter, &page, None).await?;
 
     let since = chrono::Utc::now().timestamp() - 30 * 86400;
     let outcomes =

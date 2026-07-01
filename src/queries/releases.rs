@@ -336,11 +336,13 @@ fn fill_session_gaps(present: Vec<DailySessions>, since_ts: i64) -> Vec<DailySes
 
 /// All releases across projects with event counts, issue counts, and adoption %.
 /// `adoption_since` sets the time window for computing the adoption ratio.
+/// Pass `org_id = Some(id)` to scope to that org; `None` returns all (superuser).
 pub async fn list_all_releases(
     pool: &DbPool,
     filter: &ReleaseFilter,
     page: &Page,
     adoption_since: Option<i64>,
+    org_id: Option<i64>,
 ) -> Result<PagedResult<ReleaseSummary>> {
     let adoption_since_ts =
         adoption_since.unwrap_or_else(|| chrono::Utc::now().timestamp() - 86400);
@@ -360,6 +362,11 @@ pub async fn list_all_releases(
         count_qb.push(" AND e.release LIKE ");
         count_qb.push_bind(super::like_contains(query));
         count_qb.push(" ESCAPE '\\'");
+    }
+    if let Some(oid) = org_id {
+        count_qb.push(" AND e.project_id IN (SELECT project_id FROM projects WHERE org_id = ");
+        count_qb.push_bind(oid);
+        count_qb.push(")");
     }
 
     #[cfg(feature = "sqlite")]
@@ -414,6 +421,11 @@ pub async fn list_all_releases(
         qb.push_bind(super::like_contains(query));
         qb.push(" ESCAPE '\\'");
     }
+    if let Some(oid) = org_id {
+        qb.push(" AND e.project_id IN (SELECT project_id FROM projects WHERE org_id = ");
+        qb.push_bind(oid);
+        qb.push(")");
+    }
 
     qb.push(" GROUP BY e.project_id, e.release ORDER BY ");
     qb.push(sort.as_sql_ident());
@@ -447,7 +459,9 @@ pub async fn list_all_releases(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::sql;
     use simple_hll::HyperLogLog;
+    use sqlx::Row;
 
     #[allow(clippy::too_many_arguments)]
     async fn insert_agg(
@@ -650,5 +664,103 @@ mod tests {
         assert_eq!(daily[0].total, 15);
         assert_eq!(daily[0].crashed, 1);
         assert_eq!(daily[0].errored, 3);
+    }
+
+    async fn insert_org_rel(pool: &DbPool, slug: &str) -> i64 {
+        sqlx::query(sql!("INSERT INTO organizations (slug, name) VALUES (?1, ?1)"))
+            .bind(slug)
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query(sql!("SELECT org_id FROM organizations WHERE slug = ?1"))
+            .bind(slug)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+            .get("org_id")
+    }
+
+    async fn insert_project_rel(pool: &DbPool, project_id: i64, org_id: i64) {
+        sqlx::query(sql!(
+            "INSERT INTO projects (project_id, org_id) VALUES (?1, ?2)"
+        ))
+        .bind(project_id)
+        .bind(org_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn insert_event_with_release(
+        pool: &DbPool,
+        event_id: &str,
+        project_id: i64,
+        release: &str,
+    ) {
+        crate::queries::test_helpers::insert_test_event(
+            pool,
+            event_id,
+            project_id,
+            1000,
+            None,
+            Some("error"),
+            Some("test"),
+        )
+        .await;
+        // Overwrite the placeholder release set by insert_test_event with the real value
+        sqlx::query(sql!(
+            "UPDATE events SET release = ?1 WHERE event_id = ?2"
+        ))
+        .bind(release)
+        .bind(event_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn list_all_releases_org_scoped_returns_only_that_org() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        let org_a = insert_org_rel(&pool, "rel-org-a").await;
+        let org_b = insert_org_rel(&pool, "rel-org-b").await;
+        insert_project_rel(&pool, 301, org_a).await;
+        insert_project_rel(&pool, 302, org_b).await;
+        insert_event_with_release(&pool, "re1", 301, "v1.0").await;
+        insert_event_with_release(&pool, "re2", 302, "v2.0").await;
+
+        let filter = ReleaseFilter::default();
+        let page = Page::new(None, None);
+
+        let scoped = list_all_releases(&pool, &filter, &page, None, Some(org_a))
+            .await
+            .unwrap();
+        assert_eq!(scoped.total, 1);
+        assert_eq!(scoped.items[0].version, "v1.0");
+
+        let all = list_all_releases(&pool, &filter, &page, None, None)
+            .await
+            .unwrap();
+        assert_eq!(all.total, 2);
+    }
+
+    #[tokio::test]
+    async fn list_all_releases_org_b_scoped_excludes_org_a() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        let org_a = insert_org_rel(&pool, "rel2-org-a").await;
+        let org_b = insert_org_rel(&pool, "rel2-org-b").await;
+        insert_project_rel(&pool, 401, org_a).await;
+        insert_project_rel(&pool, 402, org_b).await;
+        insert_event_with_release(&pool, "rf1", 401, "vA").await;
+        insert_event_with_release(&pool, "rf2", 401, "vA2").await;
+        insert_event_with_release(&pool, "rf3", 402, "vB").await;
+
+        let filter = ReleaseFilter::default();
+        let page = Page::new(None, None);
+
+        let scoped_b = list_all_releases(&pool, &filter, &page, None, Some(org_b))
+            .await
+            .unwrap();
+        assert_eq!(scoped_b.total, 1);
+        assert_eq!(scoped_b.items[0].version, "vB");
     }
 }

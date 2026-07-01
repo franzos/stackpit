@@ -2,9 +2,9 @@
 
 This is the master list of end-to-end test cases for the stackpit stack — admin UI,
 public ingest, both auth paths, the two API surfaces, and the security middleware.
-The `e2e-review` skill (`.claude/skills/e2e-review/SKILL.md`) drives §§3–8 of this
+The `e2e-review` skill (`.claude/skills/e2e-review/SKILL.md`) drives §§3–9 of this
 document: the automated tiers cover §2, §5, §6, and §8; the interactive Chrome
-walkthrough covers §4 and §7.
+walkthrough covers §4, §7, and §9.
 
 Each item has a stable ID (e.g. `4.3.2`) so findings can reference it. Check items
 off as you verify them. Don't fix anything mid-review — record the finding with a
@@ -407,3 +407,83 @@ Middleware order (outer→inner): security_headers → rate_limit → web_auth �
 - [ ] **8.3.1 Login limit** — `POST /web/login` 10/min/IP: attempts 1–10 → 401 (wrong token), 11th → 429 with `Retry-After: 60`. (Sleep ≥65s first to clear the bucket.)
 - [ ] **8.3.2 Admin limit** — other admin endpoints 120/min/IP → 429 on exceed.
 - [ ] **8.3.3 Window** — fixed 60s bucket; the limit resets after the window.
+
+---
+
+## §9 — Organizations, roles & multi-tenant isolation
+
+Two identity paths exercise this: the **admin_token** superuser (§9.7) and real **OIDC users** (§9.1–§9.6, §9.9, needs the OIDC stack from §7). Org *structure* is created by driving the app, so the create/invite/rename flows are themselves test cases. Fill a project with volume by grabbing its DSN and running `python3 scripts/generate-fake-data.py --dsn '<project-dsn>' --count 300` (routes events into that exact project over the real ingest path; no `--dsn` = the default 100-project seed).
+
+Two distinct OIDC users are needed for §9.3/§9.5 (an owner and an invited member). A superuser cannot create orgs (§9.1.1) — org creation is an OIDC-user action.
+
+### §9.1 Org creation & switcher (OIDC user)
+
+- [ ] **9.1.1 Create org** — `/web/organizations` → create a native org. Slug auto-derived from the name (slugified), you become owner. The admin_token superuser gets **403** here (org creation is real-users-only).
+- [ ] **9.1.2 Switcher persists + re-filters** — switch active org; `sp_active_org` cookie updates. The project list, issue list, event/release firehoses, alert rules, and digest schedules all re-filter to the active org.
+- [ ] **9.1.3 Switch to non-member org → 403** — `POST /web/organizations/switch` to an org you're not a member of is rejected.
+- [ ] **9.1.4 Create-in-active-org** — `+ New project` while an org is active assigns the new project to that org (not the System org). Verify `projects.org_id`.
+- [ ] **9.1.5 DSN seeding** — copy the new project's DSN (settings/keys), run `generate-fake-data.py --dsn …`; events + issues land in that project and only in its org.
+
+### §9.2 Personal org
+
+- [ ] **9.2.1 Auto-create + neutral slug** — first OIDC login auto-creates a personal org (`is_personal=1`, you're owner). Slug is a neutral `personal-<hex>` token — **not** `user-<id>` (no sequential id / PII leak).
+- [ ] **9.2.2 Idempotent** — re-login does not create a second personal org and does not change its slug (a §9.4 rename survives re-login).
+
+### §9.3 Members & invites
+
+- [ ] **9.3.1 Members page** — `/web/organizations/{id}/members` lists members and pending invites. A **member** sees a read-only roster (no slug/invite/danger-zone/remove controls); an **owner** additionally sees the management forms. A **non-member** gets 404 (existence hidden, not 403). (Verified 2026-07-01: member view is roster-only; management controls owner-gated.)
+- [ ] **9.3.2 Create invite** — role + optional email + optional expiry. **A blank expiry must default to 7 days, not 400** (regression: empty `ttl_secs` must deserialize to the default). An explicit expiry is honored. The invite URL is shown once.
+- [ ] **9.3.3 Accept + single-use** — the invite preview shows org + role; accept → the invitee joins with the invite's role; `accepted_by`/`accepted_at` set; the link is single-use (second accept rejected).
+- [ ] **9.3.4 Revoke pending invite** — `POST /web/organizations/{id}/invites/{invite_id}/revoke` removes a pending invite; the once-shown link no longer accepts; a member (non-owner) attempting revoke → 404/403 with no effect.
+- [ ] **9.3.5 Change member role** — `POST /web/organizations/{id}/members/{user_id}/role` toggles a member owner↔member; the target's access changes on next request. IDOR: authz is on the **path** org, never the actor's active org.
+- [ ] **9.3.6 Remove member** — `POST /web/organizations/{id}/members/{user_id}/remove` deletes the membership row; the removed user loses access to the org's projects.
+- [ ] **9.3.7 Last-owner guard** — the sole owner cannot be removed or downgraded: the guarded write affects 0 rows and returns FORBIDDEN, membership unchanged (verify the owner row survives).
+
+### §9.4 Slug rename
+
+- [ ] **9.4.1 Owner rename** — the members page's slug card renames the org slug (slugified, globally unique). Redirects back on success.
+- [ ] **9.4.2 Conflict → 409** — renaming to an existing slug returns 409 and leaves the slug unchanged (no silent suffix for a user-chosen value).
+- [ ] **9.4.3 Scope** — an owner can rename their own **personal** org; the **system** org and **Forseti-backed** orgs are rejected both in the UI (hidden) and at the query layer (bail).
+
+### §9.5 Role gates (member vs owner)
+
+- [ ] **9.5.1 Member reads → 200** — a member of the org can view the project, issue list/detail, event detail, and the settings *page*.
+- [ ] **9.5.2 Member mutations → 403** — every owner-gated write is blocked for a member, with **no side effect**: project rename/archive/delete, key create/delete, repo add/delete, filter writes, integration activate/update/delete, alert-rule & digest create/update/delete, bulk resolve/ignore/delete, issue status update, create invite, slug rename.
+- [ ] **9.5.3 Owner allowed** — the same actions as an owner succeed (2xx / 303).
+
+### §9.6 Cross-org isolation (the surfaces `c185b28` closed)
+
+- [ ] **9.6.1 Cross-org access → 404** — a scoped user opening a project / issue / event that belongs to another org (URL guessing) gets **404**, not 200 and not 403.
+- [ ] **9.6.2 Fingerprint / event lookup** — cross-org issue-by-fingerprint and event lookups are denied (`project_of_fingerprint` / `project_of_event` + `require_project_scope`).
+- [ ] **9.6.3 Firehoses scoped** — `/web/events/` and `/web/releases/` show only the active org's rows (no leak of other orgs' events).
+- [ ] **9.6.4 Jobs scoped** — issue list, digest generation, and threshold-alert evaluation only include the active org's rows.
+- [ ] **9.6.5 Integration linking** — an owner cannot link another org's integration in project settings.
+
+### §9.7 Superuser (admin_token)
+
+- [ ] **9.7.1 Unassigned view** — `/web/admin/unassigned` lists System-org projects.
+- [ ] **9.7.2 Reassignment** — `POST /web/admin/projects/{id}/assign` moves a project to an org (303); a no-CSRF POST → 403; verify `projects.org_id` changed.
+- [ ] **9.7.3 Switch to any org** — the superuser may switch active org to any org, including System and other users' personal orgs (contrast §9.1.3).
+- [ ] **9.7.4 Direct-access bypass** — the superuser can open any project / issue directly regardless of active org (per-project scope is bypassed).
+- [ ] **9.7.5 Lists still active-org-scoped** — project *lists* (web and `/api/v1/projects/`) reflect the active org even for the superuser; the bypass applies to direct access, not enumeration.
+
+### §9.8 OIDC org provisioning & reconciliation (IdP emits an `orgs` claim)
+
+Cross-ref §7.2. Requires an IdP that emits org claims (the local Forseti dev stack may not by default; the unit tests in `src/orgs/reconcile.rs` cover the logic).
+
+- [ ] **9.8.1 Provisioning** — login with an `orgs` claim (role owner) provisions a Forseti org (`ext_iss`/`ext_org_id` set) and adds membership; it appears in the switcher.
+- [ ] **9.8.2 Reconciliation** — re-login with changed claims adds/upgrades/removes memberships accordingly.
+- [ ] **9.8.3 Safety** — the last-owner guard blocks removing/downgrading the sole owner; `role_sync` promotes/demotes per the claim when enabled.
+
+### §9.9 Org deletion (danger zone)
+
+Route: `POST /web/organizations/{org_id}/delete` (handler `orgs::delete_org`, `src/html/orgs.rs`). The danger zone renders on the members page for the owner (and for the superuser on Native/Forseti orgs). Typed-slug confirmation via the `confirm_slug` field. Only **native** and **Forseti-backed** orgs are deletable; **system** and **personal** orgs are refused.
+
+- [ ] **9.9.1 Counts accurate** — the danger-zone copy shows project + member counts (`project_count`/`member_count`); cross-check against `projects`/`organization_members` for the org. Deletion also cascades invites, integrations, alert_rules, digest_schedules (per `DeleteOrgCounts`).
+- [ ] **9.9.2 Wrong slug → 400** — POST with `confirm_slug` ≠ the org slug → 400 ("Type the organization slug to confirm deletion."); org survives.
+- [ ] **9.9.3 Missing CSRF → 403** — POST delete with no `csrf_token` → 403; org survives (CSRF layer not exempted).
+- [ ] **9.9.4 Non-owner → 404** — a member (or non-member) POSTing delete gets **404** (existence hidden), not 403; org survives.
+- [ ] **9.9.5 System + personal refused** — the danger zone is hidden for system and personal orgs, and a forced POST bails at the query layer (`NotDeletable`); neither is destroyed.
+- [ ] **9.9.6 Success cascade** — correct `confirm_slug` → 303 to `/web/organizations`; the org row and all org-scoped rows are gone (projects, members, invites, integrations, alert_rules, digest_schedules) plus the projects' events/issues. The `delete_org_covers_all_org_scoped_tables` guard test backs the table set.
+- [ ] **9.9.7 Active-org cookie cleared** — if the deleted org was the active org, `sp_active_org` is cleared (not repacked); the next request falls back to a valid org.
+- [ ] **9.9.8 Audit log** — a `tracing::warn` audit line records actor, `org_id`, kind, and the cascade counts.

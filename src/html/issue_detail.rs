@@ -10,6 +10,7 @@ use crate::domain::{
 use crate::extractors::ReadPool;
 use crate::html::render_template;
 use crate::html::utils::Csrf;
+use crate::orgs::extractor::ActiveOrg;
 use crate::queries;
 use crate::queries::types::{AttachmentInfo, EventNav, PagedResult, Pagination, TagFacet};
 use crate::server::AppState;
@@ -66,12 +67,17 @@ struct IssueDetailTemplate {
 }
 
 pub async fn handler(
+    active: ActiveOrg,
     State(_state): State<AppState>,
     ReadPool(pool): ReadPool,
     Csrf(csrf): Csrf,
     Path((project_id, fingerprint)): Path<(u64, String)>,
     Query(params): Query<PageParams>,
 ) -> Result<axum::response::Response, HtmlError> {
+    crate::orgs::extractor::require_project_scope(&active, &pool, project_id as i64)
+        .await
+        .map_err(|_| HtmlError(StatusCode::NOT_FOUND, "Not found".into()))?;
+
     let issue = match queries::issues::get_issue(&pool, &fingerprint).await? {
         Some(i) => i,
         None => return Err(HtmlError(StatusCode::NOT_FOUND, "Issue not found".into())),
@@ -232,9 +238,26 @@ pub async fn handler(
 }
 
 pub async fn toggle_discard(
+    active: ActiveOrg,
     State(state): State<AppState>,
     Path((project_id, fingerprint)): Path<(u64, String)>,
 ) -> axum::response::Response {
+    // Bind fingerprint to its owning project, then verify project belongs to active org.
+    let fp_project = match crate::queries::orgs::project_of_fingerprint(&state.pool, &fingerprint).await {
+        Ok(Some(p)) => p,
+        Ok(None) => return html_error(StatusCode::NOT_FOUND, "Issue not found"),
+        Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+    if fp_project != project_id as i64 {
+        return html_error(StatusCode::NOT_FOUND, "Issue not found");
+    }
+    if let Err(r) = crate::orgs::extractor::require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    if let Err(r) = crate::orgs::extractor::require_owner(&active) {
+        return r;
+    }
+
     let is_discarded = queries::filters::is_fingerprint_discarded(&state.pool, &fingerprint)
         .await
         .unwrap_or(false);
@@ -260,10 +283,27 @@ pub async fn toggle_discard(
 }
 
 pub async fn update_status(
+    active: ActiveOrg,
     State(state): State<AppState>,
     Path((project_id, fingerprint)): Path<(u64, String)>,
     Form(form): Form<StatusForm>,
 ) -> axum::response::Response {
+    // Bind fingerprint to its owning project, then verify project belongs to active org.
+    let fp_project = match crate::queries::orgs::project_of_fingerprint(&state.pool, &fingerprint).await {
+        Ok(Some(p)) => p,
+        Ok(None) => return html_error(StatusCode::NOT_FOUND, "Issue not found"),
+        Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+    if fp_project != project_id as i64 {
+        return html_error(StatusCode::NOT_FOUND, "Issue not found");
+    }
+    if let Err(r) = crate::orgs::extractor::require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    if let Err(r) = crate::orgs::extractor::require_owner(&active) {
+        return r;
+    }
+
     let status = match form.status.as_str() {
         "unresolved" => IssueStatus::Unresolved,
         "resolved" => IssueStatus::Resolved,

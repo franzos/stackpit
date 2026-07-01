@@ -2,7 +2,7 @@ use crate::queries;
 use anyhow::Result;
 
 pub async fn run(pool: &crate::db::DbPool) -> Result<()> {
-    let projects = queries::projects::list_projects(pool, None, None, None).await?;
+    let projects = queries::projects::list_all_projects(pool, None, None, None).await?;
 
     if projects.is_empty() {
         println!("No projects found.");

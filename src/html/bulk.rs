@@ -6,6 +6,7 @@ use axum::response::{IntoResponse, Redirect};
 use crate::domain::IssueStatus;
 use crate::html::html_error;
 use crate::html::utils::period_to_timestamp;
+use crate::orgs::extractor::{require_owner, require_project_scope, ActiveOrg};
 use crate::queries;
 use crate::queries::types::{EventFilter, IssueFilter};
 use crate::server::AppState;
@@ -86,7 +87,7 @@ fn resolve_targets<T>(
     }
 }
 
-/// Shared Ok→redirect / Err→500 tail for the bulk query calls.
+/// Shared Ok->redirect / Err->500 tail for the bulk query calls.
 fn bulk_result_redirect(
     result: anyhow::Result<impl Sized>,
     redirect_to: &str,
@@ -98,7 +99,15 @@ fn bulk_result_redirect(
 }
 
 /// Bulk delete for the global events view.
-pub async fn events_bulk(State(state): State<AppState>, body: Bytes) -> axum::response::Response {
+pub async fn events_bulk(
+    State(state): State<AppState>,
+    active: ActiveOrg,
+    body: Bytes,
+) -> axum::response::Response {
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
+
     let form = match BulkForm::parse(&body) {
         Ok(f) => f,
         Err(e) => return html_error(StatusCode::BAD_REQUEST, &e),
@@ -107,6 +116,9 @@ pub async fn events_bulk(State(state): State<AppState>, body: Bytes) -> axum::re
     if form.action != "delete" {
         return html_error(StatusCode::BAD_REQUEST, "Invalid action");
     }
+
+    // Scoped users (role Some) are constrained to their org; superusers (role None) are global.
+    let org_id = active.role.as_ref().map(|_| active.org_id);
 
     let (ids, filter) = resolve_targets(form, |form| EventFilter {
         level: opt(&form.level),
@@ -121,6 +133,7 @@ pub async fn events_bulk(State(state): State<AppState>, body: Bytes) -> axum::re
         ids.as_deref(),
         filter.as_ref(),
         None,
+        org_id,
     )
     .await;
     bulk_result_redirect(result, "/web/events/")
@@ -129,9 +142,16 @@ pub async fn events_bulk(State(state): State<AppState>, body: Bytes) -> axum::re
 /// Bulk actions on issues -- delete, resolve, or ignore.
 pub async fn issues_bulk(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Path(project_id): Path<u64>,
     body: Bytes,
 ) -> axum::response::Response {
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
     let form = match BulkForm::parse(&body) {
         Ok(f) => f,
         Err(e) => return html_error(StatusCode::BAD_REQUEST, &e),
@@ -209,9 +229,16 @@ async fn handle_issue_bulk(
 /// Bulk delete for user reports.
 pub async fn user_reports_bulk(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Path(project_id): Path<u64>,
     body: Bytes,
 ) -> axum::response::Response {
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
     let form = match BulkForm::parse(&body) {
         Ok(f) => f,
         Err(e) => return html_error(StatusCode::BAD_REQUEST, &e),
@@ -229,9 +256,16 @@ pub async fn user_reports_bulk(
 /// Bulk delete for client reports.
 pub async fn client_reports_bulk(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Path(project_id): Path<u64>,
     body: Bytes,
 ) -> axum::response::Response {
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
     let form = match BulkForm::parse(&body) {
         Ok(f) => f,
         Err(e) => return html_error(StatusCode::BAD_REQUEST, &e),
@@ -270,6 +304,7 @@ async fn handle_event_type_bulk(
         ids.as_deref(),
         filter.as_ref(),
         Some(project_id),
+        None,
     )
     .await;
     bulk_result_redirect(result, redirect_to)
@@ -278,9 +313,17 @@ async fn handle_event_type_bulk(
 /// Bulk delete for monitor check-ins.
 pub async fn monitor_checkins_bulk(
     State(state): State<AppState>,
+    active: ActiveOrg,
     Path((project_id, slug)): Path<(u64, String)>,
     body: Bytes,
 ) -> axum::response::Response {
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
+
     let form = match BulkForm::parse(&body) {
         Ok(f) => f,
         Err(e) => return html_error(StatusCode::BAD_REQUEST, &e),
@@ -304,6 +347,7 @@ pub async fn monitor_checkins_bulk(
         ids.as_deref(),
         filter.as_ref(),
         Some(project_id),
+        None,
     )
     .await;
     bulk_result_redirect(result, &redirect)

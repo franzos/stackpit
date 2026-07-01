@@ -142,6 +142,23 @@ pub async fn callback(
         }
     };
 
+    warn_orgs_claim_absent_once(success.claims.orgs.is_none());
+
+    let recon = crate::orgs::reconcile::reconcile(
+        &state.pool,
+        crate::orgs::reconcile::ReconcileInput {
+            user_id: user.user_id,
+            iss: &success.claims.iss,
+            orgs: success.claims.orgs.as_deref(),
+            orgs_truncated: success.claims.orgs_truncated,
+        },
+    )
+    .await
+    .unwrap_or_else(|e| {
+        tracing::error!("reconcile failed: {e:#}");
+        Default::default()
+    });
+
     // cookie carries only the handle; tokens persist encrypted server-side
     let handle = match grants::insert(
         &state.pool,
@@ -168,9 +185,28 @@ pub async fn callback(
     };
 
     let secure = state.config.server.cookies_should_be_secure();
-    let mut resp = Redirect::to("/web/").into_response();
+
+    // Build provision cookie first so we know if it succeeds before deciding redirect.
+    let provision_cookie = if !recon.provisionable.is_empty() {
+        let ps = crate::html::provision::new_state(recon.provisionable, success.claims.iss.clone());
+        match crate::html::provision::pack(encryptor, &ps) {
+            Some(blob) => Some(crate::html::provision::build_provision_cookie(&blob, secure)),
+            None => {
+                tracing::error!("provisionable orgs present but sp_provision cookie could not be built; skipping interstitial");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let redirect_target = if provision_cookie.is_some() { "/web/provision" } else { "/web/" };
+    let mut resp = Redirect::to(redirect_target).into_response();
     append_set_cookie(&mut resp, build_grant_cookie(&handle.to_hex(), secure));
     append_set_cookie(&mut resp, clear_login_cookie(secure));
+    if let Some(cookie) = provision_cookie {
+        append_set_cookie(&mut resp, cookie);
+    }
     resp
 }
 
@@ -278,6 +314,18 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
         return false;
     }
     a.ct_eq(b).into()
+}
+
+/// Emits the missing-orgs-claim warning exactly once per process lifetime.
+fn warn_orgs_claim_absent_once(absent: bool) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static WARNED: AtomicBool = AtomicBool::new(false);
+    if absent && !WARNED.swap(true, Ordering::Relaxed) {
+        tracing::warn!(
+            "OIDC id_token carried no `orgs` claim; org reconciliation disabled. \
+             Is the `orgs` scope registered on this client in Hydra?"
+        );
+    }
 }
 
 /// Detect email unique constraint violation across SQLite + Postgres.

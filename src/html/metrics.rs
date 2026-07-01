@@ -3,6 +3,7 @@ use axum::extract::{Path, Query};
 use serde::Deserialize;
 
 use crate::extractors::ReadPool;
+use crate::orgs::extractor::ActiveOrg;
 use crate::html::render_template;
 use crate::html::utils::{render_project_list, Csrf, ListParams};
 use crate::queries;
@@ -24,11 +25,15 @@ struct MetricListTemplate {
 }
 
 pub async fn list_handler(
+    active: ActiveOrg,
     ReadPool(pool): ReadPool,
     Csrf(csrf): Csrf,
     Path(project_id): Path<u64>,
     Query(params): Query<ListParams>,
 ) -> Result<axum::response::Response, HtmlError> {
+    crate::orgs::extractor::require_project_scope(&active, &pool, project_id as i64)
+        .await
+        .map_err(|_| HtmlError(axum::http::StatusCode::NOT_FOUND, "Not found".into()))?;
     let page = params.page.page();
     let result = queries::metrics::list_metrics(&pool, project_id, &page).await?;
 
@@ -65,11 +70,15 @@ struct MetricDetailTemplate {
 }
 
 pub async fn detail_handler(
+    active: ActiveOrg,
     ReadPool(pool): ReadPool,
     Csrf(csrf): Csrf,
     Path((project_id, raw_mri)): Path<(u64, String)>,
     Query(params): Query<DetailParams>,
 ) -> Result<axum::response::Response, HtmlError> {
+    crate::orgs::extractor::require_project_scope(&active, &pool, project_id as i64)
+        .await
+        .map_err(|_| HtmlError(axum::http::StatusCode::NOT_FOUND, "Not found".into()))?;
     let mri = raw_mri
         .strip_prefix('/')
         .unwrap_or(&raw_mri)

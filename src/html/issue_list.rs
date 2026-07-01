@@ -1,5 +1,6 @@
 use askama::Template;
 use axum::extract::{Path, Query, RawQuery};
+use axum::http::StatusCode;
 use axum::response::IntoResponse;
 
 use crate::db::DbPool;
@@ -9,6 +10,7 @@ use crate::html::utils::{
     build_filter_qs, defaults_redirect_url, issue_filter_from_params, period_to_timestamp, Csrf,
     ListParams,
 };
+use crate::orgs::extractor::ActiveOrg;
 use crate::queries;
 use crate::queries::types::PagedResult;
 use crate::queries::ProjectNavCounts;
@@ -40,6 +42,7 @@ struct IssueListTemplate {
 }
 
 pub async fn handler(
+    active: ActiveOrg,
     BrowserDefaults(defaults): BrowserDefaults,
     RawQuery(raw_qs): RawQuery,
     ReadPool(pool): ReadPool,
@@ -55,6 +58,9 @@ pub async fn handler(
     ) {
         return Ok(axum::response::Redirect::to(&url).into_response());
     }
+    crate::orgs::extractor::require_project_scope(&active, &pool, project_id as i64)
+        .await
+        .map_err(|_| HtmlError(StatusCode::NOT_FOUND, "Not found".into()))?;
     issue_or_transaction_handler(&pool, project_id, params, "event", csrf).await
 }
 

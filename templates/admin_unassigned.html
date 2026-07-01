@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+
+{% block title %}Unassigned Projects - Stackpit{% endblock %}
+
+{% block sidebar_nav %}
+  {% call m::top_sidebar("") %}
+  {% endcall %}
+{% endblock %}
+
+{% block breadcrumbs %}
+  <span class="breadcrumb-sep">›</span>
+  <span>Admin</span>
+  <span class="breadcrumb-sep">›</span>
+  <span>Unassigned Projects</span>
+{% endblock %}
+
+{% block content %}
+  <div class="page-header">
+    <div>
+      <h1>Unassigned Projects</h1>
+      <p class="text-muted text-[13px] mt-1">Projects auto-registered without an org. Reassign them to a real org.</p>
+    </div>
+  </div>
+
+  {% if projects.is_empty() %}
+    <div class="card">
+      <p class="empty">No unassigned projects. All projects belong to a real org.</p>
+    </div>
+  {% else %}
+    <div class="card overflow-hidden">
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Project</th>
+              <th>Source</th>
+              <th>Assign to org</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in projects %}
+              <tr>
+                <td>
+                  <a class="font-semibold" href="/web/projects/{{ p.project_id }}/">{% match p.name %}{% when Some with (n) %}{{ n }}{% when None %}{{ p.project_id }}{% endmatch %}</a>
+                  <div class="text-muted text-[12px] text-mono mt-0.5">id: {{ p.project_id }}</div>
+                </td>
+                <td class="text-muted">{% match p.source %}{% when Some with (s) %}{{ s }}{% when None %}<span class="text-muted">-</span>{% endmatch %}</td>
+                <td>
+                  {% if orgs.is_empty() %}
+                    <span class="text-muted">No orgs available</span>
+                  {% else %}
+                    <form method="post" action="/web/admin/projects/{{ p.project_id }}/assign" class="flex items-center gap-2">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                      <select name="org_id" class="select w-auto">
+                        {% for o in orgs %}
+                          <option value="{{ o.org_id }}">{% match o.name %}{% when Some with (n) %}{{ n }}{% when None %}{{ o.slug }}{% endmatch %} ({{ o.slug }})</option>
+                        {% endfor %}
+                      </select>
+                      <button type="submit" class="btn btn-primary">Assign</button>
+                    </form>
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {% endif %}
+{% endblock %}

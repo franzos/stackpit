@@ -66,7 +66,7 @@ pub struct ResourceMetadata {
 impl ResourceMetadata {
     /// Claude Code reads `scopes_supported` for DCR; mirror any new scope here.
     pub fn new(audience: &str, authorization_server: &str) -> Self {
-        // `offline_access` (OIDC standard) -- NOT Hydra's `offline` alias.
+        // `offline_access` (OIDC standard, not Hydra's `offline` alias).
         // Publishing `offline` breaks the DCR client's refresh-token grant.
         let body = json!({
             "resource": audience,
@@ -91,7 +91,7 @@ impl ResourceMetadata {
 async fn well_known_handler(State(state): State<AppState>) -> impl IntoResponse {
     let body = match &state.mcp {
         Some(rt) => rt.metadata.body().clone(),
-        // Defensive -- route is only mounted when MCP is configured.
+        // Defensive: route is only mounted when MCP is configured.
         None => return (StatusCode::NOT_FOUND, Json(json!({ "error": "not found" }))),
     };
     (StatusCode::OK, Json(body))
@@ -185,19 +185,82 @@ impl UserProvisioner for DbProvisioner {
             }
         }
 
-        match crate::queries::users::upsert_from_oidc(&self.pool, iss, sub, None, None).await {
-            Ok(_) => {
-                self.seen
-                    .lock()
-                    .put((iss.to_string(), sub.to_string()), Instant::now());
-                Ok(())
-            }
-            Err(e) => {
-                // Don't touch the LRU -- next request retries the upsert.
-                // Caller skips the introspection cache on Err.
-                Err(stackpit_auth::BackendError::Backend(format!("{e:#}")))
-            }
+        let user =
+            match crate::queries::users::upsert_from_oidc(&self.pool, iss, sub, None, None).await
+            {
+                Ok(u) => u,
+                Err(e) => {
+                    // Don't touch the LRU; next request retries the upsert.
+                    return Err(stackpit_auth::BackendError::Backend(format!("{e:#}")));
+                }
+            };
+
+        if let Err(e) =
+            crate::queries::orgs::ensure_personal_org(&self.pool, user.user_id).await
+        {
+            // Don't touch the LRU; next request retries both steps.
+            return Err(stackpit_auth::BackendError::Backend(format!("{e:#}")));
         }
+
+        self.seen
+            .lock()
+            .put((iss.to_string(), sub.to_string()), Instant::now());
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::queries::orgs::list_memberships;
+    use crate::queries::users::find_by_iss_sub;
+
+    #[tokio::test]
+    async fn provision_creates_personal_org() {
+        let pool = crate::db::open_test_pool().await;
+        let provisioner = DbProvisioner::new(pool.clone());
+
+        provisioner
+            .provision("https://idp.test", "sub-mcp")
+            .await
+            .expect("provision must succeed");
+
+        let user = find_by_iss_sub(&pool, "https://idp.test", "sub-mcp")
+            .await
+            .unwrap()
+            .expect("user must exist after provision");
+
+        let memberships = list_memberships(&pool, user.user_id).await.unwrap();
+        assert_eq!(memberships.len(), 1, "exactly one membership");
+        assert!(memberships[0].is_personal, "membership must be personal org");
+    }
+
+    #[tokio::test]
+    async fn provision_personal_org_is_idempotent_via_lru_bypass() {
+        let pool = crate::db::open_test_pool().await;
+        let provisioner = DbProvisioner::new(pool.clone());
+
+        // Call twice; LRU fast-path skips DB on second call, still one membership.
+        provisioner
+            .provision("https://idp.test", "sub-mcp-idem")
+            .await
+            .unwrap();
+        // Clear the LRU so the second call hits the DB again.
+        provisioner
+            .seen
+            .lock()
+            .clear();
+        provisioner
+            .provision("https://idp.test", "sub-mcp-idem")
+            .await
+            .unwrap();
+
+        let user = find_by_iss_sub(&pool, "https://idp.test", "sub-mcp-idem")
+            .await
+            .unwrap()
+            .unwrap();
+        let memberships = list_memberships(&pool, user.user_id).await.unwrap();
+        assert_eq!(memberships.len(), 1, "idempotent: still exactly one membership");
     }
 }
 

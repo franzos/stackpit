@@ -7,6 +7,7 @@ use crate::html::render_template;
 use crate::html::utils::{
     build_filter_qs, defaults_redirect_url, event_filter_from_params, Csrf, ListParams,
 };
+use crate::orgs::extractor::ActiveOrg;
 use crate::queries;
 use crate::queries::types::PagedResult;
 use crate::server::AppState;
@@ -37,6 +38,7 @@ pub async fn handler(
     ReadPool(pool): ReadPool,
     Csrf(csrf): Csrf,
     Query(params): Query<ListParams>,
+    active: ActiveOrg,
 ) -> Result<axum::response::Response, HtmlError> {
     if let Some(url) = defaults_redirect_url(
         "/web/events/",
@@ -54,8 +56,9 @@ pub async fn handler(
 
     let filter = event_filter_from_params(&params);
     let page = params.page.page();
+    let org_id = if active.role.is_none() { None } else { Some(active.org_id) };
 
-    let result = queries::events::list_all_events(&pool, &filter, &page).await?;
+    let result = queries::events::list_all_events(&pool, &filter, &page, org_id).await?;
 
     let (base_qs, filter_qs) = build_filter_qs(
         &[

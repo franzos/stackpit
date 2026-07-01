@@ -5,6 +5,7 @@ use axum::Json;
 use serde::Deserialize;
 
 use crate::extractors::ReadPool;
+use crate::orgs::extractor::{require_owner, ActiveOrg};
 use crate::queries;
 use crate::server::AppState;
 
@@ -42,8 +43,12 @@ fn default_true() -> bool {
 }
 
 /// GET /api/v1/alerts/rules
-pub async fn list_rules(ReadPool(pool): ReadPool) -> Result<impl IntoResponse, ApiError> {
-    let rules = queries::alerts::list_alert_rules(&pool, None)
+pub async fn list_rules(
+    active: ActiveOrg,
+    ReadPool(pool): ReadPool,
+) -> Result<impl IntoResponse, ApiError> {
+    let org_scope = if active.role.is_none() { None } else { Some(active.org_id) };
+    let rules = queries::alerts::list_alert_rules(&pool, None, org_scope)
         .await
         .map_err(ApiError::internal)?;
     let out = rules
@@ -67,11 +72,25 @@ pub async fn list_rules(ReadPool(pool): ReadPool) -> Result<impl IntoResponse, A
 
 /// POST /api/v1/alerts/rules
 pub async fn create_rule(
+    active: ActiveOrg,
     State(state): State<AppState>,
     Json(body): Json<CreateAlertRuleBody>,
 ) -> Result<impl IntoResponse, ApiError> {
+    require_owner(&active).map_err(|_| ApiError::new(StatusCode::FORBIDDEN, "forbidden"))?;
+    if let Some(pid) = body.project_id {
+        if active.role.is_some() {
+            crate::queries::orgs::assert_project_in_org(
+                &state.pool,
+                pid as i64,
+                active.org_id,
+            )
+            .await
+            .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "project not in org"))?;
+        }
+    }
     let id = queries::alerts::create_alert_rule(
         &state.writer_pool,
+        active.org_id,
         body.project_id,
         body.fingerprint.as_deref(),
         &body.trigger_kind,
@@ -86,13 +105,16 @@ pub async fn create_rule(
 
 /// PUT /api/v1/alerts/rules/{id}
 pub async fn update_rule(
+    active: ActiveOrg,
     State(state): State<AppState>,
     Path(id): Path<i64>,
     Json(body): Json<UpdateAlertRuleBody>,
 ) -> Result<impl IntoResponse, ApiError> {
+    require_owner(&active).map_err(|_| ApiError::new(StatusCode::FORBIDDEN, "forbidden"))?;
     match queries::alerts::update_alert_rule(
         &state.writer_pool,
         id,
+        active.org_id,
         body.threshold_count,
         body.window_secs,
         body.cooldown_secs,
@@ -108,10 +130,12 @@ pub async fn update_rule(
 
 /// DELETE /api/v1/alerts/rules/{id}
 pub async fn delete_rule(
+    active: ActiveOrg,
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<impl IntoResponse, ApiError> {
-    match queries::alerts::delete_alert_rule(&state.writer_pool, id).await {
+    require_owner(&active).map_err(|_| ApiError::new(StatusCode::FORBIDDEN, "forbidden"))?;
+    match queries::alerts::delete_alert_rule(&state.writer_pool, id, active.org_id).await {
         Ok(0) => Err(ApiError::not_found(format!("not found: alert rule: {id}"))),
         Ok(_) => Ok(StatusCode::NO_CONTENT),
         Err(e) => Err(ApiError::not_found(e.to_string())),
@@ -134,8 +158,12 @@ pub struct UpdateDigestBody {
 }
 
 /// GET /api/v1/digests
-pub async fn list_digests(ReadPool(pool): ReadPool) -> Result<impl IntoResponse, ApiError> {
-    let schedules = queries::alerts::list_digest_schedules(&pool)
+pub async fn list_digests(
+    active: ActiveOrg,
+    ReadPool(pool): ReadPool,
+) -> Result<impl IntoResponse, ApiError> {
+    let org_scope = if active.role.is_none() { None } else { Some(active.org_id) };
+    let schedules = queries::alerts::list_digest_schedules(&pool, org_scope)
         .await
         .map_err(ApiError::internal)?;
     let out = schedules
@@ -156,11 +184,25 @@ pub async fn list_digests(ReadPool(pool): ReadPool) -> Result<impl IntoResponse,
 
 /// POST /api/v1/digests
 pub async fn create_digest(
+    active: ActiveOrg,
     State(state): State<AppState>,
     Json(body): Json<CreateDigestBody>,
 ) -> Result<impl IntoResponse, ApiError> {
+    require_owner(&active).map_err(|_| ApiError::new(StatusCode::FORBIDDEN, "forbidden"))?;
+    if let Some(pid) = body.project_id {
+        if active.role.is_some() {
+            crate::queries::orgs::assert_project_in_org(
+                &state.pool,
+                pid as i64,
+                active.org_id,
+            )
+            .await
+            .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "project not in org"))?;
+        }
+    }
     let id = queries::alerts::create_digest_schedule(
         &state.writer_pool,
+        active.org_id,
         body.project_id,
         body.interval_secs,
     )
@@ -171,13 +213,16 @@ pub async fn create_digest(
 
 /// PUT /api/v1/digests/{id}
 pub async fn update_digest(
+    active: ActiveOrg,
     State(state): State<AppState>,
     Path(id): Path<i64>,
     Json(body): Json<UpdateDigestBody>,
 ) -> Result<impl IntoResponse, ApiError> {
+    require_owner(&active).map_err(|_| ApiError::new(StatusCode::FORBIDDEN, "forbidden"))?;
     match queries::alerts::update_digest_schedule(
         &state.writer_pool,
         id,
+        active.org_id,
         body.interval_secs,
         body.enabled,
     )
@@ -193,10 +238,12 @@ pub async fn update_digest(
 
 /// DELETE /api/v1/digests/{id}
 pub async fn delete_digest(
+    active: ActiveOrg,
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<impl IntoResponse, ApiError> {
-    match queries::alerts::delete_digest_schedule(&state.writer_pool, id).await {
+    require_owner(&active).map_err(|_| ApiError::new(StatusCode::FORBIDDEN, "forbidden"))?;
+    match queries::alerts::delete_digest_schedule(&state.writer_pool, id, active.org_id).await {
         Ok(0) => Err(ApiError::not_found(format!(
             "not found: digest schedule: {id}"
         ))),

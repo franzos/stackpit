@@ -34,7 +34,7 @@ pub(super) async fn check_threshold_alerts(
     }
 
     let all_rules = match sqlx::query(sql!(
-        "SELECT id, project_id, fingerprint, threshold_count, window_secs, cooldown_secs
+        "SELECT id, org_id, project_id, fingerprint, threshold_count, window_secs, cooldown_secs
          FROM alert_rules WHERE enabled = TRUE AND trigger_kind = 'threshold'"
     ))
     .fetch_all(pool)
@@ -53,6 +53,7 @@ pub(super) async fn check_threshold_alerts(
 
     struct Rule {
         id: i64,
+        org_id: i64,
         project_id: Option<i64>,
         fingerprint: Option<String>,
         threshold: i64,
@@ -65,6 +66,7 @@ pub(super) async fn check_threshold_alerts(
         .filter_map(|row| {
             Some(Rule {
                 id: row.get("id"),
+                org_id: row.get("org_id"),
                 project_id: row.get("project_id"),
                 fingerprint: row.get("fingerprint"),
                 threshold: row.get::<Option<i64>, _>("threshold_count")?,
@@ -73,6 +75,33 @@ pub(super) async fn check_threshold_alerts(
             })
         })
         .collect();
+
+    // Batch-fetch org_id for every candidate project so we can enforce org scope.
+    let unique_candidate_pids: Vec<i64> = {
+        let mut v: Vec<i64> = candidates.iter().map(|c| c.project_id as i64).collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    };
+    let mut project_orgs: HashMap<u64, i64> = HashMap::new();
+    for chunk in unique_candidate_pids.chunks(TRIGGER_CHUNK_SIZE) {
+        let mut qb = QueryBuilder::<crate::db::Db>::new(
+            "SELECT project_id, org_id FROM projects WHERE project_id IN (",
+        );
+        {
+            let mut sep = qb.separated(", ");
+            for pid in chunk {
+                sep.push_bind(*pid);
+            }
+        }
+        qb.push(")");
+        if let Ok(rows) = qb.build().fetch_all(pool).await {
+            for row in &rows {
+                project_orgs
+                    .insert(row.get::<i64, _>("project_id") as u64, row.get("org_id"));
+            }
+        }
+    }
 
     if rules.is_empty() {
         return;
@@ -85,13 +114,16 @@ pub(super) async fn check_threshold_alerts(
 
     let mut matches: Vec<RuleMatch> = Vec::new();
     for (ci, c) in candidates.iter().enumerate() {
+        let candidate_org = project_orgs.get(&c.project_id).copied();
         for (ri, rule) in rules.iter().enumerate() {
             let project_ok = rule.project_id.is_none_or(|pid| pid == c.project_id as i64);
             let fp_ok = rule
                 .fingerprint
                 .as_deref()
                 .is_none_or(|fp| fp == c.fingerprint);
-            if project_ok && fp_ok {
+            // Org must match; fail-closed if candidate project is unknown.
+            let org_ok = candidate_org == Some(rule.org_id);
+            if project_ok && fp_ok && org_ok {
                 matches.push(RuleMatch {
                     rule_idx: ri,
                     candidate_idx: ci,
@@ -178,7 +210,8 @@ pub(super) async fn check_threshold_alerts(
         return;
     }
 
-    let mut event_counts: BTreeMap<(i64, String), i64> = BTreeMap::new();
+    // Key: (window_secs, project_id, fingerprint) to avoid cross-project count inflation.
+    let mut event_counts: BTreeMap<(i64, u64, String), i64> = BTreeMap::new();
     for (&window, checks) in &by_window {
         let mut fps: Vec<&str> = checks
             .iter()
@@ -187,24 +220,44 @@ pub(super) async fn check_threshold_alerts(
         fps.sort_unstable();
         fps.dedup();
 
-        let since = now - window;
-        for chunk in fps.chunks(TRIGGER_CHUNK_SIZE) {
-            let mut qb = QueryBuilder::<crate::db::Db>::new(
-                "SELECT fingerprint, COUNT(*) as cnt FROM events WHERE timestamp >= ",
-            );
-            qb.push_bind(since);
-            qb.push(" AND fingerprint IN (");
-            {
-                let mut sep = qb.separated(", ");
-                for fp in chunk {
-                    sep.push_bind(*fp);
-                }
-            }
-            qb.push(") GROUP BY fingerprint");
+        let mut pids: Vec<i64> = checks
+            .iter()
+            .map(|c| candidates[c.candidate_idx].project_id as i64)
+            .collect();
+        pids.sort_unstable();
+        pids.dedup();
 
-            if let Ok(rows) = qb.build().fetch_all(pool).await {
-                for row in &rows {
-                    event_counts.insert((window, row.get("fingerprint")), row.get("cnt"));
+        let since = now - window;
+        for fp_chunk in fps.chunks(TRIGGER_CHUNK_SIZE) {
+            for pid_chunk in pids.chunks(TRIGGER_CHUNK_SIZE) {
+                let mut qb = QueryBuilder::<crate::db::Db>::new(
+                    "SELECT project_id, fingerprint, COUNT(*) as cnt FROM events WHERE timestamp >= ",
+                );
+                qb.push_bind(since);
+                qb.push(" AND fingerprint IN (");
+                {
+                    let mut sep = qb.separated(", ");
+                    for fp in fp_chunk {
+                        sep.push_bind(*fp);
+                    }
+                }
+                qb.push(") AND project_id IN (");
+                {
+                    let mut sep = qb.separated(", ");
+                    for pid in pid_chunk {
+                        sep.push_bind(*pid);
+                    }
+                }
+                qb.push(") GROUP BY project_id, fingerprint");
+
+                if let Ok(rows) = qb.build().fetch_all(pool).await {
+                    for row in &rows {
+                        let pid = row.get::<i64, _>("project_id") as u64;
+                        event_counts.insert(
+                            (window, pid, row.get("fingerprint")),
+                            row.get("cnt"),
+                        );
+                    }
                 }
             }
         }
@@ -215,7 +268,7 @@ pub(super) async fn check_threshold_alerts(
             let rule = &rules[check.rule_idx];
             let c = &candidates[check.candidate_idx];
             let count = event_counts
-                .get(&(window, c.fingerprint.clone()))
+                .get(&(window, c.project_id, c.fingerprint.clone()))
                 .copied()
                 .unwrap_or(0);
 
@@ -255,5 +308,109 @@ pub(super) async fn check_threshold_alerts(
                 digest: None,
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::sql;
+    use crate::queries::alerts::create_alert_rule;
+    use crate::queries::test_helpers::{insert_test_event, insert_test_issue};
+    use sqlx::Row;
+
+    async fn setup_org(pool: &crate::db::DbPool, slug: &str) -> i64 {
+        sqlx::query(sql!("INSERT INTO organizations (slug, name) VALUES (?1, ?2)"))
+            .bind(slug)
+            .bind(slug)
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query(sql!("SELECT org_id FROM organizations WHERE slug = ?1"))
+            .bind(slug)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+            .get("org_id")
+    }
+
+    async fn setup_project(pool: &crate::db::DbPool, project_id: i64, org_id: i64) {
+        sqlx::query(sql!(
+            "INSERT INTO projects (project_id, org_id) VALUES (?1, ?2)"
+        ))
+        .bind(project_id)
+        .bind(org_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    // Fix 3: a global rule in org_a must not fire for a candidate from org_b.
+    #[tokio::test]
+    async fn threshold_global_rule_does_not_match_foreign_org_candidate() {
+        let pool = crate::db::open_test_pool().await;
+        let now = chrono::Utc::now().timestamp();
+
+        let org_a = setup_org(&pool, "thr-org-a").await;
+        let org_b = setup_org(&pool, "thr-org-b").await;
+        setup_project(&pool, 9501, org_a).await;
+        setup_project(&pool, 9502, org_b).await;
+
+        // Global threshold rule (project_id NULL) in org_a with threshold=1.
+        create_alert_rule(&pool, org_a, None, None, "threshold", Some(1), Some(3600), 3600)
+            .await
+            .unwrap();
+
+        // Insert events that would trigger the rule if org scoping were absent.
+        insert_test_event(&pool, "thr-e1", 9502, now - 10, Some("fp-thr"), Some("error"), Some("E"))
+            .await;
+        insert_test_issue(&pool, "fp-thr", 9502, Some("E"), Some("error"), now - 10, now - 10, 1, "unresolved")
+            .await;
+
+        let candidates = vec![ThresholdCandidate {
+            fingerprint: "fp-thr".to_string(),
+            project_id: 9502,
+            title: None,
+            level: None,
+        }];
+
+        let mut pending = Vec::new();
+        check_threshold_alerts(&pool, &candidates, &mut pending).await;
+
+        assert!(
+            pending.is_empty(),
+            "global rule in org_a must not fire for org_b candidate"
+        );
+    }
+
+    // Fix 3: same rule DOES fire when org matches.
+    #[tokio::test]
+    async fn threshold_global_rule_fires_for_own_org_candidate() {
+        let pool = crate::db::open_test_pool().await;
+        let now = chrono::Utc::now().timestamp();
+
+        let org_a = setup_org(&pool, "thr-own-org-a").await;
+        setup_project(&pool, 9601, org_a).await;
+
+        create_alert_rule(&pool, org_a, None, None, "threshold", Some(1), Some(3600), 3600)
+            .await
+            .unwrap();
+
+        insert_test_event(&pool, "thr-own-e1", 9601, now - 10, Some("fp-thr-own"), Some("error"), Some("E"))
+            .await;
+        insert_test_issue(&pool, "fp-thr-own", 9601, Some("E"), Some("error"), now - 10, now - 10, 1, "unresolved")
+            .await;
+
+        let candidates = vec![ThresholdCandidate {
+            fingerprint: "fp-thr-own".to_string(),
+            project_id: 9601,
+            title: None,
+            level: None,
+        }];
+
+        let mut pending = Vec::new();
+        check_threshold_alerts(&pool, &candidates, &mut pending).await;
+
+        assert_eq!(pending.len(), 1, "rule must fire for own-org candidate");
     }
 }

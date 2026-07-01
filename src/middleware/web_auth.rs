@@ -55,6 +55,7 @@ pub async fn web_auth_middleware(
             // CSRF still wants something to compare against; pass-through
             // auth means the token is a constant, not a secret.
             req.extensions_mut().insert(CsrfToken("noauth".to_string()));
+            req.extensions_mut().insert(crate::orgs::extractor::ActiveOrg { org_id: 1, role: None });
             return next.run(req).await;
         }
         return unauthenticated_response(&req, secure_cookies);
@@ -82,6 +83,16 @@ pub async fn web_auth_middleware(
             let csrf = derive_admin_csrf_token(expected.expose_secret(), &salt);
             req.extensions_mut().insert(ctx);
             req.extensions_mut().insert(CsrfToken(csrf));
+            let admin_org_id = state
+                .encryptor
+                .as_deref()
+                .and_then(|enc| {
+                    crate::middleware::cookie::read_cookie(req.headers(), crate::orgs::extractor::ACTIVE_ORG_COOKIE)
+                        .and_then(|v| crate::orgs::extractor::unpack(enc, v))
+                })
+                .unwrap_or(1);
+            req.extensions_mut()
+                .insert(crate::orgs::extractor::ActiveOrg { org_id: admin_org_id, role: None });
             let mut resp = next.run(req).await;
             if set_salt {
                 if let Ok(val) =
@@ -128,6 +139,12 @@ pub async fn web_auth_middleware(
 
         // Failures fall through to the existing token; the gate will reject if expired.
         let now = chrono::Utc::now().timestamp();
+        let cap = state.config.auth.oauth.session_max_ttl_secs;
+        if session_expired(grant.created_at, now, cap) {
+            tracing::info!("session absolute TTL exceeded; forcing re-login");
+            grants::forget(&state.auth_pool, &handle).await;
+            return unauthenticated_response(&req, secure_cookies);
+        }
         let grant = if grant.should_refresh(now, REFRESH_MARGIN_SECS) {
             match refresh::refresh(&state.auth_pool, encryptor, oidc, &grant).await {
                 Ok(RefreshOutcome::Refreshed(g)) => g,
@@ -178,8 +195,17 @@ pub async fn web_auth_middleware(
                     );
                 }
                 let csrf = grant.csrf_token.clone();
+                let user_id = grant.user_id;
                 req.extensions_mut().insert(ctx);
                 req.extensions_mut().insert(CsrfToken(csrf));
+                let active_org = resolve_session_active_org(
+                    &state.auth_pool,
+                    user_id,
+                    req.headers(),
+                    state.encryptor.as_deref(),
+                )
+                .await;
+                req.extensions_mut().insert(active_org);
                 return next.run(req).await;
             }
             _ => {
@@ -192,6 +218,49 @@ pub async fn web_auth_middleware(
 
     // 3. No identity.
     unauthenticated_response(&req, secure_cookies)
+}
+
+/// Load memberships and resolve which org is active for a browser session user.
+async fn resolve_session_active_org(
+    pool: &crate::db::DbPool,
+    user_id: i64,
+    headers: &axum::http::HeaderMap,
+    encryptor: Option<&crate::util::crypto::SecretEncryptor>,
+) -> crate::orgs::extractor::ActiveOrg {
+    use crate::orgs::extractor::{resolve_active_org, unpack, ActiveOrg, ACTIVE_ORG_COOKIE};
+    use crate::queries::orgs::{ensure_personal_org, list_memberships};
+
+    let personal_org_id = match ensure_personal_org(pool, user_id).await {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::error!("ensure_personal_org failed for user {user_id}: {e:#}");
+            return ActiveOrg { org_id: 1, role: Some(crate::orgs::Role::Member) };
+        }
+    };
+
+    let memberships = match list_memberships(pool, user_id).await {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::error!("list_memberships failed for user {user_id}: {e:#}");
+            return ActiveOrg { org_id: personal_org_id, role: Some(crate::orgs::Role::Member) };
+        }
+    };
+
+    let cookie_org = encryptor.and_then(|enc| {
+        crate::middleware::cookie::read_cookie(headers, ACTIVE_ORG_COOKIE)
+            .and_then(|v| unpack(enc, v))
+    });
+
+    let member_ids: Vec<i64> = memberships.iter().map(|m| m.org_id).collect();
+    let org_id = resolve_active_org(cookie_org, &member_ids, personal_org_id);
+
+    let role = memberships
+        .iter()
+        .find(|m| m.org_id == org_id)
+        .map(|m| crate::orgs::Role::parse(&m.role))
+        .unwrap_or(crate::orgs::Role::Member);
+
+    ActiveOrg { org_id, role: Some(role) }
 }
 
 fn unauthenticated_response(req: &Request<Body>, secure_cookies: bool) -> Response {
@@ -209,6 +278,11 @@ fn unauthenticated_response(req: &Request<Body>, secure_cookies: bool) -> Respon
     resp
 }
 
+/// True when the session has exceeded its absolute lifetime cap. `cap_secs == 0` disables the check.
+fn session_expired(created_at: i64, now: i64, cap_secs: u64) -> bool {
+    cap_secs > 0 && now - created_at > cap_secs as i64
+}
+
 /// Audit UUID = `SHA-256(handle)[..16]` (hashed so logs don't leak the cookie secret), patched to v8 per RFC 9562.
 fn handle_to_uuid(handle: &GrantHandle) -> uuid::Uuid {
     use sha2::{Digest, Sha256};
@@ -222,7 +296,31 @@ fn handle_to_uuid(handle: &GrantHandle) -> uuid::Uuid {
 
 #[cfg(test)]
 mod tests {
-    use super::is_public_path;
+    use super::{is_public_path, session_expired};
+
+    #[test]
+    fn session_not_expired_strictly_under_cap() {
+        // elapsed < cap: not yet expired
+        assert!(!session_expired(1000, 1000 + 3599, 3600));
+    }
+
+    #[test]
+    fn session_expired_just_over_cap() {
+        // elapsed > cap: expired
+        assert!(session_expired(1000, 1000 + 3601, 3600));
+    }
+
+    #[test]
+    fn session_at_boundary_not_expired() {
+        // elapsed == cap: exactly at boundary, not yet expired
+        assert!(!session_expired(0, 3600, 3600));
+    }
+
+    #[test]
+    fn cap_zero_disables_expiry() {
+        // cap == 0 disables the check
+        assert!(!session_expired(0, i64::MAX, 0));
+    }
 
     #[test]
     fn only_pre_session_oauth_paths_are_public() {

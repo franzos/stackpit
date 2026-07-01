@@ -7,7 +7,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use openidconnect::core::{
     CoreAuthenticationFlow, CoreClient, CoreClientAuthMethod, CoreIdTokenClaims,
-    CoreIdTokenVerifier, CoreJsonWebKey, CoreProviderMetadata,
+    CoreIdTokenVerifier, CoreJsonWebKey, CoreJwsSigningAlgorithm, CoreProviderMetadata,
 };
 use openidconnect::{
     AccessTokenHash, AuthType, ClientId, ClientSecret, CsrfToken, IssuerUrl, Nonce,
@@ -72,6 +72,10 @@ pub struct LoginClaims {
     /// OIDC Session Management 1.0 §5. Dedupe key for back-channel logout.
     /// Provider-dependent -- Hydra emits it, not every IdP does.
     pub sid: Option<String>,
+    /// None = orgs claim absent (scope not granted); distinct from Some(empty) = granted, no orgs.
+    pub orgs: Option<Vec<OrgClaim>>,
+    /// Mirrors the `orgs_truncated` flag from Forseti; true means the list was capped.
+    pub orgs_truncated: bool,
 }
 
 /// Verified claims plus live IdP tokens. Stored server-side, encrypted; the
@@ -257,6 +261,7 @@ impl OidcClient {
             .add_scope(Scope::new("email".to_string()))
             .add_scope(Scope::new("profile".to_string()))
             .add_scope(Scope::new("offline_access".to_string()))
+            .add_scope(Scope::new("orgs".to_string()))
             .set_pkce_challenge(pkce_challenge);
 
         // Hydra binds `audience=` (non-standard) into the access token's `aud`,
@@ -325,6 +330,9 @@ impl OidcClient {
         // `sid` isn't in openidconnect 4's standard claim set; pull it from
         // the (already-verified) payload directly.
         login_claims.sid = extract_sid(&id_token_str);
+        let (orgs, orgs_truncated) = extract_orgs(&id_token_str);
+        login_claims.orgs = orgs;
+        login_claims.orgs_truncated = orgs_truncated;
 
         let access_token = token_response.access_token().secret().to_string();
         let access_exp = compute_access_exp(token_response.expires_in())?;
@@ -366,12 +374,14 @@ impl OidcClient {
 
         let issuer = IssuerUrl::new(self.inner.issuer.clone())
             .with_context(|| format!("invalid issuer_url '{}'", self.inner.issuer))?;
+        // RFC 8725: reject alg:none and HMAC algs; RS256 is the only accepted algorithm.
         Ok(CoreIdTokenVerifier::new_confidential_client(
             ClientId::new(self.inner.client_id.clone()),
             ClientSecret::new(self.inner.client_secret.expose_secret().to_string()),
             issuer,
             keys,
-        ))
+        )
+        .set_allowed_algs([CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256]))
     }
 
     /// Exchange a refresh token. Hydra rotates by default (OAuth 2.1 §4.3.2);
@@ -483,6 +493,57 @@ fn compute_access_exp(expires_in: Option<std::time::Duration>) -> Result<i64> {
     let secs =
         i64::try_from(dur.as_secs()).context("access-token `expires_in` overflows i64 seconds")?;
     Ok(chrono::Utc::now().timestamp() + secs)
+}
+
+// Serialize/Deserialize required: Task 1.9 JSON-packs Vec<OrgClaim> into the signed sp_provision cookie.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct OrgClaim {
+    pub id: String,
+    pub slug: String,
+    pub role: String,
+    pub name: Option<String>,
+}
+
+// None = claim absent (zero authority, no removals); Some(empty) = granted, no orgs. Truncation from flag only.
+fn extract_orgs(id_token_jwt: &str) -> (Option<Vec<OrgClaim>>, bool) {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine as _;
+    let Some(payload_b64) = id_token_jwt.split('.').nth(1) else {
+        return (None, false);
+    };
+    let Ok(decoded) = URL_SAFE_NO_PAD.decode(payload_b64) else {
+        return (None, false);
+    };
+    let Ok(json) = serde_json::from_slice::<serde_json::Value>(&decoded) else {
+        return (None, false);
+    };
+    let truncated = json
+        .get("orgs_truncated")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let Some(arr) = json.get("orgs").and_then(|v| v.as_array()) else {
+        return (None, truncated);
+    };
+    let orgs = arr
+        .iter()
+        .filter_map(|o| {
+            Some(OrgClaim {
+                id: o.get("id")?.as_str()?.to_string(),
+                slug: o
+                    .get("slug")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                role: o
+                    .get("role")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("member")
+                    .to_string(),
+                name: o.get("name").and_then(|v| v.as_str()).map(String::from),
+            })
+        })
+        .collect::<Vec<_>>();
+    (Some(orgs), truncated)
 }
 
 fn extract_sid(id_token_jwt: &str) -> Option<String> {
@@ -679,6 +740,8 @@ fn extract_login_claims(claims: &CoreIdTokenClaims) -> LoginClaims {
         email,
         name,
         sid: None,
+        orgs: None,
+        orgs_truncated: false,
     }
 }
 
@@ -735,6 +798,34 @@ impl OidcClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fake_jwt(payload: &str) -> String {
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use base64::Engine as _;
+        format!("h.{}.sig", URL_SAFE_NO_PAD.encode(payload.as_bytes()))
+    }
+
+    #[test]
+    fn extract_orgs_reads_array_and_truncation() {
+        let payload = r#"{"orgs":[{"id":"acme","slug":"acme","role":"owner","name":"Acme"},
+                                  {"id":"default","slug":"default","role":"member","name":"Default"}],
+                          "orgs_truncated":true}"#;
+        let jwt = fake_jwt(payload);
+        let (orgs, truncated) = extract_orgs(&jwt);
+        let orgs = orgs.unwrap();
+        assert_eq!(orgs.len(), 2);
+        assert_eq!(orgs[0].id, "acme");
+        assert_eq!(orgs[0].role, "owner");
+        assert!(truncated);
+    }
+
+    #[test]
+    fn extract_orgs_absent_is_none() {
+        let jwt = fake_jwt(r#"{"sub":"x"}"#);
+        let (orgs, truncated) = extract_orgs(&jwt);
+        assert!(orgs.is_none());
+        assert!(!truncated);
+    }
 
     #[test]
     fn end_session_present_is_ok_regardless_of_flags() {
@@ -836,5 +927,43 @@ mod tests {
             Some(&[CoreClientAuthMethod::ClientSecretJwt]),
             None
         )));
+    }
+
+    // RS256 pin rejects HS256 tokens; DisallowedAlg fires before sig bytes so a fake sig suffices.
+    #[test]
+    fn id_token_verifier_rejects_non_rs256_alg() {
+        use std::str::FromStr;
+        use openidconnect::core::CoreIdToken;
+        use openidconnect::{ClaimsVerificationError, SignatureVerificationError};
+
+        // HS256 JWT: iss=https://id.example.com, aud=client1, no typ (avoids JOSE-type check)
+        let hs256_token = concat!(
+            "eyJhbGciOiJIUzI1NiIsImtpZCI6InRlc3Qta2lkIn0.",
+            "eyJpc3MiOiJodHRwczovL2lkLmV4YW1wbGUuY29tIiwic3ViIjoidXNlcjEiLCJhdWQiOiJjbGll",
+            "bnQxIiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjk5OTk5OTk5OTksIm5vbmNlIjoidGVzdC1ub25j",
+            "ZSJ9.",
+            "ZmFrZXNpZw"
+        );
+        let id_token = CoreIdToken::from_str(hs256_token).expect("HS256 token parses structurally");
+
+        let verifier = CoreIdTokenVerifier::new_confidential_client(
+            ClientId::new("client1".to_string()),
+            ClientSecret::new("test-secret".to_string()),
+            IssuerUrl::new("https://id.example.com".to_string()).unwrap(),
+            JsonWebKeySet::<CoreJsonWebKey>::new(vec![]),
+        )
+        .set_allowed_algs([CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256]);
+
+        let nonce = Nonce::new("test-nonce".to_string());
+        let err = id_token.claims(&verifier, &nonce).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ClaimsVerificationError::SignatureVerification(
+                    SignatureVerificationError::DisallowedAlg(_)
+                )
+            ),
+            "expected DisallowedAlg, got: {err:?}"
+        );
     }
 }

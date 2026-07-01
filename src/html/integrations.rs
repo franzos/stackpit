@@ -4,7 +4,8 @@ use axum::http::StatusCode;
 use serde::Deserialize;
 
 use crate::html::render_template;
-use crate::html::utils::{self, Csrf};
+use crate::html::utils::Csrf;
+use crate::orgs::extractor::{require_owner, ActiveOrg};
 use crate::queries;
 use crate::queries::types::Integration;
 use crate::server::AppState;
@@ -22,8 +23,13 @@ struct IntegrationsTemplate {
     csrf_token: String,
 }
 
-pub async fn handler(State(state): State<AppState>, Csrf(csrf): Csrf) -> axum::response::Response {
-    render_list(&state, None, &csrf).await
+pub async fn handler(
+    State(state): State<AppState>,
+    Csrf(csrf): Csrf,
+    active: ActiveOrg,
+) -> axum::response::Response {
+    let org_filter = active.role.as_ref().map(|_| active.org_id);
+    render_list(&state, org_filter, None, &csrf).await
 }
 
 #[derive(Deserialize)]
@@ -42,15 +48,20 @@ pub struct CreateForm {
 pub async fn create(
     State(state): State<AppState>,
     Csrf(csrf): Csrf,
+    active: ActiveOrg,
     Form(form): Form<CreateForm>,
 ) -> axum::response::Response {
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
+    let org_filter = active.role.as_ref().map(|_| active.org_id);
     let name = form.name.trim().to_string();
     if name.is_empty() {
-        return render_list(&state, Some("Name is required".into()), &csrf).await;
+        return render_list(&state, org_filter, Some("Name is required".into()), &csrf).await;
     }
     let kind = form.kind.trim().to_string();
     if !["webhook", "slack", "email"].contains(&kind.as_str()) {
-        return render_list(&state, Some("Invalid integration kind".into()), &csrf).await;
+        return render_list(&state, org_filter, Some("Invalid integration kind".into()), &csrf).await;
     }
     // Email has no user-controlled endpoint, so `url` stays NULL and there's no
     // SSRF surface. A locked mailer ignores any submitted token.
@@ -65,7 +76,7 @@ pub async fn create(
             let provider = match crate::providers::email::EmailProvider::parse(provider_str) {
                 Some(p) => p,
                 None => {
-                    return render_list(&state, Some("Invalid email provider".into()), &csrf).await
+                    return render_list(&state, org_filter, Some("Invalid email provider".into()), &csrf).await
                 }
             };
             // Reject up front when neither form nor server config supplies the values
@@ -76,7 +87,7 @@ pub async fn create(
                 .map(str::trim)
                 .is_some_and(|s| !s.is_empty());
             if !has_form_secret && email_cfg.token.is_none() {
-                return render_list(&state, Some("API token is required.".into()), &csrf).await;
+                return render_list(&state, org_filter, Some("API token is required.".into()), &csrf).await;
             }
             let has_form_from = form
                 .from_address
@@ -84,7 +95,7 @@ pub async fn create(
                 .map(str::trim)
                 .is_some_and(|s| !s.is_empty());
             if !has_form_from && email_cfg.from_address.is_none() {
-                return render_list(&state, Some("From address is required.".into()), &csrf).await;
+                return render_list(&state, org_filter, Some("From address is required.".into()), &csrf).await;
             }
             let mut cfg = serde_json::json!({ "provider": provider.as_str() });
             if let Some(from) = form
@@ -108,12 +119,12 @@ pub async fn create(
     } else {
         let url = form.url.trim().to_string();
         if url.is_empty() {
-            return render_list(&state, Some("URL is required".into()), &csrf).await;
+            return render_list(&state, org_filter, Some("URL is required".into()), &csrf).await;
         }
         // Block webhooks pointing at private/internal addresses. Validation only,
         // no request here, so no TOCTOU; the dispatcher does its own pinned resolution.
         if let Err(msg) = crate::util::ssrf::check_ssrf(&url).await {
-            return render_list(&state, Some(msg), &csrf).await;
+            return render_list(&state, org_filter, Some(msg), &csrf).await;
         }
         (Some(url), None, false)
     };
@@ -134,6 +145,7 @@ pub async fn create(
                 tracing::warn!("refusing to store plaintext secret: {e}");
                 return render_list(
                     &state,
+                    org_filter,
                     Some("Cannot store secret: encryption is not configured. Set STACKPIT_MASTER_KEY to enable secret storage.".into()),
                     &csrf,
                 ).await;
@@ -142,46 +154,58 @@ pub async fn create(
         None => (None, false),
     };
 
-    let s = state.clone();
-    utils::query_then_render(
-        queries::integrations::create_integration(
-            &state.writer_pool,
-            &name,
-            &kind,
-            url.as_deref(),
-            secret.as_deref(),
-            config.as_deref(),
-            encrypted,
-        )
-        .await,
-        "Integration created",
-        move |msg| async move { render_list(&s, msg, &csrf).await },
+    let result = queries::integrations::create_integration(
+        &state.writer_pool,
+        active.org_id,
+        &name,
+        &kind,
+        url.as_deref(),
+        secret.as_deref(),
+        config.as_deref(),
+        encrypted,
     )
-    .await
+    .await;
+    match result {
+        Ok(_) => render_list(&state, org_filter, Some("Integration created".into()), &csrf).await,
+        Err(ref e) if is_name_conflict(e) => {
+            render_list(&state, org_filter, Some("An integration with that name already exists.".into()), &csrf).await
+        }
+        Err(e) => render_list(&state, org_filter, Some(format!("Error: {e}")), &csrf).await,
+    }
 }
 
 pub async fn delete(
     State(state): State<AppState>,
     Csrf(csrf): Csrf,
+    active: ActiveOrg,
     Path(id): Path<i64>,
 ) -> axum::response::Response {
-    let msg = match queries::integrations::delete_integration(&state.writer_pool, id).await {
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
+    let org_filter = active.role.as_ref().map(|_| active.org_id);
+    let msg = match queries::integrations::delete_integration(&state.writer_pool, id, active.org_id).await {
         Ok(0) => format!("Error: not found: integration: {id}"),
         Ok(_) => "Integration deleted".to_string(),
         Err(e) => format!("Error: {e}"),
     };
-    render_list(&state, Some(msg), &csrf).await
+    render_list(&state, org_filter, Some(msg), &csrf).await
 }
 
 pub async fn test_integration(
     State(state): State<AppState>,
     Csrf(csrf): Csrf,
+    active: ActiveOrg,
     Path(id): Path<i64>,
 ) -> axum::response::Response {
-    let integration = match queries::integrations::get_integration(&state.pool, id).await {
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
+    let org_filter = active.role.as_ref().map(|_| active.org_id);
+    let integration = match queries::integrations::get_integration(&state.pool, id, org_filter).await {
         Ok(Some(i)) => i,
-        Ok(None) => return render_list(&state, Some("Integration not found".into()), &csrf).await,
-        Err(e) => return render_list(&state, Some(format!("Error: {e}")), &csrf).await,
+        Ok(None) => return render_list(&state, org_filter, Some("Integration not found".into()), &csrf).await,
+        Err(e) => return render_list(&state, org_filter, Some(format!("Error: {e}")), &csrf).await,
     };
 
     let secret = match (&integration.secret, integration.encrypted, &state.encryptor) {
@@ -217,6 +241,7 @@ pub async fn test_integration(
             _ => {
                 return render_list(
                     &state,
+                    org_filter,
                     Some("Integration has no URL configured".into()),
                     &csrf,
                 )
@@ -227,7 +252,7 @@ pub async fn test_integration(
         // Pin resolved DNS so reqwest can't re-resolve to a different (internal) IP.
         let resolved = match crate::util::ssrf::check_ssrf(url).await {
             Ok(r) => r,
-            Err(msg) => return render_list(&state, Some(msg), &csrf).await,
+            Err(msg) => return render_list(&state, org_filter, Some(msg), &csrf).await,
         };
 
         let client = match reqwest::Client::builder()
@@ -247,8 +272,8 @@ pub async fn test_integration(
     };
 
     match result {
-        Ok(()) => render_list(&state, Some("Test notification sent".into()), &csrf).await,
-        Err(e) => render_list(&state, Some(format!("Test failed: {e}")), &csrf).await,
+        Ok(()) => render_list(&state, org_filter, Some("Test notification sent".into()), &csrf).await,
+        Err(e) => render_list(&state, org_filter, Some(format!("Test failed: {e}")), &csrf).await,
     }
 }
 
@@ -308,12 +333,30 @@ pub async fn new_email(
     })
 }
 
+/// Detect a duplicate integration name across SQLite and Postgres.
+fn is_name_conflict(err: &anyhow::Error) -> bool {
+    for cause in err.chain() {
+        if let Some(sqlx::Error::Database(db_err)) = cause.downcast_ref::<sqlx::Error>() {
+            // SQLite: "UNIQUE constraint failed: integrations.name"
+            if db_err.message().contains("integrations.name") {
+                return true;
+            }
+            // Postgres unique_violation (only one unique constraint on this table)
+            if db_err.code().as_deref() == Some("23505") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 async fn render_list(
     state: &AppState,
+    org_id: Option<i64>,
     message: Option<String>,
     csrf: &str,
 ) -> axum::response::Response {
-    let integrations = queries::integrations::list_integrations(&state.pool)
+    let integrations = queries::integrations::list_integrations(&state.pool, org_id)
         .await
         .unwrap_or_default();
 

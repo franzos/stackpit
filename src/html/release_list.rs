@@ -4,6 +4,7 @@ use axum::extract::{Query, State};
 use crate::extractors::ReadPool;
 use crate::html::render_template;
 use crate::html::utils::{build_filter_qs, period_to_timestamp, Csrf, ListParams};
+use crate::orgs::extractor::ActiveOrg;
 use crate::queries;
 use crate::queries::types::{PagedResult, ReleaseFilter};
 use crate::server::AppState;
@@ -31,6 +32,7 @@ pub async fn handler(
     ReadPool(pool): ReadPool,
     Csrf(csrf): Csrf,
     Query(params): Query<ListParams>,
+    active: ActiveOrg,
 ) -> Result<axum::response::Response, HtmlError> {
     let query_str = params.query.clone().unwrap_or_default();
     let project_id_str = params.project_id.map(|p| p.to_string()).unwrap_or_default();
@@ -45,9 +47,11 @@ pub async fn handler(
         sort: params.sort.filter(|s| !s.is_empty()),
     };
     let page = params.page.page();
+    let org_id = if active.role.is_none() { None } else { Some(active.org_id) };
 
     let result =
-        queries::releases::list_all_releases(&pool, &filter, &page, adoption_since).await?;
+        queries::releases::list_all_releases(&pool, &filter, &page, adoption_since, org_id)
+            .await?;
 
     let (base_qs, filter_qs) = build_filter_qs(
         &[

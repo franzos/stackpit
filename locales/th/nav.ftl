@@ -1,0 +1,24 @@
+# nav-logout อยู่ใน common.ftl (แปลไว้ที่นั่น ไม่ทำซ้ำที่นี่)
+nav-project = โปรเจกต์
+nav-projects = โปรเจกต์
+nav-organizations = องค์กร
+nav-settings = การตั้งค่า
+nav-defaults = ค่าเริ่มต้น
+nav-issues = ปัญหา
+nav-transactions = ทรานแซกชัน
+nav-spans = สแปน
+nav-logs = ล็อก
+nav-metrics = เมตริก
+nav-monitors = มอนิเตอร์
+nav-profiles = โปรไฟล์
+nav-replays = รีเพลย์
+nav-health = สุขภาพระบบ
+nav-user-reports = รายงานจากผู้ใช้
+nav-client-reports = รายงานจากไคลเอนต์
+nav-across-projects = ข้ามโปรเจกต์
+nav-releases = รีลีส
+nav-alerts-digests = การแจ้งเตือน &amp; สรุป
+nav-integrations = การเชื่อมต่อ
+nav-back-projects = โปรเจกต์
+nav-aria-primary = เมนูหลัก
+nav-aria-breadcrumb = เส้นทางนำทาง

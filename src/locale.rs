@@ -10,7 +10,17 @@ pub(crate) const LOCALE_COOKIE: &str = "sp_locale";
 /// own name, shown untranslated in the switcher. Adding a locale is one row here
 /// plus a matching `locales/<code>/` catalog; the switcher and negotiation both
 /// read from this list.
-pub(crate) const LOCALES: &[(&str, &str)] = &[("en", "English"), ("de", "Deutsch")];
+pub(crate) const LOCALES: &[(&str, &str)] = &[
+    ("en", "English"),
+    ("de", "Deutsch"),
+    ("fr", "Français"),
+    ("es", "Español"),
+    ("it", "Italiano"),
+    ("pt", "Português"),
+    ("ru", "Русский"),
+    ("th", "ไทย"),
+    ("ar", "العربية"),
+];
 
 /// Codes from `LOCALES` parsed once; negotiate/accept run per request.
 static SUPPORTED_LANGS: LazyLock<Vec<LanguageIdentifier>> = LazyLock::new(|| {
@@ -95,7 +105,8 @@ mod tests {
     #[test]
     fn negotiate_prefers_supported_else_default() {
         assert_eq!(negotiate(&[langid!("de-AT")]), langid!("de"));
-        assert_eq!(negotiate(&[langid!("fr")]), langid!("en"));
+        assert_eq!(negotiate(&[langid!("fr-CA")]), langid!("fr"));
+        assert_eq!(negotiate(&[langid!("ja")]), langid!("en"));
         assert_eq!(negotiate(&[]), langid!("en"));
     }
 
@@ -103,7 +114,8 @@ mod tests {
     fn accept_only_supported() {
         assert_eq!(accept("de"), Some(langid!("de")));
         assert_eq!(accept("de-AT"), Some(langid!("de")));
-        assert_eq!(accept("fr"), None);
+        assert_eq!(accept("ar"), Some(langid!("ar")));
+        assert_eq!(accept("ja"), None);
         assert_eq!(accept("garbage!"), None);
     }
 
@@ -113,7 +125,7 @@ mod tests {
     fn accept_gates_oidc_locale_claim() {
         assert_eq!(accept("de-DE"), Some(langid!("de")));
         assert_eq!(accept("zz-nonsense"), None);
-        assert_eq!(accept("fr-FR"), None);
+        assert_eq!(accept("ja-JP"), None);
     }
 
     #[test]

@@ -1,0 +1,30 @@
+# Раздел реплеев: список реплеев по проекту и страница детали реплея.
+# Повторно использует nav-replays. Счётные строки используют плюрали tv_count
+# ([one]/[few]/[many]/[other]).
+
+# --- Суффикс заголовка страницы ---
+replays-title-suffix = — Stackpit
+
+# --- Список реплеев ---
+replays-list-empty = Реплеи не найдены. События реплеев появятся здесь.
+replays-col-event-id = ID события
+replays-col-type = Тип
+replays-col-release = Релиз
+replays-col-environment = Окружение
+replays-col-timestamp = Метка времени
+
+# --- Деталь реплея ---
+replays-detail-heading = Реплей
+replays-detail-note = Воспроизведение записи пока недоступно. Ниже показаны исходные данные реплея.
+replays-detail-raw-payload = Исходные данные
+
+# --- Постраничная навигация ---
+replays-pagination-label = Постраничная навигация
+replays-pagination-prev = « Назад
+replays-pagination-next = Вперёд »
+replays-count = { $count ->
+    [one] { $count } реплей
+    [few] { $count } реплея
+    [many] { $count } реплеев
+   *[other] { $count } реплея
+}

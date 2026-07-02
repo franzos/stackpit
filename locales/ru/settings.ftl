@@ -1,0 +1,46 @@
+# Раздел настроек: страница значений по умолчанию для браузера
+# (templates/browser_defaults.html, ключи defaults-*) и отдельная страница
+# провижининга организаций (templates/provision.html, ключи provision-*).
+# Повторно использует nav-settings. Значения уровней (fatal/error/...) остаются
+# без перевода в шаблоне, как на разделах ошибок/событий, где уровни лога
+# сохраняются в каноническом английском виде.
+
+# --- Значения по умолчанию для браузера ---
+defaults-page-title = Значения по умолчанию (браузер) — Stackpit
+defaults-heading = Значения по умолчанию для браузера
+defaults-subtitle = Задайте значения фильтров по умолчанию для страниц-списков. Хранятся как cookie браузера.
+defaults-none = Без значения по умолчанию
+defaults-status-label = Статус по умолчанию (ошибки)
+defaults-status-unresolved = Не решено
+defaults-status-resolved = Решено
+defaults-status-ignored = Проигнорировано
+defaults-level-label = Уровень по умолчанию
+defaults-period-label = Диапазон времени по умолчанию
+defaults-period-1h = Последний час
+defaults-period-24h = Последние 24 ч
+defaults-period-7d = Последние 7 дней
+defaults-period-14d = Последние 14 дней
+defaults-period-30d = Последние 30 дней
+defaults-period-90d = Последние 90 дней
+defaults-period-365d = Последние 365 дней
+defaults-save = Сохранить значения по умолчанию
+defaults-clear-confirm = Очистить все значения по умолчанию для браузера?
+defaults-clear = Очистить все значения по умолчанию
+flash-defaults-saved = Значения по умолчанию сохранены
+flash-defaults-cleared = Значения по умолчанию очищены
+
+# --- Предпочитаемый язык ---
+settings-language-heading = Предпочитаемый язык
+settings-language-subtitle = Выберите язык интерфейса Stackpit. Для вошедших в систему аккаунтов настройка сохраняется на всех устройствах.
+settings-language-label = Язык
+settings-language-save = Сохранить язык
+
+settings-aria-sections = Разделы настроек
+
+# --- Страница провижининга (отдельная страница) ---
+provision-page-title = Настройка организаций — Stackpit
+provision-heading = Настройка организаций
+provision-subtitle-1 = Следующие организации доступны от вашего провайдера идентификации.
+provision-subtitle-2 = Выберите те, которые хотите создать в Stackpit.
+provision-create = Создать выбранные
+provision-skip = Пропустить

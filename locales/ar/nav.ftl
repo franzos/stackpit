@@ -1,0 +1,24 @@
+# nav-logout موجود في common.ftl (مترجم هناك، غير مكرر هنا).
+nav-project = المشروع
+nav-projects = المشاريع
+nav-organizations = المؤسسات
+nav-settings = الإعدادات
+nav-defaults = الإعدادات الافتراضية
+nav-issues = المشكلات
+nav-transactions = المعاملات
+nav-spans = الامتدادات
+nav-logs = السجلات
+nav-metrics = المقاييس
+nav-monitors = المراقبات
+nav-profiles = ملفات التعريف
+nav-replays = عمليات إعادة التشغيل
+nav-health = الصحة
+nav-user-reports = تقارير المستخدمين
+nav-client-reports = تقارير العميل
+nav-across-projects = عبر المشاريع
+nav-releases = الإصدارات
+nav-alerts-digests = التنبيهات &amp; الملخّصات
+nav-integrations = التكاملات
+nav-back-projects = المشاريع
+nav-aria-primary = التنقل الرئيسي
+nav-aria-breadcrumb = مسار التنقل

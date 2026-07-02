@@ -1,0 +1,24 @@
+# nav-logout находится в common.ftl (переведён там, здесь не дублируется).
+nav-project = Проект
+nav-projects = Проекты
+nav-organizations = Организации
+nav-settings = Настройки
+nav-defaults = Значения по умолчанию
+nav-issues = Ошибки
+nav-transactions = Транзакции
+nav-spans = Спаны
+nav-logs = Логи
+nav-metrics = Метрики
+nav-monitors = Мониторы
+nav-profiles = Профили
+nav-replays = Реплеи
+nav-health = Состояние
+nav-user-reports = Отчёты пользователей
+nav-client-reports = Отчёты клиентов
+nav-across-projects = По всем проектам
+nav-releases = Релизы
+nav-alerts-digests = Оповещения &amp; сводки
+nav-integrations = Интеграции
+nav-back-projects = Проекты
+nav-aria-primary = Основная навигация
+nav-aria-breadcrumb = Хлебные крошки

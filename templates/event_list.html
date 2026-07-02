@@ -1,21 +1,21 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
 
-{% block title %}Events — Stackpit{% endblock %}
+{% block title %}{{ chrome.t("events-list-title") }}{% endblock %}
 
 {% block sidebar_nav %}
-  {% call m::top_sidebar("events") %}
+  {% call m::top_sidebar(chrome, "events") %}
   {% endcall %}
 {% endblock %}
 
 {% block breadcrumbs %}
   <span class="breadcrumb-sep">/</span>
-  <span class="breadcrumb-current">Events</span>
+  <span class="breadcrumb-current">{{ chrome.t("events-heading") }}</span>
 {% endblock %}
 
 {% block content %}
   <div class="page-header">
-    <h1>Events</h1>
+    <h1>{{ chrome.t("events-heading") }}</h1>
   </div>
 
   <form class="filter-form" method="get" action="/web/events/">
@@ -25,19 +25,23 @@
     <input class="input"
            type="text"
            name="query"
-           placeholder="Search events…"
+           placeholder="{{ chrome.t("events-list-search-placeholder") }}"
            value="{{ query }}"
-           aria-label="Search events">
-    <select class="select w-auto" name="level" aria-label="Filter by level">
-      <option value="">All levels</option>
+           aria-label="{{ chrome.t("events-list-search-label") }}">
+    <select class="select w-auto"
+            name="level"
+            aria-label="{{ chrome.t("events-list-filter-level") }}">
+      <option value="">{{ chrome.t("events-list-level-all") }}</option>
       <option value="fatal"{% if level == "fatal" %} selected{% endif %}>fatal</option>
       <option value="error"{% if level == "error" %} selected{% endif %}>error</option>
       <option value="warning"{% if level == "warning" %} selected{% endif %}>warning</option>
       <option value="info"{% if level == "info" %} selected{% endif %}>info</option>
       <option value="debug"{% if level == "debug" %} selected{% endif %}>debug</option>
     </select>
-    <select class="select w-auto" name="item_type" aria-label="Filter by type">
-      <option value="">All types</option>
+    <select class="select w-auto"
+            name="item_type"
+            aria-label="{{ chrome.t("events-list-filter-type") }}">
+      <option value="">{{ chrome.t("events-list-type-all") }}</option>
       <option value="event"{% if item_type == "event" %} selected{% endif %}>event</option>
       <option value="transaction"
               {% if item_type == "transaction" %}selected{% endif %}>transaction</option>
@@ -56,27 +60,27 @@
     <input class="input w-auto"
            type="text"
            name="project_id"
-           placeholder="Project ID"
+           placeholder="{{ chrome.t("events-list-project-placeholder") }}"
            value="{{ project_id }}"
-           aria-label="Filter by project"
+           aria-label="{{ chrome.t("events-list-filter-project") }}"
            size="10">
-    <button class="btn btn-secondary" type="submit">Filter</button>
+    <button class="btn btn-secondary" type="submit">{{ chrome.t("events-list-filter-submit") }}</button>
   </form>
 
   {% if result.items.is_empty() %}
     <div class="card">
-      <p class="empty">No events match the current filters.</p>
+      <p class="empty">{{ chrome.t("events-list-empty") }}</p>
     </div>
   {% else %}
 
     <form method="post" action="/web/events/bulk">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
       <input type="hidden" name="action" value="delete">
       <input type="hidden" name="mode" value="selected">
       <div class="bulk-bar">
         <button type="submit"
                 class="btn btn-danger"
-                data-confirm="Delete selected events?">Delete</button>
+                data-confirm="{{ chrome.t("events-bulk-delete-selected-confirm") }}">{{ chrome.t("events-bulk-delete") }}</button>
       </div>
 
       <div class="card overflow-hidden">
@@ -85,21 +89,21 @@
             <thead>
               <tr>
                 <th class="col-check"></th>
-                <th>Title</th>
-                <th class="hide-mobile">Type</th>
-                <th>Level</th>
+                <th>{{ chrome.t("events-label-title") }}</th>
+                <th class="hide-mobile">{{ chrome.t("events-label-type") }}</th>
+                <th>{{ chrome.t("events-label-level") }}</th>
                 <th>
                   <a href="/web/events/?sort=project_id{{ base_qs }}"
-                     {% if sort == "project_id" %}class="active-sort"{% endif %}>Project</a>
+                     {% if sort == "project_id" %}class="active-sort"{% endif %}>{{ chrome.t("events-col-project") }}</a>
                 </th>
                 <th class="hide-mobile">
                   <a href="/web/events/?sort=platform{{ base_qs }}"
-                     {% if sort == "platform" %}class="active-sort"{% endif %}>Platform</a>
+                     {% if sort == "platform" %}class="active-sort"{% endif %}>{{ chrome.t("events-label-platform") }}</a>
                 </th>
-                <th class="hide-mobile">Environment</th>
+                <th class="hide-mobile">{{ chrome.t("events-label-environment") }}</th>
                 <th>
                   <a href="/web/events/?{{ base_qs }}"
-                     {% if sort.is_empty() %}class="active-sort"{% endif %}>Time</a>
+                     {% if sort.is_empty() %}class="active-sort"{% endif %}>{{ chrome.t("events-label-time") }}</a>
                 </th>
               </tr>
             </thead>
@@ -110,73 +114,72 @@
                     data-level="{{ lvl }}"
                     {% when None %}
                     {% endmatch %}>
-                  <td class="col-check">
-                    <input type="checkbox"
-                           name="ids"
-                           value="{{ event.event_id }}"
-                           aria-label="Select event">
-                  </td>
-                  <td class="truncate-cell"
-                      title="{% match event.title %}{% when Some with (t) %}{{ t }}{% when None %}(untitled){% endmatch %}">
-                    <a href="/web/projects/{{ event.project_id }}/events/{{ event.event_id }}/">{% match event.title %}{% when Some with (t) %}{{ t }}{% when None %}(untitled){% endmatch %}</a>
-                  </td>
-                  <td class="hide-mobile">
-                    <span class="inline-flex items-center gap-1.5"><span class="type-icon type-icon-{{ event.item_type }}"></span>{{ event.item_type }}</span>
-                  </td>
-                  <td>
-                    {% match event.level %}{% when Some with (lvl) %}<span class="badge badge-{{ lvl }}">{{ lvl }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
-                  </td>
-                  <td>
-                    <a class="text-mono" href="/web/projects/{{ event.project_id }}/">{% match event.project_name %}{% when Some with (n) %}{{ n }}{% when None %}{{ event.project_id }}{% endmatch %}</a>
-                  </td>
-                  <td class="hide-mobile">
-                    {% match event.platform %}{% when Some with (p) %}<span class="badge badge-platform">{{ p }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
-                  </td>
-                  <td class="hide-mobile">
-                    {% match event.environment %}{% when Some with (e) %}<span class="text-mono text-[12px]">{{ e }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
-                  </td>
-                  <td class="text-muted">
-                    <time datetime="{{ event.timestamp|format_ts }}"
-                          title="{{ event.timestamp|format_ts }}">{{ event.timestamp|format_relative }}</time>
-                  </td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </form>
+                <td class="col-check">
+                  <input type="checkbox"
+                         name="ids"
+                         value="{{ event.event_id }}"
+                         aria-label="{{ chrome.t("events-list-select") }}">
+                </td>
+                <td class="truncate-cell"
+                    title="{% match event.title %}{% when Some with (t) %}{{ t }}{% when None %}{{ chrome.t("events-untitled") }}{% endmatch %}">
+                <a href="/web/projects/{{ event.project_id }}/events/{{ event.event_id }}/"><bdi>{% match event.title %}{% when Some with (t) %}{{ t }}{% when None %}{{ chrome.t("events-untitled") }}{% endmatch %}</bdi></a>
+            </td>
+            <td class="hide-mobile">
+              <span class="inline-flex items-center gap-1.5"><span class="type-icon type-icon-{{ event.item_type }}"></span>{{ event.item_type }}</span>
+            </td>
+            <td>
+              {% match event.level %}{% when Some with (lvl) %}<span class="badge badge-{{ lvl }}">{{ lvl }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
+          </td>
+          <td>
+            <a class="text-mono" href="/web/projects/{{ event.project_id }}/">{% match event.project_name %}{% when Some with (n) %}{{ n }}{% when None %}{{ event.project_id }}{% endmatch %}</a>
+        </td>
+        <td class="hide-mobile">
+          {% match event.platform %}{% when Some with (p) %}<span class="badge badge-platform">{{ p }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
+      </td>
+      <td class="hide-mobile">
+        {% match event.environment %}{% when Some with (e) %}<span class="text-mono text-[12px]">{{ e }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
+    </td>
+    <td class="text-muted">
+      <time datetime="{{ event.timestamp|format_ts }}"
+            title="{{ event.timestamp|format_ts }}">{{ chrome.rel_time(event.timestamp) }}</time>
+    </td>
+  </tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+</div>
+</form>
 
-    {% if result.total > 0 %}
-      <form class="mt-3" method="post" action="/web/events/bulk">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <input type="hidden" name="action" value="delete">
-        <input type="hidden" name="mode" value="all_matching">
-        {% if !query.is_empty() %}<input type="hidden" name="query" value="{{ query }}">{% endif %}
-        {% if !level.is_empty() %}<input type="hidden" name="level" value="{{ level }}">{% endif %}
-        {% if !item_type.is_empty() %}<input type="hidden" name="item_type" value="{{ item_type }}">{% endif %}
-        <button type="submit"
-                class="btn btn-danger"
-                data-confirm="Permanently delete all {{ result.total }} matching events?">
-          Delete all {{ result.total }} matching
-        </button>
-      </form>
+{% if result.total > 0 %}
+  <form class="mt-3" method="post" action="/web/events/bulk">
+    <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+    <input type="hidden" name="action" value="delete">
+    <input type="hidden" name="mode" value="all_matching">
+    {% if !query.is_empty() %}<input type="hidden" name="query" value="{{ query }}">{% endif %}
+    {% if !level.is_empty() %}<input type="hidden" name="level" value="{{ level }}">{% endif %}
+    {% if !item_type.is_empty() %}<input type="hidden" name="item_type" value="{{ item_type }}">{% endif %}
+    <button type="submit"
+            class="btn btn-danger"
+            data-confirm="{{ chrome.tv_count("events-bulk-delete-all-confirm", result.total as i64) }}">
+      {{ chrome.tv_count("events-bulk-delete-all", result.total as i64) }}
+    </button>
+  </form>
+{% endif %}
+
+<nav class="pagination"
+     aria-label="{{ chrome.t("events-pagination-label") }}">
+  <span>{{ chrome.tv_count("events-count", result.total as i64) }}</span>
+  <span class="flex gap-2">
+    {% if result.has_prev() %}
+      <a class="btn btn-ghost"
+         href="/web/events/?offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}{{ filter_qs }}">{{ chrome.t("events-pagination-prev") }}</a>
     {% endif %}
-
-    <nav class="pagination" aria-label="Pagination">
-      <span>{{ result.total }} event
-        {%- if result.total != 1 %}s{% endif %}
-      </span>
-      <span class="flex gap-2">
-        {% if result.has_prev() %}
-          <a class="btn btn-ghost"
-             href="/web/events/?offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}{{ filter_qs }}">« Previous</a>
-        {% endif %}
-        {% if result.has_next() %}
-          <a class="btn btn-ghost"
-             href="/web/events/?offset={{ result.next_offset() }}&amp;limit={{ result.limit }}{{ filter_qs }}">Next »</a>
-        {% endif %}
-      </span>
-    </nav>
-  {% endif %}
+    {% if result.has_next() %}
+      <a class="btn btn-ghost"
+         href="/web/events/?offset={{ result.next_offset() }}&amp;limit={{ result.limit }}{{ filter_qs }}">{{ chrome.t("events-pagination-next") }}</a>
+    {% endif %}
+  </span>
+</nav>
+{% endif %}
 {% endblock %}

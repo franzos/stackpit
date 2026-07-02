@@ -253,7 +253,11 @@ pub async fn create_message_filter(
 }
 
 /// Returns 0 if not found or id belongs to a different project.
-pub async fn delete_message_filter(pool: &crate::db::DbPool, id: i64, project_id: u64) -> Result<u64> {
+pub async fn delete_message_filter(
+    pool: &crate::db::DbPool,
+    id: i64,
+    project_id: u64,
+) -> Result<u64> {
     delete_by_id_and_project(pool, "message_filters", id, project_id).await
 }
 
@@ -299,7 +303,11 @@ pub async fn add_environment_filter(
 }
 
 /// Returns 0 if not found or id belongs to a different project.
-pub async fn delete_environment_filter(pool: &crate::db::DbPool, id: i64, project_id: u64) -> Result<u64> {
+pub async fn delete_environment_filter(
+    pool: &crate::db::DbPool,
+    id: i64,
+    project_id: u64,
+) -> Result<u64> {
     delete_by_id_and_project(pool, "environment_filters", id, project_id).await
 }
 
@@ -324,7 +332,11 @@ pub async fn add_release_filter(
 }
 
 /// Returns 0 if not found or id belongs to a different project.
-pub async fn delete_release_filter(pool: &crate::db::DbPool, id: i64, project_id: u64) -> Result<u64> {
+pub async fn delete_release_filter(
+    pool: &crate::db::DbPool,
+    id: i64,
+    project_id: u64,
+) -> Result<u64> {
     delete_by_id_and_project(pool, "release_filters", id, project_id).await
 }
 
@@ -350,7 +362,11 @@ pub async fn add_user_agent_filter(
 }
 
 /// Returns 0 if not found or id belongs to a different project.
-pub async fn delete_user_agent_filter(pool: &crate::db::DbPool, id: i64, project_id: u64) -> Result<u64> {
+pub async fn delete_user_agent_filter(
+    pool: &crate::db::DbPool,
+    id: i64,
+    project_id: u64,
+) -> Result<u64> {
     delete_by_id_and_project(pool, "user_agent_filters", id, project_id).await
 }
 
@@ -638,12 +654,16 @@ mod tests {
     #[tokio::test]
     async fn delete_message_filter_cross_project_affects_zero_rows() {
         let pool = open_test_db().await;
-        create_message_filter(&pool, 1, "bad-pattern").await.unwrap();
-        let id: i64 = sqlx::query(sql!("SELECT id FROM message_filters WHERE project_id = 1 AND pattern = 'bad-pattern'"))
-            .fetch_one(&pool)
+        create_message_filter(&pool, 1, "bad-pattern")
             .await
-            .unwrap()
-            .get(0);
+            .unwrap();
+        let id: i64 = sqlx::query(sql!(
+            "SELECT id FROM message_filters WHERE project_id = 1 AND pattern = 'bad-pattern'"
+        ))
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+        .get(0);
         let rows = delete_message_filter(&pool, id, 2).await.unwrap();
         assert_eq!(rows, 0, "cross-project delete must affect 0 rows");
         let rows = delete_message_filter(&pool, id, 1).await.unwrap();
@@ -654,11 +674,13 @@ mod tests {
     async fn delete_environment_filter_cross_project_affects_zero_rows() {
         let pool = open_test_db().await;
         add_environment_filter(&pool, 1, "staging").await.unwrap();
-        let id: i64 = sqlx::query(sql!("SELECT id FROM environment_filters WHERE project_id = 1 AND environment = 'staging'"))
-            .fetch_one(&pool)
-            .await
-            .unwrap()
-            .get(0);
+        let id: i64 = sqlx::query(sql!(
+            "SELECT id FROM environment_filters WHERE project_id = 1 AND environment = 'staging'"
+        ))
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+        .get(0);
         assert_eq!(delete_environment_filter(&pool, id, 2).await.unwrap(), 0);
         assert_eq!(delete_environment_filter(&pool, id, 1).await.unwrap(), 1);
     }
@@ -667,11 +689,13 @@ mod tests {
     async fn delete_release_filter_cross_project_affects_zero_rows() {
         let pool = open_test_db().await;
         add_release_filter(&pool, 1, "1.0.*").await.unwrap();
-        let id: i64 = sqlx::query(sql!("SELECT id FROM release_filters WHERE project_id = 1 AND pattern = '1.0.*'"))
-            .fetch_one(&pool)
-            .await
-            .unwrap()
-            .get(0);
+        let id: i64 = sqlx::query(sql!(
+            "SELECT id FROM release_filters WHERE project_id = 1 AND pattern = '1.0.*'"
+        ))
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+        .get(0);
         assert_eq!(delete_release_filter(&pool, id, 2).await.unwrap(), 0);
         assert_eq!(delete_release_filter(&pool, id, 1).await.unwrap(), 1);
     }
@@ -680,11 +704,13 @@ mod tests {
     async fn delete_user_agent_filter_cross_project_affects_zero_rows() {
         let pool = open_test_db().await;
         add_user_agent_filter(&pool, 1, "Googlebot").await.unwrap();
-        let id: i64 = sqlx::query(sql!("SELECT id FROM user_agent_filters WHERE project_id = 1 AND pattern = 'Googlebot'"))
-            .fetch_one(&pool)
-            .await
-            .unwrap()
-            .get(0);
+        let id: i64 = sqlx::query(sql!(
+            "SELECT id FROM user_agent_filters WHERE project_id = 1 AND pattern = 'Googlebot'"
+        ))
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+        .get(0);
         assert_eq!(delete_user_agent_filter(&pool, id, 2).await.unwrap(), 0);
         assert_eq!(delete_user_agent_filter(&pool, id, 1).await.unwrap(), 1);
     }
@@ -695,11 +721,13 @@ mod tests {
         create_filter_rule(&pool, 1, "level", "equals", "fatal", "drop", None, 0)
             .await
             .unwrap();
-        let id: i64 = sqlx::query(sql!("SELECT id FROM filter_rules WHERE project_id = 1 AND value = 'fatal'"))
-            .fetch_one(&pool)
-            .await
-            .unwrap()
-            .get(0);
+        let id: i64 = sqlx::query(sql!(
+            "SELECT id FROM filter_rules WHERE project_id = 1 AND value = 'fatal'"
+        ))
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+        .get(0);
         assert_eq!(delete_filter_rule(&pool, id, 2).await.unwrap(), 0);
         assert_eq!(delete_filter_rule(&pool, id, 1).await.unwrap(), 1);
     }
@@ -708,11 +736,13 @@ mod tests {
     async fn delete_ip_block_cross_project_affects_zero_rows() {
         let pool = open_test_db().await;
         add_ip_block(&pool, 1, "10.0.0.1/32").await.unwrap();
-        let id: i64 = sqlx::query(sql!("SELECT id FROM ip_blocklist WHERE project_id = 1 AND cidr = '10.0.0.1/32'"))
-            .fetch_one(&pool)
-            .await
-            .unwrap()
-            .get(0);
+        let id: i64 = sqlx::query(sql!(
+            "SELECT id FROM ip_blocklist WHERE project_id = 1 AND cidr = '10.0.0.1/32'"
+        ))
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+        .get(0);
         assert_eq!(delete_ip_block(&pool, id, 2).await.unwrap(), 0);
         assert_eq!(delete_ip_block(&pool, id, 1).await.unwrap(), 1);
     }

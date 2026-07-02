@@ -1,40 +1,40 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
 
-{% block title %}User Reports — {{ nav.label }} — Stackpit{% endblock %}
+{% block title %}{{ chrome.t("user-reports-title") }} — {{ nav.label }} {{ chrome.t("events-title-suffix") }}{% endblock %}
 
 {% block sidebar_nav %}
-  {% call m::project_sidebar(project_id, nav, "user_reports") %}
+  {% call m::project_sidebar(chrome, project_id, nav, "user_reports") %}
   {% endcall %}
 {% endblock %}
 
 {% block breadcrumbs %}
   <span class="breadcrumb-sep">/</span>
-  <a class="breadcrumb-link" href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
+  <a class="breadcrumb-link" href="/web/projects/{{ project_id }}/"><bdi>{{ nav.label }}</bdi></a>
   <span class="breadcrumb-sep">/</span>
-  <span class="breadcrumb-current">User reports</span>
+  <span class="breadcrumb-current">{{ chrome.t("user-reports-heading") }}</span>
 {% endblock %}
 
 {% block content %}
   <div class="page-header">
-    <h1>User reports</h1>
+    <h1>{{ chrome.t("user-reports-heading") }}</h1>
   </div>
 
   {% if result.items.is_empty() %}
     <div class="card">
-      <p class="empty">No user reports found for this project.</p>
+      <p class="empty">{{ chrome.t("user-reports-empty") }}</p>
     </div>
   {% else %}
 
     <form method="post"
           action="/web/projects/{{ project_id }}/user-reports/bulk">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
       <input type="hidden" name="action" value="delete">
       <input type="hidden" name="mode" value="selected">
       <div class="bulk-bar">
         <button type="submit"
                 class="btn btn-danger"
-                data-confirm="Delete selected reports?">Delete</button>
+                data-confirm="{{ chrome.t("user-reports-delete-selected-confirm") }}">{{ chrome.t("user-reports-delete") }}</button>
       </div>
 
       <div class="card overflow-hidden">
@@ -43,11 +43,11 @@
             <thead>
               <tr>
                 <th class="col-check"></th>
-                <th>Event ID</th>
-                <th>Title</th>
-                <th>Timestamp</th>
-                <th>Platform</th>
-                <th>Release</th>
+                <th>{{ chrome.t("user-reports-th-event-id") }}</th>
+                <th>{{ chrome.t("user-reports-th-title") }}</th>
+                <th>{{ chrome.t("user-reports-th-timestamp") }}</th>
+                <th>{{ chrome.t("user-reports-th-platform") }}</th>
+                <th>{{ chrome.t("user-reports-th-release") }}</th>
               </tr>
             </thead>
             <tbody>
@@ -57,60 +57,59 @@
                     <input type="checkbox"
                            name="ids"
                            value="{{ event.event_id }}"
-                           aria-label="Select report">
+                           aria-label="{{ chrome.t("user-reports-select") }}">
                   </td>
                   <td>
                     <a class="text-mono"
                        href="/web/projects/{{ project_id }}/events/{{ event.event_id }}/">{{ event.event_id|truncate_id }}</a>
                   </td>
                   <td class="truncate-cell">
-                    {% match event.title %}{% when Some with (t) %}{{ t }}{% when None %}(untitled){% endmatch %}
-                  </td>
-                  <td class="text-muted">
-                    <time datetime="{{ event.timestamp|format_ts }}"
-                          title="{{ event.timestamp|format_ts }}">{{ event.timestamp|format_relative }}</time>
-                  </td>
-                  <td>
-                    {% match event.platform %}{% when Some with (p) %}<span class="badge badge-platform">{{ p }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
-                  </td>
-                  <td class="text-mono text-[12px]">
-                    {% match event.release %}{% when Some with (r) %}{{ r }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
-                  </td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </form>
+                    {% match event.title %}{% when Some with (t) %}{{ t }}{% when None %}{{ chrome.t("events-untitled") }}{% endmatch %}
+                </td>
+                <td class="text-muted">
+                  <time datetime="{{ event.timestamp|format_ts }}"
+                        title="{{ event.timestamp|format_ts }}">{{ chrome.rel_time(event.timestamp) }}</time>
+                </td>
+                <td>
+                  {% match event.platform %}{% when Some with (p) %}<span class="badge badge-platform">{{ p }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
+              </td>
+              <td class="text-mono text-[12px]">
+                {% match event.release %}{% when Some with (r) %}{{ r }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+</form>
 
-    {% if result.total > 0 %}
-      <form class="mt-3"
-            method="post"
-            action="/web/projects/{{ project_id }}/user-reports/bulk">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <input type="hidden" name="action" value="delete">
-        <input type="hidden" name="mode" value="all_matching">
-        <button type="submit"
-                class="btn btn-danger"
-                data-confirm="Delete all {{ result.total }} matching reports?">Delete all {{ result.total }}</button>
-      </form>
+{% if result.total > 0 %}
+  <form class="mt-3"
+        method="post"
+        action="/web/projects/{{ project_id }}/user-reports/bulk">
+    <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+    <input type="hidden" name="action" value="delete">
+    <input type="hidden" name="mode" value="all_matching">
+    <button type="submit"
+            class="btn btn-danger"
+            data-confirm="{{ chrome.tv_count("user-reports-delete-all-confirm", result.total as i64) }}">{{ chrome.tv_count("user-reports-delete-all", result.total as i64) }}</button>
+  </form>
+{% endif %}
+
+<nav class="pagination"
+     aria-label="{{ chrome.t("events-pagination-label") }}">
+  <span>{{ chrome.tv_count("user-reports-count", result.total as i64) }}</span>
+  <span class="flex gap-2">
+    {% if result.has_prev() %}
+      <a class="btn btn-ghost"
+         href="/web/projects/{{ project_id }}/user-reports/?offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}">{{ chrome.t("events-pagination-prev") }}</a>
     {% endif %}
-
-    <nav class="pagination" aria-label="Pagination">
-      <span>{{ result.total }} report
-        {%- if result.total != 1 %}s{% endif %}
-      </span>
-      <span class="flex gap-2">
-        {% if result.has_prev() %}
-          <a class="btn btn-ghost"
-             href="/web/projects/{{ project_id }}/user-reports/?offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}">« Previous</a>
-        {% endif %}
-        {% if result.has_next() %}
-          <a class="btn btn-ghost"
-             href="/web/projects/{{ project_id }}/user-reports/?offset={{ result.next_offset() }}&amp;limit={{ result.limit }}">Next »</a>
-        {% endif %}
-      </span>
-    </nav>
-  {% endif %}
+    {% if result.has_next() %}
+      <a class="btn btn-ghost"
+         href="/web/projects/{{ project_id }}/user-reports/?offset={{ result.next_offset() }}&amp;limit={{ result.limit }}">{{ chrome.t("events-pagination-next") }}</a>
+    {% endif %}
+  </span>
+</nav>
+{% endif %}
 {% endblock %}

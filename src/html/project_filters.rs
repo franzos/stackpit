@@ -5,8 +5,9 @@ use axum::response::IntoResponse;
 use serde::Deserialize;
 
 use crate::filter::admin;
+use crate::html::chrome::PageChrome;
 use crate::html::render_template;
-use crate::html::utils::Csrf;
+use crate::html::utils::Chrome;
 use crate::orgs::extractor::{require_owner, require_project_scope, ActiveOrg};
 use crate::queries;
 use crate::server::AppState;
@@ -17,13 +18,13 @@ use super::HtmlError;
 async fn write_then_render(
     state: &AppState,
     project_id: u64,
-    csrf: &str,
+    chrome: &PageChrome,
     result: anyhow::Result<()>,
     success_msg: &str,
 ) -> axum::response::Response {
     match admin::persist_and_reload(&state.writer_pool, &state.filter_engine, result).await {
-        Ok(()) => render_filters(state, project_id, Some(success_msg.into()), csrf).await,
-        Err(e) => render_filters(state, project_id, Some(format!("Error: {e}")), csrf).await,
+        Ok(()) => render_filters(state, project_id, Some(success_msg.into()), chrome).await,
+        Err(e) => render_filters(state, project_id, Some(chrome.err(e)), chrome).await,
     }
 }
 
@@ -32,7 +33,7 @@ async fn write_then_render(
 async fn delete_then_render(
     state: &AppState,
     project_id: u64,
-    csrf: &str,
+    chrome: &PageChrome,
     result: anyhow::Result<u64>,
     label: &str,
     success_msg: &str,
@@ -42,17 +43,21 @@ async fn delete_then_render(
             render_filters_status(
                 state,
                 project_id,
-                Some(format!("Error: not found: {label}")),
-                csrf,
+                Some(format!(
+                    "{} {}",
+                    chrome.t("common-error-prefix"),
+                    chrome.tv1("flash-not-found-filter", "label", label)
+                )),
+                chrome,
                 StatusCode::NOT_FOUND,
             )
             .await
         }
         Ok(_) => {
             admin::reload(&state.writer_pool, &state.filter_engine).await;
-            render_filters(state, project_id, Some(success_msg.into()), csrf).await
+            render_filters(state, project_id, Some(success_msg.into()), chrome).await
         }
-        Err(e) => render_filters(state, project_id, Some(format!("Error: {e}")), csrf).await,
+        Err(e) => render_filters(state, project_id, Some(chrome.err(e)), chrome).await,
     }
 }
 
@@ -63,11 +68,11 @@ async fn require_nonempty(
     msg: &str,
     state: &AppState,
     project_id: u64,
-    csrf: &str,
+    chrome: &PageChrome,
 ) -> Result<String, axum::response::Response> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        Err(validation_error(state, project_id, msg, csrf).await)
+        Err(validation_error(state, project_id, msg, chrome).await)
     } else {
         Ok(trimmed.to_string())
     }
@@ -92,38 +97,38 @@ struct ProjectFiltersTemplate {
     filter_rules: Vec<queries::RawFilterRule>,
     ip_blocks: Vec<(i64, String)>,
     discard_stats: Vec<(String, String, u64)>,
-    csrf_token: String,
+    chrome: PageChrome,
 }
 
 pub async fn handler(
     State(state): State<AppState>,
     active: ActiveOrg,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path(project_id): Path<u64>,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
         return r;
     }
-    render_filters(&state, project_id, None, &csrf).await
+    render_filters(&state, project_id, None, &chrome).await
 }
 
 async fn render_filters(
     state: &AppState,
     project_id: u64,
     message: Option<String>,
-    csrf: &str,
+    chrome: &PageChrome,
 ) -> axum::response::Response {
-    render_filters_status(state, project_id, message, csrf, StatusCode::OK).await
+    render_filters_status(state, project_id, message, chrome, StatusCode::OK).await
 }
 
 async fn render_filters_status(
     state: &AppState,
     project_id: u64,
     message: Option<String>,
-    csrf: &str,
+    chrome: &PageChrome,
     status: StatusCode,
 ) -> axum::response::Response {
-    match build_filters_template(state, project_id, message, csrf).await {
+    match build_filters_template(state, project_id, message, chrome).await {
         Ok(tmpl) => (status, render_template(&tmpl)).into_response(),
         Err(e) => e.into_response(),
     }
@@ -133,13 +138,13 @@ async fn validation_error(
     state: &AppState,
     project_id: u64,
     msg: &str,
-    csrf: &str,
+    chrome: &PageChrome,
 ) -> axum::response::Response {
     render_filters_status(
         state,
         project_id,
         Some(msg.into()),
-        csrf,
+        chrome,
         StatusCode::UNPROCESSABLE_ENTITY,
     )
     .await
@@ -149,7 +154,7 @@ async fn build_filters_template(
     state: &AppState,
     project_id: u64,
     message: Option<String>,
-    csrf: &str,
+    chrome: &PageChrome,
 ) -> Result<ProjectFiltersTemplate, HtmlError> {
     let inbound = queries::filters::get_inbound_filters(&state.pool, project_id).await?;
     let browser_extensions_enabled = inbound.contains("browser_extensions");
@@ -181,7 +186,7 @@ async fn build_filters_template(
         filter_rules,
         ip_blocks,
         discard_stats,
-        csrf_token: csrf.to_string(),
+        chrome: chrome.clone(),
     })
 }
 
@@ -227,7 +232,7 @@ pub struct RuleForm {
 pub async fn set_inbound_filters(
     State(state): State<AppState>,
     active: ActiveOrg,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path(project_id): Path<u64>,
     Form(form): Form<InboundFilterForm>,
 ) -> axum::response::Response {
@@ -245,7 +250,7 @@ pub async fn set_inbound_filters(
             queries::filters::set_inbound_filter(&state.writer_pool, project_id, filter_id, enabled)
                 .await
         {
-            return render_filters(&state, project_id, Some(format!("Error: {e}")), &csrf).await;
+            return render_filters(&state, project_id, Some(chrome.err(e)), &chrome).await;
         }
     }
     admin::reload(&state.writer_pool, &state.filter_engine).await;
@@ -253,8 +258,8 @@ pub async fn set_inbound_filters(
     render_filters(
         &state,
         project_id,
-        Some("Inbound filters updated".into()),
-        &csrf,
+        Some(chrome.t("flash-inbound-filters-updated")),
+        &chrome,
     )
     .await
 }
@@ -262,7 +267,7 @@ pub async fn set_inbound_filters(
 pub async fn add_message_filter(
     State(state): State<AppState>,
     active: ActiveOrg,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path(project_id): Path<u64>,
     Form(form): Form<PatternForm>,
 ) -> axum::response::Response {
@@ -274,10 +279,10 @@ pub async fn add_message_filter(
     }
     let pattern = match require_nonempty(
         &form.pattern,
-        "Pattern is required",
+        &chrome.t("flash-pattern-required"),
         &state,
         project_id,
-        &csrf,
+        &chrome,
     )
     .await
     {
@@ -286,13 +291,20 @@ pub async fn add_message_filter(
     };
     let result =
         queries::filters::create_message_filter(&state.writer_pool, project_id, &pattern).await;
-    write_then_render(&state, project_id, &csrf, result, "Message filter added").await
+    write_then_render(
+        &state,
+        project_id,
+        &chrome,
+        result,
+        &chrome.t("flash-message-filter-added"),
+    )
+    .await
 }
 
 pub async fn delete_message_filter(
     State(state): State<AppState>,
     active: ActiveOrg,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path((project_id, id)): Path<(u64, i64)>,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
@@ -305,10 +317,10 @@ pub async fn delete_message_filter(
     delete_then_render(
         &state,
         project_id,
-        &csrf,
+        &chrome,
         result,
-        "message filter",
-        "Message filter removed",
+        &chrome.t("projects-filter-label-message"),
+        &chrome.t("flash-message-filter-removed"),
     )
     .await
 }
@@ -316,7 +328,7 @@ pub async fn delete_message_filter(
 pub async fn set_rate_limit(
     State(state): State<AppState>,
     active: ActiveOrg,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path(project_id): Path<u64>,
     Form(form): Form<RateLimitForm>,
 ) -> axum::response::Response {
@@ -333,13 +345,20 @@ pub async fn set_rate_limit(
         form.max_events_per_minute,
     )
     .await;
-    write_then_render(&state, project_id, &csrf, result, "Rate limit updated").await
+    write_then_render(
+        &state,
+        project_id,
+        &chrome,
+        result,
+        &chrome.t("flash-rate-limit-updated"),
+    )
+    .await
 }
 
 pub async fn add_environment_filter(
     State(state): State<AppState>,
     active: ActiveOrg,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path(project_id): Path<u64>,
     Form(form): Form<EnvironmentForm>,
 ) -> axum::response::Response {
@@ -351,10 +370,10 @@ pub async fn add_environment_filter(
     }
     let env = match require_nonempty(
         &form.environment,
-        "Environment is required",
+        &chrome.t("flash-environment-required"),
         &state,
         project_id,
-        &csrf,
+        &chrome,
     )
     .await
     {
@@ -363,13 +382,20 @@ pub async fn add_environment_filter(
     };
     let result =
         queries::filters::add_environment_filter(&state.writer_pool, project_id, &env).await;
-    write_then_render(&state, project_id, &csrf, result, "Environment excluded").await
+    write_then_render(
+        &state,
+        project_id,
+        &chrome,
+        result,
+        &chrome.t("flash-environment-excluded"),
+    )
+    .await
 }
 
 pub async fn delete_environment_filter(
     State(state): State<AppState>,
     active: ActiveOrg,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path((project_id, id)): Path<(u64, i64)>,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
@@ -383,10 +409,10 @@ pub async fn delete_environment_filter(
     delete_then_render(
         &state,
         project_id,
-        &csrf,
+        &chrome,
         result,
-        "environment filter",
-        "Environment filter removed",
+        &chrome.t("projects-filter-label-environment"),
+        &chrome.t("flash-environment-filter-removed"),
     )
     .await
 }
@@ -394,7 +420,7 @@ pub async fn delete_environment_filter(
 pub async fn add_release_filter(
     State(state): State<AppState>,
     active: ActiveOrg,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path(project_id): Path<u64>,
     Form(form): Form<PatternForm>,
 ) -> axum::response::Response {
@@ -406,10 +432,10 @@ pub async fn add_release_filter(
     }
     let pattern = match require_nonempty(
         &form.pattern,
-        "Pattern is required",
+        &chrome.t("flash-pattern-required"),
         &state,
         project_id,
-        &csrf,
+        &chrome,
     )
     .await
     {
@@ -418,13 +444,20 @@ pub async fn add_release_filter(
     };
     let result =
         queries::filters::add_release_filter(&state.writer_pool, project_id, &pattern).await;
-    write_then_render(&state, project_id, &csrf, result, "Release filter added").await
+    write_then_render(
+        &state,
+        project_id,
+        &chrome,
+        result,
+        &chrome.t("flash-release-filter-added"),
+    )
+    .await
 }
 
 pub async fn delete_release_filter(
     State(state): State<AppState>,
     active: ActiveOrg,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path((project_id, id)): Path<(u64, i64)>,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
@@ -437,10 +470,10 @@ pub async fn delete_release_filter(
     delete_then_render(
         &state,
         project_id,
-        &csrf,
+        &chrome,
         result,
-        "release filter",
-        "Release filter removed",
+        &chrome.t("projects-filter-label-release"),
+        &chrome.t("flash-release-filter-removed"),
     )
     .await
 }
@@ -448,7 +481,7 @@ pub async fn delete_release_filter(
 pub async fn add_ua_filter(
     State(state): State<AppState>,
     active: ActiveOrg,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path(project_id): Path<u64>,
     Form(form): Form<PatternForm>,
 ) -> axum::response::Response {
@@ -460,10 +493,10 @@ pub async fn add_ua_filter(
     }
     let pattern = match require_nonempty(
         &form.pattern,
-        "Pattern is required",
+        &chrome.t("flash-pattern-required"),
         &state,
         project_id,
-        &csrf,
+        &chrome,
     )
     .await
     {
@@ -472,13 +505,20 @@ pub async fn add_ua_filter(
     };
     let result =
         queries::filters::add_user_agent_filter(&state.writer_pool, project_id, &pattern).await;
-    write_then_render(&state, project_id, &csrf, result, "User-agent filter added").await
+    write_then_render(
+        &state,
+        project_id,
+        &chrome,
+        result,
+        &chrome.t("flash-ua-filter-added"),
+    )
+    .await
 }
 
 pub async fn delete_ua_filter(
     State(state): State<AppState>,
     active: ActiveOrg,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path((project_id, id)): Path<(u64, i64)>,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
@@ -492,10 +532,10 @@ pub async fn delete_ua_filter(
     delete_then_render(
         &state,
         project_id,
-        &csrf,
+        &chrome,
         result,
-        "user-agent filter",
-        "User-agent filter removed",
+        &chrome.t("projects-filter-label-user-agent"),
+        &chrome.t("flash-ua-filter-removed"),
     )
     .await
 }
@@ -503,7 +543,7 @@ pub async fn delete_ua_filter(
 pub async fn add_filter_rule(
     State(state): State<AppState>,
     active: ActiveOrg,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path(project_id): Path<u64>,
     Form(form): Form<RuleForm>,
 ) -> axum::response::Response {
@@ -519,8 +559,8 @@ pub async fn add_filter_rule(
         return validation_error(
             &state,
             project_id,
-            &format!("Unrecognized field '{}'", form.field),
-            &csrf,
+            &chrome.tv1("flash-unrecognized-field", "value", &form.field),
+            &chrome,
         )
         .await;
     }
@@ -528,8 +568,8 @@ pub async fn add_filter_rule(
         return validation_error(
             &state,
             project_id,
-            &format!("Unrecognized operator '{}'", form.operator),
-            &csrf,
+            &chrome.tv1("flash-unrecognized-operator", "value", &form.operator),
+            &chrome,
         )
         .await;
     }
@@ -537,8 +577,8 @@ pub async fn add_filter_rule(
         return validation_error(
             &state,
             project_id,
-            &format!("Unrecognized action '{}'", form.action),
-            &csrf,
+            &chrome.tv1("flash-unrecognized-action", "value", &form.action),
+            &chrome,
         )
         .await;
     }
@@ -554,13 +594,20 @@ pub async fn add_filter_rule(
         form.priority,
     )
     .await;
-    write_then_render(&state, project_id, &csrf, result, "Rule added").await
+    write_then_render(
+        &state,
+        project_id,
+        &chrome,
+        result,
+        &chrome.t("flash-rule-added"),
+    )
+    .await
 }
 
 pub async fn delete_filter_rule(
     State(state): State<AppState>,
     active: ActiveOrg,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path((project_id, id)): Path<(u64, i64)>,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
@@ -573,10 +620,10 @@ pub async fn delete_filter_rule(
     delete_then_render(
         &state,
         project_id,
-        &csrf,
+        &chrome,
         result,
-        "filter rule",
-        "Rule removed",
+        &chrome.t("projects-filter-label-rule"),
+        &chrome.t("flash-rule-removed"),
     )
     .await
 }
@@ -584,7 +631,7 @@ pub async fn delete_filter_rule(
 pub async fn add_ip_block(
     State(state): State<AppState>,
     active: ActiveOrg,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path(project_id): Path<u64>,
     Form(form): Form<CidrForm>,
 ) -> axum::response::Response {
@@ -594,22 +641,37 @@ pub async fn add_ip_block(
     if let Err(r) = require_owner(&active) {
         return r;
     }
-    let cidr =
-        match require_nonempty(&form.cidr, "CIDR is required", &state, project_id, &csrf).await {
-            Ok(c) => c,
-            Err(resp) => return resp,
-        };
+    let cidr = match require_nonempty(
+        &form.cidr,
+        &chrome.t("flash-cidr-required"),
+        &state,
+        project_id,
+        &chrome,
+    )
+    .await
+    {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
     if crate::filter::cidr::CidrBlock::parse(&cidr).is_none() {
-        return validation_error(&state, project_id, "Invalid CIDR format", &csrf).await;
+        return validation_error(&state, project_id, &chrome.t("flash-invalid-cidr"), &chrome)
+            .await;
     }
     let result = queries::filters::add_ip_block(&state.writer_pool, project_id, &cidr).await;
-    write_then_render(&state, project_id, &csrf, result, "IP block added").await
+    write_then_render(
+        &state,
+        project_id,
+        &chrome,
+        result,
+        &chrome.t("flash-ip-block-added"),
+    )
+    .await
 }
 
 pub async fn delete_ip_block(
     State(state): State<AppState>,
     active: ActiveOrg,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path((project_id, id)): Path<(u64, i64)>,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
@@ -622,10 +684,10 @@ pub async fn delete_ip_block(
     delete_then_render(
         &state,
         project_id,
-        &csrf,
+        &chrome,
         result,
         "IP block",
-        "IP block removed",
+        &chrome.t("flash-ip-block-removed"),
     )
     .await
 }

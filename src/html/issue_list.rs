@@ -5,9 +5,10 @@ use axum::response::IntoResponse;
 
 use crate::db::DbPool;
 use crate::extractors::{BrowserDefaults, ReadPool};
+use crate::html::chrome::PageChrome;
 use crate::html::render_template;
 use crate::html::utils::{
-    build_filter_qs, defaults_redirect_url, issue_filter_from_params, period_to_timestamp, Csrf,
+    build_filter_qs, defaults_redirect_url, issue_filter_from_params, period_to_timestamp, Chrome,
     ListParams,
 };
 use crate::orgs::extractor::ActiveOrg;
@@ -38,7 +39,7 @@ struct IssueListTemplate {
     base_qs: String,
     nav: ProjectNavCounts,
     chart_svg: String,
-    csrf_token: String,
+    chrome: PageChrome,
 }
 
 pub async fn handler(
@@ -46,7 +47,7 @@ pub async fn handler(
     BrowserDefaults(defaults): BrowserDefaults,
     RawQuery(raw_qs): RawQuery,
     ReadPool(pool): ReadPool,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path(project_id): Path<u64>,
     Query(params): Query<ListParams>,
 ) -> Result<axum::response::Response, HtmlError> {
@@ -61,7 +62,7 @@ pub async fn handler(
     crate::orgs::extractor::require_project_scope(&active, &pool, project_id as i64)
         .await
         .map_err(|_| HtmlError(StatusCode::NOT_FOUND, "Not found".into()))?;
-    issue_or_transaction_handler(&pool, project_id, params, "event", csrf).await
+    issue_or_transaction_handler(&pool, project_id, params, "event", chrome).await
 }
 
 async fn issue_or_transaction_handler(
@@ -69,7 +70,7 @@ async fn issue_or_transaction_handler(
     project_id: u64,
     params: ListParams,
     item_type: &str,
-    csrf: String,
+    chrome: PageChrome,
 ) -> Result<axum::response::Response, HtmlError> {
     let query_str = params.query.clone().unwrap_or_default();
     let level_str = params.level.clone().unwrap_or_default();
@@ -127,6 +128,6 @@ async fn issue_or_transaction_handler(
         base_qs,
         nav,
         chart_svg,
-        csrf_token: csrf,
+        chrome,
     }))
 }

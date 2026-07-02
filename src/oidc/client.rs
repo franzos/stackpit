@@ -76,6 +76,9 @@ pub struct LoginClaims {
     pub orgs: Option<Vec<OrgClaim>>,
     /// Mirrors the `orgs_truncated` flag from Forseti; true means the list was capped.
     pub orgs_truncated: bool,
+    /// Validated BCP-47 tag of the OIDC `locale` claim (e.g. "de"). None if the
+    /// claim is absent or not a SUPPORTED locale.
+    pub locale: Option<String>,
 }
 
 /// Verified claims plus live IdP tokens. Stored server-side, encrypted; the
@@ -734,6 +737,11 @@ fn extract_login_claims(claims: &CoreIdTokenClaims) -> LoginClaims {
         .name()
         .and_then(|n| n.get(None))
         .map(|n| n.as_str().to_string());
+    // Untrusted provider value: keep only if it negotiates to a SUPPORTED locale.
+    let locale = claims
+        .locale()
+        .and_then(|tag| crate::locale::accept(tag.as_str()))
+        .map(|l| l.to_string());
     LoginClaims {
         iss,
         sub,
@@ -742,6 +750,7 @@ fn extract_login_claims(claims: &CoreIdTokenClaims) -> LoginClaims {
         sid: None,
         orgs: None,
         orgs_truncated: false,
+        locale,
     }
 }
 
@@ -932,9 +941,9 @@ mod tests {
     // RS256 pin rejects HS256 tokens; DisallowedAlg fires before sig bytes so a fake sig suffices.
     #[test]
     fn id_token_verifier_rejects_non_rs256_alg() {
-        use std::str::FromStr;
         use openidconnect::core::CoreIdToken;
         use openidconnect::{ClaimsVerificationError, SignatureVerificationError};
+        use std::str::FromStr;
 
         // HS256 JWT: iss=https://id.example.com, aud=client1, no typ (avoids JOSE-type check)
         let hs256_token = concat!(

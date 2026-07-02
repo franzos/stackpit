@@ -6,8 +6,10 @@ use serde::Deserialize;
 use stackpit_auth::AuthContext;
 
 use crate::db::DbPool;
-use crate::html::{filters, html_error, render_template};
-use crate::html::utils::Csrf;
+use crate::html::chrome::{Localized, PageChrome};
+use crate::html::utils::Chrome;
+use crate::html::{filters, html_error, html_error_localized, render_template};
+use crate::locale::LanguageIdentifier;
 use crate::orgs::extractor::{pack, ActiveOrg, ACTIVE_ORG_COOKIE};
 use crate::orgs::{OrgKind, Role, SYSTEM_ORG_ID};
 use crate::queries::orgs::{
@@ -113,6 +115,15 @@ struct InviteAcceptTemplate {
     role: String,
     csrf_token: String,
     error: Option<String>,
+    /// Standalone page (no PageChrome), so it carries its own locale and looks
+    /// strings up directly.
+    locale: LanguageIdentifier,
+}
+
+impl Localized for InviteAcceptTemplate {
+    fn locale(&self) -> &LanguageIdentifier {
+        &self.locale
+    }
 }
 
 /// `POST /web/organizations/:org_id/invites`: create an invite for a native org.
@@ -156,8 +167,15 @@ pub async fn create_org_invite(
     let email = form.email.as_deref().filter(|s| !s.is_empty());
     let ttl_secs = form.ttl_secs.unwrap_or(7 * 24 * 3600);
 
-    let token = match create_invite(&state.pool, path_org_id, role, email, user.user_id, ttl_secs)
-        .await
+    let token = match create_invite(
+        &state.pool,
+        path_org_id,
+        role,
+        email,
+        user.user_id,
+        ttl_secs,
+    )
+    .await
     {
         Ok(t) => t,
         Err(e) => {
@@ -184,10 +202,23 @@ pub async fn create_org_invite(
         format!("{} seconds", ttl_secs)
     };
 
+    // No request context on this confirmation page, so its strings resolve at
+    // the default locale (English), like html_error.
+    let locale = crate::locale::default_locale();
+    let page_title = crate::i18n::lookup(&locale, "invite-created-page-title");
+    let heading = crate::i18n::lookup(&locale, "invite-created-heading");
+    let back_members = crate::i18n::lookup(&locale, "invite-created-back-members");
+    let mut share_args: std::collections::HashMap<
+        std::borrow::Cow<'static, str>,
+        fluent_templates::fluent_bundle::FluentValue,
+    > = std::collections::HashMap::new();
+    share_args.insert(std::borrow::Cow::Borrowed("ttl"), ttl_label.into());
+    let share = crate::i18n::lookup_args(&locale, "invite-created-share", &share_args);
+
     let body = format!(
         r#"<!DOCTYPE html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><title>Invite created - Stackpit</title>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><title>{page_title}</title>
 <link rel="preload" href="/web/_assets/fonts/Inter-Regular.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/web/_assets/fonts/Inter-SemiBold.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/web/_assets/style.css">
@@ -196,12 +227,12 @@ pub async fn create_org_invite(
 <div class="w-full max-w-md">
 <div class="flex flex-col items-center mb-6">
 <div class="flex items-center gap-2 mb-4"><img src="/web/_assets/icon.svg" alt="" width="28" height="28"><span class="text-xl font-semibold tracking-tight">Stackpit</span></div>
-<h1 class="page-h1">Invite created</h1>
+<h1 class="page-h1">{heading}</h1>
 </div>
 <div class="card card-pad space-y-4">
-<p class="text-[13px] text-muted">Share this link. It is valid for {ttl_label} and single-use.</p>
+<p class="text-[13px] text-muted">{share}</p>
 <pre class="codeblock select-all">{}</pre>
-<a href="/web/organizations/{path_org_id}/members" class="btn btn-secondary w-full justify-center h-10">Back to members</a>
+<a href="/web/organizations/{path_org_id}/members" class="btn btn-secondary w-full justify-center h-10">{back_members}</a>
 </div>
 </div>
 </body></html>"#,
@@ -221,6 +252,7 @@ pub async fn set_org_slug(
     State(state): State<AppState>,
     active_org: ActiveOrg,
     opt_auth: Option<Extension<AuthContext>>,
+    Chrome(chrome): Chrome,
     Path(path_org_id): Path<i64>,
     Form(form): Form<RenameSlugForm>,
 ) -> impl IntoResponse {
@@ -256,7 +288,11 @@ pub async fn set_org_slug(
         Ok(RenameOutcome::Renamed) => {
             Redirect::to(&format!("/web/organizations/{path_org_id}/members")).into_response()
         }
-        Ok(RenameOutcome::Taken) => html_error(StatusCode::CONFLICT, "That slug is already taken."),
+        Ok(RenameOutcome::Taken) => html_error_localized(
+            StatusCode::CONFLICT,
+            &crate::i18n::lookup(&chrome.locale, "orgs-err-slug-taken"),
+            &chrome.locale,
+        ),
         Err(e) => html_error(StatusCode::BAD_REQUEST, &e.to_string()),
     }
 }
@@ -265,16 +301,16 @@ pub async fn set_org_slug(
 pub async fn get_invite_accept(
     State(state): State<AppState>,
     Path(token): Path<String>,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
 ) -> impl IntoResponse {
     let now = chrono::Utc::now().timestamp();
 
     match get_invite_preview(&state.pool, &token).await {
         Ok(Some(preview)) => {
             let error = if preview.accepted_at.is_some() {
-                Some("This invite has already been accepted.".to_string())
+                Some(crate::i18n::lookup(&chrome.locale, "invite-error-accepted"))
             } else if now > preview.expires_at {
-                Some("This invite has expired.".to_string())
+                Some(crate::i18n::lookup(&chrome.locale, "invite-error-expired"))
             } else {
                 None
             };
@@ -283,14 +319,22 @@ pub async fn get_invite_accept(
                 token,
                 org_name,
                 role: preview.role,
-                csrf_token: csrf,
+                csrf_token: chrome.csrf_token,
                 error,
+                locale: chrome.locale,
             })
         }
-        Ok(None) => html_error(StatusCode::NOT_FOUND, "Invite not found or invalid."),
+        Ok(None) => html_error_localized(
+            StatusCode::NOT_FOUND,
+            &crate::i18n::lookup(&chrome.locale, "orgs-err-invite-not-found"),
+            &chrome.locale,
+        ),
         Err(e) => {
             tracing::error!("get_invite_preview failed: {e:#}");
-            html_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to look up invite.")
+            html_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to look up invite.",
+            )
         }
     }
 }
@@ -352,7 +396,7 @@ struct OrgMembersTemplate {
     current_slug: String,
     members: Vec<MemberView>,
     invites: Vec<InviteView>,
-    csrf_token: String,
+    chrome: PageChrome,
     can_delete: bool,
     project_count: i64,
     member_count: i64,
@@ -373,7 +417,7 @@ struct OrgRow {
 struct OrgsTemplate {
     rows: Vec<OrgRow>,
     show_create: bool,
-    csrf_token: String,
+    chrome: PageChrome,
 }
 
 /// `GET /web/organizations`: list the caller's orgs (or all orgs for a superuser) and offer creation.
@@ -381,7 +425,7 @@ pub async fn orgs_index(
     State(state): State<AppState>,
     active_org: ActiveOrg,
     opt_auth: Option<Extension<AuthContext>>,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
 ) -> axum::response::Response {
     let is_superuser = active_org.role.is_none();
 
@@ -407,7 +451,11 @@ pub async fn orgs_index(
                 }
             })
             .collect();
-        return render_template(&OrgsTemplate { rows, show_create: false, csrf_token: csrf });
+        return render_template(&OrgsTemplate {
+            rows,
+            show_create: false,
+            chrome,
+        });
     }
 
     let (iss, sub) = match opt_auth.as_ref().map(|e| &e.0) {
@@ -443,7 +491,11 @@ pub async fn orgs_index(
             }
         })
         .collect();
-    render_template(&OrgsTemplate { rows, show_create: true, csrf_token: csrf })
+    render_template(&OrgsTemplate {
+        rows,
+        show_create: true,
+        chrome,
+    })
 }
 
 #[derive(Deserialize)]
@@ -458,6 +510,7 @@ pub async fn create_org(
     State(state): State<AppState>,
     _active_org: ActiveOrg,
     opt_auth: Option<Extension<AuthContext>>,
+    Chrome(chrome): Chrome,
     Form(form): Form<CreateOrgForm>,
 ) -> axum::response::Response {
     // Only a real user can own an org; the admin token and every other context get 403.
@@ -468,7 +521,11 @@ pub async fn create_org(
 
     let name = form.name.trim();
     if name.is_empty() {
-        return html_error(StatusCode::BAD_REQUEST, "Organization name is required.");
+        return html_error_localized(
+            StatusCode::BAD_REQUEST,
+            &crate::i18n::lookup(&chrome.locale, "orgs-err-name-required"),
+            &chrome.locale,
+        );
     }
 
     let user = match users::find_by_iss_sub(&state.pool, iss, sub).await {
@@ -476,22 +533,29 @@ pub async fn create_org(
         Ok(None) => return StatusCode::FORBIDDEN.into_response(),
         Err(e) => {
             tracing::error!("find_by_iss_sub failed in create_org: {e:#}");
-            return html_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to create organization.");
+            return html_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to create organization.",
+            );
         }
     };
 
     let cap = state.config.filter.max_native_orgs_per_user;
     match count_user_native_orgs(&state.pool, user.user_id).await {
         Ok(n) if n >= i64::from(cap) => {
-            return html_error(
+            return html_error_localized(
                 StatusCode::FORBIDDEN,
-                &format!("You have reached the limit of {cap} organizations."),
+                &chrome.tv_count("orgs-err-limit-reached", i64::from(cap)),
+                &chrome.locale,
             );
         }
         Ok(_) => {}
         Err(e) => {
             tracing::error!("count_user_native_orgs failed: {e:#}");
-            return html_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to create organization.");
+            return html_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to create organization.",
+            );
         }
     }
 
@@ -507,7 +571,10 @@ pub async fn create_org(
         Ok(_) => Redirect::to("/web/organizations").into_response(),
         Err(e) => {
             tracing::error!("create_native_org failed: {e:#}");
-            html_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to create organization.")
+            html_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to create organization.",
+            )
         }
     }
 }
@@ -569,13 +636,16 @@ pub async fn remove_org_member(
     State(state): State<AppState>,
     active_org: ActiveOrg,
     opt_auth: Option<Extension<AuthContext>>,
+    Chrome(chrome): Chrome,
     Path((org_id, target_user_id)): Path<(i64, i64)>,
 ) -> axum::response::Response {
     if let Err(resp) = check_native_org_owner(&state.pool, &active_org, &opt_auth, org_id).await {
         return resp;
     }
     match member_role(&state.pool, target_user_id, org_id).await {
-        Ok(None) => return Redirect::to(&format!("/web/organizations/{org_id}/members")).into_response(),
+        Ok(None) => {
+            return Redirect::to(&format!("/web/organizations/{org_id}/members")).into_response()
+        }
         Ok(Some(_)) => {}
         Err(e) => {
             tracing::error!("member_role check failed in remove_org_member: {e:#}");
@@ -583,7 +653,11 @@ pub async fn remove_org_member(
         }
     }
     match remove_member_guarded(&state.pool, target_user_id, org_id).await {
-        Ok(0) => html_error(StatusCode::FORBIDDEN, "cannot remove the last owner"),
+        Ok(0) => html_error_localized(
+            StatusCode::FORBIDDEN,
+            &crate::i18n::lookup(&chrome.locale, "orgs-err-last-owner-remove"),
+            &chrome.locale,
+        ),
         Ok(_) => Redirect::to(&format!("/web/organizations/{org_id}/members")).into_response(),
         Err(e) => {
             tracing::error!("remove_member_guarded failed: {e:#}");
@@ -597,6 +671,7 @@ pub async fn set_org_member_role(
     State(state): State<AppState>,
     active_org: ActiveOrg,
     opt_auth: Option<Extension<AuthContext>>,
+    Chrome(chrome): Chrome,
     Path((org_id, target_user_id)): Path<(i64, i64)>,
     Form(form): Form<RoleForm>,
 ) -> axum::response::Response {
@@ -605,7 +680,9 @@ pub async fn set_org_member_role(
     }
     let new_role = Role::parse(&form.role);
     match member_role(&state.pool, target_user_id, org_id).await {
-        Ok(None) => return Redirect::to(&format!("/web/organizations/{org_id}/members")).into_response(),
+        Ok(None) => {
+            return Redirect::to(&format!("/web/organizations/{org_id}/members")).into_response()
+        }
         Ok(Some(_)) => {}
         Err(e) => {
             tracing::error!("member_role check failed in set_org_member_role: {e:#}");
@@ -613,9 +690,11 @@ pub async fn set_org_member_role(
         }
     }
     match set_member_role_guarded(&state.pool, target_user_id, org_id, new_role).await {
-        Ok(0) if new_role == Role::Member => {
-            html_error(StatusCode::FORBIDDEN, "cannot demote the last owner")
-        }
+        Ok(0) if new_role == Role::Member => html_error_localized(
+            StatusCode::FORBIDDEN,
+            &crate::i18n::lookup(&chrome.locale, "orgs-err-last-owner-demote"),
+            &chrome.locale,
+        ),
         Ok(_) => Redirect::to(&format!("/web/organizations/{org_id}/members")).into_response(),
         Err(e) => {
             tracing::error!("set_member_role_guarded failed: {e:#}");
@@ -647,7 +726,7 @@ pub async fn org_members(
     active_org: ActiveOrg,
     opt_auth: Option<Extension<AuthContext>>,
     Path(org_id): Path<i64>,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
 ) -> impl IntoResponse {
     let is_superuser = active_org.role.is_none();
 
@@ -672,7 +751,13 @@ pub async fn org_members(
     // View gate: non-members get 404 to avoid leaking org existence.
     if !is_superuser {
         match member_role(&state.pool, caller_id.unwrap(), org_id).await {
-            Ok(None) => return html_error(StatusCode::NOT_FOUND, "Organization not found."),
+            Ok(None) => {
+                return html_error_localized(
+                    StatusCode::NOT_FOUND,
+                    &crate::i18n::lookup(&chrome.locale, "orgs-err-org-not-found"),
+                    &chrome.locale,
+                )
+            }
             Ok(Some(_)) => {}
             Err(e) => {
                 tracing::error!("member_role check failed in org_members: {e:#}");
@@ -683,7 +768,13 @@ pub async fn org_members(
 
     let org = match get_org(&state.pool, org_id).await {
         Ok(Some(o)) => o,
-        Ok(None) => return html_error(StatusCode::NOT_FOUND, "Organization not found."),
+        Ok(None) => {
+            return html_error_localized(
+                StatusCode::NOT_FOUND,
+                &crate::i18n::lookup(&chrome.locale, "orgs-err-org-not-found"),
+                &chrome.locale,
+            )
+        }
         Err(e) => {
             tracing::error!("get_org failed in org_members: {e:#}");
             return html_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to load org.");
@@ -738,7 +829,9 @@ pub async fn org_members(
                 .filter(|n| !n.is_empty())
                 .map(str::to_owned)
                 .or_else(|| m.email.clone().filter(|e| !e.is_empty()))
-                .unwrap_or_else(|| format!("user #{}", m.user_id));
+                .unwrap_or_else(|| {
+                    chrome.tv1("orgs-member-fallback", "id", &m.user_id.to_string())
+                });
             let is_owner = m.role == "owner";
             let can_remove = can_manage && !strands_org(is_owner, owner_count);
             let can_demote = can_manage && !strands_org(is_owner, owner_count);
@@ -812,7 +905,7 @@ pub async fn org_members(
         current_slug,
         members,
         invites,
-        csrf_token: csrf,
+        chrome,
         can_delete,
         project_count,
         member_count,
@@ -830,6 +923,7 @@ pub async fn delete_org(
     State(state): State<AppState>,
     active_org: ActiveOrg,
     opt_auth: Option<Extension<AuthContext>>,
+    Chrome(chrome): Chrome,
     Path(org_id): Path<i64>,
     Form(form): Form<DeleteOrgForm>,
 ) -> axum::response::Response {
@@ -868,14 +962,20 @@ pub async fn delete_org(
     }
 
     if form.confirm_slug != org.slug {
-        return html_error(StatusCode::BAD_REQUEST, "Type the organization slug to confirm deletion.");
+        return html_error_localized(
+            StatusCode::BAD_REQUEST,
+            &crate::i18n::lookup(&chrome.locale, "orgs-err-confirm-slug"),
+            &chrome.locale,
+        );
     }
 
     let kind = OrgKind::classify(org.org_id, org.is_personal, org.ext_iss.is_some());
     match delete_org_guarded(&state.writer_pool, org_id).await {
-        Ok(DeleteOrgOutcome::NotDeletable) => {
-            html_error(StatusCode::BAD_REQUEST, "This organization cannot be deleted.")
-        }
+        Ok(DeleteOrgOutcome::NotDeletable) => html_error_localized(
+            StatusCode::BAD_REQUEST,
+            &crate::i18n::lookup(&chrome.locale, "orgs-err-not-deletable"),
+            &chrome.locale,
+        ),
         Ok(DeleteOrgOutcome::Deleted(counts)) => {
             let actor = opt_auth
                 .as_ref()
@@ -919,6 +1019,90 @@ pub async fn delete_org(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use askama::Template;
+    use unic_langid::langid;
+
+    fn chrome(locale: &LanguageIdentifier) -> PageChrome {
+        PageChrome::new("csrf".into(), locale.clone(), "/web/projects/".into())
+    }
+
+    fn assert_no_missing(label: &str, locale: &LanguageIdentifier, html: &str) {
+        assert!(
+            !html.contains(crate::i18n::MISSING_PREFIX),
+            "{label} ({locale}) leaked a missing localization key: {html}"
+        );
+    }
+
+    // Renders the org list, the full members page (all owner-only sections via
+    // empty collections), the two non-native notes, and the standalone invite
+    // page in en and de, asserting no Fluent placeholder leaks.
+    #[test]
+    fn orgs_templates_render_without_missing_keys() {
+        for locale in [langid!("en"), langid!("de")] {
+            let list = OrgsTemplate {
+                rows: Vec::new(),
+                show_create: true,
+                chrome: chrome(&locale),
+            }
+            .render()
+            .expect("orgs list renders");
+            assert_no_missing("orgs list", &locale, &list);
+
+            let members = OrgMembersTemplate {
+                org_id: 1,
+                org_name: "Acme".into(),
+                kind: "Native".into(),
+                is_native: true,
+                can_manage: true,
+                can_rename: true,
+                current_slug: "acme".into(),
+                members: Vec::new(),
+                invites: Vec::new(),
+                chrome: chrome(&locale),
+                can_delete: true,
+                project_count: 0,
+                member_count: 0,
+                slug: "acme".into(),
+            }
+            .render()
+            .expect("org members (native) renders");
+            assert_no_missing("org members native", &locale, &members);
+
+            for kind in ["Forseti", "Personal"] {
+                let non_native = OrgMembersTemplate {
+                    org_id: 1,
+                    org_name: "Acme".into(),
+                    kind: kind.into(),
+                    is_native: false,
+                    can_manage: false,
+                    can_rename: false,
+                    current_slug: "acme".into(),
+                    members: Vec::new(),
+                    invites: Vec::new(),
+                    chrome: chrome(&locale),
+                    can_delete: false,
+                    project_count: 0,
+                    member_count: 0,
+                    slug: "acme".into(),
+                }
+                .render()
+                .expect("org members (non-native) renders");
+                assert_no_missing("org members non-native", &locale, &non_native);
+            }
+
+            let invite = InviteAcceptTemplate {
+                token: "tok".into(),
+                org_name: "Acme".into(),
+                role: "owner".into(),
+                csrf_token: "csrf".into(),
+                error: None,
+                locale: locale.clone(),
+            }
+            .render()
+            .expect("invite accept renders");
+            assert_no_missing("invite accept", &locale, &invite);
+        }
+    }
 
     #[test]
     fn non_member_org_is_rejected() {
@@ -970,14 +1154,18 @@ mod tests {
 
     #[test]
     fn invite_form_numeric_ttl_parses() {
-        let form: CreateInviteForm =
-            serde_urlencoded::from_str("role=member&ttl_secs=3600").expect("numeric ttl must parse");
+        let form: CreateInviteForm = serde_urlencoded::from_str("role=member&ttl_secs=3600")
+            .expect("numeric ttl must parse");
         assert_eq!(form.ttl_secs, Some(3600));
     }
 
     #[test]
     fn invite_form_invalid_ttl_still_errors() {
-        let res: Result<CreateInviteForm, _> = serde_urlencoded::from_str("role=member&ttl_secs=abc");
-        assert!(res.is_err(), "non-numeric ttl must not be silently swallowed");
+        let res: Result<CreateInviteForm, _> =
+            serde_urlencoded::from_str("role=member&ttl_secs=abc");
+        assert!(
+            res.is_err(),
+            "non-numeric ttl must not be silently swallowed"
+        );
     }
 }

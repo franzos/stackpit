@@ -186,8 +186,7 @@ impl UserProvisioner for DbProvisioner {
         }
 
         let user =
-            match crate::queries::users::upsert_from_oidc(&self.pool, iss, sub, None, None).await
-            {
+            match crate::queries::users::upsert_from_oidc(&self.pool, iss, sub, None, None).await {
                 Ok(u) => u,
                 Err(e) => {
                     // Don't touch the LRU; next request retries the upsert.
@@ -195,9 +194,7 @@ impl UserProvisioner for DbProvisioner {
                 }
             };
 
-        if let Err(e) =
-            crate::queries::orgs::ensure_personal_org(&self.pool, user.user_id).await
-        {
+        if let Err(e) = crate::queries::orgs::ensure_personal_org(&self.pool, user.user_id).await {
             // Don't touch the LRU; next request retries both steps.
             return Err(stackpit_auth::BackendError::Backend(format!("{e:#}")));
         }
@@ -232,7 +229,10 @@ mod tests {
 
         let memberships = list_memberships(&pool, user.user_id).await.unwrap();
         assert_eq!(memberships.len(), 1, "exactly one membership");
-        assert!(memberships[0].is_personal, "membership must be personal org");
+        assert!(
+            memberships[0].is_personal,
+            "membership must be personal org"
+        );
     }
 
     #[tokio::test]
@@ -246,10 +246,7 @@ mod tests {
             .await
             .unwrap();
         // Clear the LRU so the second call hits the DB again.
-        provisioner
-            .seen
-            .lock()
-            .clear();
+        provisioner.seen.lock().clear();
         provisioner
             .provision("https://idp.test", "sub-mcp-idem")
             .await
@@ -260,7 +257,11 @@ mod tests {
             .unwrap()
             .unwrap();
         let memberships = list_memberships(&pool, user.user_id).await.unwrap();
-        assert_eq!(memberships.len(), 1, "idempotent: still exactly one membership");
+        assert_eq!(
+            memberships.len(),
+            1,
+            "idempotent: still exactly one membership"
+        );
     }
 }
 

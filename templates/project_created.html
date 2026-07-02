@@ -1,36 +1,36 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
 
-{% block title %}{{ project_label }} created — Stackpit{% endblock %}
+{% block title %}{{ project_label }} {{ chrome.t("projects-created-word") }} — Stackpit{% endblock %}
 
 {% block sidebar_nav %}
-  {% call m::top_sidebar("projects") %}
+  {% call m::top_sidebar(chrome, "projects") %}
   {% endcall %}
 {% endblock %}
 
 {% block breadcrumbs %}
   <span class="breadcrumb-sep">/</span>
-  <a class="breadcrumb-link" href="/web/projects/{{ project_id }}/">{{ project_label }}</a>
+  <a class="breadcrumb-link" href="/web/projects/{{ project_id }}/"><bdi>{{ project_label }}</bdi></a>
   <span class="breadcrumb-sep">/</span>
-  <span class="breadcrumb-current">Created</span>
+  <span class="breadcrumb-current">{{ chrome.t("projects-created-breadcrumb") }}</span>
 {% endblock %}
 
 {% block content %}
   <div class="page-header">
     <div>
-      <h1>Project created</h1>
-      <p class="text-muted text-[13px] mt-1">Use the DSN below to configure your SDK.</p>
+      <h1>{{ chrome.t("projects-created-heading") }}</h1>
+      <p class="text-muted text-[13px] mt-1">{{ chrome.t("projects-created-subtitle") }}</p>
     </div>
     <div class="page-actions">
       <a href="/web/projects/{{ project_id }}/settings/"
-         class="btn btn-secondary">Project settings</a>
-      <a href="/web/projects/" class="btn btn-primary">Back to projects</a>
+         class="btn btn-secondary">{{ chrome.t("projects-created-settings-btn") }}</a>
+      <a href="/web/projects/" class="btn btn-primary">{{ chrome.t("projects-created-back") }}</a>
     </div>
   </div>
 
   <div class="card mb-4">
     <div class="card-header">
-      <span>DSN</span>
+      <span>{{ chrome.t("projects-keys-dsn-heading") }}</span>
     </div>
     <div class="p-4">
       <pre class="codeblock select-all">{{ dsn }}</pre>
@@ -39,22 +39,22 @@
 
   <div class="card mb-4">
     <div class="card-header">
-      <span>Project details</span>
+      <span>{{ chrome.t("projects-created-details-heading") }}</span>
     </div>
     <div class="table-wrap">
       <table class="table">
         <tbody>
           <tr>
-            <th>Project ID</th>
+            <th>{{ chrome.t("projects-created-col-id") }}</th>
             <td class="text-mono">{{ project_id }}</td>
           </tr>
           <tr>
-            <th>Public key</th>
+            <th>{{ chrome.t("projects-keys-col-public") }}</th>
             <td class="text-mono">{{ public_key }}</td>
           </tr>
           {% if !platform.is_empty() %}
             <tr>
-              <th>Platform</th>
+              <th>{{ chrome.t("projects-new-platform-label") }}</th>
               <td>
                 <span class="badge badge-platform">{{ platform }}</span>
               </td>
@@ -67,67 +67,67 @@
 
   {% if !platform.is_empty() %}
     <div class="card card-pad">
-      <h2 class="page-h2 mb-2">SDK setup</h2>
+      <h2 class="page-h2 mb-2">{{ chrome.t("projects-tab-sdk") }}</h2>
       <p class="text-muted text-[13px]">
-        Install the Sentry SDK for <strong class="text-on-surface">{{ platform }}</strong> and initialize it with the DSN above.
+        {{ chrome.t("projects-created-sdk-desc-before") }} <strong class="text-on-surface">{{ platform }}</strong> {{ chrome.t("projects-created-sdk-desc-after") }}
       </p>
       <p class="mt-2 text-[13px]">
         {% if platform == "javascript" %}
           <a href="https://docs.sentry.io/platforms/javascript/"
              target="_blank"
-             rel="noopener">Sentry JavaScript docs →</a>
+             rel="noopener">{{ chrome.t("projects-created-docs-javascript") }}</a>
         {% else if platform == "python" %}
           <a href="https://docs.sentry.io/platforms/python/"
              target="_blank"
-             rel="noopener">Sentry Python docs →</a>
+             rel="noopener">{{ chrome.t("projects-created-docs-python") }}</a>
         {% else if platform == "rust" %}
           <a href="https://docs.sentry.io/platforms/rust/"
              target="_blank"
-             rel="noopener">Sentry Rust docs →</a>
+             rel="noopener">{{ chrome.t("projects-created-docs-rust") }}</a>
         {% else if platform == "go" %}
           <a href="https://docs.sentry.io/platforms/go/"
              target="_blank"
-             rel="noopener">Sentry Go docs →</a>
+             rel="noopener">{{ chrome.t("projects-created-docs-go") }}</a>
         {% else if platform == "node" %}
           <a href="https://docs.sentry.io/platforms/node/"
              target="_blank"
-             rel="noopener">Sentry Node.js docs →</a>
+             rel="noopener">{{ chrome.t("projects-created-docs-node") }}</a>
         {% else if platform == "java" %}
           <a href="https://docs.sentry.io/platforms/java/"
              target="_blank"
-             rel="noopener">Sentry Java docs →</a>
+             rel="noopener">{{ chrome.t("projects-created-docs-java") }}</a>
         {% else if platform == "ruby" %}
           <a href="https://docs.sentry.io/platforms/ruby/"
              target="_blank"
-             rel="noopener">Sentry Ruby docs →</a>
+             rel="noopener">{{ chrome.t("projects-created-docs-ruby") }}</a>
         {% else if platform == "php" %}
           <a href="https://docs.sentry.io/platforms/php/"
              target="_blank"
-             rel="noopener">Sentry PHP docs →</a>
+             rel="noopener">{{ chrome.t("projects-created-docs-php") }}</a>
         {% else if platform == "elixir" %}
           <a href="https://docs.sentry.io/platforms/elixir/"
              target="_blank"
-             rel="noopener">Sentry Elixir docs →</a>
+             rel="noopener">{{ chrome.t("projects-created-docs-elixir") }}</a>
         {% else if platform == "csharp" %}
           <a href="https://docs.sentry.io/platforms/dotnet/"
              target="_blank"
-             rel="noopener">Sentry .NET docs →</a>
+             rel="noopener">{{ chrome.t("projects-created-docs-dotnet") }}</a>
         {% else if platform == "swift" %}
           <a href="https://docs.sentry.io/platforms/apple/"
              target="_blank"
-             rel="noopener">Sentry Apple docs →</a>
+             rel="noopener">{{ chrome.t("projects-created-docs-apple") }}</a>
         {% else if platform == "kotlin" %}
           <a href="https://docs.sentry.io/platforms/kotlin-multiplatform/"
              target="_blank"
-             rel="noopener">Sentry Kotlin docs →</a>
+             rel="noopener">{{ chrome.t("projects-created-docs-kotlin") }}</a>
         {% else if platform == "native" %}
           <a href="https://docs.sentry.io/platforms/native/"
              target="_blank"
-             rel="noopener">Sentry Native docs →</a>
+             rel="noopener">{{ chrome.t("projects-created-docs-native") }}</a>
         {% else %}
           <a href="https://docs.sentry.io/platforms/"
              target="_blank"
-             rel="noopener">Sentry platform docs →</a>
+             rel="noopener">{{ chrome.t("projects-created-docs-generic") }}</a>
         {% endif %}
       </p>
     </div>

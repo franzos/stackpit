@@ -47,7 +47,11 @@ pub async fn list_rules(
     active: ActiveOrg,
     ReadPool(pool): ReadPool,
 ) -> Result<impl IntoResponse, ApiError> {
-    let org_scope = if active.role.is_none() { None } else { Some(active.org_id) };
+    let org_scope = if active.role.is_none() {
+        None
+    } else {
+        Some(active.org_id)
+    };
     let rules = queries::alerts::list_alert_rules(&pool, None, org_scope)
         .await
         .map_err(ApiError::internal)?;
@@ -79,13 +83,9 @@ pub async fn create_rule(
     require_owner(&active).map_err(|_| ApiError::new(StatusCode::FORBIDDEN, "forbidden"))?;
     if let Some(pid) = body.project_id {
         if active.role.is_some() {
-            crate::queries::orgs::assert_project_in_org(
-                &state.pool,
-                pid as i64,
-                active.org_id,
-            )
-            .await
-            .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "project not in org"))?;
+            crate::queries::orgs::assert_project_in_org(&state.pool, pid as i64, active.org_id)
+                .await
+                .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "project not in org"))?;
         }
     }
     let id = queries::alerts::create_alert_rule(
@@ -162,7 +162,11 @@ pub async fn list_digests(
     active: ActiveOrg,
     ReadPool(pool): ReadPool,
 ) -> Result<impl IntoResponse, ApiError> {
-    let org_scope = if active.role.is_none() { None } else { Some(active.org_id) };
+    let org_scope = if active.role.is_none() {
+        None
+    } else {
+        Some(active.org_id)
+    };
     let schedules = queries::alerts::list_digest_schedules(&pool, org_scope)
         .await
         .map_err(ApiError::internal)?;
@@ -191,13 +195,9 @@ pub async fn create_digest(
     require_owner(&active).map_err(|_| ApiError::new(StatusCode::FORBIDDEN, "forbidden"))?;
     if let Some(pid) = body.project_id {
         if active.role.is_some() {
-            crate::queries::orgs::assert_project_in_org(
-                &state.pool,
-                pid as i64,
-                active.org_id,
-            )
-            .await
-            .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "project not in org"))?;
+            crate::queries::orgs::assert_project_in_org(&state.pool, pid as i64, active.org_id)
+                .await
+                .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "project not in org"))?;
         }
     }
     let id = queries::alerts::create_digest_schedule(

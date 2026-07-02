@@ -8,33 +8,6 @@ pub fn format_ts(ts: &i64, _: &dyn askama::Values) -> askama::Result<String, Inf
         .unwrap_or_else(|| ts.to_string()))
 }
 
-/// Formats a timestamp as relative time (e.g. "3h ago", "2d ago").
-#[askama::filter_fn]
-pub fn format_relative(ts: &i64, _: &dyn askama::Values) -> askama::Result<String, Infallible> {
-    let now = chrono::Utc::now().timestamp();
-    let delta = now - *ts;
-
-    if delta < 0 {
-        return Ok("just now".to_string());
-    }
-
-    let secs = delta as u64;
-    Ok(if secs < 60 {
-        "just now".to_string()
-    } else if secs < 3600 {
-        format!("{}m ago", secs / 60)
-    } else if secs < 86400 {
-        format!("{}h ago", secs / 3600)
-    } else if secs < 604800 {
-        format!("{}d ago", secs / 86400)
-    } else {
-        // Older than a week: show the date.
-        chrono::DateTime::from_timestamp(*ts, 0)
-            .map(|dt| dt.format("%Y-%m-%d").to_string())
-            .unwrap_or_else(|| ts.to_string())
-    })
-}
-
 /// Truncates long IDs to 12 chars for display.
 #[askama::filter_fn]
 pub fn truncate_id(s: &str, _: &dyn askama::Values) -> askama::Result<String, Infallible> {

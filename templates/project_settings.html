@@ -1,212 +1,208 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
 
-{% block title %}Settings — {{ nav.label }} — Stackpit{% endblock %}
+{% block title %}{{ chrome.t("projects-settings-heading") }} — {{ nav.label }} — Stackpit{% endblock %}
 
 {% block sidebar_nav %}
-  {% call m::project_sidebar(project_id, nav, "settings") %}
+  {% call m::project_sidebar(chrome, project_id, nav, "settings") %}
   {% endcall %}
 {% endblock %}
 
 {% block breadcrumbs %}
   <span class="breadcrumb-sep">/</span>
-  <a class="breadcrumb-link" href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
+  <a class="breadcrumb-link" href="/web/projects/{{ project_id }}/"><bdi>{{ nav.label }}</bdi></a>
   <span class="breadcrumb-sep">/</span>
-  <span class="breadcrumb-current">Settings</span>
+  <span class="breadcrumb-current">{{ chrome.t("projects-settings-heading") }}</span>
 {% endblock %}
 
 {% block content %}
   <div class="page-header">
     <div>
       <h1>
-        Settings
-        {% if project_status == "archived" %}<span class="text-muted text-[14px] font-normal">(archived)</span>{% endif %}
+        {{ chrome.t("projects-settings-heading") }}
+        {% if project_status == "archived" %}<span class="text-muted text-[14px] font-normal">{{ chrome.t("projects-settings-archived") }}</span>{% endif %}
       </h1>
     </div>
   </div>
 
   <nav class="flex gap-1 mb-6 border-b border-outline-variant -mx-6 px-6"
-       aria-label="Settings sections">
+       aria-label="{{ chrome.t("settings-aria-sections") }}">
     <a href="/web/projects/{{ project_id }}/settings/"
-       class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-primary text-on-surface">General</a>
+       class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-primary text-on-surface">{{ chrome.t("projects-tab-general") }}</a>
     <a href="/web/projects/{{ project_id }}/settings/keys/"
-       class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-transparent text-muted hover:text-on-surface">SDK setup</a>
+       class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-transparent text-muted hover:text-on-surface">{{ chrome.t("projects-tab-sdk") }}</a>
     <a href="/web/projects/{{ project_id }}/settings/sourcemaps/"
-       class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-transparent text-muted hover:text-on-surface">Source maps</a>
+       class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-transparent text-muted hover:text-on-surface">{{ chrome.t("projects-tab-sourcemaps") }}</a>
     <a href="/web/projects/{{ project_id }}/settings/filters/"
-       class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-transparent text-muted hover:text-on-surface">Filters</a>
+       class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-transparent text-muted hover:text-on-surface">{{ chrome.t("projects-tab-filters") }}</a>
     <a href="/web/projects/{{ project_id }}/settings/integrations/"
-       class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-transparent text-muted hover:text-on-surface">Integrations</a>
+       class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-transparent text-muted hover:text-on-surface">{{ chrome.t("projects-tab-integrations") }}</a>
   </nav>
 
   {% match message %}{% when Some with (msg) %}
   <div class="settings-message mb-4">{{ msg }}</div>
   {% when None %}{% endmatch %}
 
-  <div class="space-y-6 max-w-3xl">
-    <div class="card card-pad">
-      <h2 class="page-h2 mb-3">Project name</h2>
-      <form class="settings-form"
-            method="post"
-            action="/web/projects/{{ project_id }}/settings/name">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <div>
-          <label class="field-label" for="project_name">Display name</label>
-          <input class="input"
-                 type="text"
-                 id="project_name"
-                 name="name"
-                 placeholder="My Project"
-                 value="{{ project_name }}">
-        </div>
-        <div>
-          <button type="submit" class="btn btn-primary">Save name</button>
-        </div>
-      </form>
-    </div>
-
-    <div class="card">
-      <div class="card-header">
-        <span>Project info</span>
+<div class="space-y-6 max-w-3xl">
+  <div class="card card-pad">
+    <h2 class="page-h2 mb-3">{{ chrome.t("projects-settings-name-heading") }}</h2>
+    <form class="settings-form"
+          method="post"
+          action="/web/projects/{{ project_id }}/settings/name">
+      <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+      <div>
+        <label class="field-label" for="project_name">{{ chrome.t("projects-settings-display-name") }}</label>
+        <input class="input"
+               type="text"
+               id="project_name"
+               name="name"
+               placeholder="{{ chrome.t("projects-name-placeholder") }}"
+               value="{{ project_name }}">
       </div>
-      <div class="table-wrap">
-        <table class="table">
-          <tbody>
-            <tr>
-              <th>Status</th>
-              <td>
-                {% if project_status == "active" %}
-                  <span class="badge badge-resolved">{{ project_status }}</span>
-                {% else %}
-                  <span class="badge badge-ignored">{{ project_status }}</span>
-                {% endif %}
-              </td>
-            </tr>
-            <tr>
-              <th>Source</th>
-              <td class="text-mono">{{ project_source }}</td>
-            </tr>
+      <div>
+        <button type="submit" class="btn btn-primary">{{ chrome.t("projects-settings-save-name") }}</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <span>{{ chrome.t("projects-settings-info-heading") }}</span>
+    </div>
+    <div class="table-wrap">
+      <table class="table">
+        <tbody>
+          <tr>
+            <th>{{ chrome.t("projects-settings-status") }}</th>
+            <td>
+              {% if project_status == "active" %}
+                <span class="badge badge-resolved">{{ project_status }}</span>
+              {% else %}
+                <span class="badge badge-ignored">{{ project_status }}</span>
+              {% endif %}
+            </td>
+          </tr>
+          <tr>
+            <th>{{ chrome.t("projects-settings-source") }}</th>
+            <td class="text-mono">{{ project_source }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <span>{{ chrome.t("projects-repos-heading") }}</span>
+    </div>
+    <div class="p-4">
+      <p class="text-muted text-[13px] mb-3">{{ chrome.t("projects-repos-help") |safe }}</p>
+      {% if repos.is_empty() %}
+        <p class="empty">{{ chrome.t("projects-repos-empty") }}</p>
+      {% else %}
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>{{ chrome.t("projects-repos-url-label") }}</th>
+                <th>{{ chrome.t("projects-repos-col-forge") }}</th>
+                <th>{{ chrome.t("projects-repos-template") }}</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for repo in repos %}
+                <tr>
+                  <td>
+                    <code class="text-mono">{{ repo.repo_url }}</code>
+                  </td>
+                  <td>
+                    <span class="badge badge-neutral">{{ repo.forge_type }}</span>
+                  </td>
+                  <td>
+                    {% match repo.url_template %}{% when Some with (t) %}<code class="text-mono text-[11px]">{{ t }}</code>{% when None %}<span class="text-muted">{{ chrome.t("projects-repos-auto") }}</span>{% endmatch %}
+                </td>
+                <td>
+                  <form method="post"
+                        action="/web/projects/{{ project_id }}/settings/repos/{{ repo.id }}/delete">
+                    <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+                    <button type="submit"
+                            class="btn btn-danger"
+                            data-confirm="{{ chrome.t("projects-repos-remove-confirm") }}">{{ chrome.t("projects-remove") }}</button>
+                  </form>
+                </td>
+              </tr>
+            {% endfor %}
           </tbody>
         </table>
       </div>
-    </div>
-
-    <div class="card">
-      <div class="card-header">
-        <span>Source repositories</span>
-      </div>
-      <div class="p-4">
-        <p class="text-muted text-[13px] mb-3">
-          Link stack frames to source code on your forge. Register a release with a commit SHA via <code class="text-mono">sentry-cli</code> to activate links.
-        </p>
-        {% if repos.is_empty() %}
-          <p class="empty">No repositories configured.</p>
-        {% else %}
-          <div class="table-wrap">
-            <table class="table">
-              <thead>
-                <tr>
-                  <th>Repository URL</th>
-                  <th>Forge</th>
-                  <th>URL template</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for repo in repos %}
-                  <tr>
-                    <td>
-                      <code class="text-mono">{{ repo.repo_url }}</code>
-                    </td>
-                    <td>
-                      <span class="badge badge-neutral">{{ repo.forge_type }}</span>
-                    </td>
-                    <td>
-                      {% match repo.url_template %}{% when Some with (t) %}<code class="text-mono text-[11px]">{{ t }}</code>{% when None %}<span class="text-muted">auto</span>{% endmatch %}
-                    </td>
-                    <td>
-                      <form method="post"
-                            action="/web/projects/{{ project_id }}/settings/repos/{{ repo.id }}/delete">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                        <button type="submit"
-                                class="btn btn-danger"
-                                data-confirm="Remove this repository?">Remove</button>
-                      </form>
-                    </td>
-                  </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-        {% endif %}
-      </div>
-    </div>
-
-    <div class="card card-pad">
-      <h2 class="page-h2 mb-2">Add repository</h2>
-      <p class="text-muted text-[13px] mb-4">
-        Adds clickable source links (e.g. "View on GitHub") next to stack frames. Requires a release with a commit SHA — forge type auto-detected. Supported: GitHub, GitLab, Gitea/Codeberg, Bitbucket, Sourcehut, Gitee, Azure DevOps. For other forges, provide a URL template.
-      </p>
-      <form class="settings-form"
-            method="post"
-            action="/web/projects/{{ project_id }}/settings/repos">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <div>
-          <label class="field-label" for="repo_url">Repository URL</label>
-          <input class="input text-mono"
-                 type="text"
-                 id="repo_url"
-                 name="repo_url"
-                 placeholder="https://github.com/org/repo"
-                 required>
-        </div>
-        <div>
-          <label class="field-label" for="url_template">
-            URL template <span class="text-muted normal-case tracking-normal font-normal">(optional)</span>
-          </label>
-          <input class="input text-mono"
-                 type="text"
-                 id="url_template"
-                 name="url_template"
-                 placeholder="{repo}/blob/{commit}/{path}#L{line}">
-        </div>
-        <div>
-          <button type="submit" class="btn btn-primary">Add repository</button>
-        </div>
-      </form>
-    </div>
-
-    <div class="card border-error/40">
-      <div class="card-header" style="color: var(--color-error);">
-        <span>Danger zone</span>
-      </div>
-      <div class="p-4 space-y-4">
-        {% if project_status == "active" %}
-          <form method="post"
-                action="/web/projects/{{ project_id }}/settings/archive">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <p class="text-[13px] mb-2">Archive this project. Archived projects reject new events.</p>
-            <button type="submit"
-                    class="btn btn-danger"
-                    data-confirm="Archive this project? New events will be rejected.">Archive project</button>
-          </form>
-        {% else %}
-          <form method="post"
-                action="/web/projects/{{ project_id }}/settings/unarchive">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <p class="text-[13px] mb-2">Unarchive this project to resume accepting events.</p>
-            <button type="submit" class="btn btn-primary">Unarchive project</button>
-          </form>
-        {% endif %}
-
-        <form method="post" action="/web/projects/{{ project_id }}/settings/delete">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <p class="text-[13px] mb-2">Permanently delete this project and all its data. This cannot be undone.</p>
-          <button type="submit"
-                  class="btn btn-danger"
-                  data-confirm="Delete this project and ALL its data? This cannot be undone.">Delete project</button>
-        </form>
-      </div>
-    </div>
+    {% endif %}
   </div>
+</div>
+
+<div class="card card-pad">
+  <h2 class="page-h2 mb-2">{{ chrome.t("projects-repos-add") }}</h2>
+  <p class="text-muted text-[13px] mb-4">{{ chrome.t("projects-repos-add-help") |safe }}</p>
+  <form class="settings-form"
+        method="post"
+        action="/web/projects/{{ project_id }}/settings/repos">
+    <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+    <div>
+      <label class="field-label" for="repo_url">{{ chrome.t("projects-repos-url-label") }}</label>
+      <input class="input text-mono"
+             type="text"
+             id="repo_url"
+             name="repo_url"
+             placeholder="https://github.com/org/repo"
+             required>
+    </div>
+    <div>
+      <label class="field-label" for="url_template">
+        {{ chrome.t("projects-repos-template") }} <span class="text-muted normal-case tracking-normal font-normal">{{ chrome.t("projects-optional") }}</span>
+      </label>
+      <input class="input text-mono"
+             type="text"
+             id="url_template"
+             name="url_template"
+             placeholder="{repo}/blob/{commit}/{path}#L{line}">
+    </div>
+    <div>
+      <button type="submit" class="btn btn-primary">{{ chrome.t("projects-repos-add") }}</button>
+    </div>
+  </form>
+</div>
+
+<div class="card border-error/40">
+  <div class="card-header" style="color: var(--color-error);">
+    <span>{{ chrome.t("projects-danger-heading") }}</span>
+  </div>
+  <div class="p-4 space-y-4">
+    {% if project_status == "active" %}
+      <form method="post"
+            action="/web/projects/{{ project_id }}/settings/archive">
+        <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+        <p class="text-[13px] mb-2">{{ chrome.t("projects-archive-desc") }}</p>
+        <button type="submit"
+                class="btn btn-danger"
+                data-confirm="{{ chrome.t("projects-archive-confirm") }}">{{ chrome.t("projects-archive-submit") }}</button>
+      </form>
+    {% else %}
+      <form method="post"
+            action="/web/projects/{{ project_id }}/settings/unarchive">
+        <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+        <p class="text-[13px] mb-2">{{ chrome.t("projects-unarchive-desc") }}</p>
+        <button type="submit" class="btn btn-primary">{{ chrome.t("projects-unarchive-submit") }}</button>
+      </form>
+    {% endif %}
+
+    <form method="post" action="/web/projects/{{ project_id }}/settings/delete">
+      <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+      <p class="text-[13px] mb-2">{{ chrome.t("projects-delete-desc") }}</p>
+      <button type="submit"
+              class="btn btn-danger"
+              data-confirm="{{ chrome.t("projects-delete-confirm") }}">{{ chrome.t("projects-delete-submit") }}</button>
+    </form>
+  </div>
+</div>
+</div>
 {% endblock %}

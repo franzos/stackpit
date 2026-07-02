@@ -2,6 +2,7 @@ use askama::Template;
 use axum::extract::Query;
 
 use crate::extractors::ProjectPageCtx;
+use crate::html::chrome::PageChrome;
 use crate::html::render_template;
 use crate::html::utils::ListParams;
 use crate::queries;
@@ -19,7 +20,7 @@ struct UserReportListTemplate {
     project_id: u64,
     result: PagedResult<EventSummary>,
     nav: ProjectNavCounts,
-    csrf_token: String,
+    chrome: PageChrome,
 }
 
 #[derive(Template)]
@@ -29,7 +30,7 @@ struct ClientReportListTemplate {
     result: PagedResult<EventSummary>,
     outcomes: Vec<crate::queries::client_reports::ClientReportOutcome>,
     nav: ProjectNavCounts,
-    csrf_token: String,
+    chrome: PageChrome,
 }
 
 pub async fn user_reports_handler(
@@ -50,7 +51,7 @@ pub async fn user_reports_handler(
         project_id: ctx.project_id,
         result,
         nav: ctx.nav,
-        csrf_token: ctx.csrf_token,
+        chrome: ctx.chrome,
     };
     Ok(render_template(&tmpl))
 }
@@ -78,7 +79,87 @@ pub async fn client_reports_handler(
         result,
         outcomes,
         nav: ctx.nav,
-        csrf_token: ctx.csrf_token,
+        chrome: ctx.chrome,
     };
     Ok(render_template(&tmpl))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::locale::LanguageIdentifier;
+    use unic_langid::langid;
+
+    fn empty_result() -> PagedResult<EventSummary> {
+        PagedResult {
+            items: Vec::new(),
+            total: 0,
+            offset: 0,
+            limit: 25,
+        }
+    }
+
+    fn chrome_for(locale: LanguageIdentifier) -> PageChrome {
+        PageChrome::new(String::new(), locale, "/web/projects/1/".into())
+    }
+
+    // Empty-collection render must not leak an unresolved Fluent key in either locale.
+    #[test]
+    fn user_reports_render_without_missing_keys() {
+        for lang in [langid!("en"), langid!("de")] {
+            let tmpl = UserReportListTemplate {
+                project_id: 1,
+                result: empty_result(),
+                nav: ProjectNavCounts::default(),
+                chrome: chrome_for(lang.clone()),
+            };
+            let out = tmpl.render().expect("render");
+            assert!(
+                !out.contains(crate::i18n::MISSING_PREFIX),
+                "missing localization key for {lang} in user_report_list render"
+            );
+        }
+    }
+
+    #[test]
+    fn client_reports_render_without_missing_keys() {
+        for lang in [langid!("en"), langid!("de")] {
+            let tmpl = ClientReportListTemplate {
+                project_id: 1,
+                result: empty_result(),
+                outcomes: Vec::new(),
+                nav: ProjectNavCounts::default(),
+                chrome: chrome_for(lang.clone()),
+            };
+            let out = tmpl.render().expect("render");
+            assert!(
+                !out.contains(crate::i18n::MISSING_PREFIX),
+                "missing localization key for {lang} in client_report_list render"
+            );
+        }
+    }
+
+    // The empty render skips the count-bearing pagination, so exercise those keys directly.
+    #[test]
+    fn counted_keys_resolve() {
+        for lang in [langid!("en"), langid!("de")] {
+            let chrome = chrome_for(lang.clone());
+            for (id, n) in [
+                ("client-reports-count", 1),
+                ("client-reports-count", 5),
+                ("client-reports-delete-all", 3),
+                ("client-reports-delete-all-confirm", 3),
+                ("user-reports-count", 1),
+                ("user-reports-count", 5),
+                ("user-reports-delete-all", 3),
+                ("user-reports-delete-all-confirm", 3),
+            ] {
+                let s = chrome.tv_count(id, n);
+                assert!(
+                    !s.contains(crate::i18n::MISSING_PREFIX),
+                    "missing {id} for {lang}"
+                );
+            }
+        }
+    }
 }

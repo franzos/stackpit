@@ -586,7 +586,11 @@ pub async fn list_unassigned_projects(pool: &crate::db::DbPool) -> Result<Vec<Un
 }
 
 /// Move a project from its current org into `org_id`. Returns rows affected.
-pub async fn reassign_project(pool: &crate::db::DbPool, project_id: i64, org_id: i64) -> Result<u64> {
+pub async fn reassign_project(
+    pool: &crate::db::DbPool,
+    project_id: i64,
+    org_id: i64,
+) -> Result<u64> {
     let result = sqlx::query(sql!(
         "UPDATE projects SET org_id = ?2 WHERE project_id = ?1"
     ))
@@ -903,10 +907,12 @@ mod tests {
     #[tokio::test]
     async fn create_project_stores_org_id() {
         let pool = open_test_db().await;
-        sqlx::query("INSERT INTO organizations (org_id, slug, name) VALUES (5, 'test-org', 'Test Org')")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO organizations (org_id, slug, name) VALUES (5, 'test-org', 'Test Org')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         let (project_id, _key) = create_project(&pool, 5, "My Project", Some("rust"))
             .await
             .unwrap();
@@ -991,7 +997,10 @@ mod tests {
             .await
             .unwrap()
             .get(0);
-        assert_eq!(count, 1, "key_b must still exist after rejected cross-project delete");
+        assert_eq!(
+            count, 1,
+            "key_b must still exist after rejected cross-project delete"
+        );
 
         // Legitimate delete still works.
         let affected = delete_project_key(&pool, 10, &key_a).await.unwrap();

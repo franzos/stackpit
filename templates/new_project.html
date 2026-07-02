@@ -1,68 +1,68 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
 
-{% block title %}New project — Stackpit{% endblock %}
+{% block title %}{{ chrome.t("projects-new-title") }}{% endblock %}
 
 {% block sidebar_nav %}
-  {% call m::top_sidebar("projects") %}
+  {% call m::top_sidebar(chrome, "projects") %}
   {% endcall %}
 {% endblock %}
 
 {% block breadcrumbs %}
   <span class="breadcrumb-sep">/</span>
-  <span class="breadcrumb-current">New project</span>
+  <span class="breadcrumb-current">{{ chrome.t("projects-new-heading") }}</span>
 {% endblock %}
 
 {% block content %}
   <div class="page-header">
-    <h1>New project</h1>
+    <h1>{{ chrome.t("projects-new-heading") }}</h1>
   </div>
 
   {% match message %}{% when Some with (msg) %}
   <div class="settings-message mb-4">{{ msg }}</div>
   {% when None %}{% endmatch %}
 
-  <div class="card card-pad max-w-2xl">
-    <form class="settings-form" method="post" action="/web/projects/new">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<div class="card card-pad max-w-2xl">
+  <form class="settings-form" method="post" action="/web/projects/new">
+    <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
 
-      <div>
-        <label class="field-label" for="project_name">Project name</label>
-        <input class="input"
-               type="text"
-               id="project_name"
-               name="name"
-               placeholder="My Project"
-               required>
-      </div>
+    <div>
+      <label class="field-label" for="project_name">{{ chrome.t("projects-new-name-label") }}</label>
+      <input class="input"
+             type="text"
+             id="project_name"
+             name="name"
+             placeholder="{{ chrome.t("projects-name-placeholder") }}"
+             required>
+    </div>
 
-      <div>
-        <label class="field-label" for="platform">
-          Platform <span class="text-muted normal-case tracking-normal font-normal">(optional)</span>
-        </label>
-        <select class="select" id="platform" name="platform">
-          <option value="">Select a platform…</option>
-          <option value="javascript">JavaScript</option>
-          <option value="python">Python</option>
-          <option value="rust">Rust</option>
-          <option value="go">Go</option>
-          <option value="java">Java</option>
-          <option value="node">Node.js</option>
-          <option value="ruby">Ruby</option>
-          <option value="php">PHP</option>
-          <option value="elixir">Elixir</option>
-          <option value="csharp">C#</option>
-          <option value="swift">Swift</option>
-          <option value="kotlin">Kotlin</option>
-          <option value="native">Native (C/C++)</option>
-          <option value="other">Other</option>
-        </select>
-      </div>
+    <div>
+      <label class="field-label" for="platform">
+        {{ chrome.t("projects-new-platform-label") }} <span class="text-muted normal-case tracking-normal font-normal">{{ chrome.t("projects-optional") }}</span>
+      </label>
+      <select class="select" id="platform" name="platform">
+        <option value="">{{ chrome.t("projects-new-platform-select") }}</option>
+        <option value="javascript">JavaScript</option>
+        <option value="python">Python</option>
+        <option value="rust">Rust</option>
+        <option value="go">Go</option>
+        <option value="java">Java</option>
+        <option value="node">Node.js</option>
+        <option value="ruby">Ruby</option>
+        <option value="php">PHP</option>
+        <option value="elixir">Elixir</option>
+        <option value="csharp">C#</option>
+        <option value="swift">Swift</option>
+        <option value="kotlin">Kotlin</option>
+        <option value="native">{{ chrome.t("projects-new-platform-native") }}</option>
+        <option value="other">{{ chrome.t("projects-new-platform-other") }}</option>
+      </select>
+    </div>
 
-      <div class="flex gap-2">
-        <button type="submit" class="btn btn-primary">Create project</button>
-        <a href="/web/projects/" class="btn btn-secondary">Cancel</a>
-      </div>
-    </form>
-  </div>
+    <div class="flex gap-2">
+      <button type="submit" class="btn btn-primary">{{ chrome.t("projects-new-submit") }}</button>
+      <a href="/web/projects/" class="btn btn-secondary">{{ chrome.t("projects-cancel") }}</a>
+    </div>
+  </form>
+</div>
 {% endblock %}

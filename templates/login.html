@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{{ self.locale }}" dir="{{ self.dir() }}">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
-    <title>Sign in — Stackpit</title>
+    <title>{{ self.t("login-page-title") }}</title>
     <link rel="preload"
           href="/web/_assets/fonts/Inter-Regular.woff2"
           as="font"
@@ -25,8 +25,8 @@
           <img src="/web/_assets/icon.svg" alt="" width="28" height="28">
           <span class="text-xl font-semibold tracking-tight">Stackpit</span>
         </div>
-        <h1 class="page-h1">Welcome back</h1>
-        <p class="text-muted mt-1 text-[13px]">Sign in to manage your error tracking</p>
+        <h1 class="page-h1">{{ self.t("login-welcome") }}</h1>
+        <p class="text-muted mt-1 text-[13px]">{{ self.t("login-subtitle") }}</p>
       </div>
 
       <div class="card card-pad space-y-4">
@@ -44,45 +44,51 @@
         {% if oauth_enabled %}
           <a href="/web/auth/login"
              class="btn btn-primary w-full justify-center uppercase tracking-wider text-[11px] h-10">
-            Sign in with SSO
+            {{ self.t("login-sso") }}
           </a>
           <div class="flex items-center gap-3 text-[10px] text-muted uppercase tracking-widest">
             <div class="flex-1 h-px bg-outline-variant"></div>
-            <span>or</span>
+            <span>{{ self.t("login-or") }}</span>
             <div class="flex-1 h-px bg-outline-variant"></div>
           </div>
         {% endif %}
 
         <form method="POST" action="/web/login" class="space-y-3">
           <div>
-            <label for="token" class="field-label">Admin Token</label>
+            <label for="token" class="field-label">{{ self.t("login-token-label") }}</label>
             <input class="input text-mono"
                    type="password"
                    id="token"
                    name="token"
-                   placeholder="Enter your master token…"
+                   placeholder="{{ self.t("login-token-placeholder") }}"
                    required
                    {% if !oauth_enabled %}autofocus{% endif %}>
           </div>
-          <button type="submit" class="btn btn-secondary w-full justify-center h-10">Sign in</button>
+          <button type="submit" class="btn btn-secondary w-full justify-center h-10">{{ self.t("login-submit") }}</button>
         </form>
 
         {% if let Some(_) = error %}
-          <p class="text-muted text-[12px]">
-            The admin token comes from <code class="text-mono">admin_token</code> in
-            <code class="text-mono">stackpit.toml</code>. Edit the file and restart
-            <code class="text-mono">stackpit serve</code> to pick up changes.
-          </p>
+          <p class="text-muted text-[12px]">{{ self.t("login-token-help") |safe }}</p>
         {% endif %}
       </div>
 
       <div class="mt-6 flex items-center justify-center gap-4 text-[12px] text-muted">
         <a class="hover:text-on-surface"
-           href="https://github.com/franzos/stackpit">Documentation</a>
+           href="https://github.com/franzos/stackpit">{{ self.t("login-docs") }}</a>
         <span>·</span>
         <a class="hover:text-on-surface"
-           href="https://github.com/franzos/stackpit#self-hosting">Self-hosting guide</a>
+           href="https://github.com/franzos/stackpit#self-hosting">{{ self.t("login-selfhosting") }}</a>
       </div>
+
+      <details class="mt-3 text-[12px] text-muted">
+        <summary class="cursor-pointer select-none flex justify-center gap-1">{{ self.locale_name() }}</summary>
+        <div class="mt-2 flex flex-col items-center gap-1">
+          {% for l in self.locales() %}
+            <a class="{% if l.active %}text-on-surface font-medium{% else %}hover:text-on-surface{% endif %}"
+               href="/web/lang/{{ l.code }}?next=/web/login">{{ l.name }}</a>
+          {% endfor %}
+        </div>
+      </details>
     </div>
   </body>
 </html>

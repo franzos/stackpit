@@ -73,9 +73,15 @@ mod tests {
 
     #[test]
     fn org_kind_classify_covers_every_variant() {
-        assert_eq!(OrgKind::classify(SYSTEM_ORG_ID, false, false), OrgKind::System);
+        assert_eq!(
+            OrgKind::classify(SYSTEM_ORG_ID, false, false),
+            OrgKind::System
+        );
         // System wins even if other flags are set.
-        assert_eq!(OrgKind::classify(SYSTEM_ORG_ID, true, true), OrgKind::System);
+        assert_eq!(
+            OrgKind::classify(SYSTEM_ORG_ID, true, true),
+            OrgKind::System
+        );
         assert_eq!(OrgKind::classify(5, true, false), OrgKind::Personal);
         assert_eq!(OrgKind::classify(5, false, true), OrgKind::Forseti);
         assert_eq!(OrgKind::classify(5, false, false), OrgKind::Native);

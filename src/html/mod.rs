@@ -13,6 +13,7 @@ pub mod auth;
 pub mod browser_defaults;
 pub mod bulk;
 pub mod charts;
+pub(crate) mod chrome;
 pub mod event_detail;
 pub mod event_list;
 pub mod event_type_list;
@@ -21,6 +22,7 @@ pub mod filters;
 pub mod integrations;
 pub mod issue_detail;
 pub mod issue_list;
+pub mod lang;
 pub mod login;
 pub mod logs;
 pub mod metrics;
@@ -28,11 +30,11 @@ pub mod monitors;
 pub mod new_project;
 pub mod orgs;
 pub mod profiles;
-pub mod provision;
 pub mod project_filters;
 pub mod project_integrations;
 pub mod project_list;
 pub mod project_settings;
+pub mod provision;
 pub mod release_health;
 pub mod release_list;
 pub mod replays;
@@ -293,6 +295,9 @@ pub fn routes() -> Router<AppState> {
             "/web/settings/defaults/clear",
             post(browser_defaults::clear_defaults),
         )
+        // -- locale switch --
+        .route("/web/lang/{code}", get(lang::get_lang))
+        .route("/web/settings/language", post(lang::post_language))
         // -- global settings: alerts & digests --
         .route("/web/settings/alerts/", get(alerts::handler))
         .route(
@@ -332,15 +337,18 @@ pub fn routes() -> Router<AppState> {
         .route("/web/events/", get(event_list::handler))
         .route("/web/releases/", get(release_list::handler))
         // -- org switcher --
-        .route("/web/organizations", get(orgs::orgs_index).post(orgs::create_org))
+        .route(
+            "/web/organizations",
+            get(orgs::orgs_index).post(orgs::create_org),
+        )
         .route("/web/organizations/switch", post(orgs::switch_org))
         // -- org delete --
-        .route(
-            "/web/organizations/{org_id}/delete",
-            post(orgs::delete_org),
-        )
+        .route("/web/organizations/{org_id}/delete", post(orgs::delete_org))
         // -- org members --
-        .route("/web/organizations/{org_id}/members", get(orgs::org_members))
+        .route(
+            "/web/organizations/{org_id}/members",
+            get(orgs::org_members),
+        )
         .route("/web/organizations/{org_id}/slug", post(orgs::set_org_slug))
         // -- org member mutations --
         .route(
@@ -517,11 +525,28 @@ impl From<anyhow::Error> for HtmlError {
 /// Minimal styled error page. Uses the same shell language as base.html but
 /// without a sidebar so the page renders standalone.
 pub fn html_error(status: axum::http::StatusCode, detail: &str) -> axum::response::Response {
+    // Context-free call sites (5xx internals, extractor rejections) resolve at
+    // the default locale. Handlers that carry a request locale use html_error_l.
+    html_error_localized(status, detail, &crate::locale::default_locale())
+}
+
+/// Locale-aware error page. Call sites that already hold a request locale (e.g.
+/// a `Chrome` extractor) pass it so the frame matches the localized `detail`.
+pub(crate) fn html_error_localized(
+    status: axum::http::StatusCode,
+    detail: &str,
+    locale: &crate::locale::LanguageIdentifier,
+) -> axum::response::Response {
     let escaped_detail = crate::util::encoding::escape_html(detail);
+    let lang = locale.to_string();
+    let dir = crate::locale::dir_for(locale);
+    let page_title = crate::i18n::lookup(locale, "error-page-title");
+    let heading = crate::i18n::lookup(locale, "error-heading");
+    let back = crate::i18n::lookup(locale, "error-back-projects");
     let body = format!(
         r#"<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><title>Error - Stackpit</title>
+<html lang="{lang}" dir="{dir}">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><title>{page_title}</title>
 <link rel="preload" href="/web/_assets/fonts/Inter-Regular.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/web/_assets/fonts/Inter-SemiBold.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/web/_assets/style.css">
@@ -530,9 +555,9 @@ pub fn html_error(status: axum::http::StatusCode, detail: &str) -> axum::respons
 <div class="min-h-screen flex items-center justify-center px-6">
 <div class="card card-pad max-w-lg w-full">
 <div class="flex items-center gap-2 mb-4"><img src="/web/_assets/icon.svg" alt="" width="22" height="22"><span class="font-semibold">Stackpit</span></div>
-<div class="page-h1 mb-2">Error {}</div>
+<div class="page-h1 mb-2">{heading} {}</div>
 <p class="text-muted">{}</p>
-<div class="mt-6"><a href="/web/projects/" class="btn btn-secondary">Back to projects</a></div>
+<div class="mt-6"><a href="/web/projects/" class="btn btn-secondary">{back}</a></div>
 </div>
 </div>
 </body></html>"#,

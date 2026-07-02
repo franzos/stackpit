@@ -1,10 +1,10 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
 
-{% block title %}Projects — Stackpit{% endblock %}
+{% block title %}{{ chrome.t("projects-list-title") }}{% endblock %}
 
 {% block sidebar_nav %}
-  {% call m::top_sidebar("projects") %}
+  {% call m::top_sidebar(chrome, "projects") %}
   {% endcall %}
 {% endblock %}
 
@@ -13,13 +13,13 @@
 {% block content %}
   <div class="page-header">
     <div>
-      <h1>Projects</h1>
-      <p class="text-muted text-[13px] mt-1">Monitor health across your entire architecture.</p>
+      <h1>{{ chrome.t("projects-list-heading") }}</h1>
+      <p class="text-muted text-[13px] mt-1">{{ chrome.t("projects-list-subtitle") }}</p>
     </div>
     <div class="page-actions">
-      <a href="/web/events/" class="btn btn-secondary">All events</a>
-      <a href="/web/releases/" class="btn btn-secondary">All releases</a>
-      <a href="/web/projects/new" class="btn btn-primary">+ New project</a>
+      <a href="/web/events/" class="btn btn-secondary">{{ chrome.t("projects-list-all-events") }}</a>
+      <a href="/web/releases/" class="btn btn-secondary">{{ chrome.t("projects-list-all-releases") }}</a>
+      <a href="/web/projects/new" class="btn btn-primary">{{ chrome.t("projects-list-new") }}</a>
     </div>
   </div>
 
@@ -28,25 +28,27 @@
     <input class="input"
            type="text"
            name="query"
-           placeholder="Query projects by name, platform, or owner…"
+           placeholder="{{ chrome.t("projects-list-search-placeholder") }}"
            value="{{ query }}"
-           aria-label="Search projects">
-    <select class="select w-auto" name="period" aria-label="Time range">
-      <option value="">All time</option>
-      <option value="1h"{% if period == "1h" %} selected{% endif %}>Last hour</option>
-      <option value="24h"{% if period == "24h" %} selected{% endif %}>Last 24 hours</option>
-      <option value="7d"{% if period == "7d" %} selected{% endif %}>Last 7 days</option>
-      <option value="14d"{% if period == "14d" %} selected{% endif %}>Last 14 days</option>
-      <option value="30d"{% if period == "30d" %} selected{% endif %}>Last 30 days</option>
-      <option value="90d"{% if period == "90d" %} selected{% endif %}>Last 90 days</option>
-      <option value="365d"{% if period == "365d" %} selected{% endif %}>Last 365 days</option>
+           aria-label="{{ chrome.t("projects-list-search-label") }}">
+    <select class="select w-auto"
+            name="period"
+            aria-label="{{ chrome.t("projects-period-label") }}">
+      <option value="">{{ chrome.t("projects-period-all") }}</option>
+      <option value="1h"{% if period == "1h" %} selected{% endif %}>{{ chrome.t("projects-period-1h") }}</option>
+      <option value="24h"{% if period == "24h" %} selected{% endif %}>{{ chrome.t("projects-period-24h") }}</option>
+      <option value="7d"{% if period == "7d" %} selected{% endif %}>{{ chrome.t("projects-period-7d") }}</option>
+      <option value="14d"{% if period == "14d" %} selected{% endif %}>{{ chrome.t("projects-period-14d") }}</option>
+      <option value="30d"{% if period == "30d" %} selected{% endif %}>{{ chrome.t("projects-period-30d") }}</option>
+      <option value="90d"{% if period == "90d" %} selected{% endif %}>{{ chrome.t("projects-period-90d") }}</option>
+      <option value="365d"{% if period == "365d" %} selected{% endif %}>{{ chrome.t("projects-period-365d") }}</option>
     </select>
-    <button type="submit" class="btn btn-secondary">Filter</button>
+    <button type="submit" class="btn btn-secondary">{{ chrome.t("projects-list-filter") }}</button>
   </form>
 
   {% if projects.is_empty() %}
     <div class="card">
-      <p class="empty">No projects found. Events will appear here once ingested.</p>
+      <p class="empty">{{ chrome.t("projects-list-empty") }}</p>
     </div>
   {% else %}
     <div class="card overflow-hidden">
@@ -56,26 +58,26 @@
             <tr>
               <th>
                 <a href="/web/projects/?sort=project_id{% if !query.is_empty() %}&amp;query={{ query }}{% endif %}{% if !period.is_empty() %}&amp;period={{ period }}{% endif %}"
-                   {% if sort == "project_id" %}class="active-sort"{% endif %}>Project</a>
+                   {% if sort == "project_id" %}class="active-sort"{% endif %}>{{ chrome.t("projects-col-project") }}</a>
               </th>
-              <th>Platforms</th>
+              <th>{{ chrome.t("projects-col-platforms") }}</th>
               <th>
                 <a href="/web/projects/?sort=issues{% if !query.is_empty() %}&amp;query={{ query }}{% endif %}{% if !period.is_empty() %}&amp;period={{ period }}{% endif %}"
-                   {% if sort == "issues" %}class="active-sort"{% endif %}>Issues</a>
+                   {% if sort == "issues" %}class="active-sort"{% endif %}>{{ chrome.t("projects-col-issues") }}</a>
               </th>
               <th>
                 <a href="/web/projects/?sort=events{% if !query.is_empty() %}&amp;query={{ query }}{% endif %}{% if !period.is_empty() %}&amp;period={{ period }}{% endif %}"
-                   {% if sort == "events" %}class="active-sort"{% endif %}>Events</a>
+                   {% if sort == "events" %}class="active-sort"{% endif %}>{{ chrome.t("projects-col-events") }}</a>
               </th>
-              <th class="hide-mobile">Breakdown</th>
-              <th class="hide-mobile">Release</th>
+              <th class="hide-mobile">{{ chrome.t("projects-col-breakdown") }}</th>
+              <th class="hide-mobile">{{ chrome.t("projects-col-release") }}</th>
               <th class="hide-mobile">
                 <a href="/web/projects/?sort=first_seen{% if !query.is_empty() %}&amp;query={{ query }}{% endif %}{% if !period.is_empty() %}&amp;period={{ period }}{% endif %}"
-                   {% if sort == "first_seen" %}class="active-sort"{% endif %}>First seen</a>
+                   {% if sort == "first_seen" %}class="active-sort"{% endif %}>{{ chrome.t("projects-col-first-seen") }}</a>
               </th>
               <th>
                 <a href="/web/projects/?{% if !query.is_empty() %}query={{ query }}&amp;{% endif %}{% if !period.is_empty() %}period={{ period }}{% endif %}"
-                   {% if sort.is_empty() %}class="active-sort"{% endif %}>Last seen</a>
+                   {% if sort.is_empty() %}class="active-sort"{% endif %}>{{ chrome.t("projects-col-last-seen") }}</a>
               </th>
             </tr>
           </thead>
@@ -84,62 +86,64 @@
               <tr>
                 <td>
                   <a class="font-semibold"
-                     href="/web/projects/{{ p.project_id }}/?{% if !query.is_empty() %}query={{ query }}&amp;{% endif %}period={{ period }}">{% match p.name %}{% when Some with (n) %}{{ n }}{% when None %}{{ p.project_id }}{% endmatch %}</a>
-                  <div class="text-muted text-[12px] text-mono mt-0.5">id: {{ p.project_id }}</div>
-                </td>
-                <td>
-                  {% if !p.platforms.is_empty() %}
-                    <span class="badge badge-platform">{{ p.platforms }}</span>
-                  {% else %}
-                    <span class="text-muted">—</span>
+                     href="/web/projects/{{ p.project_id }}/?{% if !query.is_empty() %}query={{ query }}&amp;{% endif %}period={{ period }}">{% match p.name %}{% when Some with (n) %}<bdi>{{ n }}</bdi>{% when None %}{{ p.project_id }}{% endmatch %}</a>
+                <div class="text-muted text-[12px] text-mono mt-0.5">{{ chrome.t("common-id-prefix") }} {{ p.project_id }}</div>
+              </td>
+              <td>
+                {% if !p.platforms.is_empty() %}
+                  <span class="badge badge-platform">{{ p.platforms }}</span>
+                {% else %}
+                  <span class="text-muted">—</span>
+                {% endif %}
+              </td>
+              <td class="text-tabular">{{ p.issue_count }}</td>
+              <td class="text-tabular">{{ p.event_count }}</td>
+              <td class="hide-mobile">
+                <div class="type-breakdown">
+                  {% if p.error_count > 0 %}
+                    <span class="seg event"
+                          style="height:{% if p.event_count > 0 %}{{ p.error_count * 100 / p.event_count }}{% else %}0{% endif %}%"
+                          title="{{ chrome.t("projects-breakdown-errors") }} {{ p.error_count }}"></span>
                   {% endif %}
-                </td>
-                <td class="text-tabular">{{ p.issue_count }}</td>
-                <td class="text-tabular">{{ p.event_count }}</td>
-                <td class="hide-mobile">
-                  <div class="type-breakdown">
-                    {% if p.error_count > 0 %}
-                      <span class="seg event"
-                            style="height:{% if p.event_count > 0 %}{{ p.error_count * 100 / p.event_count }}{% else %}0{% endif %}%"
-                            title="Errors: {{ p.error_count }}"></span>
-                    {% endif %}
-                    {% if p.transaction_count > 0 %}
-                      <span class="seg transaction"
-                            style="height:{% if p.event_count > 0 %}{{ p.transaction_count * 100 / p.event_count }}{% else %}0{% endif %}%"
-                            title="Transactions: {{ p.transaction_count }}"></span>
-                    {% endif %}
-                    {% if p.session_count > 0 %}
-                      <span class="seg log"
-                            style="height:{% if p.event_count > 0 %}{{ p.session_count * 100 / p.event_count }}{% else %}0{% endif %}%"
-                            title="Sessions: {{ p.session_count }}"></span>
-                    {% endif %}
-                    {% if p.other_count > 0 %}
-                      <span class="seg" style="height:50%" title="Other: {{ p.other_count }}"></span>
-                    {% endif %}
-                  </div>
-                </td>
-                <td class="hide-mobile text-mono text-[12px]">
-                  {% match p.latest_release %}{% when Some with (r) %}{{ r }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
-                </td>
-                <td class="hide-mobile text-muted">
-                  <time datetime="{{ p.first_seen|format_ts }}"
-                        title="{{ p.first_seen|format_ts }}">{{ p.first_seen|format_relative }}</time>
-                </td>
-                <td class="text-muted">
-                  <time datetime="{{ p.last_seen|format_ts }}"
-                        title="{{ p.last_seen|format_ts }}">{{ p.last_seen|format_relative }}</time>
-                </td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </div>
-    <div class="flex flex-wrap items-center gap-4 mt-3 text-muted text-[12px]">
-      <span class="inline-flex items-center gap-1.5"><span class="type-breakdown"><span class="seg event" style="height:14px"></span></span>Errors</span>
-      <span class="inline-flex items-center gap-1.5"><span class="type-breakdown"><span class="seg transaction" style="height:14px"></span></span>Transactions</span>
-      <span class="inline-flex items-center gap-1.5"><span class="type-breakdown"><span class="seg log" style="height:14px"></span></span>Sessions</span>
-      <span class="inline-flex items-center gap-1.5"><span class="type-breakdown"><span class="seg" style="height:14px"></span></span>Other</span>
-    </div>
-  {% endif %}
+                  {% if p.transaction_count > 0 %}
+                    <span class="seg transaction"
+                          style="height:{% if p.event_count > 0 %}{{ p.transaction_count * 100 / p.event_count }}{% else %}0{% endif %}%"
+                          title="{{ chrome.t("projects-breakdown-transactions") }} {{ p.transaction_count }}"></span>
+                  {% endif %}
+                  {% if p.session_count > 0 %}
+                    <span class="seg log"
+                          style="height:{% if p.event_count > 0 %}{{ p.session_count * 100 / p.event_count }}{% else %}0{% endif %}%"
+                          title="{{ chrome.t("projects-breakdown-sessions") }} {{ p.session_count }}"></span>
+                  {% endif %}
+                  {% if p.other_count > 0 %}
+                    <span class="seg"
+                          style="height:50%"
+                          title="{{ chrome.t("projects-breakdown-other") }} {{ p.other_count }}"></span>
+                  {% endif %}
+                </div>
+              </td>
+              <td class="hide-mobile text-mono text-[12px]">
+                {% match p.latest_release %}{% when Some with (r) %}{{ r }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
+            </td>
+            <td class="hide-mobile text-muted">
+              <time datetime="{{ p.first_seen|format_ts }}"
+                    title="{{ p.first_seen|format_ts }}">{{ chrome.rel_time(p.first_seen) }}</time>
+            </td>
+            <td class="text-muted">
+              <time datetime="{{ p.last_seen|format_ts }}"
+                    title="{{ p.last_seen|format_ts }}">{{ chrome.rel_time(p.last_seen) }}</time>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+<div class="flex flex-wrap items-center gap-4 mt-3 text-muted text-[12px]">
+  <span class="inline-flex items-center gap-1.5"><span class="type-breakdown"><span class="seg event" style="height:14px"></span></span>{{ chrome.t("projects-legend-errors") }}</span>
+  <span class="inline-flex items-center gap-1.5"><span class="type-breakdown"><span class="seg transaction" style="height:14px"></span></span>{{ chrome.t("projects-legend-transactions") }}</span>
+  <span class="inline-flex items-center gap-1.5"><span class="type-breakdown"><span class="seg log" style="height:14px"></span></span>{{ chrome.t("projects-legend-sessions") }}</span>
+  <span class="inline-flex items-center gap-1.5"><span class="type-breakdown"><span class="seg" style="height:14px"></span></span>{{ chrome.t("projects-legend-other") }}</span>
+</div>
+{% endif %}
 {% endblock %}

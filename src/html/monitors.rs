@@ -2,9 +2,10 @@ use askama::Template;
 use axum::extract::{Path, Query};
 
 use crate::extractors::{ProjectPageCtx, ReadPool};
-use crate::orgs::extractor::ActiveOrg;
+use crate::html::chrome::PageChrome;
 use crate::html::render_template;
-use crate::html::utils::Csrf;
+use crate::html::utils::Chrome;
+use crate::orgs::extractor::ActiveOrg;
 use crate::queries;
 use crate::queries::types::{PagedResult, Pagination};
 use crate::queries::MonitorSummary;
@@ -21,7 +22,7 @@ struct MonitorListTemplate {
     project_id: u64,
     monitors: Vec<MonitorSummary>,
     nav: ProjectNavCounts,
-    csrf_token: String,
+    chrome: PageChrome,
 }
 
 pub async fn list_handler(ctx: ProjectPageCtx) -> Result<axum::response::Response, HtmlError> {
@@ -31,7 +32,7 @@ pub async fn list_handler(ctx: ProjectPageCtx) -> Result<axum::response::Respons
         project_id: ctx.project_id,
         monitors,
         nav: ctx.nav,
-        csrf_token: ctx.csrf_token,
+        chrome: ctx.chrome,
     };
     Ok(render_template(&tmpl))
 }
@@ -43,13 +44,13 @@ struct MonitorDetailTemplate {
     slug: String,
     checkins: PagedResult<queries::EventSummary>,
     nav: queries::ProjectNavCounts,
-    csrf_token: String,
+    chrome: PageChrome,
 }
 
 pub async fn detail_handler(
     active: ActiveOrg,
     ReadPool(pool): ReadPool,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path((project_id, slug)): Path<(u64, String)>,
     Query(params): Query<Pagination>,
 ) -> Result<axum::response::Response, HtmlError> {
@@ -67,7 +68,88 @@ pub async fn detail_handler(
         slug,
         checkins,
         nav,
-        csrf_token: csrf,
+        chrome,
     };
     Ok(render_template(&tmpl))
+}
+
+#[cfg(test)]
+mod i18n_tests {
+    use super::*;
+    use unic_langid::langid;
+
+    fn empty_list(locale: crate::locale::LanguageIdentifier) -> MonitorListTemplate {
+        MonitorListTemplate {
+            project_id: 1,
+            monitors: Vec::new(),
+            nav: ProjectNavCounts::default(),
+            chrome: PageChrome::new(String::new(), locale, "/web/projects/".into()),
+        }
+    }
+
+    // Empty-collection render must not leak an unresolved Fluent key in either locale.
+    #[test]
+    fn monitor_list_renders_without_missing_keys() {
+        for lang in [langid!("en"), langid!("de")] {
+            let out = empty_list(lang.clone()).render().expect("render");
+            assert!(
+                !out.contains(crate::i18n::MISSING_PREFIX),
+                "missing localization key for {lang} in monitor_list render"
+            );
+        }
+    }
+
+    // Empty renders skip the count-bearing paths, so exercise the cluster plurals directly.
+    #[test]
+    fn cluster_counted_keys_resolve() {
+        for lang in [langid!("en"), langid!("de")] {
+            let chrome = PageChrome::new(String::new(), lang.clone(), "/web/projects/".into());
+            for (id, n) in [
+                ("monitors-detail-count", 1),
+                ("monitors-detail-count", 5),
+                ("monitors-detail-confirm-delete-all", 5),
+                ("monitors-detail-delete-all", 5),
+                ("profiles-count", 5),
+                ("replays-count", 5),
+                ("releases-count", 5),
+            ] {
+                let s = chrome.tv_count(id, n);
+                assert!(
+                    !s.contains(crate::i18n::MISSING_PREFIX),
+                    "missing {id} for {lang}"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+
+    // Pre-i18n-retrofit baseline: empty check-ins avoid timestamp filters and
+    // default nav counts keep the project sidebar deterministic.
+    #[test]
+    fn monitor_detail_renders_stable() {
+        let tmpl = MonitorDetailTemplate {
+            project_id: 42,
+            slug: "nightly-backup".to_string(),
+            checkins: PagedResult {
+                items: Vec::new(),
+                total: 0,
+                offset: 0,
+                limit: 25,
+            },
+            nav: ProjectNavCounts {
+                label: "Test Project".to_string(),
+                ..ProjectNavCounts::default()
+            },
+            chrome: PageChrome::new(
+                "test-csrf-token".into(),
+                crate::locale::default_locale(),
+                "/web/projects/".into(),
+            ),
+        };
+        insta::assert_snapshot!(tmpl.render().unwrap());
+    }
 }

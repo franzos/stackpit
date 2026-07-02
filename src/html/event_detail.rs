@@ -5,9 +5,10 @@ use axum::response::IntoResponse;
 
 use crate::domain::*;
 use crate::extractors::ReadPool;
-use crate::orgs::extractor::ActiveOrg;
+use crate::html::chrome::PageChrome;
 use crate::html::render_template;
-use crate::html::utils::Csrf;
+use crate::html::utils::Chrome;
+use crate::orgs::extractor::ActiveOrg;
 use crate::queries;
 use crate::queries::types::{AttachmentInfo, EventNav};
 use crate::queries::{event_supplements, ExtractedEventData};
@@ -36,14 +37,14 @@ struct EventDetailTemplate {
     own_feedback: Option<queries::types::UserFeedback>,
     measurements: Vec<Measurement>,
     raw_json: String,
-    csrf_token: String,
+    chrome: PageChrome,
 }
 
 pub async fn handler(
     active: ActiveOrg,
     State(_state): State<AppState>,
     ReadPool(pool): ReadPool,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path((project_id, event_id)): Path<(u64, String)>,
 ) -> Result<axum::response::Response, HtmlError> {
     crate::orgs::extractor::require_project_scope(&active, &pool, project_id as i64)
@@ -109,7 +110,7 @@ pub async fn handler(
         own_feedback,
         measurements,
         raw_json,
-        csrf_token: csrf,
+        chrome,
     };
 
     Ok(render_template(&tmpl))

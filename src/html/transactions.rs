@@ -3,6 +3,7 @@ use axum::extract::Query;
 use serde::Deserialize;
 
 use crate::extractors::ProjectPageCtx;
+use crate::html::chrome::PageChrome;
 use crate::html::render_template;
 use crate::html::utils::{period_to_timestamp, ListParams};
 use crate::queries;
@@ -22,7 +23,7 @@ struct TransactionListTemplate {
     sort: String,
     period: String,
     nav: ProjectNavCounts,
-    csrf_token: String,
+    chrome: PageChrome,
 }
 
 #[derive(Template)]
@@ -33,7 +34,7 @@ struct TransactionDetailTemplate {
     op: Option<String>,
     result: PagedResult<TransactionInstance>,
     nav: ProjectNavCounts,
-    csrf_token: String,
+    chrome: PageChrome,
 }
 
 #[derive(Deserialize)]
@@ -60,7 +61,7 @@ pub async fn list_handler(
         sort,
         period,
         nav: ctx.nav,
-        csrf_token: ctx.csrf_token,
+        chrome: ctx.chrome,
     }))
 }
 
@@ -82,6 +83,6 @@ pub async fn detail_handler(
         op,
         result,
         nav: ctx.nav,
-        csrf_token: ctx.csrf_token,
+        chrome: ctx.chrome,
     }))
 }

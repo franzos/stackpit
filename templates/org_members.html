@@ -1,36 +1,38 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
 
-{% block title %}{{ org_name }} Members - Stackpit{% endblock %}
+{% block title %}{{ org_name }} {{ chrome.t("orgs-members-title-suffix") }}{% endblock %}
 
 {% block sidebar_nav %}
-  {% call m::top_sidebar("") %}
+  {% call m::top_sidebar(chrome, "") %}
   {% endcall %}
 {% endblock %}
 
 {% block breadcrumbs %}
   <span class="breadcrumb-sep">/</span>
-  <a href="/web/organizations" class="breadcrumb-link">Organizations</a>
+  <a href="/web/organizations" class="breadcrumb-link">{{ chrome.t("nav-organizations") }}</a>
   <span class="breadcrumb-sep">/</span>
-  <span class="breadcrumb-current">{{ org_name }} Members</span>
+  <span class="breadcrumb-current"><bdi>{{ org_name }}</bdi> {{ chrome.t("orgs-members-word") }}</span>
 {% endblock %}
 
 {% block content %}
   <div class="page-header">
     <div>
-      <h1>{{ org_name }}</h1>
-      <p class="text-muted text-[13px] mt-1">{{ kind }} organization</p>
+      <h1><bdi>{{ org_name }}</bdi></h1>
+      <p class="text-muted text-[13px] mt-1">{{ kind }} {{ chrome.t("orgs-organization-word") }}</p>
     </div>
   </div>
 
   {% if can_rename %}
     <div class="card card-pad mb-6">
-      <h2 class="page-h2 mb-1">Slug</h2>
-      <p class="text-muted text-[13px] mb-4">Identifies this organization in URLs. Must be unique.</p>
-      <form class="settings-form" method="post" action="/web/organizations/{{ org_id }}/slug">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <h2 class="page-h2 mb-1">{{ chrome.t("orgs-slug-heading") }}</h2>
+      <p class="text-muted text-[13px] mb-4">{{ chrome.t("orgs-slug-desc") }}</p>
+      <form class="settings-form"
+            method="post"
+            action="/web/organizations/{{ org_id }}/slug">
+        <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
         <div>
-          <label class="field-label" for="org-slug">Slug</label>
+          <label class="field-label" for="org-slug">{{ chrome.t("orgs-slug") }}</label>
           <input id="org-slug"
                  name="slug"
                  type="text"
@@ -39,7 +41,7 @@
                  required>
         </div>
         <div>
-          <button type="submit" class="btn btn-primary">Save</button>
+          <button type="submit" class="btn btn-primary">{{ chrome.t("common-action-save") }}</button>
         </div>
       </form>
     </div>
@@ -51,10 +53,10 @@
         <table class="table">
           <thead>
             <tr>
-              <th>Name</th>
-              <th>Email</th>
-              <th>Role</th>
-              <th>Joined</th>
+              <th>{{ chrome.t("orgs-name") }}</th>
+              <th>{{ chrome.t("orgs-email") }}</th>
+              <th>{{ chrome.t("orgs-role") }}</th>
+              <th>{{ chrome.t("orgs-joined") }}</th>
               {% if can_manage %}
                 <th></th>
               {% endif %}
@@ -63,200 +65,207 @@
           <tbody>
             {% for member in members %}
               <tr>
-                <td class="font-semibold">{{ member.name }}</td>
+                <td class="font-semibold"><bdi>{{ member.name }}</bdi></td>
                 <td class="text-muted">
                   {% match member.email %}
-                    {% when Some with (email) %}
-                      {{ email }}
-                    {% when None %}
-                      -
-                  {% endmatch %}
-                </td>
-                <td class="text-muted">{{ member.role }}</td>
-                <td class="text-muted">{{ member.joined_at|format_ts }}</td>
-                {% if can_manage %}
-                  <td class="flex gap-2">
-                    {% if member.role == "member" %}
+                  {% when Some with (email) %}
+                  <bdi>{{ email }}</bdi>
+                  {% when None %}
+                  -
+                {% endmatch %}
+              </td>
+              <td class="text-muted">{{ member.role }}</td>
+              <td class="text-muted">{{ member.joined_at|format_ts }}</td>
+              {% if can_manage %}
+                <td class="flex gap-2">
+                  {% if member.role == "member" %}
+                    <form method="post"
+                          action="/web/organizations/{{ org_id }}/members/{{ member.user_id }}/role">
+                      <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+                      <input type="hidden" name="role" value="owner">
+                      <button type="submit" class="btn btn-secondary">{{ chrome.t("orgs-promote") }}</button>
+                    </form>
+                  {% endif %}
+                  {% if member.role == "owner" %}
+                    {% if member.can_demote %}
                       <form method="post"
                             action="/web/organizations/{{ org_id }}/members/{{ member.user_id }}/role">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                        <input type="hidden" name="role" value="owner">
-                        <button type="submit" class="btn btn-secondary">Promote</button>
+                        <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+                        <input type="hidden" name="role" value="member">
+                        <button type="submit" class="btn btn-secondary">{{ chrome.t("orgs-demote") }}</button>
                       </form>
                     {% endif %}
-                    {% if member.role == "owner" %}
-                      {% if member.can_demote %}
-                        <form method="post"
-                              action="/web/organizations/{{ org_id }}/members/{{ member.user_id }}/role">
-                          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                          <input type="hidden" name="role" value="member">
-                          <button type="submit" class="btn btn-secondary">Demote</button>
-                        </form>
-                      {% endif %}
-                    {% endif %}
-                    {% if member.can_remove %}
-                      <form method="post"
-                            action="/web/organizations/{{ org_id }}/members/{{ member.user_id }}/remove">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                        <button type="submit" class="btn btn-danger">Remove</button>
-                      </form>
-                    {% endif %}
-                  </td>
-                {% endif %}
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </div>
-
-    {% if can_manage %}
-      <div class="card card-pad mt-6">
-        <h2 class="page-h2 mb-4">Invites</h2>
-        {% if !invites.is_empty() %}
-          <div class="table-wrap mb-6">
-            <table class="table">
-              <thead>
-                <tr>
-                  <th>Email</th>
-                  <th>Role</th>
-                  <th>Created</th>
-                  <th>Expires</th>
-                  <th>Status</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for invite in invites %}
-                  <tr>
-                    <td class="text-muted">
-                      {% match invite.email %}
-                        {% when Some with (email) %}
-                          {{ email }}
-                        {% when None %}
-                          -
-                      {% endmatch %}
-                    </td>
-                    <td class="text-muted">{{ invite.role }}</td>
-                    <td class="text-muted">{{ invite.created_at|format_ts }}</td>
-                    <td class="text-muted">{{ invite.expires_at|format_ts }}</td>
-                    <td class="text-muted">{{ invite.status }}</td>
-                    <td>
-                      {% if invite.status == "pending" %}
-                        <form method="post"
-                              action="/web/organizations/{{ org_id }}/invites/{{ invite.invite_id }}/revoke">
-                          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                          <button type="submit" class="btn btn-secondary">Revoke</button>
-                        </form>
-                      {% endif %}
-                    </td>
-                  </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-        {% endif %}
-
-        <h3 class="page-h2 mb-1">Create invite</h3>
-        <p class="text-muted text-[13px] mb-4">Generates a single-use invite link.</p>
-        <form class="settings-form" method="post" action="/web/organizations/{{ org_id }}/invites">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <div>
-            <label class="field-label" for="inv-role">Role</label>
-            <select id="inv-role" name="role" class="input">
-              <option value="member">member</option>
-              <option value="owner">owner</option>
-            </select>
-          </div>
-          <div>
-            <label class="field-label" for="inv-email">
-              Email <span class="text-muted normal-case tracking-normal font-normal">(optional)</span>
-            </label>
-            <input id="inv-email"
-                   name="email"
-                   type="email"
-                   class="input"
-                   placeholder="user@example.com">
-          </div>
-          <div>
-            <label class="field-label" for="inv-ttl">
-              Expiry (seconds)
-              <span class="text-muted normal-case tracking-normal font-normal">(optional, default 7 days)</span>
-            </label>
-            <input id="inv-ttl"
-                   name="ttl_secs"
-                   type="number"
-                   class="input"
-                   placeholder="604800">
-          </div>
-          <div>
-            <button type="submit" class="btn btn-primary">Create invite</button>
-          </div>
-        </form>
-      </div>
-    {% endif %}
-  {% else %}
-    <div class="card overflow-hidden">
-      <div class="table-wrap">
-        <table class="table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Email</th>
-              <th>Role</th>
-              <th>Joined</th>
+                  {% endif %}
+                  {% if member.can_remove %}
+                    <form method="post"
+                          action="/web/organizations/{{ org_id }}/members/{{ member.user_id }}/remove">
+                      <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+                      <button type="submit" class="btn btn-danger">{{ chrome.t("orgs-remove") }}</button>
+                    </form>
+                  {% endif %}
+                </td>
+              {% endif %}
             </tr>
-          </thead>
-          <tbody>
-            {% for member in members %}
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {% if can_manage %}
+    <div class="card card-pad mt-6">
+      <h2 class="page-h2 mb-4">{{ chrome.t("orgs-invites-heading") }}</h2>
+      {% if !invites.is_empty() %}
+        <div class="table-wrap mb-6">
+          <table class="table">
+            <thead>
               <tr>
-                <td class="font-semibold">{{ member.name }}</td>
-                <td class="text-muted">
-                  {% match member.email %}
+                <th>{{ chrome.t("orgs-email") }}</th>
+                <th>{{ chrome.t("orgs-role") }}</th>
+                <th>{{ chrome.t("orgs-created") }}</th>
+                <th>{{ chrome.t("orgs-expires") }}</th>
+                <th>{{ chrome.t("orgs-status") }}</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for invite in invites %}
+                <tr>
+                  <td class="text-muted">
+                    {% match invite.email %}
                     {% when Some with (email) %}
-                      {{ email }}
+                    <bdi>{{ email }}</bdi>
                     {% when None %}
-                      -
+                    -
                   {% endmatch %}
                 </td>
-                <td class="text-muted">{{ member.role }}</td>
-                <td class="text-muted">{{ member.joined_at|format_ts }}</td>
+                <td class="text-muted">{{ invite.role }}</td>
+                <td class="text-muted">{{ invite.created_at|format_ts }}</td>
+                <td class="text-muted">{{ invite.expires_at|format_ts }}</td>
+                <td class="text-muted">{{ invite.status }}</td>
+                <td>
+                  {% if invite.status == "pending" %}
+                    <form method="post"
+                          action="/web/organizations/{{ org_id }}/invites/{{ invite.invite_id }}/revoke">
+                      <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+                      <button type="submit" class="btn btn-secondary">{{ chrome.t("orgs-revoke") }}</button>
+                    </form>
+                  {% endif %}
+                </td>
               </tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
-    </div>
-    <div class="card card-pad mt-6">
-      {% if kind == "Forseti" %}
-        <p class="text-muted text-[13px]">Membership for this organization is managed externally.</p>
-      {% else %}
-        <p class="text-muted text-[13px]">This is a personal organization. Membership is not configurable.</p>
-      {% endif %}
-    </div>
-  {% endif %}
+    {% endif %}
 
-  {% if can_delete %}
-    <div class="card card-pad mt-6">
-      <h2 class="page-h2 mb-1">Danger zone</h2>
-      <p class="text-muted text-[13px] mb-4">
-        Deleting removes {{ project_count }} project(s), {{ member_count }} member(s),
-        and all events, issues, keys, alerts and integrations. This cannot be undone.
-      </p>
-      <form class="settings-form" method="post" action="/web/organizations/{{ org_id }}/delete">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <div>
-          <label class="field-label" for="confirm-slug">Type <code>{{ slug }}</code> to confirm</label>
-          <input id="confirm-slug" name="confirm_slug" type="text" class="input" autocomplete="off" required>
-        </div>
-        <div>
-          <button type="submit"
-                  class="btn btn-danger"
-                  data-confirm="Delete this organization and ALL its data. This cannot be undone.">
-            Delete organization
-          </button>
-        </div>
-      </form>
-    </div>
+    <h3 class="page-h2 mb-1">{{ chrome.t("orgs-create-invite-heading") }}</h3>
+    <p class="text-muted text-[13px] mb-4">{{ chrome.t("orgs-create-invite-desc") }}</p>
+    <form class="settings-form"
+          method="post"
+          action="/web/organizations/{{ org_id }}/invites">
+      <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+      <div>
+        <label class="field-label" for="inv-role">{{ chrome.t("orgs-role") }}</label>
+        <select id="inv-role" name="role" class="input">
+          <option value="member">{{ chrome.t("orgs-role-member") }}</option>
+          <option value="owner">{{ chrome.t("orgs-role-owner") }}</option>
+        </select>
+      </div>
+      <div>
+        <label class="field-label" for="inv-email">
+          {{ chrome.t("orgs-email") }} <span class="text-muted normal-case tracking-normal font-normal">{{ chrome.t("orgs-optional") }}</span>
+        </label>
+        <input id="inv-email"
+               name="email"
+               type="email"
+               class="input"
+               placeholder="user@example.com">
+      </div>
+      <div>
+        <label class="field-label" for="inv-ttl">
+          {{ chrome.t("orgs-expiry-label") }}
+          <span class="text-muted normal-case tracking-normal font-normal">{{ chrome.t("orgs-expiry-hint") }}</span>
+        </label>
+        <input id="inv-ttl"
+               name="ttl_secs"
+               type="number"
+               class="input"
+               placeholder="604800">
+      </div>
+      <div>
+        <button type="submit" class="btn btn-primary">{{ chrome.t("orgs-create-invite-submit") }}</button>
+      </div>
+    </form>
+  </div>
+{% endif %}
+{% else %}
+<div class="card overflow-hidden">
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>{{ chrome.t("orgs-name") }}</th>
+          <th>{{ chrome.t("orgs-email") }}</th>
+          <th>{{ chrome.t("orgs-role") }}</th>
+          <th>{{ chrome.t("orgs-joined") }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for member in members %}
+          <tr>
+            <td class="font-semibold"><bdi>{{ member.name }}</bdi></td>
+            <td class="text-muted">
+              {% match member.email %}
+              {% when Some with (email) %}
+              <bdi>{{ email }}</bdi>
+              {% when None %}
+              -
+            {% endmatch %}
+          </td>
+          <td class="text-muted">{{ member.role }}</td>
+          <td class="text-muted">{{ member.joined_at|format_ts }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+</div>
+<div class="card card-pad mt-6">
+  {% if kind == "Forseti" %}
+    <p class="text-muted text-[13px]">{{ chrome.t("orgs-forseti-note") }}</p>
+  {% else %}
+    <p class="text-muted text-[13px]">{{ chrome.t("orgs-personal-note") }}</p>
   {% endif %}
+</div>
+{% endif %}
+
+{% if can_delete %}
+  <div class="card card-pad mt-6">
+    <h2 class="page-h2 mb-1">{{ chrome.t("orgs-danger-heading") }}</h2>
+    <p class="text-muted text-[13px] mb-4">
+      {{ chrome.t("orgs-delete-danger-pre") }} {{ project_count }} {{ chrome.t("orgs-delete-danger-projects") }} {{ member_count }} {{ chrome.t("orgs-delete-danger-members") }}
+      {{ chrome.t("orgs-delete-danger-rest") }}
+    </p>
+    <form class="settings-form"
+          method="post"
+          action="/web/organizations/{{ org_id }}/delete">
+      <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+      <div>
+        <label class="field-label" for="confirm-slug">{{ chrome.t("orgs-confirm-type-pre") }} <code><bdi>{{ slug }}</bdi></code> {{ chrome.t("orgs-confirm-type-post") }}</label>
+        <input id="confirm-slug"
+               name="confirm_slug"
+               type="text"
+               class="input"
+               autocomplete="off"
+               required>
+      </div>
+      <div>
+        <button type="submit"
+                class="btn btn-danger"
+                data-confirm="{{ chrome.t("orgs-delete-confirm") }}">{{ chrome.t("orgs-delete-submit") }}</button>
+      </div>
+    </form>
+  </div>
+{% endif %}
 {% endblock %}

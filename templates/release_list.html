@@ -1,21 +1,21 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
 
-{% block title %}Releases — Stackpit{% endblock %}
+{% block title %}{{ chrome.t("nav-releases") }} {{ chrome.t("releases-title-suffix") }}{% endblock %}
 
 {% block sidebar_nav %}
-  {% call m::top_sidebar("releases") %}
+  {% call m::top_sidebar(chrome, "releases") %}
   {% endcall %}
 {% endblock %}
 
 {% block breadcrumbs %}
   <span class="breadcrumb-sep">/</span>
-  <span class="breadcrumb-current">Releases</span>
+  <span class="breadcrumb-current">{{ chrome.t("nav-releases") }}</span>
 {% endblock %}
 
 {% block content %}
   <div class="page-header">
-    <h1>Releases</h1>
+    <h1>{{ chrome.t("nav-releases") }}</h1>
   </div>
 
   <form class="filter-form" method="get" action="/web/releases/">
@@ -25,29 +25,29 @@
     <input class="input"
            type="text"
            name="query"
-           placeholder="Search releases…"
+           placeholder="{{ chrome.t("releases-list-search-placeholder") }}"
            value="{{ query }}"
-           aria-label="Search releases">
+           aria-label="{{ chrome.t("releases-list-search-label") }}">
     <input class="input w-auto"
            type="text"
            name="project_id"
-           placeholder="Project ID"
+           placeholder="{{ chrome.t("releases-list-project-placeholder") }}"
            value="{{ project_id }}"
-           aria-label="Filter by project"
+           aria-label="{{ chrome.t("releases-list-project-label") }}"
            size="10">
-    <select class="select w-auto" name="period" aria-label="Adoption period">
-      <option value="24h"{% if period == "24h" %} selected{% endif %}>Last 24h</option>
-      <option value="7d"{% if period == "7d" %} selected{% endif %}>Last 7 days</option>
-      <option value="30d"{% if period == "30d" %} selected{% endif %}>Last 30 days</option>
+    <select class="select w-auto"
+            name="period"
+            aria-label="{{ chrome.t("releases-list-period-label") }}">
+      <option value="24h"{% if period == "24h" %} selected{% endif %}>{{ chrome.t("releases-list-period-24h") }}</option>
+      <option value="7d"{% if period == "7d" %} selected{% endif %}>{{ chrome.t("releases-list-period-7d") }}</option>
+      <option value="30d"{% if period == "30d" %} selected{% endif %}>{{ chrome.t("releases-list-period-30d") }}</option>
     </select>
-    <button class="btn btn-secondary" type="submit">Filter</button>
+    <button class="btn btn-secondary" type="submit">{{ chrome.t("releases-filter-submit") }}</button>
   </form>
 
   {% if result.items.is_empty() %}
     <div class="card">
-      <p class="empty">
-        No releases yet. Set a <code class="text-mono">release</code> on your SDK and they'll appear here once events arrive.
-      </p>
+      <p class="empty">{{ chrome.t("releases-list-empty") |safe }}</p>
     </div>
   {% else %}
     <div class="card overflow-hidden">
@@ -55,30 +55,30 @@
         <table class="table">
           <thead>
             <tr>
-              <th>Version</th>
+              <th>{{ chrome.t("releases-col-version") }}</th>
               <th>
                 <a href="/web/releases/?sort=project_id{{ base_qs }}"
-                   {% if sort == "project_id" %}class="active-sort"{% endif %}>Project</a>
+                   {% if sort == "project_id" %}class="active-sort"{% endif %}>{{ chrome.t("releases-col-project") }}</a>
               </th>
               <th>
                 <a href="/web/releases/?sort=issues{{ base_qs }}"
-                   {% if sort == "issues" %}class="active-sort"{% endif %}>Issues</a>
+                   {% if sort == "issues" %}class="active-sort"{% endif %}>{{ chrome.t("releases-col-issues") }}</a>
               </th>
               <th>
                 <a href="/web/releases/?sort=events{{ base_qs }}"
-                   {% if sort == "events" %}class="active-sort"{% endif %}>Events</a>
+                   {% if sort == "events" %}class="active-sort"{% endif %}>{{ chrome.t("releases-col-events") }}</a>
               </th>
               <th>
                 <a href="/web/releases/?sort=adoption{{ base_qs }}"
-                   {% if sort == "adoption" %}class="active-sort"{% endif %}>Adoption</a>
+                   {% if sort == "adoption" %}class="active-sort"{% endif %}>{{ chrome.t("releases-col-adoption") }}</a>
               </th>
               <th class="hide-mobile">
                 <a href="/web/releases/?sort=first_seen{{ base_qs }}"
-                   {% if sort == "first_seen" %}class="active-sort"{% endif %}>First seen</a>
+                   {% if sort == "first_seen" %}class="active-sort"{% endif %}>{{ chrome.t("releases-col-first-seen") }}</a>
               </th>
               <th>
                 <a href="/web/releases/?{{ base_qs }}"
-                   {% if sort.is_empty() %}class="active-sort"{% endif %}>Last seen</a>
+                   {% if sort.is_empty() %}class="active-sort"{% endif %}>{{ chrome.t("releases-col-last-seen") }}</a>
               </th>
             </tr>
           </thead>
@@ -88,39 +88,38 @@
                 <td class="truncate-cell text-mono" title="{{ r.version }}">{{ r.version }}</td>
                 <td>
                   <a href="/web/projects/{{ r.project_id }}/">{% match r.project_name %}{% when Some with (n) %}{{ n }}{% when None %}{{ r.project_id }}{% endmatch %}</a>
-                </td>
-                <td class="text-tabular">{{ r.issue_count }}</td>
-                <td class="text-tabular">{{ r.event_count }}</td>
-                <td class="text-tabular">{{ r.adoption }}%</td>
-                <td class="hide-mobile text-muted">
-                  <time datetime="{{ r.first_seen|format_ts }}"
-                        title="{{ r.first_seen|format_ts }}">{{ r.first_seen|format_relative }}</time>
-                </td>
-                <td class="text-muted">
-                  <time datetime="{{ r.last_seen|format_ts }}"
-                        title="{{ r.last_seen|format_ts }}">{{ r.last_seen|format_relative }}</time>
-                </td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
+              </td>
+              <td class="text-tabular">{{ r.issue_count }}</td>
+              <td class="text-tabular">{{ r.event_count }}</td>
+              <td class="text-tabular">{{ r.adoption }}%</td>
+              <td class="hide-mobile text-muted">
+                <time datetime="{{ r.first_seen|format_ts }}"
+                      title="{{ r.first_seen|format_ts }}">{{ chrome.rel_time(r.first_seen) }}</time>
+              </td>
+              <td class="text-muted">
+                <time datetime="{{ r.last_seen|format_ts }}"
+                      title="{{ r.last_seen|format_ts }}">{{ chrome.rel_time(r.last_seen) }}</time>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
     </div>
+  </div>
 
-    <nav class="pagination" aria-label="Pagination">
-      <span>{{ result.total }} release
-        {%- if result.total != 1 %}s{% endif %}
-      </span>
-      <span class="flex gap-2">
-        {% if result.has_prev() %}
-          <a class="btn btn-ghost"
-             href="/web/releases/?offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}{{ filter_qs }}">« Previous</a>
-        {% endif %}
-        {% if result.has_next() %}
-          <a class="btn btn-ghost"
-             href="/web/releases/?offset={{ result.next_offset() }}&amp;limit={{ result.limit }}{{ filter_qs }}">Next »</a>
-        {% endif %}
-      </span>
-    </nav>
-  {% endif %}
+  <nav class="pagination"
+       aria-label="{{ chrome.t("releases-pagination-label") }}">
+    <span>{{ chrome.tv_count("releases-count", result.total as i64) }}</span>
+    <span class="flex gap-2">
+      {% if result.has_prev() %}
+        <a class="btn btn-ghost"
+           href="/web/releases/?offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}{{ filter_qs }}">{{ chrome.t("releases-pagination-prev") }}</a>
+      {% endif %}
+      {% if result.has_next() %}
+        <a class="btn btn-ghost"
+           href="/web/releases/?offset={{ result.next_offset() }}&amp;limit={{ result.limit }}{{ filter_qs }}">{{ chrome.t("releases-pagination-next") }}</a>
+      {% endif %}
+    </span>
+  </nav>
+{% endif %}
 {% endblock %}

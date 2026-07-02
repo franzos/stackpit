@@ -97,8 +97,7 @@ pub(super) async fn check_threshold_alerts(
         qb.push(")");
         if let Ok(rows) = qb.build().fetch_all(pool).await {
             for row in &rows {
-                project_orgs
-                    .insert(row.get::<i64, _>("project_id") as u64, row.get("org_id"));
+                project_orgs.insert(row.get::<i64, _>("project_id") as u64, row.get("org_id"));
             }
         }
     }
@@ -253,10 +252,7 @@ pub(super) async fn check_threshold_alerts(
                 if let Ok(rows) = qb.build().fetch_all(pool).await {
                     for row in &rows {
                         let pid = row.get::<i64, _>("project_id") as u64;
-                        event_counts.insert(
-                            (window, pid, row.get("fingerprint")),
-                            row.get("cnt"),
-                        );
+                        event_counts.insert((window, pid, row.get("fingerprint")), row.get("cnt"));
                     }
                 }
             }
@@ -320,12 +316,14 @@ mod tests {
     use sqlx::Row;
 
     async fn setup_org(pool: &crate::db::DbPool, slug: &str) -> i64 {
-        sqlx::query(sql!("INSERT INTO organizations (slug, name) VALUES (?1, ?2)"))
-            .bind(slug)
-            .bind(slug)
-            .execute(pool)
-            .await
-            .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO organizations (slug, name) VALUES (?1, ?2)"
+        ))
+        .bind(slug)
+        .bind(slug)
+        .execute(pool)
+        .await
+        .unwrap();
         sqlx::query(sql!("SELECT org_id FROM organizations WHERE slug = ?1"))
             .bind(slug)
             .fetch_one(pool)
@@ -357,15 +355,42 @@ mod tests {
         setup_project(&pool, 9502, org_b).await;
 
         // Global threshold rule (project_id NULL) in org_a with threshold=1.
-        create_alert_rule(&pool, org_a, None, None, "threshold", Some(1), Some(3600), 3600)
-            .await
-            .unwrap();
+        create_alert_rule(
+            &pool,
+            org_a,
+            None,
+            None,
+            "threshold",
+            Some(1),
+            Some(3600),
+            3600,
+        )
+        .await
+        .unwrap();
 
         // Insert events that would trigger the rule if org scoping were absent.
-        insert_test_event(&pool, "thr-e1", 9502, now - 10, Some("fp-thr"), Some("error"), Some("E"))
-            .await;
-        insert_test_issue(&pool, "fp-thr", 9502, Some("E"), Some("error"), now - 10, now - 10, 1, "unresolved")
-            .await;
+        insert_test_event(
+            &pool,
+            "thr-e1",
+            9502,
+            now - 10,
+            Some("fp-thr"),
+            Some("error"),
+            Some("E"),
+        )
+        .await;
+        insert_test_issue(
+            &pool,
+            "fp-thr",
+            9502,
+            Some("E"),
+            Some("error"),
+            now - 10,
+            now - 10,
+            1,
+            "unresolved",
+        )
+        .await;
 
         let candidates = vec![ThresholdCandidate {
             fingerprint: "fp-thr".to_string(),
@@ -392,14 +417,41 @@ mod tests {
         let org_a = setup_org(&pool, "thr-own-org-a").await;
         setup_project(&pool, 9601, org_a).await;
 
-        create_alert_rule(&pool, org_a, None, None, "threshold", Some(1), Some(3600), 3600)
-            .await
-            .unwrap();
+        create_alert_rule(
+            &pool,
+            org_a,
+            None,
+            None,
+            "threshold",
+            Some(1),
+            Some(3600),
+            3600,
+        )
+        .await
+        .unwrap();
 
-        insert_test_event(&pool, "thr-own-e1", 9601, now - 10, Some("fp-thr-own"), Some("error"), Some("E"))
-            .await;
-        insert_test_issue(&pool, "fp-thr-own", 9601, Some("E"), Some("error"), now - 10, now - 10, 1, "unresolved")
-            .await;
+        insert_test_event(
+            &pool,
+            "thr-own-e1",
+            9601,
+            now - 10,
+            Some("fp-thr-own"),
+            Some("error"),
+            Some("E"),
+        )
+        .await;
+        insert_test_issue(
+            &pool,
+            "fp-thr-own",
+            9601,
+            Some("E"),
+            Some("error"),
+            now - 10,
+            now - 10,
+            1,
+            "unresolved",
+        )
+        .await;
 
         let candidates = vec![ThresholdCandidate {
             fingerprint: "fp-thr-own".to_string(),

@@ -32,6 +32,7 @@ fn map_alert_rule(row: &crate::db::DbRow) -> AlertRule {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn create_alert_rule(
     pool: &DbPool,
     org_id: i64,
@@ -111,11 +112,13 @@ pub async fn delete_alert_rule(pool: &DbPool, id: i64, org_id: i64) -> Result<u6
     .bind(org_id)
     .execute(&mut *tx)
     .await?;
-    let result = sqlx::query(sql!("DELETE FROM alert_rules WHERE id = ?1 AND org_id = ?2"))
-        .bind(id)
-        .bind(org_id)
-        .execute(&mut *tx)
-        .await?;
+    let result = sqlx::query(sql!(
+        "DELETE FROM alert_rules WHERE id = ?1 AND org_id = ?2"
+    ))
+    .bind(id)
+    .bind(org_id)
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
     Ok(result.rows_affected())
 }
@@ -508,14 +511,30 @@ mod tests {
         let pool = open_test_db().await;
 
         // global rule (project_id = NULL)
-        let global =
-            create_alert_rule(&pool, 1, None, None, "threshold", Some(10), Some(3600), 3600)
-                .await
-                .unwrap();
-        let specific =
-            create_alert_rule(&pool, 1, Some(1), None, "threshold", Some(5), Some(1800), 3600)
-                .await
-                .unwrap();
+        let global = create_alert_rule(
+            &pool,
+            1,
+            None,
+            None,
+            "threshold",
+            Some(10),
+            Some(3600),
+            3600,
+        )
+        .await
+        .unwrap();
+        let specific = create_alert_rule(
+            &pool,
+            1,
+            Some(1),
+            None,
+            "threshold",
+            Some(5),
+            Some(1800),
+            3600,
+        )
+        .await
+        .unwrap();
         // rule for a different project
         create_alert_rule(
             &pool,
@@ -577,7 +596,9 @@ mod tests {
     async fn digest_schedule_crud() {
         let pool = open_test_db().await;
 
-        let id = create_digest_schedule(&pool, 1, Some(1), 86400).await.unwrap();
+        let id = create_digest_schedule(&pool, 1, Some(1), 86400)
+            .await
+            .unwrap();
         assert!(id > 0);
 
         let schedule = get_digest_schedule(&pool, id).await.unwrap().unwrap();
@@ -678,12 +699,14 @@ mod tests {
 
         let pool = open_test_db().await;
 
-        sqlx::query(sql!("INSERT INTO organizations (slug, name) VALUES (?1, ?2)"))
-            .bind("alert-org-a")
-            .bind("Alert Org A")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO organizations (slug, name) VALUES (?1, ?2)"
+        ))
+        .bind("alert-org-a")
+        .bind("Alert Org A")
+        .execute(&pool)
+        .await
+        .unwrap();
         let org_a: i64 = sqlx::query(sql!("SELECT org_id FROM organizations WHERE slug = ?1"))
             .bind("alert-org-a")
             .fetch_one(&pool)
@@ -691,12 +714,14 @@ mod tests {
             .unwrap()
             .get("org_id");
 
-        sqlx::query(sql!("INSERT INTO organizations (slug, name) VALUES (?1, ?2)"))
-            .bind("alert-org-b")
-            .bind("Alert Org B")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO organizations (slug, name) VALUES (?1, ?2)"
+        ))
+        .bind("alert-org-b")
+        .bind("Alert Org B")
+        .execute(&pool)
+        .await
+        .unwrap();
         let org_b: i64 = sqlx::query(sql!("SELECT org_id FROM organizations WHERE slug = ?1"))
             .bind("alert-org-b")
             .fetch_one(&pool)
@@ -704,12 +729,30 @@ mod tests {
             .unwrap()
             .get("org_id");
 
-        create_alert_rule(&pool, org_a, None, None, "threshold", Some(10), Some(3600), 3600)
-            .await
-            .unwrap();
-        create_alert_rule(&pool, org_b, None, None, "threshold", Some(20), Some(3600), 3600)
-            .await
-            .unwrap();
+        create_alert_rule(
+            &pool,
+            org_a,
+            None,
+            None,
+            "threshold",
+            Some(10),
+            Some(3600),
+            3600,
+        )
+        .await
+        .unwrap();
+        create_alert_rule(
+            &pool,
+            org_b,
+            None,
+            None,
+            "threshold",
+            Some(20),
+            Some(3600),
+            3600,
+        )
+        .await
+        .unwrap();
 
         let rules_a = list_alert_rules(&pool, None, Some(org_a)).await.unwrap();
         assert_eq!(rules_a.len(), 1);
@@ -729,12 +772,14 @@ mod tests {
 
         let pool = open_test_db().await;
 
-        sqlx::query(sql!("INSERT INTO organizations (slug, name) VALUES (?1, ?2)"))
-            .bind("upd-org-a")
-            .bind("Upd Org A")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO organizations (slug, name) VALUES (?1, ?2)"
+        ))
+        .bind("upd-org-a")
+        .bind("Upd Org A")
+        .execute(&pool)
+        .await
+        .unwrap();
         let org_a: i64 = sqlx::query(sql!("SELECT org_id FROM organizations WHERE slug = ?1"))
             .bind("upd-org-a")
             .fetch_one(&pool)
@@ -744,10 +789,9 @@ mod tests {
 
         let org_b = org_a + 9999;
 
-        let id =
-            create_alert_rule(&pool, org_a, None, None, "threshold", Some(5), Some(60), 60)
-                .await
-                .unwrap();
+        let id = create_alert_rule(&pool, org_a, None, None, "threshold", Some(5), Some(60), 60)
+            .await
+            .unwrap();
 
         // cross-org update must affect 0 rows
         let affected = update_alert_rule(&pool, id, org_b, Some(99), None, 60, true)
@@ -769,12 +813,14 @@ mod tests {
 
         let pool = open_test_db().await;
 
-        sqlx::query(sql!("INSERT INTO organizations (slug, name) VALUES (?1, ?2)"))
-            .bind("del-org-a")
-            .bind("Del Org A")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO organizations (slug, name) VALUES (?1, ?2)"
+        ))
+        .bind("del-org-a")
+        .bind("Del Org A")
+        .execute(&pool)
+        .await
+        .unwrap();
         let org_a: i64 = sqlx::query(sql!("SELECT org_id FROM organizations WHERE slug = ?1"))
             .bind("del-org-a")
             .fetch_one(&pool)
@@ -784,10 +830,9 @@ mod tests {
 
         let org_b = org_a + 9999;
 
-        let id =
-            create_alert_rule(&pool, org_a, None, None, "threshold", Some(5), Some(60), 60)
-                .await
-                .unwrap();
+        let id = create_alert_rule(&pool, org_a, None, None, "threshold", Some(5), Some(60), 60)
+            .await
+            .unwrap();
 
         // cross-org delete must affect 0 rows and leave the rule intact
         let affected = delete_alert_rule(&pool, id, org_b).await.unwrap();
@@ -807,12 +852,14 @@ mod tests {
 
         let pool = open_test_db().await;
 
-        sqlx::query(sql!("INSERT INTO organizations (slug, name) VALUES (?1, ?2)"))
-            .bind("digest-org-a")
-            .bind("Digest Org A")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO organizations (slug, name) VALUES (?1, ?2)"
+        ))
+        .bind("digest-org-a")
+        .bind("Digest Org A")
+        .execute(&pool)
+        .await
+        .unwrap();
         let org_a: i64 = sqlx::query(sql!("SELECT org_id FROM organizations WHERE slug = ?1"))
             .bind("digest-org-a")
             .fetch_one(&pool)
@@ -820,12 +867,14 @@ mod tests {
             .unwrap()
             .get("org_id");
 
-        sqlx::query(sql!("INSERT INTO organizations (slug, name) VALUES (?1, ?2)"))
-            .bind("digest-org-b")
-            .bind("Digest Org B")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO organizations (slug, name) VALUES (?1, ?2)"
+        ))
+        .bind("digest-org-b")
+        .bind("Digest Org B")
+        .execute(&pool)
+        .await
+        .unwrap();
         let org_b: i64 = sqlx::query(sql!("SELECT org_id FROM organizations WHERE slug = ?1"))
             .bind("digest-org-b")
             .fetch_one(&pool)
@@ -833,8 +882,12 @@ mod tests {
             .unwrap()
             .get("org_id");
 
-        create_digest_schedule(&pool, org_a, None, 3600).await.unwrap();
-        create_digest_schedule(&pool, org_b, None, 7200).await.unwrap();
+        create_digest_schedule(&pool, org_a, None, 3600)
+            .await
+            .unwrap();
+        create_digest_schedule(&pool, org_b, None, 7200)
+            .await
+            .unwrap();
 
         let schedules_a = list_digest_schedules(&pool, Some(org_a)).await.unwrap();
         assert_eq!(schedules_a.len(), 1);
@@ -856,12 +909,14 @@ mod tests {
 
         let pool = open_test_db().await;
 
-        sqlx::query(sql!("INSERT INTO organizations (slug, name) VALUES (?1, ?2)"))
-            .bind("dupd-org-a")
-            .bind("DUpd Org A")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO organizations (slug, name) VALUES (?1, ?2)"
+        ))
+        .bind("dupd-org-a")
+        .bind("DUpd Org A")
+        .execute(&pool)
+        .await
+        .unwrap();
         let org_a: i64 = sqlx::query(sql!("SELECT org_id FROM organizations WHERE slug = ?1"))
             .bind("dupd-org-a")
             .fetch_one(&pool)
@@ -871,14 +926,20 @@ mod tests {
 
         let org_b = org_a + 9999;
 
-        let id = create_digest_schedule(&pool, org_a, None, 3600).await.unwrap();
+        let id = create_digest_schedule(&pool, org_a, None, 3600)
+            .await
+            .unwrap();
 
         // cross-org update must affect 0 rows
-        let affected = update_digest_schedule(&pool, id, org_b, 7200, false).await.unwrap();
+        let affected = update_digest_schedule(&pool, id, org_b, 7200, false)
+            .await
+            .unwrap();
         assert_eq!(affected, 0);
 
         // own-org update must succeed
-        let affected = update_digest_schedule(&pool, id, org_a, 7200, false).await.unwrap();
+        let affected = update_digest_schedule(&pool, id, org_a, 7200, false)
+            .await
+            .unwrap();
         assert_eq!(affected, 1);
     }
 
@@ -889,12 +950,14 @@ mod tests {
 
         let pool = open_test_db().await;
 
-        sqlx::query(sql!("INSERT INTO organizations (slug, name) VALUES (?1, ?2)"))
-            .bind("ddel-org-a")
-            .bind("DDel Org A")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO organizations (slug, name) VALUES (?1, ?2)"
+        ))
+        .bind("ddel-org-a")
+        .bind("DDel Org A")
+        .execute(&pool)
+        .await
+        .unwrap();
         let org_a: i64 = sqlx::query(sql!("SELECT org_id FROM organizations WHERE slug = ?1"))
             .bind("ddel-org-a")
             .fetch_one(&pool)
@@ -904,7 +967,9 @@ mod tests {
 
         let org_b = org_a + 9999;
 
-        let id = create_digest_schedule(&pool, org_a, None, 3600).await.unwrap();
+        let id = create_digest_schedule(&pool, org_a, None, 3600)
+            .await
+            .unwrap();
 
         // cross-org delete must affect 0 rows
         let affected = delete_digest_schedule(&pool, id, org_b).await.unwrap();
@@ -926,12 +991,14 @@ mod tests {
         let pool = open_test_db().await;
         let now = chrono::Utc::now().timestamp();
 
-        sqlx::query(sql!("INSERT INTO organizations (slug, name) VALUES (?1, ?2)"))
-            .bind("bdd-org-a")
-            .bind("BDD Org A")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO organizations (slug, name) VALUES (?1, ?2)"
+        ))
+        .bind("bdd-org-a")
+        .bind("BDD Org A")
+        .execute(&pool)
+        .await
+        .unwrap();
         let org_a: i64 = sqlx::query(sql!("SELECT org_id FROM organizations WHERE slug = ?1"))
             .bind("bdd-org-a")
             .fetch_one(&pool)
@@ -939,12 +1006,14 @@ mod tests {
             .unwrap()
             .get("org_id");
 
-        sqlx::query(sql!("INSERT INTO organizations (slug, name) VALUES (?1, ?2)"))
-            .bind("bdd-org-b")
-            .bind("BDD Org B")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO organizations (slug, name) VALUES (?1, ?2)"
+        ))
+        .bind("bdd-org-b")
+        .bind("BDD Org B")
+        .execute(&pool)
+        .await
+        .unwrap();
         let org_b: i64 = sqlx::query(sql!("SELECT org_id FROM organizations WHERE slug = ?1"))
             .bind("bdd-org-b")
             .fetch_one(&pool)
@@ -972,27 +1041,70 @@ mod tests {
         .await
         .unwrap();
 
-        insert_test_event(&pool, "bdd-e1", 7001, now - 10, Some("fp-bdd-a"), Some("error"), Some("E"))
-            .await;
-        insert_test_issue(&pool, "fp-bdd-a", 7001, Some("E"), Some("error"), now - 10, now - 10, 1, "unresolved")
-            .await;
-        insert_test_event(&pool, "bdd-e2", 7002, now - 10, Some("fp-bdd-b"), Some("error"), Some("F"))
-            .await;
-        insert_test_issue(&pool, "fp-bdd-b", 7002, Some("F"), Some("error"), now - 10, now - 10, 1, "unresolved")
-            .await;
+        insert_test_event(
+            &pool,
+            "bdd-e1",
+            7001,
+            now - 10,
+            Some("fp-bdd-a"),
+            Some("error"),
+            Some("E"),
+        )
+        .await;
+        insert_test_issue(
+            &pool,
+            "fp-bdd-a",
+            7001,
+            Some("E"),
+            Some("error"),
+            now - 10,
+            now - 10,
+            1,
+            "unresolved",
+        )
+        .await;
+        insert_test_event(
+            &pool,
+            "bdd-e2",
+            7002,
+            now - 10,
+            Some("fp-bdd-b"),
+            Some("error"),
+            Some("F"),
+        )
+        .await;
+        insert_test_issue(
+            &pool,
+            "fp-bdd-b",
+            7002,
+            Some("F"),
+            Some("error"),
+            now - 10,
+            now - 10,
+            1,
+            "unresolved",
+        )
+        .await;
 
         // Global digest for org_a: only org_a's project_id 7001 should appear.
         let data = build_digest_data(&pool, now - 100, now, org_a, None)
             .await
             .unwrap();
-        assert_eq!(data.len(), 1, "global digest for org_a must not include org_b projects");
+        assert_eq!(
+            data.len(),
+            1,
+            "global digest for org_a must not include org_b projects"
+        );
         assert_eq!(data[0].project_id, 7001);
 
         // Per-project digest for org_b project_id=7001 (wrong org): must return empty.
         let data_wrong = build_digest_data(&pool, now - 100, now, org_b, Some(7001))
             .await
             .unwrap();
-        assert!(data_wrong.is_empty(), "digest for foreign project_id must return empty");
+        assert!(
+            data_wrong.is_empty(),
+            "digest for foreign project_id must return empty"
+        );
 
         // Per-project digest for correct org+project: must return data.
         let data_ok = build_digest_data(&pool, now - 100, now, org_a, Some(7001))
@@ -1010,12 +1122,14 @@ mod tests {
 
         let pool = open_test_db().await;
 
-        sqlx::query(sql!("INSERT INTO organizations (slug, name) VALUES (?1, ?2)"))
-            .bind("fix4-org-a")
-            .bind("Fix4 Org A")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO organizations (slug, name) VALUES (?1, ?2)"
+        ))
+        .bind("fix4-org-a")
+        .bind("Fix4 Org A")
+        .execute(&pool)
+        .await
+        .unwrap();
         let org_a: i64 = sqlx::query(sql!("SELECT org_id FROM organizations WHERE slug = ?1"))
             .bind("fix4-org-a")
             .fetch_one(&pool)
@@ -1023,12 +1137,14 @@ mod tests {
             .unwrap()
             .get("org_id");
 
-        sqlx::query(sql!("INSERT INTO organizations (slug, name) VALUES (?1, ?2)"))
-            .bind("fix4-org-b")
-            .bind("Fix4 Org B")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO organizations (slug, name) VALUES (?1, ?2)"
+        ))
+        .bind("fix4-org-b")
+        .bind("Fix4 Org B")
+        .execute(&pool)
+        .await
+        .unwrap();
         let org_b: i64 = sqlx::query(sql!("SELECT org_id FROM organizations WHERE slug = ?1"))
             .bind("fix4-org-b")
             .fetch_one(&pool)
@@ -1036,21 +1152,24 @@ mod tests {
             .unwrap()
             .get("org_id");
 
-        sqlx::query(sql!("INSERT INTO projects (project_id, org_id) VALUES (?1, ?2)"))
-            .bind(8801i64)
-            .bind(org_a)
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO projects (project_id, org_id) VALUES (?1, ?2)"
+        ))
+        .bind(8801i64)
+        .bind(org_a)
+        .execute(&pool)
+        .await
+        .unwrap();
 
         // org_b must not be allowed to create a rule scoped to org_a's project.
-        let guard =
-            crate::queries::orgs::assert_project_in_org(&pool, 8801, org_b).await;
-        assert!(guard.is_err(), "foreign project_id must be rejected before rule insertion");
+        let guard = crate::queries::orgs::assert_project_in_org(&pool, 8801, org_b).await;
+        assert!(
+            guard.is_err(),
+            "foreign project_id must be rejected before rule insertion"
+        );
 
         // org_a can create it.
-        let guard_ok =
-            crate::queries::orgs::assert_project_in_org(&pool, 8801, org_a).await;
+        let guard_ok = crate::queries::orgs::assert_project_in_org(&pool, 8801, org_a).await;
         assert!(guard_ok.is_ok());
     }
 }

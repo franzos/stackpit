@@ -2,8 +2,9 @@ use askama::Template;
 use axum::extract::{Query, State};
 
 use crate::extractors::ReadPool;
+use crate::html::chrome::PageChrome;
 use crate::html::render_template;
-use crate::html::utils::{build_filter_qs, period_to_timestamp, Csrf, ListParams};
+use crate::html::utils::{build_filter_qs, period_to_timestamp, Chrome, ListParams};
 use crate::orgs::extractor::ActiveOrg;
 use crate::queries;
 use crate::queries::types::{PagedResult, ReleaseFilter};
@@ -24,13 +25,13 @@ struct ReleaseListTemplate {
     period: String,
     filter_qs: String,
     base_qs: String,
-    csrf_token: String,
+    chrome: PageChrome,
 }
 
 pub async fn handler(
     State(_state): State<AppState>,
     ReadPool(pool): ReadPool,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Query(params): Query<ListParams>,
     active: ActiveOrg,
 ) -> Result<axum::response::Response, HtmlError> {
@@ -47,11 +48,14 @@ pub async fn handler(
         sort: params.sort.filter(|s| !s.is_empty()),
     };
     let page = params.page.page();
-    let org_id = if active.role.is_none() { None } else { Some(active.org_id) };
+    let org_id = if active.role.is_none() {
+        None
+    } else {
+        Some(active.org_id)
+    };
 
     let result =
-        queries::releases::list_all_releases(&pool, &filter, &page, adoption_since, org_id)
-            .await?;
+        queries::releases::list_all_releases(&pool, &filter, &page, adoption_since, org_id).await?;
 
     let (base_qs, filter_qs) = build_filter_qs(
         &[
@@ -70,7 +74,7 @@ pub async fn handler(
         period: period_str,
         filter_qs,
         base_qs,
-        csrf_token: csrf,
+        chrome,
     };
 
     Ok(render_template(&tmpl))

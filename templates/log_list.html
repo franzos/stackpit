@@ -1,23 +1,23 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
 
-{% block title %}Logs — {{ nav.label }} — Stackpit{% endblock %}
+{% block title %}{{ chrome.t("nav-logs") }} — {{ nav.label }} {{ chrome.t("logs-title-suffix") }}{% endblock %}
 
 {% block sidebar_nav %}
-  {% call m::project_sidebar(project_id, nav, "logs") %}
+  {% call m::project_sidebar(chrome, project_id, nav, "logs") %}
   {% endcall %}
 {% endblock %}
 
 {% block breadcrumbs %}
   <span class="breadcrumb-sep">/</span>
-  <a class="breadcrumb-link" href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
+  <a class="breadcrumb-link" href="/web/projects/{{ project_id }}/"><bdi>{{ nav.label }}</bdi></a>
   <span class="breadcrumb-sep">/</span>
-  <span class="breadcrumb-current">Logs</span>
+  <span class="breadcrumb-current">{{ chrome.t("nav-logs") }}</span>
 {% endblock %}
 
 {% block content %}
   <div class="page-header">
-    <h1>Logs</h1>
+    <h1>{{ chrome.t("nav-logs") }}</h1>
   </div>
 
   <form class="filter-form"
@@ -26,23 +26,25 @@
     <input class="input"
            type="text"
            name="query"
-           placeholder="Search logs…"
+           placeholder="{{ chrome.t("logs-list-search-placeholder") }}"
            value="{{ query }}"
-           aria-label="Search logs">
-    <select class="select w-auto" name="level" aria-label="Filter by level">
-      <option value="">All levels</option>
+           aria-label="{{ chrome.t("logs-list-search-label") }}">
+    <select class="select w-auto"
+            name="level"
+            aria-label="{{ chrome.t("logs-list-filter-level") }}">
+      <option value="">{{ chrome.t("logs-list-level-all") }}</option>
       <option value="error"{% if level == "error" %} selected{% endif %}>error</option>
       <option value="warning"{% if level == "warning" %} selected{% endif %}>warning</option>
       <option value="info"{% if level == "info" %} selected{% endif %}>info</option>
       <option value="debug"{% if level == "debug" %} selected{% endif %}>debug</option>
       <option value="trace"{% if level == "trace" %} selected{% endif %}>trace</option>
     </select>
-    <button class="btn btn-secondary" type="submit">Filter</button>
+    <button class="btn btn-secondary" type="submit">{{ chrome.t("logs-filter-submit") }}</button>
   </form>
 
   {% if result.items.is_empty() %}
     <div class="card">
-      <p class="empty">No logs match the current filters.</p>
+      <p class="empty">{{ chrome.t("logs-list-empty") }}</p>
     </div>
   {% else %}
 
@@ -51,11 +53,11 @@
         <table class="table">
           <thead>
             <tr>
-              <th class="w-44">Timestamp</th>
-              <th class="w-24">Level</th>
-              <th>Body</th>
-              <th class="hide-mobile">Trace</th>
-              <th class="hide-mobile">Release</th>
+              <th class="w-44">{{ chrome.t("logs-col-timestamp") }}</th>
+              <th class="w-24">{{ chrome.t("logs-col-level") }}</th>
+              <th>{{ chrome.t("logs-col-body") }}</th>
+              <th class="hide-mobile">{{ chrome.t("logs-col-trace") }}</th>
+              <th class="hide-mobile">{{ chrome.t("logs-col-release") }}</th>
             </tr>
           </thead>
           <tbody>
@@ -63,42 +65,41 @@
               <tr>
                 <td class="text-muted text-mono text-[12px] nowrap">
                   <time datetime="{{ log.timestamp|format_ts }}"
-                        title="{{ log.timestamp|format_ts }}">{{ log.timestamp|format_relative }}</time>
+                        title="{{ log.timestamp|format_ts }}">{{ chrome.rel_time(log.timestamp) }}</time>
                 </td>
                 <td>
                   {% match log.level %}{% when Some with (lvl) %}<span class="log-level log-level-{{ lvl }}">{{ lvl }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
-                </td>
-                <td class="truncate-cell text-mono text-[12px]"
-                    title="{% match log.body %}{% when Some with (b) %}{{ b }}{% when None %}{% endmatch %}">
-                  {% match log.body %}{% when Some with (b) %}{{ b }}{% when None %}<span class="text-muted">(empty)</span>{% endmatch %}
-                </td>
-                <td class="hide-mobile">
-                  {% match log.trace_id %}{% when Some with (tid) %}<code class="text-mono text-[12px]" title="{{ tid }}">{{ tid|truncate_id }}</code>{% when None %}<span class="text-muted">—</span>{% endmatch %}
-                </td>
-                <td class="hide-mobile text-mono text-[12px]">
-                  {% match log.release %}{% when Some with (r) %}{{ r }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
-                </td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </div>
+              </td>
+              <td class="truncate-cell text-mono text-[12px]"
+                  title="{% match log.body %}{% when Some with (b) %}{{ b }}{% when None %}{% endmatch %}">
+              {% match log.body %}{% when Some with (b) %}{{ b }}{% when None %}<span class="text-muted">{{ chrome.t("logs-body-empty") }}</span>{% endmatch %}
+          </td>
+          <td class="hide-mobile">
+            {% match log.trace_id %}{% when Some with (tid) %}<code class="text-mono text-[12px]" title="{{ tid }}">{{ tid|truncate_id }}</code>{% when None %}<span class="text-muted">—</span>{% endmatch %}
+        </td>
+        <td class="hide-mobile text-mono text-[12px]">
+          {% match log.release %}{% when Some with (r) %}{{ r }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
+      </td>
+    </tr>
+  {% endfor %}
+</tbody>
+</table>
+</div>
+</div>
 
-    <nav class="pagination" aria-label="Pagination">
-      <span>{{ result.total }} log
-        {%- if result.total != 1 %}s{% endif %}
-      </span>
-      <span class="flex gap-2">
-        {% if result.has_prev() %}
-          <a class="btn btn-ghost"
-             href="/web/projects/{{ project_id }}/logs/?offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}{{ filter_qs }}">« Previous</a>
-        {% endif %}
-        {% if result.has_next() %}
-          <a class="btn btn-ghost"
-             href="/web/projects/{{ project_id }}/logs/?offset={{ result.next_offset() }}&amp;limit={{ result.limit }}{{ filter_qs }}">Next »</a>
-        {% endif %}
-      </span>
-    </nav>
-  {% endif %}
+<nav class="pagination"
+     aria-label="{{ chrome.t("logs-pagination-label") }}">
+  <span>{{ chrome.tv_count("logs-count", result.total as i64) }}</span>
+  <span class="flex gap-2">
+    {% if result.has_prev() %}
+      <a class="btn btn-ghost"
+         href="/web/projects/{{ project_id }}/logs/?offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}{{ filter_qs }}">{{ chrome.t("logs-pagination-prev") }}</a>
+    {% endif %}
+    {% if result.has_next() %}
+      <a class="btn btn-ghost"
+         href="/web/projects/{{ project_id }}/logs/?offset={{ result.next_offset() }}&amp;limit={{ result.limit }}{{ filter_qs }}">{{ chrome.t("logs-pagination-next") }}</a>
+    {% endif %}
+  </span>
+</nav>
+{% endif %}
 {% endblock %}

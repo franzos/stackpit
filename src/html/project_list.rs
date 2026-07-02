@@ -3,8 +3,9 @@ use axum::extract::{Query, RawQuery, State};
 use axum::response::IntoResponse;
 
 use crate::extractors::{BrowserDefaults, ReadPool};
+use crate::html::chrome::PageChrome;
 use crate::html::render_template;
-use crate::html::utils::{defaults_redirect_url, period_to_timestamp, Csrf, ListParams};
+use crate::html::utils::{defaults_redirect_url, period_to_timestamp, Chrome, ListParams};
 use crate::orgs::extractor::ActiveOrg;
 use crate::queries;
 use crate::server::AppState;
@@ -21,7 +22,7 @@ struct ProjectListTemplate {
     sort: String,
     query: String,
     period: String,
-    csrf_token: String,
+    chrome: PageChrome,
 }
 
 pub async fn handler(
@@ -29,7 +30,7 @@ pub async fn handler(
     RawQuery(raw_qs): RawQuery,
     State(_state): State<AppState>,
     ReadPool(pool): ReadPool,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Query(params): Query<ListParams>,
     active_org: ActiveOrg,
 ) -> Result<axum::response::Response, HtmlError> {
@@ -58,7 +59,78 @@ pub async fn handler(
         sort: sort_str,
         query: query_str,
         period: period_str,
-        csrf_token: csrf,
+        chrome,
     };
     Ok(render_template(&tmpl))
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+
+    // Pre-i18n-retrofit baseline: empty projects avoids timestamp filters so
+    // the render is deterministic.
+    #[test]
+    fn project_list_renders_stable() {
+        let tmpl = ProjectListTemplate {
+            projects: Vec::new(),
+            sort: String::new(),
+            query: String::new(),
+            period: "7d".to_string(),
+            chrome: PageChrome::new(
+                "test-csrf-token".into(),
+                crate::locale::default_locale(),
+                "/web/projects/".into(),
+            ),
+        };
+        insta::assert_snapshot!(tmpl.render().unwrap());
+    }
+
+    // Proves the base.html chrome flip renders `lang="de" dir="ltr"` and that a
+    // full base-extending page carries no missing localization keys in German.
+    #[test]
+    fn project_list_renders_german_without_missing_keys() {
+        let tmpl = ProjectListTemplate {
+            projects: Vec::new(),
+            sort: String::new(),
+            query: String::new(),
+            period: "7d".to_string(),
+            chrome: PageChrome::new(
+                "test-csrf-token".into(),
+                "de".parse().unwrap(),
+                "/web/projects/".into(),
+            ),
+        };
+        let html = tmpl.render().expect("project list renders");
+        assert!(
+            html.contains(r#"lang="de""#) && html.contains(r#"dir="ltr""#),
+            "expected the German chrome language attributes in the output"
+        );
+        assert!(
+            !html.contains(crate::i18n::MISSING_PREFIX),
+            "German project-list render leaked a missing localization key: {html}"
+        );
+    }
+
+    // Proves the dir wiring end to end for an RTL locale (Arabic ships no
+    // content, so this only asserts the chrome direction attributes).
+    #[test]
+    fn project_list_renders_rtl_dir_for_arabic() {
+        let tmpl = ProjectListTemplate {
+            projects: Vec::new(),
+            sort: String::new(),
+            query: String::new(),
+            period: "7d".to_string(),
+            chrome: PageChrome::new(
+                "test-csrf-token".into(),
+                "ar".parse().unwrap(),
+                "/web/projects/".into(),
+            ),
+        };
+        let html = tmpl.render().expect("project list renders");
+        assert!(
+            html.contains(r#"lang="ar""#) && html.contains(r#"dir="rtl""#),
+            "expected the Arabic RTL chrome attributes in the output"
+        );
+    }
 }

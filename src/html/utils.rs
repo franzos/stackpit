@@ -5,19 +5,25 @@ use axum::http::StatusCode;
 use serde::Deserialize;
 
 use crate::db::DbPool;
+use crate::html::chrome::PageChrome;
 use crate::html::{render_template, HtmlError};
 use crate::middleware::CsrfToken;
 use crate::queries;
 use crate::queries::types::Pagination;
 use crate::queries::ProjectNavCounts;
 
-/// Pulls the per-session CSRF token from request extensions. Infallible:
-/// falls back to an empty string when the middleware skipped insertion
-/// (no-auth pass-through); those same paths are CSRF-exempt, so mutating
-/// /web/ POSTs from non-authed contexts already 403.
-pub struct Csrf(pub String);
+/// The persisted `preferred_language` for the current user, stashed by the
+/// web-auth middleware on the sp_grant path. Absent for admin-token and
+/// no-auth modes (no user row), so readers treat it as `Option`.
+#[derive(Clone)]
+pub struct PreferredLanguage(pub Option<String>);
 
-impl<S> axum::extract::FromRequestParts<S> for Csrf
+/// Builds the per-page shell (CSRF + resolved locale) from request extensions.
+/// Infallible, mirroring [`Csrf`]: reads the CSRF token the same way and
+/// resolves the locale via the ladder, defaulting to `en` when nothing matches.
+pub struct Chrome(pub PageChrome);
+
+impl<S> axum::extract::FromRequestParts<S> for Chrome
 where
     S: Send + Sync,
 {
@@ -27,13 +33,23 @@ where
         parts: &mut axum::http::request::Parts,
         _state: &S,
     ) -> Result<Self, Self::Rejection> {
-        Ok(Csrf(
-            parts
-                .extensions
-                .get::<CsrfToken>()
-                .map(|t| t.0.clone())
-                .unwrap_or_default(),
-        ))
+        let csrf = parts
+            .extensions
+            .get::<CsrfToken>()
+            .map(|t| t.0.clone())
+            .unwrap_or_default();
+        let pref = parts
+            .extensions
+            .get::<PreferredLanguage>()
+            .and_then(|p| p.0.clone());
+        let locale = crate::html::chrome::resolve_locale(parts, pref.as_deref());
+        let path = parts
+            .uri
+            .path_and_query()
+            .map(|p| p.as_str())
+            .unwrap_or("/web/projects/")
+            .to_string();
+        Ok(Chrome(PageChrome::new(csrf, locale, path)))
     }
 }
 
@@ -42,6 +58,7 @@ where
 /// returned id can still use this.
 pub async fn query_then_render<T, F, Fut>(
     result: anyhow::Result<T>,
+    chrome: &PageChrome,
     success_msg: &str,
     render: F,
 ) -> axum::response::Response
@@ -51,7 +68,7 @@ where
 {
     match result {
         Ok(_) => render(Some(success_msg.to_string())).await,
-        Err(e) => render(Some(format!("Error: {e}"))).await,
+        Err(e) => render(Some(chrome.err(e))).await,
     }
 }
 
@@ -61,16 +78,16 @@ where
 pub async fn render_project_list<T, F, Tmpl>(
     pool: &DbPool,
     project_id: u64,
-    csrf: String,
+    chrome: PageChrome,
     result: T,
     build: F,
 ) -> axum::response::Response
 where
-    F: FnOnce(u64, T, ProjectNavCounts, String) -> Tmpl,
+    F: FnOnce(u64, T, ProjectNavCounts, PageChrome) -> Tmpl,
     Tmpl: Template,
 {
     let nav = queries::projects::get_nav_counts(pool, project_id).await;
-    render_template(&build(project_id, result, nav, csrf))
+    render_template(&build(project_id, result, nav, chrome))
 }
 
 /// Like [`render_project_list`] for detail pages: resolves an `Option` row,
@@ -78,20 +95,20 @@ where
 pub async fn render_project_detail<T, F, Tmpl>(
     pool: &DbPool,
     project_id: u64,
-    csrf: String,
+    chrome: PageChrome,
     item: Option<T>,
     not_found: &str,
     build: F,
 ) -> Result<axum::response::Response, HtmlError>
 where
-    F: FnOnce(u64, T, ProjectNavCounts, String) -> Tmpl,
+    F: FnOnce(u64, T, ProjectNavCounts, PageChrome) -> Tmpl,
     Tmpl: Template,
 {
     let Some(item) = item else {
         return Err(HtmlError(StatusCode::NOT_FOUND, not_found.into()));
     };
     let nav = queries::projects::get_nav_counts(pool, project_id).await;
-    Ok(render_template(&build(project_id, item, nav, csrf)))
+    Ok(render_template(&build(project_id, item, nav, chrome)))
 }
 
 /// Shared query params for all list pages. Unused fields stay `None`.

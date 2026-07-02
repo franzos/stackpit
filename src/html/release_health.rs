@@ -1,6 +1,7 @@
 use askama::Template;
 
 use crate::extractors::ProjectPageCtx;
+use crate::html::chrome::PageChrome;
 use crate::html::render_template;
 use crate::queries;
 use crate::queries::types::ReleaseHealth;
@@ -20,7 +21,7 @@ struct ReleaseHealthTemplate {
     releases: Vec<ReleaseHealthRow>,
     chart: String,
     nav: ProjectNavCounts,
-    csrf_token: String,
+    chrome: PageChrome,
 }
 
 /// Display row with crash-free metrics recomputed defensively so they can never
@@ -90,7 +91,7 @@ pub async fn handler(ctx: ProjectPageCtx) -> Result<axum::response::Response, Ht
         releases,
         chart,
         nav: ctx.nav,
-        csrf_token: ctx.csrf_token,
+        chrome: ctx.chrome,
     };
     Ok(render_template(&tmpl))
 }

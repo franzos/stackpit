@@ -1,30 +1,28 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
 
-{% block title %}Monitors — {{ nav.label }} — Stackpit{% endblock %}
+{% block title %}{{ chrome.t("nav-monitors") }} — {{ nav.label }} {{ chrome.t("monitors-title-suffix") }}{% endblock %}
 
 {% block sidebar_nav %}
-  {% call m::project_sidebar(project_id, nav, "monitors") %}
+  {% call m::project_sidebar(chrome, project_id, nav, "monitors") %}
   {% endcall %}
 {% endblock %}
 
 {% block breadcrumbs %}
   <span class="breadcrumb-sep">/</span>
-  <a class="breadcrumb-link" href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
+  <a class="breadcrumb-link" href="/web/projects/{{ project_id }}/"><bdi>{{ nav.label }}</bdi></a>
   <span class="breadcrumb-sep">/</span>
-  <span class="breadcrumb-current">Monitors</span>
+  <span class="breadcrumb-current">{{ chrome.t("nav-monitors") }}</span>
 {% endblock %}
 
 {% block content %}
   <div class="page-header">
-    <h1>Monitors</h1>
+    <h1>{{ chrome.t("nav-monitors") }}</h1>
   </div>
 
   {% if monitors.is_empty() %}
     <div class="card">
-      <p class="empty">
-        No monitors found. Check-in events with a <code class="text-mono">monitor_slug</code> will appear here.
-      </p>
+      <p class="empty">{{ chrome.t("monitors-list-empty") |safe }}</p>
     </div>
   {% else %}
     <div class="card overflow-hidden">
@@ -32,10 +30,10 @@
         <table class="table">
           <thead>
             <tr>
-              <th>Slug</th>
-              <th>Last status</th>
-              <th>Last check-in</th>
-              <th>Count</th>
+              <th>{{ chrome.t("monitors-col-slug") }}</th>
+              <th>{{ chrome.t("monitors-col-last-status") }}</th>
+              <th>{{ chrome.t("monitors-col-last-checkin") }}</th>
+              <th>{{ chrome.t("monitors-col-count") }}</th>
             </tr>
           </thead>
           <tbody>
@@ -43,14 +41,14 @@
               <tr>
                 <td>
                   <a class="text-mono"
-                     href="/web/projects/{{ project_id }}/monitors/{{ mon.monitor_slug }}/">{{ mon.monitor_slug }}</a>
+                     href="/web/projects/{{ project_id }}/monitors/{{ mon.monitor_slug }}/"><bdi>{{ mon.monitor_slug }}</bdi></a>
                 </td>
                 <td>
                   <span class="badge badge-monitor-{{ mon.last_status }}">{{ mon.last_status }}</span>
                 </td>
                 <td class="text-muted">
                   <time datetime="{{ mon.last_checkin|format_ts }}"
-                        title="{{ mon.last_checkin|format_ts }}">{{ mon.last_checkin|format_relative }}</time>
+                        title="{{ mon.last_checkin|format_ts }}">{{ chrome.rel_time(mon.last_checkin) }}</time>
                 </td>
                 <td class="text-tabular">{{ mon.checkin_count }}</td>
               </tr>

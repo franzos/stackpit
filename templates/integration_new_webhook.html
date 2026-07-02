@@ -1,27 +1,27 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
 
-{% block title %}Add webhook — Stackpit{% endblock %}
+{% block title %}{{ chrome.t("integrations-webhook-title") }}{% endblock %}
 
 {% block sidebar_nav %}
-  {% call m::settings_sidebar("integrations") %}
+  {% call m::settings_sidebar(chrome, "integrations") %}
   {% endcall %}
 {% endblock %}
 
 {% block breadcrumbs %}
   <span class="breadcrumb-sep">/</span>
-  <a class="breadcrumb-link" href="/web/settings/integrations/">Integrations</a>
+  <a class="breadcrumb-link" href="/web/settings/integrations/">{{ chrome.t("nav-integrations") }}</a>
   <span class="breadcrumb-sep">/</span>
-  <span class="breadcrumb-current">Add webhook</span>
+  <span class="breadcrumb-current">{{ chrome.t("integrations-webhook-breadcrumb") }}</span>
 {% endblock %}
 
 {% block content %}
   <div class="page-header">
     <div>
-      <h1>Add webhook integration</h1>
+      <h1>{{ chrome.t("integrations-webhook-heading") }}</h1>
     </div>
     <div class="page-actions">
-      <a href="/web/settings/integrations/" class="btn btn-secondary">Cancel</a>
+      <a href="/web/settings/integrations/" class="btn btn-secondary">{{ chrome.t("integrations-cancel") }}</a>
     </div>
   </div>
 
@@ -29,19 +29,19 @@
     <form class="settings-form"
           method="post"
           action="/web/settings/integrations/create">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
       <input type="hidden" name="kind" value="webhook">
       <div>
-        <label class="field-label" for="int_name">Name</label>
+        <label class="field-label" for="int_name">{{ chrome.t("integrations-col-name") }}</label>
         <input class="input"
                type="text"
                id="int_name"
                name="name"
-               placeholder="e.g. Production alerts"
+               placeholder="{{ chrome.t("integrations-webhook-name-placeholder") }}"
                required>
       </div>
       <div>
-        <label class="field-label" for="int_url">Webhook URL</label>
+        <label class="field-label" for="int_url">{{ chrome.t("integrations-webhook-url-label") }}</label>
         <input class="input text-mono"
                type="url"
                id="int_url"
@@ -51,16 +51,16 @@
       </div>
       <div>
         <label class="field-label" for="int_secret">
-          HMAC secret <span class="text-muted normal-case tracking-normal font-normal">(optional)</span>
+          {{ chrome.t("integrations-webhook-secret-label") }} <span class="text-muted normal-case tracking-normal font-normal">{{ chrome.t("integrations-optional") }}</span>
         </label>
         <input class="input"
                type="password"
                id="int_secret"
                name="secret"
-               placeholder="Optional signing secret">
+               placeholder="{{ chrome.t("integrations-webhook-secret-placeholder") }}">
       </div>
       <div>
-        <button type="submit" class="btn btn-primary">Create integration</button>
+        <button type="submit" class="btn btn-primary">{{ chrome.t("integrations-create") }}</button>
       </div>
     </form>
   </div>

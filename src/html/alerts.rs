@@ -2,8 +2,9 @@ use askama::Template;
 use axum::extract::{Form, Path, State};
 use serde::Deserialize;
 
+use crate::html::chrome::PageChrome;
 use crate::html::render_template;
-use crate::html::utils::{self, Csrf};
+use crate::html::utils::{self, Chrome};
 use crate::orgs::extractor::{require_owner, ActiveOrg};
 use crate::queries;
 use crate::queries::alerts::{AlertRule, DigestSchedule};
@@ -24,15 +25,15 @@ struct AlertsTemplate {
     digest_schedules: Vec<DigestSchedule>,
     projects: Vec<ProjectOption>,
     message: Option<String>,
-    csrf_token: String,
+    chrome: PageChrome,
 }
 
 pub async fn handler(
     State(state): State<AppState>,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     active_org: ActiveOrg,
 ) -> axum::response::Response {
-    render_page(&state, active_org.org_id, None, &csrf).await
+    render_page(&state, active_org.org_id, None, &chrome).await
 }
 
 // -- Alert rules -------------------------------------------------------------
@@ -49,7 +50,7 @@ pub struct CreateAlertRuleForm {
 
 pub async fn create_alert_rule(
     State(state): State<AppState>,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     active_org: ActiveOrg,
     Form(form): Form<CreateAlertRuleForm>,
 ) -> axum::response::Response {
@@ -78,8 +79,8 @@ pub async fn create_alert_rule(
             return render_page(
                 &state,
                 active_org.org_id,
-                Some("Error: project not found or access denied".to_string()),
-                &csrf,
+                Some(chrome.t("flash-project-not-found-or-denied")),
+                &chrome,
             )
             .await;
         }
@@ -87,6 +88,8 @@ pub async fn create_alert_rule(
 
     let s = state.clone();
     let org_id = active_org.org_id;
+    let success = chrome.t("flash-alert-rule-created");
+    let render_chrome = chrome.clone();
     utils::query_then_render(
         queries::alerts::create_alert_rule(
             &state.writer_pool,
@@ -99,27 +102,33 @@ pub async fn create_alert_rule(
             form.cooldown_secs.unwrap_or(3600),
         )
         .await,
-        "Alert rule created",
-        move |msg| async move { render_page(&s, org_id, msg, &csrf).await },
+        &chrome,
+        &success,
+        move |msg| async move { render_page(&s, org_id, msg, &render_chrome).await },
     )
     .await
 }
 
 pub async fn delete_alert_rule(
     State(state): State<AppState>,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     active_org: ActiveOrg,
     Path(id): Path<i64>,
 ) -> axum::response::Response {
     if let Err(r) = require_owner(&active_org) {
         return r;
     }
-    let msg = match queries::alerts::delete_alert_rule(&state.writer_pool, id, active_org.org_id).await {
-        Ok(0) => format!("Error: not found: alert rule: {id}"),
-        Ok(_) => "Alert rule deleted".to_string(),
-        Err(e) => format!("Error: {e}"),
-    };
-    render_page(&state, active_org.org_id, Some(msg), &csrf).await
+    let msg =
+        match queries::alerts::delete_alert_rule(&state.writer_pool, id, active_org.org_id).await {
+            Ok(0) => format!(
+                "{} {}",
+                chrome.t("common-error-prefix"),
+                chrome.tv1("flash-not-found-alert-rule", "id", &id.to_string())
+            ),
+            Ok(_) => chrome.t("flash-alert-rule-deleted"),
+            Err(e) => chrome.err(e),
+        };
+    render_page(&state, active_org.org_id, Some(msg), &chrome).await
 }
 
 // -- Digest schedules --------------------------------------------------------
@@ -132,7 +141,7 @@ pub struct CreateDigestForm {
 
 pub async fn create_digest_schedule(
     State(state): State<AppState>,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     active_org: ActiveOrg,
     Form(form): Form<CreateDigestForm>,
 ) -> axum::response::Response {
@@ -157,8 +166,8 @@ pub async fn create_digest_schedule(
             return render_page(
                 &state,
                 active_org.org_id,
-                Some("Error: project not found or access denied".to_string()),
-                &csrf,
+                Some(chrome.t("flash-project-not-found-or-denied")),
+                &chrome,
             )
             .await;
         }
@@ -166,6 +175,8 @@ pub async fn create_digest_schedule(
 
     let s = state.clone();
     let org_id = active_org.org_id;
+    let success = chrome.t("flash-digest-schedule-created");
+    let render_chrome = chrome.clone();
     utils::query_then_render(
         queries::alerts::create_digest_schedule(
             &state.writer_pool,
@@ -174,27 +185,35 @@ pub async fn create_digest_schedule(
             form.interval_secs,
         )
         .await,
-        "Digest schedule created",
-        move |msg| async move { render_page(&s, org_id, msg, &csrf).await },
+        &chrome,
+        &success,
+        move |msg| async move { render_page(&s, org_id, msg, &render_chrome).await },
     )
     .await
 }
 
 pub async fn delete_digest_schedule(
     State(state): State<AppState>,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     active_org: ActiveOrg,
     Path(id): Path<i64>,
 ) -> axum::response::Response {
     if let Err(r) = require_owner(&active_org) {
         return r;
     }
-    let msg = match queries::alerts::delete_digest_schedule(&state.writer_pool, id, active_org.org_id).await {
-        Ok(0) => format!("Error: not found: digest schedule: {id}"),
-        Ok(_) => "Digest schedule deleted".to_string(),
-        Err(e) => format!("Error: {e}"),
-    };
-    render_page(&state, active_org.org_id, Some(msg), &csrf).await
+    let msg =
+        match queries::alerts::delete_digest_schedule(&state.writer_pool, id, active_org.org_id)
+            .await
+        {
+            Ok(0) => format!(
+                "{} {}",
+                chrome.t("common-error-prefix"),
+                chrome.tv1("flash-not-found-digest-schedule", "id", &id.to_string())
+            ),
+            Ok(_) => chrome.t("flash-digest-schedule-deleted"),
+            Err(e) => chrome.err(e),
+        };
+    render_page(&state, active_org.org_id, Some(msg), &chrome).await
 }
 
 // -- Render ------------------------------------------------------------------
@@ -203,7 +222,7 @@ async fn render_page(
     state: &AppState,
     org_id: i64,
     message: Option<String>,
-    csrf: &str,
+    chrome: &PageChrome,
 ) -> axum::response::Response {
     let alert_rules = queries::alerts::list_alert_rules(&state.pool, None, Some(org_id))
         .await
@@ -220,9 +239,9 @@ async fn render_page(
             .unwrap_or_default()
             .into_iter()
             .map(|p| {
-                let label = p
-                    .name
-                    .unwrap_or_else(|| format!("Project {}", p.project_id));
+                let label = p.name.unwrap_or_else(|| {
+                    chrome.tv1("alerts-project-fallback", "id", &p.project_id.to_string())
+                });
                 (p.project_id, label)
             })
             .collect();
@@ -233,8 +252,34 @@ async fn render_page(
         digest_schedules,
         projects,
         message,
-        csrf_token: csrf.to_string(),
+        chrome: chrome.clone(),
     };
 
     render_template(&tmpl)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use askama::Template;
+    use unic_langid::langid;
+
+    // Empty-collections render must not leak any Fluent placeholder in en or de.
+    #[test]
+    fn alerts_renders_without_missing_keys() {
+        for locale in [langid!("en"), langid!("de")] {
+            let tmpl = AlertsTemplate {
+                alert_rules: Vec::new(),
+                digest_schedules: Vec::new(),
+                projects: Vec::new(),
+                message: None,
+                chrome: PageChrome::new("csrf".into(), locale.clone(), "/web/projects/".into()),
+            };
+            let html = tmpl.render().expect("alerts renders");
+            assert!(
+                !html.contains(crate::i18n::MISSING_PREFIX),
+                "alerts ({locale}) leaked a missing localization key: {html}"
+            );
+        }
+    }
 }

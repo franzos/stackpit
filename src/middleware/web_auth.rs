@@ -31,6 +31,7 @@ fn is_public_path(path: &str) -> bool {
     path == "/web/login"
         || path == "/health"
         || path.starts_with("/web/_assets/")
+        || path.starts_with("/web/lang/")
         || path.starts_with("/api/0/")
         || path == "/web/auth/login"
         || path == "/web/auth/callback"
@@ -55,7 +56,11 @@ pub async fn web_auth_middleware(
             // CSRF still wants something to compare against; pass-through
             // auth means the token is a constant, not a secret.
             req.extensions_mut().insert(CsrfToken("noauth".to_string()));
-            req.extensions_mut().insert(crate::orgs::extractor::ActiveOrg { org_id: 1, role: None });
+            req.extensions_mut()
+                .insert(crate::orgs::extractor::ActiveOrg {
+                    org_id: 1,
+                    role: None,
+                });
             return next.run(req).await;
         }
         return unauthenticated_response(&req, secure_cookies);
@@ -87,12 +92,18 @@ pub async fn web_auth_middleware(
                 .encryptor
                 .as_deref()
                 .and_then(|enc| {
-                    crate::middleware::cookie::read_cookie(req.headers(), crate::orgs::extractor::ACTIVE_ORG_COOKIE)
-                        .and_then(|v| crate::orgs::extractor::unpack(enc, v))
+                    crate::middleware::cookie::read_cookie(
+                        req.headers(),
+                        crate::orgs::extractor::ACTIVE_ORG_COOKIE,
+                    )
+                    .and_then(|v| crate::orgs::extractor::unpack(enc, v))
                 })
                 .unwrap_or(1);
             req.extensions_mut()
-                .insert(crate::orgs::extractor::ActiveOrg { org_id: admin_org_id, role: None });
+                .insert(crate::orgs::extractor::ActiveOrg {
+                    org_id: admin_org_id,
+                    role: None,
+                });
             let mut resp = next.run(req).await;
             if set_salt {
                 if let Ok(val) =
@@ -198,6 +209,28 @@ pub async fn web_auth_middleware(
                 let user_id = grant.user_id;
                 req.extensions_mut().insert(ctx);
                 req.extensions_mut().insert(CsrfToken(csrf));
+                // Locale ladder step 3 (persisted preference) is only reachable when
+                // neither a valid `?lang=` query nor a valid `sp_locale` cookie wins;
+                // skip the SELECT otherwise. Mirrors resolve_locale's query/cookie logic.
+                let query_or_cookie_wins = req
+                    .uri()
+                    .query()
+                    .and_then(|q| {
+                        q.split('&')
+                            .find_map(|kv| kv.strip_prefix("lang="))
+                            .and_then(crate::locale::accept)
+                    })
+                    .or_else(|| crate::locale::read_locale_cookie(req.headers()))
+                    .is_some();
+                let preferred = if query_or_cookie_wins {
+                    None
+                } else {
+                    crate::queries::users::get_preferred_language(&state.pool, user_id)
+                        .await
+                        .unwrap_or(None)
+                };
+                req.extensions_mut()
+                    .insert(crate::html::utils::PreferredLanguage(preferred));
                 let active_org = resolve_session_active_org(
                     &state.auth_pool,
                     user_id,
@@ -234,7 +267,10 @@ async fn resolve_session_active_org(
         Ok(id) => id,
         Err(e) => {
             tracing::error!("ensure_personal_org failed for user {user_id}: {e:#}");
-            return ActiveOrg { org_id: 1, role: Some(crate::orgs::Role::Member) };
+            return ActiveOrg {
+                org_id: 1,
+                role: Some(crate::orgs::Role::Member),
+            };
         }
     };
 
@@ -242,7 +278,10 @@ async fn resolve_session_active_org(
         Ok(m) => m,
         Err(e) => {
             tracing::error!("list_memberships failed for user {user_id}: {e:#}");
-            return ActiveOrg { org_id: personal_org_id, role: Some(crate::orgs::Role::Member) };
+            return ActiveOrg {
+                org_id: personal_org_id,
+                role: Some(crate::orgs::Role::Member),
+            };
         }
     };
 
@@ -260,7 +299,10 @@ async fn resolve_session_active_org(
         .map(|m| crate::orgs::Role::parse(&m.role))
         .unwrap_or(crate::orgs::Role::Member);
 
-    ActiveOrg { org_id, role: Some(role) }
+    ActiveOrg {
+        org_id,
+        role: Some(role),
+    }
 }
 
 fn unauthenticated_response(req: &Request<Body>, secure_cookies: bool) -> Response {
@@ -331,6 +373,7 @@ mod tests {
             "/web/auth/login",
             "/web/auth/callback",
             "/web/auth/backchannel-logout",
+            "/web/lang/de",
         ] {
             assert!(is_public_path(p), "{p} must be public");
         }

@@ -48,7 +48,11 @@ pub async fn list_integrations(pool: &DbPool, org_id: Option<i64>) -> Result<Vec
 
 /// Fetch a single integration by ID.
 /// Pass `Some(org_id)` to restrict to the caller's org (prevents cross-org reads).
-pub async fn get_integration(pool: &DbPool, id: i64, org_id: Option<i64>) -> Result<Option<Integration>> {
+pub async fn get_integration(
+    pool: &DbPool,
+    id: i64,
+    org_id: Option<i64>,
+) -> Result<Option<Integration>> {
     let row = if let Some(oid) = org_id {
         sqlx::query(sql!(
             "SELECT id, name, kind, url, secret, encrypted, config, created_at
@@ -156,6 +160,7 @@ pub async fn list_available_for_project(
 // --- Write operations ---
 
 /// Create a new integration. Returns its row ID.
+#[allow(clippy::too_many_arguments)]
 pub async fn create_integration(
     pool: &DbPool,
     org_id: i64,
@@ -204,11 +209,13 @@ pub async fn create_integration(
 
 /// Delete an integration in the given org. Returns 0 if not found or wrong org.
 pub async fn delete_integration(pool: &DbPool, id: i64, org_id: i64) -> Result<u64> {
-    let result = sqlx::query(sql!("DELETE FROM integrations WHERE id = ?1 AND org_id = ?2"))
-        .bind(id)
-        .bind(org_id)
-        .execute(pool)
-        .await?;
+    let result = sqlx::query(sql!(
+        "DELETE FROM integrations WHERE id = ?1 AND org_id = ?2"
+    ))
+    .bind(id)
+    .bind(org_id)
+    .execute(pool)
+    .await?;
     Ok(result.rows_affected())
 }
 
@@ -289,7 +296,11 @@ pub async fn update_project_integration(
 }
 
 /// Remove a project integration link. Returns 0 if it wasn't found.
-pub async fn deactivate_project_integration(pool: &DbPool, project_id: i64, id: i64) -> Result<u64> {
+pub async fn deactivate_project_integration(
+    pool: &DbPool,
+    project_id: i64,
+    id: i64,
+) -> Result<u64> {
     let result = sqlx::query(sql!(
         "DELETE FROM project_integrations WHERE id = ?1 AND project_id = ?2"
     ))
@@ -307,19 +318,38 @@ mod tests {
     use sqlx::Row;
 
     async fn seed_project_integration(pool: &DbPool, project_id: u64) -> i64 {
-        create_integration(pool, 1, "test-intg", "webhook", Some("https://example.com"), None, None, false)
-            .await
-            .unwrap();
-        let integration_id: i64 = sqlx::query(sql!(
-            "SELECT id FROM integrations WHERE name = 'test-intg'"
-        ))
-        .fetch_one(pool)
+        create_integration(
+            pool,
+            1,
+            "test-intg",
+            "webhook",
+            Some("https://example.com"),
+            None,
+            None,
+            false,
+        )
         .await
-        .unwrap()
-        .get(0);
-        activate_project_integration(pool, project_id, integration_id, false, false, None, None, None, false, false)
-            .await
-            .unwrap();
+        .unwrap();
+        let integration_id: i64 =
+            sqlx::query(sql!("SELECT id FROM integrations WHERE name = 'test-intg'"))
+                .fetch_one(pool)
+                .await
+                .unwrap()
+                .get(0);
+        activate_project_integration(
+            pool,
+            project_id,
+            integration_id,
+            false,
+            false,
+            None,
+            None,
+            None,
+            false,
+            false,
+        )
+        .await
+        .unwrap();
         sqlx::query(sql!(
             "SELECT id FROM project_integrations WHERE project_id = ?1 AND integration_id = ?2"
         ))
@@ -335,13 +365,17 @@ mod tests {
     async fn update_project_integration_cross_project_affects_zero_rows() {
         let pool = open_test_db().await;
         let pi_id = seed_project_integration(&pool, 1).await;
-        let rows = update_project_integration(&pool, 2, pi_id, false, false, None, None, None, false, false)
-            .await
-            .unwrap();
+        let rows = update_project_integration(
+            &pool, 2, pi_id, false, false, None, None, None, false, false,
+        )
+        .await
+        .unwrap();
         assert_eq!(rows, 0, "cross-project update must affect 0 rows");
-        let rows = update_project_integration(&pool, 1, pi_id, true, false, None, None, None, false, false)
-            .await
-            .unwrap();
+        let rows = update_project_integration(
+            &pool, 1, pi_id, true, false, None, None, None, false, false,
+        )
+        .await
+        .unwrap();
         assert_eq!(rows, 1);
     }
 
@@ -349,21 +383,43 @@ mod tests {
     async fn deactivate_project_integration_cross_project_affects_zero_rows() {
         let pool = open_test_db().await;
         let pi_id = seed_project_integration(&pool, 1).await;
-        let rows = deactivate_project_integration(&pool, 2, pi_id).await.unwrap();
+        let rows = deactivate_project_integration(&pool, 2, pi_id)
+            .await
+            .unwrap();
         assert_eq!(rows, 0, "cross-project delete must affect 0 rows");
-        let rows = deactivate_project_integration(&pool, 1, pi_id).await.unwrap();
+        let rows = deactivate_project_integration(&pool, 1, pi_id)
+            .await
+            .unwrap();
         assert_eq!(rows, 1);
     }
 
     #[tokio::test]
     async fn list_integrations_scoped_excludes_other_org() {
         let pool = open_test_db().await;
-        create_integration(&pool, 1, "intg-org1", "webhook", Some("https://a.example"), None, None, false)
-            .await
-            .unwrap();
-        create_integration(&pool, 2, "intg-org2", "webhook", Some("https://b.example"), None, None, false)
-            .await
-            .unwrap();
+        create_integration(
+            &pool,
+            1,
+            "intg-org1",
+            "webhook",
+            Some("https://a.example"),
+            None,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+        create_integration(
+            &pool,
+            2,
+            "intg-org2",
+            "webhook",
+            Some("https://b.example"),
+            None,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
         let org1 = list_integrations(&pool, Some(1)).await.unwrap();
         assert!(org1.iter().any(|i| i.name == "intg-org1"));
         assert!(!org1.iter().any(|i| i.name == "intg-org2"));
@@ -379,9 +435,18 @@ mod tests {
     #[tokio::test]
     async fn get_integration_cross_org_returns_none() {
         let pool = open_test_db().await;
-        let id = create_integration(&pool, 1, "cross-get", "webhook", Some("https://x.example"), None, None, false)
-            .await
-            .unwrap();
+        let id = create_integration(
+            &pool,
+            1,
+            "cross-get",
+            "webhook",
+            Some("https://x.example"),
+            None,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
         // correct org -> found
         assert!(get_integration(&pool, id, Some(1)).await.unwrap().is_some());
         // wrong org -> None
@@ -393,9 +458,18 @@ mod tests {
     #[tokio::test]
     async fn delete_integration_cross_org_affects_zero_rows() {
         let pool = open_test_db().await;
-        let id = create_integration(&pool, 1, "cross-del", "webhook", Some("https://y.example"), None, None, false)
-            .await
-            .unwrap();
+        let id = create_integration(
+            &pool,
+            1,
+            "cross-del",
+            "webhook",
+            Some("https://y.example"),
+            None,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
         let rows = delete_integration(&pool, id, 2).await.unwrap();
         assert_eq!(rows, 0, "cross-org delete must affect 0 rows");
         // still exists for correct org
@@ -407,29 +481,65 @@ mod tests {
     #[tokio::test]
     async fn list_available_for_project_excludes_other_org_integrations() {
         let pool = open_test_db().await;
-        create_integration(&pool, 1, "org1-intg", "webhook", Some("https://a.example"), None, None, false)
-            .await
-            .unwrap();
-        create_integration(&pool, 2, "org2-intg", "webhook", Some("https://b.example"), None, None, false)
-            .await
-            .unwrap();
+        create_integration(
+            &pool,
+            1,
+            "org1-intg",
+            "webhook",
+            Some("https://a.example"),
+            None,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+        create_integration(
+            &pool,
+            2,
+            "org2-intg",
+            "webhook",
+            Some("https://b.example"),
+            None,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
         // project 99 belongs to org 1 (no links yet)
         let available = list_available_for_project(&pool, 99, 1).await.unwrap();
-        assert!(available.iter().any(|i| i.name == "org1-intg"), "org1 integration must be offered");
-        assert!(!available.iter().any(|i| i.name == "org2-intg"), "org2 integration must be excluded");
+        assert!(
+            available.iter().any(|i| i.name == "org1-intg"),
+            "org1 integration must be offered"
+        );
+        assert!(
+            !available.iter().any(|i| i.name == "org2-intg"),
+            "org2 integration must be excluded"
+        );
     }
 
     #[tokio::test]
     async fn activate_cross_org_integration_guard_rejects() {
         let pool = open_test_db().await;
         // Integration belongs to org 2; project owner is in org 1.
-        let foreign_id = create_integration(&pool, 2, "foreign-intg", "webhook", Some("https://c.example"), None, None, false)
-            .await
-            .unwrap();
+        let foreign_id = create_integration(
+            &pool,
+            2,
+            "foreign-intg",
+            "webhook",
+            Some("https://c.example"),
+            None,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
         // The activate handler guards by calling get_integration with the project's org_id.
         // Confirm it returns None for the wrong org so the handler correctly rejects.
         assert!(
-            get_integration(&pool, foreign_id, Some(1)).await.unwrap().is_none(),
+            get_integration(&pool, foreign_id, Some(1))
+                .await
+                .unwrap()
+                .is_none(),
             "cross-org integration must not be visible to org 1, so activation is rejected"
         );
     }

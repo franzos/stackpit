@@ -5,7 +5,8 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 
 use crate::db::DbPool;
-use crate::html::utils::{self, Csrf};
+use crate::html::chrome::PageChrome;
+use crate::html::utils::{self, Chrome};
 use crate::orgs::extractor::ActiveOrg;
 use crate::queries::ProjectNavCounts;
 use crate::server::AppState;
@@ -50,7 +51,7 @@ pub struct ProjectPageCtx {
     pub pool: DbPool,
     pub project_id: u64,
     pub nav: ProjectNavCounts,
-    pub csrf_token: String,
+    pub chrome: PageChrome,
 }
 
 /// None = extension absent (fail closed), Ok(None) = superuser bypass, Ok(Some) = must check.
@@ -72,11 +73,17 @@ impl FromRequestParts<AppState> for ProjectPageCtx {
         let Path(project_id) = Path::<u64>::from_request_parts(parts, state)
             .await
             .map_err(IntoResponse::into_response)?;
-        // Csrf extraction is infallible (falls back to empty for no-auth paths).
-        let csrf_token = Csrf::from_request_parts(parts, state)
+        // Chrome extraction is infallible (CSRF falls back to empty, locale to en).
+        let chrome = Chrome::from_request_parts(parts, state)
             .await
             .map(|c| c.0)
-            .unwrap_or_default();
+            .unwrap_or_else(|_| {
+                PageChrome::new(
+                    String::new(),
+                    crate::locale::default_locale(),
+                    "/web/projects/".to_string(),
+                )
+            });
         let pool = state.pool.clone();
         // Enforce org scope before nav to avoid leaking counts for foreign projects.
         match org_gate(parts.extensions.get::<ActiveOrg>()) {
@@ -93,7 +100,7 @@ impl FromRequestParts<AppState> for ProjectPageCtx {
             pool,
             project_id,
             nav,
-            csrf_token,
+            chrome,
         })
     }
 }
@@ -135,11 +142,13 @@ mod tests {
         let pool = crate::db::open_test_pool().await;
 
         // Insert org A and org B.
-        sqlx::query(sql!("INSERT INTO organizations (slug, name) VALUES (?1, 'Org A')"))
-            .bind("extractor-org-a")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO organizations (slug, name) VALUES (?1, 'Org A')"
+        ))
+        .bind("extractor-org-a")
+        .execute(&pool)
+        .await
+        .unwrap();
         let org_a: i64 = sqlx::query(sql!("SELECT org_id FROM organizations WHERE slug = ?1"))
             .bind("extractor-org-a")
             .fetch_one(&pool)
@@ -147,11 +156,13 @@ mod tests {
             .unwrap()
             .get("org_id");
 
-        sqlx::query(sql!("INSERT INTO organizations (slug, name) VALUES (?1, 'Org B')"))
-            .bind("extractor-org-b")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO organizations (slug, name) VALUES (?1, 'Org B')"
+        ))
+        .bind("extractor-org-b")
+        .execute(&pool)
+        .await
+        .unwrap();
         let org_b: i64 = sqlx::query(sql!("SELECT org_id FROM organizations WHERE slug = ?1"))
             .bind("extractor-org-b")
             .fetch_one(&pool)
@@ -160,23 +171,29 @@ mod tests {
             .get("org_id");
 
         // Project belongs to org A.
-        sqlx::query(sql!("INSERT INTO projects (project_id, org_id) VALUES (?1, ?2)"))
-            .bind(9001i64)
-            .bind(org_a)
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO projects (project_id, org_id) VALUES (?1, ?2)"
+        ))
+        .bind(9001i64)
+        .bind(org_a)
+        .execute(&pool)
+        .await
+        .unwrap();
 
         // Caller is a member of org B (foreign).
         let caller = make_active(org_b, Some(Role::Member));
         let needed_org = org_gate(Some(&caller)).unwrap().unwrap();
         // The DB check must deny.
-        assert!(assert_project_in_org(&pool, 9001, needed_org).await.is_err());
+        assert!(assert_project_in_org(&pool, 9001, needed_org)
+            .await
+            .is_err());
 
         // Same caller in org A must be allowed.
         let caller_a = make_active(org_a, Some(Role::Member));
         let needed_org_a = org_gate(Some(&caller_a)).unwrap().unwrap();
-        assert!(assert_project_in_org(&pool, 9001, needed_org_a).await.is_ok());
+        assert!(assert_project_in_org(&pool, 9001, needed_org_a)
+            .await
+            .is_ok());
 
         // Superuser always bypasses (org_gate returns Ok(None) regardless of project's org).
         let superuser = make_active(org_b, None);

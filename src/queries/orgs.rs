@@ -186,7 +186,7 @@ pub async fn is_current_owner(pool: &DbPool, user_id: i64, org_id: i64) -> Resul
     .bind(org_id)
     .fetch_optional(pool)
     .await?;
-    Ok(row.map_or(false, |r| r.get::<String, _>("role") == "owner"))
+    Ok(row.is_some_and(|r| r.get::<String, _>("role") == "owner"))
 }
 
 pub async fn role_sync_enabled(pool: &DbPool, org_id: i64) -> Result<bool> {
@@ -629,11 +629,10 @@ pub async fn delete_org_guarded(pool: &DbPool, org_id: i64) -> Result<DeleteOrgO
     let mut tx = pool.begin().await?;
 
     // Per-project cascade (reuses the single source of truth for project-scoped tables).
-    let project_rows =
-        sqlx::query(sql!("SELECT project_id FROM projects WHERE org_id = ?1"))
-            .bind(org_id)
-            .fetch_all(&mut *tx)
-            .await?;
+    let project_rows = sqlx::query(sql!("SELECT project_id FROM projects WHERE org_id = ?1"))
+        .bind(org_id)
+        .fetch_all(&mut *tx)
+        .await?;
     let project_ids: Vec<i64> = project_rows.iter().map(|r| r.get("project_id")).collect();
     let projects = project_ids.len() as u64;
     for pid in project_ids {
@@ -649,15 +648,30 @@ pub async fn delete_org_guarded(pool: &DbPool, org_id: i64) -> Result<DeleteOrgO
     .await?;
 
     let alert_rules = sqlx::query(sql!("DELETE FROM alert_rules WHERE org_id = ?1"))
-        .bind(org_id).execute(&mut *tx).await?.rows_affected();
+        .bind(org_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
     let digest_schedules = sqlx::query(sql!("DELETE FROM digest_schedules WHERE org_id = ?1"))
-        .bind(org_id).execute(&mut *tx).await?.rows_affected();
+        .bind(org_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
     let integrations = sqlx::query(sql!("DELETE FROM integrations WHERE org_id = ?1"))
-        .bind(org_id).execute(&mut *tx).await?.rows_affected();
+        .bind(org_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
     let invites = sqlx::query(sql!("DELETE FROM invites WHERE org_id = ?1"))
-        .bind(org_id).execute(&mut *tx).await?.rows_affected();
+        .bind(org_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
     let members = sqlx::query(sql!("DELETE FROM organization_members WHERE org_id = ?1"))
-        .bind(org_id).execute(&mut *tx).await?.rows_affected();
+        .bind(org_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
 
     sqlx::query(sql!("DELETE FROM organizations WHERE org_id = ?1"))
         .bind(org_id)
@@ -815,11 +829,13 @@ pub async fn rename_org_slug(pool: &DbPool, org_id: i64, requested: &str) -> Res
     }
 
     // Defense in depth: a Forseti owner could POST directly past the UI gate; its slug would be clobbered on reconcile.
-    let row = sqlx::query(sql!("SELECT ext_org_id FROM organizations WHERE org_id = ?1"))
-        .bind(org_id)
-        .fetch_optional(pool)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("org {org_id} not found"))?;
+    let row = sqlx::query(sql!(
+        "SELECT ext_org_id FROM organizations WHERE org_id = ?1"
+    ))
+    .bind(org_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("org {org_id} not found"))?;
     if row.get::<Option<String>, _>("ext_org_id").is_some() {
         anyhow::bail!("cannot rename a Forseti-backed org");
     }
@@ -881,13 +897,11 @@ pub async fn assert_project_in_org(
     project_id: i64,
     org_id: i64,
 ) -> Result<(), OrgScopeError> {
-    let row = sqlx::query(sql!(
-        "SELECT org_id FROM projects WHERE project_id = ?1"
-    ))
-    .bind(project_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|_| OrgScopeError::Denied)?;
+    let row = sqlx::query(sql!("SELECT org_id FROM projects WHERE project_id = ?1"))
+        .bind(project_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|_| OrgScopeError::Denied)?;
 
     match row {
         Some(r) if r.get::<i64, _>("org_id") == org_id => Ok(()),
@@ -897,23 +911,19 @@ pub async fn assert_project_in_org(
 
 /// Returns the `project_id` that owns `fingerprint`, or `None` if unknown.
 pub async fn project_of_fingerprint(pool: &DbPool, fingerprint: &str) -> Result<Option<i64>> {
-    let row = sqlx::query(sql!(
-        "SELECT project_id FROM issues WHERE fingerprint = ?1"
-    ))
-    .bind(fingerprint)
-    .fetch_optional(pool)
-    .await?;
+    let row = sqlx::query(sql!("SELECT project_id FROM issues WHERE fingerprint = ?1"))
+        .bind(fingerprint)
+        .fetch_optional(pool)
+        .await?;
     Ok(row.map(|r| r.get("project_id")))
 }
 
 /// Returns the `project_id` that owns `event_id`, or `None` if unknown.
 pub async fn project_of_event(pool: &DbPool, event_id: &str) -> Result<Option<i64>> {
-    let row = sqlx::query(sql!(
-        "SELECT project_id FROM events WHERE event_id = ?1"
-    ))
-    .bind(event_id)
-    .fetch_optional(pool)
-    .await?;
+    let row = sqlx::query(sql!("SELECT project_id FROM events WHERE event_id = ?1"))
+        .bind(event_id)
+        .fetch_optional(pool)
+        .await?;
     Ok(row.map(|r| r.get("project_id")))
 }
 
@@ -944,26 +954,47 @@ mod tests {
     #[tokio::test]
     async fn personal_org_slug_is_not_sequential_user_id() {
         let pool = crate::db::open_test_pool().await;
-        let u = crate::queries::users::upsert_from_oidc(&pool, "iss", "sub-noleak", None, Some("Some One"))
-            .await
-            .unwrap();
+        let u = crate::queries::users::upsert_from_oidc(
+            &pool,
+            "iss",
+            "sub-noleak",
+            None,
+            Some("Some One"),
+        )
+        .await
+        .unwrap();
         ensure_personal_org(&pool, u.user_id).await.unwrap();
         let slug = personal_slug(&pool, u.user_id).await;
         let id_str = u.user_id.to_string();
         // Slug must not expose the user_id as a recognizable hyphen-separated segment.
-        assert!(!slug.split('-').any(|seg| seg == id_str), "slug leaked user_id as segment: {slug}");
+        assert!(
+            !slug.split('-').any(|seg| seg == id_str),
+            "slug leaked user_id as segment: {slug}"
+        );
     }
 
     #[tokio::test]
     async fn personal_org_slug_is_neutral_not_name_derived() {
         let pool = crate::db::open_test_pool().await;
-        let u = crate::queries::users::upsert_from_oidc(&pool, "iss", "sub-neutral", None, Some("Some One"))
-            .await
-            .unwrap();
+        let u = crate::queries::users::upsert_from_oidc(
+            &pool,
+            "iss",
+            "sub-neutral",
+            None,
+            Some("Some One"),
+        )
+        .await
+        .unwrap();
         ensure_personal_org(&pool, u.user_id).await.unwrap();
         let slug = personal_slug(&pool, u.user_id).await;
-        assert!(slug.starts_with("personal-"), "expected neutral slug, got: {slug}");
-        assert!(!slug.contains("some"), "slug must not leak the user's name: {slug}");
+        assert!(
+            slug.starts_with("personal-"),
+            "expected neutral slug, got: {slug}"
+        );
+        assert!(
+            !slug.contains("some"),
+            "slug must not leak the user's name: {slug}"
+        );
     }
 
     // The suffix collision loop shape is exercised by create_native_org_collision_never_joins_existing;
@@ -972,9 +1003,15 @@ mod tests {
     #[tokio::test]
     async fn ensure_personal_org_reslug_is_stable_across_relogin() {
         let pool = crate::db::open_test_pool().await;
-        let u = crate::queries::users::upsert_from_oidc(&pool, "iss", "sub-stable", None, Some("Stable One"))
-            .await
-            .unwrap();
+        let u = crate::queries::users::upsert_from_oidc(
+            &pool,
+            "iss",
+            "sub-stable",
+            None,
+            Some("Stable One"),
+        )
+        .await
+        .unwrap();
         let a = ensure_personal_org(&pool, u.user_id).await.unwrap();
         rename_org_slug(&pool, a, "chosen-handle").await.unwrap();
         let b = ensure_personal_org(&pool, u.user_id).await.unwrap();
@@ -996,7 +1033,8 @@ mod tests {
         let slug = personal_slug(&pool, u.user_id).await;
         assert!(!slug.is_empty());
         assert!(
-            slug.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
+            slug.chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
             "slug out of charset: {slug}"
         );
         assert_ne!(slug, format!("user-{}", u.user_id));
@@ -1010,7 +1048,10 @@ mod tests {
             rename_org_slug(&pool, org_id, "My New Team").await.unwrap(),
             RenameOutcome::Renamed
         );
-        assert_eq!(get_org(&pool, org_id).await.unwrap().unwrap().slug, "my-new-team");
+        assert_eq!(
+            get_org(&pool, org_id).await.unwrap().unwrap().slug,
+            "my-new-team"
+        );
     }
 
     #[tokio::test]
@@ -1028,7 +1069,9 @@ mod tests {
     #[tokio::test]
     async fn rename_org_slug_rejects_system_org() {
         let pool = crate::db::open_test_pool().await;
-        let err = rename_org_slug(&pool, SYSTEM_ORG_ID, "anything").await.unwrap_err();
+        let err = rename_org_slug(&pool, SYSTEM_ORG_ID, "anything")
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("system org"), "got: {err}");
     }
 
@@ -1038,7 +1081,10 @@ mod tests {
         let org_id = insert_native_org(&pool, "keep-me").await;
         let err = rename_org_slug(&pool, org_id, "   ").await.unwrap_err();
         assert!(err.to_string().contains("empty"), "got: {err}");
-        assert_eq!(get_org(&pool, org_id).await.unwrap().unwrap().slug, "keep-me");
+        assert_eq!(
+            get_org(&pool, org_id).await.unwrap().unwrap().slug,
+            "keep-me"
+        );
     }
 
     #[tokio::test]
@@ -1047,31 +1093,55 @@ mod tests {
         let u = crate::queries::users::upsert_from_oidc(&pool, "iss", "sub-ren-fors", None, None)
             .await
             .unwrap();
-        let forseti_id =
-            provision_forseti_org(&pool, u.user_id, "https://idp", "org-ren", "fors-slug", "Fors")
-                .await
-                .unwrap();
-        let err = rename_org_slug(&pool, forseti_id, "hijacked").await.unwrap_err();
-        assert!(err.to_string().contains("Forseti"), "expected Forseti rejection, got: {err}");
-        assert_eq!(get_org(&pool, forseti_id).await.unwrap().unwrap().slug, "fors-slug");
+        let forseti_id = provision_forseti_org(
+            &pool,
+            u.user_id,
+            "https://idp",
+            "org-ren",
+            "fors-slug",
+            "Fors",
+        )
+        .await
+        .unwrap();
+        let err = rename_org_slug(&pool, forseti_id, "hijacked")
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("Forseti"),
+            "expected Forseti rejection, got: {err}"
+        );
+        assert_eq!(
+            get_org(&pool, forseti_id).await.unwrap().unwrap().slug,
+            "fors-slug"
+        );
     }
 
     // The set_org_slug handler gates on is_current_owner; this proves that primitive denies a member and allows the owner.
     #[tokio::test]
     async fn is_current_owner_true_for_owner_false_for_member() {
         let pool = crate::db::open_test_pool().await;
-        let owner = crate::queries::users::upsert_from_oidc(&pool, "iss", "sub-ico-own", None, None)
-            .await
-            .unwrap();
-        let member = crate::queries::users::upsert_from_oidc(&pool, "iss", "sub-ico-mem", None, None)
-            .await
-            .unwrap();
+        let owner =
+            crate::queries::users::upsert_from_oidc(&pool, "iss", "sub-ico-own", None, None)
+                .await
+                .unwrap();
+        let member =
+            crate::queries::users::upsert_from_oidc(&pool, "iss", "sub-ico-mem", None, None)
+                .await
+                .unwrap();
         let org_id = insert_native_org(&pool, "ico-org").await;
-        add_member(&pool, owner.user_id, org_id, Role::Owner).await.unwrap();
-        add_member(&pool, member.user_id, org_id, Role::Member).await.unwrap();
+        add_member(&pool, owner.user_id, org_id, Role::Owner)
+            .await
+            .unwrap();
+        add_member(&pool, member.user_id, org_id, Role::Member)
+            .await
+            .unwrap();
 
-        assert!(is_current_owner(&pool, owner.user_id, org_id).await.unwrap());
-        assert!(!is_current_owner(&pool, member.user_id, org_id).await.unwrap());
+        assert!(is_current_owner(&pool, owner.user_id, org_id)
+            .await
+            .unwrap());
+        assert!(!is_current_owner(&pool, member.user_id, org_id)
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -1080,9 +1150,16 @@ mod tests {
         let u = crate::queries::users::upsert_from_oidc(&pool, "iss", "sub-ext", None, None)
             .await
             .unwrap();
-        provision_forseti_org(&pool, u.user_id, "https://iss.example", "org-42", "acme", "Acme")
-            .await
-            .unwrap();
+        provision_forseti_org(
+            &pool,
+            u.user_id,
+            "https://iss.example",
+            "org-42",
+            "acme",
+            "Acme",
+        )
+        .await
+        .unwrap();
 
         assert!(org_by_ext(&pool, "https://iss.example", "org-42")
             .await
@@ -1107,7 +1184,10 @@ mod tests {
             .unwrap();
 
         let ms = list_memberships(&pool, u.user_id).await.unwrap();
-        assert_eq!(ms[0].role, "owner", "add_member must not overwrite existing role");
+        assert_eq!(
+            ms[0].role, "owner",
+            "add_member must not overwrite existing role"
+        );
     }
 
     #[tokio::test]
@@ -1187,7 +1267,10 @@ mod tests {
         let ms = list_memberships(&pool, u.user_id).await.unwrap();
         let org2_m = ms.iter().find(|m| m.org_id == org2).unwrap();
         assert_eq!(org2_m.slug, "collision-1");
-        assert!(!org2_m.is_personal, "provision_forseti_org must not set is_personal");
+        assert!(
+            !org2_m.is_personal,
+            "provision_forseti_org must not set is_personal"
+        );
         // role_sync should be enabled for Forseti-provisioned orgs.
         assert!(role_sync_enabled(&pool, org2).await.unwrap());
     }
@@ -1274,8 +1357,12 @@ mod tests {
         provision_forseti_org(&pool, u.user_id, "https://idp", "org-x", "fx", "FX")
             .await
             .unwrap();
-        create_native_org(&pool, u.user_id, "n1", "N1").await.unwrap();
-        create_native_org(&pool, u.user_id, "n2", "N2").await.unwrap();
+        create_native_org(&pool, u.user_id, "n1", "N1")
+            .await
+            .unwrap();
+        create_native_org(&pool, u.user_id, "n2", "N2")
+            .await
+            .unwrap();
 
         assert_eq!(count_user_native_orgs(&pool, u.user_id).await.unwrap(), 2);
     }
@@ -1301,11 +1388,13 @@ mod tests {
     // invite tests
 
     async fn insert_native_org(pool: &DbPool, slug: &str) -> i64 {
-        sqlx::query(sql!("INSERT INTO organizations (slug, name) VALUES (?1, 'Test Org')"))
-            .bind(slug)
-            .execute(pool)
-            .await
-            .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO organizations (slug, name) VALUES (?1, 'Test Org')"
+        ))
+        .bind(slug)
+        .execute(pool)
+        .await
+        .unwrap();
         let row = sqlx::query(sql!("SELECT org_id FROM organizations WHERE slug = ?1"))
             .bind(slug)
             .fetch_one(pool)
@@ -1368,9 +1457,7 @@ mod tests {
             .await
             .unwrap();
 
-        let returned_org = accept_invite(&pool, &token, invitee.user_id)
-            .await
-            .unwrap();
+        let returned_org = accept_invite(&pool, &token, invitee.user_id).await.unwrap();
         assert_eq!(returned_org, org_id);
 
         let ms = list_memberships(&pool, invitee.user_id).await.unwrap();
@@ -1384,10 +1471,9 @@ mod tests {
         let u = crate::queries::users::upsert_from_oidc(&pool, "iss", "sub-inv-exp", None, None)
             .await
             .unwrap();
-        let u2 =
-            crate::queries::users::upsert_from_oidc(&pool, "iss", "sub-inv-exp2", None, None)
-                .await
-                .unwrap();
+        let u2 = crate::queries::users::upsert_from_oidc(&pool, "iss", "sub-inv-exp2", None, None)
+            .await
+            .unwrap();
         let org_id = insert_native_org(&pool, "native-exp").await;
 
         let token = create_invite(&pool, org_id, Role::Member, None, u.user_id, -3600)
@@ -1408,14 +1494,12 @@ mod tests {
             crate::queries::users::upsert_from_oidc(&pool, "iss", "sub-inv-aa-own", None, None)
                 .await
                 .unwrap();
-        let u2 =
-            crate::queries::users::upsert_from_oidc(&pool, "iss", "sub-inv-aa-u2", None, None)
-                .await
-                .unwrap();
-        let u3 =
-            crate::queries::users::upsert_from_oidc(&pool, "iss", "sub-inv-aa-u3", None, None)
-                .await
-                .unwrap();
+        let u2 = crate::queries::users::upsert_from_oidc(&pool, "iss", "sub-inv-aa-u2", None, None)
+            .await
+            .unwrap();
+        let u3 = crate::queries::users::upsert_from_oidc(&pool, "iss", "sub-inv-aa-u3", None, None)
+            .await
+            .unwrap();
         let org_id = insert_native_org(&pool, "native-aa").await;
 
         let token = create_invite(&pool, org_id, Role::Member, None, owner.user_id, 3600)
@@ -1447,9 +1531,7 @@ mod tests {
         let token = create_invite(&pool, native_id, Role::Member, None, owner.user_id, 3600)
             .await
             .unwrap();
-        accept_invite(&pool, &token, invitee.user_id)
-            .await
-            .unwrap();
+        accept_invite(&pool, &token, invitee.user_id).await.unwrap();
 
         let row = sqlx::query(sql!(
             "SELECT COUNT(*) AS cnt FROM organization_members WHERE org_id = ?1"
@@ -1489,7 +1571,9 @@ mod tests {
         .await
         .unwrap()
         .get("invite_id");
-        accept_invite(&pool, &accepted_tok, acceptor.user_id).await.unwrap();
+        accept_invite(&pool, &accepted_tok, acceptor.user_id)
+            .await
+            .unwrap();
 
         // Create a second pending invite
         let _pending_tok = create_invite(&pool, org_a, Role::Owner, None, u.user_id, 3600)
@@ -1507,7 +1591,11 @@ mod tests {
         // wrong org returns 0 and invite still present
         let affected = revoke_invite(&pool, pending_id, org_b).await.unwrap();
         assert_eq!(affected, 0);
-        assert!(list_org_invites(&pool, org_a).await.unwrap().iter().any(|r| r.invite_id == pending_id));
+        assert!(list_org_invites(&pool, org_a)
+            .await
+            .unwrap()
+            .iter()
+            .any(|r| r.invite_id == pending_id));
 
         // accepted invite returns 0
         let affected = revoke_invite(&pool, accepted_id, org_a).await.unwrap();
@@ -1516,7 +1604,11 @@ mod tests {
         // right org + pending returns 1
         let affected = revoke_invite(&pool, pending_id, org_a).await.unwrap();
         assert_eq!(affected, 1);
-        assert!(!list_org_invites(&pool, org_a).await.unwrap().iter().any(|r| r.invite_id == pending_id));
+        assert!(!list_org_invites(&pool, org_a)
+            .await
+            .unwrap()
+            .iter()
+            .any(|r| r.invite_id == pending_id));
     }
 
     #[tokio::test]
@@ -1530,7 +1622,9 @@ mod tests {
                 .await
                 .unwrap();
         let org_id = insert_native_org(&pool, "mr-org").await;
-        add_member(&pool, u.user_id, org_id, Role::Owner).await.unwrap();
+        add_member(&pool, u.user_id, org_id, Role::Owner)
+            .await
+            .unwrap();
 
         let role = member_role(&pool, u.user_id, org_id).await.unwrap();
         assert_eq!(role, Some(Role::Owner));
@@ -1546,10 +1640,14 @@ mod tests {
             .await
             .unwrap();
         let org_id = insert_native_org(&pool, "rmg-sole-org").await;
-        add_member(&pool, u.user_id, org_id, Role::Owner).await.unwrap();
+        add_member(&pool, u.user_id, org_id, Role::Owner)
+            .await
+            .unwrap();
 
         // sole owner: returns 0, stays
-        let affected = remove_member_guarded(&pool, u.user_id, org_id).await.unwrap();
+        let affected = remove_member_guarded(&pool, u.user_id, org_id)
+            .await
+            .unwrap();
         assert_eq!(affected, 0);
         assert_eq!(count_owners(&pool, org_id).await.unwrap(), 1);
 
@@ -1557,8 +1655,12 @@ mod tests {
         let m = crate::queries::users::upsert_from_oidc(&pool, "iss", "sub-rmg-mem", None, None)
             .await
             .unwrap();
-        add_member(&pool, m.user_id, org_id, Role::Member).await.unwrap();
-        let affected = remove_member_guarded(&pool, m.user_id, org_id).await.unwrap();
+        add_member(&pool, m.user_id, org_id, Role::Member)
+            .await
+            .unwrap();
+        let affected = remove_member_guarded(&pool, m.user_id, org_id)
+            .await
+            .unwrap();
         assert_eq!(affected, 1);
     }
 
@@ -1573,14 +1675,22 @@ mod tests {
             .await
             .unwrap();
         let org_id = insert_native_org(&pool, "rmg-two-org").await;
-        add_member(&pool, u1.user_id, org_id, Role::Owner).await.unwrap();
-        add_member(&pool, u2.user_id, org_id, Role::Owner).await.unwrap();
+        add_member(&pool, u1.user_id, org_id, Role::Owner)
+            .await
+            .unwrap();
+        add_member(&pool, u2.user_id, org_id, Role::Owner)
+            .await
+            .unwrap();
 
         // remove u1: succeeds (u2 still owner)
-        let a1 = remove_member_guarded(&pool, u1.user_id, org_id).await.unwrap();
+        let a1 = remove_member_guarded(&pool, u1.user_id, org_id)
+            .await
+            .unwrap();
         assert_eq!(a1, 1);
         // remove u2: sole owner, must be blocked
-        let a2 = remove_member_guarded(&pool, u2.user_id, org_id).await.unwrap();
+        let a2 = remove_member_guarded(&pool, u2.user_id, org_id)
+            .await
+            .unwrap();
         assert_eq!(a2, 0);
         assert!(count_owners(&pool, org_id).await.unwrap() >= 1);
     }
@@ -1595,7 +1705,9 @@ mod tests {
             .await
             .unwrap();
         let org_id = insert_native_org(&pool, "smrg-org").await;
-        add_member(&pool, u.user_id, org_id, Role::Owner).await.unwrap();
+        add_member(&pool, u.user_id, org_id, Role::Owner)
+            .await
+            .unwrap();
 
         // demote sole owner: returns 0
         let affected = set_member_role_guarded(&pool, u.user_id, org_id, Role::Member)
@@ -1608,7 +1720,9 @@ mod tests {
         );
 
         // add co-owner, demote u: returns 1
-        add_member(&pool, co.user_id, org_id, Role::Owner).await.unwrap();
+        add_member(&pool, co.user_id, org_id, Role::Owner)
+            .await
+            .unwrap();
         let affected = set_member_role_guarded(&pool, u.user_id, org_id, Role::Member)
             .await
             .unwrap();
@@ -1657,9 +1771,15 @@ mod tests {
 
         let rows = list_org_invites(&pool, org_a).await.unwrap();
         assert_eq!(rows.len(), 2, "only org_a invites");
-        let accepted = rows.iter().find(|r| r.email.as_deref() == Some("a@x.com")).unwrap();
+        let accepted = rows
+            .iter()
+            .find(|r| r.email.as_deref() == Some("a@x.com"))
+            .unwrap();
         assert!(accepted.accepted_at.is_some());
-        let pending = rows.iter().find(|r| r.email.as_deref() == Some("b@x.com")).unwrap();
+        let pending = rows
+            .iter()
+            .find(|r| r.email.as_deref() == Some("b@x.com"))
+            .unwrap();
         assert!(pending.accepted_at.is_none());
     }
 
@@ -1670,19 +1790,31 @@ mod tests {
             crate::queries::users::upsert_from_oidc(&pool, "iss", "sub-lom-own", None, None)
                 .await
                 .unwrap();
-        let member =
-            crate::queries::users::upsert_from_oidc(&pool, "iss", "sub-lom-mem", Some("mem@example.com"), None)
-                .await
-                .unwrap();
+        let member = crate::queries::users::upsert_from_oidc(
+            &pool,
+            "iss",
+            "sub-lom-mem",
+            Some("mem@example.com"),
+            None,
+        )
+        .await
+        .unwrap();
         let org_id = insert_native_org(&pool, "lom-org").await;
-        add_member(&pool, owner.user_id, org_id, Role::Owner).await.unwrap();
-        add_member(&pool, member.user_id, org_id, Role::Member).await.unwrap();
+        add_member(&pool, owner.user_id, org_id, Role::Owner)
+            .await
+            .unwrap();
+        add_member(&pool, member.user_id, org_id, Role::Member)
+            .await
+            .unwrap();
 
         let members = list_org_members(&pool, org_id).await.unwrap();
         assert_eq!(members.len(), 2);
         let owner_row = members.iter().find(|m| m.user_id == owner.user_id).unwrap();
         assert_eq!(owner_row.role, "owner");
-        let member_row = members.iter().find(|m| m.user_id == member.user_id).unwrap();
+        let member_row = members
+            .iter()
+            .find(|m| m.user_id == member.user_id)
+            .unwrap();
         assert_eq!(member_row.role, "member");
         assert_eq!(member_row.email.as_deref(), Some("mem@example.com"));
     }
@@ -1739,7 +1871,11 @@ mod tests {
         // fp-org-b belongs to project 402, not 401: mismatch detected
         let fp_project = project_of_fingerprint(&pool, "fp-org-b").await.unwrap();
         assert_eq!(fp_project, Some(402));
-        assert_ne!(fp_project.unwrap(), 401, "cross-project fingerprint must be detected");
+        assert_ne!(
+            fp_project.unwrap(),
+            401,
+            "cross-project fingerprint must be detected"
+        );
 
         // fp-org-a is in org_a; org_b caller must be denied
         assert!(assert_project_in_org(&pool, 401, org_a).await.is_ok());
@@ -1783,11 +1919,13 @@ mod tests {
         let org = provision_forseti_org(&pool, u.user_id, "https://idp", "acme", "acme", "Acme")
             .await
             .unwrap();
-        let row = sqlx::query(sql!("SELECT is_personal, ext_org_id FROM organizations WHERE org_id = ?1"))
-            .bind(org)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let row = sqlx::query(sql!(
+            "SELECT is_personal, ext_org_id FROM organizations WHERE org_id = ?1"
+        ))
+        .bind(org)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         let is_personal: bool = row.get("is_personal");
         let ext: Option<String> = row.get("ext_org_id");
         assert!(!is_personal);
@@ -1801,22 +1939,40 @@ mod tests {
         let u = crate::queries::users::upsert_from_oidc(&pool, "iss", "del-1", None, None)
             .await
             .unwrap();
-        let org = create_native_org(&pool, u.user_id, "to-delete", "To Delete").await.unwrap();
+        let org = create_native_org(&pool, u.user_id, "to-delete", "To Delete")
+            .await
+            .unwrap();
 
         // A project in the org plus an event and a project-scoped alert rule + state.
         sqlx::query(sql!("INSERT INTO projects (project_id, status, source, org_id) VALUES (7100, 'active', 'manual', ?1)"))
             .bind(org).execute(&pool).await.unwrap();
-        sqlx::query(sql!("INSERT INTO alert_rules (org_id, project_id, trigger_kind) VALUES (?1, 7100, 'rate')"))
-            .bind(org).execute(&pool).await.unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO alert_rules (org_id, project_id, trigger_kind) VALUES (?1, 7100, 'rate')"
+        ))
+        .bind(org)
+        .execute(&pool)
+        .await
+        .unwrap();
 
         let outcome = delete_org_guarded(&pool, org).await.unwrap();
         assert!(matches!(outcome, DeleteOrgOutcome::Deleted(_)));
 
-        let org_rows: i64 = sqlx::query(sql!("SELECT COUNT(*) AS c FROM organizations WHERE org_id = ?1"))
-            .bind(org).fetch_one(&pool).await.unwrap().get("c");
+        let org_rows: i64 = sqlx::query(sql!(
+            "SELECT COUNT(*) AS c FROM organizations WHERE org_id = ?1"
+        ))
+        .bind(org)
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+        .get("c");
         assert_eq!(org_rows, 0, "org row gone");
-        let proj_rows: i64 = sqlx::query(sql!("SELECT COUNT(*) AS c FROM projects WHERE org_id = ?1"))
-            .bind(org).fetch_one(&pool).await.unwrap().get("c");
+        let proj_rows: i64 =
+            sqlx::query(sql!("SELECT COUNT(*) AS c FROM projects WHERE org_id = ?1"))
+                .bind(org)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+                .get("c");
         assert_eq!(proj_rows, 0, "projects gone");
     }
 
@@ -1827,20 +1983,42 @@ mod tests {
         let u = crate::queries::users::upsert_from_oidc(&pool, "iss", "del-2", None, None)
             .await
             .unwrap();
-        let org = create_native_org(&pool, u.user_id, "orphan-org", "Orphan").await.unwrap();
+        let org = create_native_org(&pool, u.user_id, "orphan-org", "Orphan")
+            .await
+            .unwrap();
 
         // Alert rule with NULL project_id (purely org-scoped) plus its alert_state child.
-        sqlx::query(sql!("INSERT INTO alert_rules (org_id, project_id, trigger_kind) VALUES (?1, NULL, 'rate')"))
-            .bind(org).execute(&pool).await.unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO alert_rules (org_id, project_id, trigger_kind) VALUES (?1, NULL, 'rate')"
+        ))
+        .bind(org)
+        .execute(&pool)
+        .await
+        .unwrap();
         let rule_id: i64 = sqlx::query(sql!("SELECT id FROM alert_rules WHERE org_id = ?1"))
-            .bind(org).fetch_one(&pool).await.unwrap().get("id");
-        sqlx::query(sql!("INSERT INTO alert_state (alert_rule_id, fingerprint) VALUES (?1, 'test-fp')"))
-            .bind(rule_id).execute(&pool).await.unwrap();
+            .bind(org)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get("id");
+        sqlx::query(sql!(
+            "INSERT INTO alert_state (alert_rule_id, fingerprint) VALUES (?1, 'test-fp')"
+        ))
+        .bind(rule_id)
+        .execute(&pool)
+        .await
+        .unwrap();
 
         delete_org_guarded(&pool, org).await.unwrap();
 
-        let state_rows: i64 = sqlx::query(sql!("SELECT COUNT(*) AS c FROM alert_state WHERE alert_rule_id = ?1"))
-            .bind(rule_id).fetch_one(&pool).await.unwrap().get("c");
+        let state_rows: i64 = sqlx::query(sql!(
+            "SELECT COUNT(*) AS c FROM alert_state WHERE alert_rule_id = ?1"
+        ))
+        .bind(rule_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+        .get("c");
         assert_eq!(state_rows, 0, "org-scoped alert_state must not orphan");
     }
 
@@ -1852,8 +2030,16 @@ mod tests {
             .unwrap();
         let personal = ensure_personal_org(&pool, u.user_id).await.unwrap();
 
-        assert!(matches!(delete_org_guarded(&pool, crate::orgs::SYSTEM_ORG_ID).await.unwrap(), DeleteOrgOutcome::NotDeletable));
-        assert!(matches!(delete_org_guarded(&pool, personal).await.unwrap(), DeleteOrgOutcome::NotDeletable));
+        assert!(matches!(
+            delete_org_guarded(&pool, crate::orgs::SYSTEM_ORG_ID)
+                .await
+                .unwrap(),
+            DeleteOrgOutcome::NotDeletable
+        ));
+        assert!(matches!(
+            delete_org_guarded(&pool, personal).await.unwrap(),
+            DeleteOrgOutcome::NotDeletable
+        ));
     }
 
     #[tokio::test]
@@ -1863,15 +2049,23 @@ mod tests {
         let u = crate::queries::users::upsert_from_oidc(&pool, "iss", "del-4", None, None)
             .await
             .unwrap();
-        let keep = create_native_org(&pool, u.user_id, "keep", "Keep").await.unwrap();
-        let drop = create_native_org(&pool, u.user_id, "drop", "Drop").await.unwrap();
+        let keep = create_native_org(&pool, u.user_id, "keep", "Keep")
+            .await
+            .unwrap();
+        let drop = create_native_org(&pool, u.user_id, "drop", "Drop")
+            .await
+            .unwrap();
         sqlx::query(sql!("INSERT INTO projects (project_id, status, source, org_id) VALUES (7200, 'active', 'manual', ?1)"))
             .bind(keep).execute(&pool).await.unwrap();
 
         delete_org_guarded(&pool, drop).await.unwrap();
 
         let kept: i64 = sqlx::query(sql!("SELECT COUNT(*) AS c FROM projects WHERE org_id = ?1"))
-            .bind(keep).fetch_one(&pool).await.unwrap().get("c");
+            .bind(keep)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get("c");
         assert_eq!(kept, 1, "other org's project survives");
     }
 
@@ -1881,7 +2075,9 @@ mod tests {
         let u = crate::queries::users::upsert_from_oidc(&pool, "iss", "cnt-1", None, None)
             .await
             .unwrap();
-        let org = create_native_org(&pool, u.user_id, "counted", "Counted").await.unwrap();
+        let org = create_native_org(&pool, u.user_id, "counted", "Counted")
+            .await
+            .unwrap();
         sqlx::query(sql!("INSERT INTO projects (project_id, status, source, org_id) VALUES (7300, 'active', 'manual', ?1)"))
             .bind(org).execute(&pool).await.unwrap();
         sqlx::query(sql!("INSERT INTO projects (project_id, status, source, org_id) VALUES (7301, 'active', 'manual', ?1)"))

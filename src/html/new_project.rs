@@ -2,8 +2,9 @@ use askama::Template;
 use axum::extract::{Form, State};
 use serde::Deserialize;
 
+use crate::html::chrome::PageChrome;
 use crate::html::render_template;
-use crate::html::utils::Csrf;
+use crate::html::utils::Chrome;
 use crate::orgs::extractor::{require_owner, ActiveOrg};
 use crate::queries;
 use crate::server::AppState;
@@ -12,7 +13,7 @@ use crate::server::AppState;
 #[template(path = "new_project.html")]
 struct NewProjectTemplate {
     message: Option<String>,
-    csrf_token: String,
+    chrome: PageChrome,
 }
 
 #[derive(Template)]
@@ -23,13 +24,13 @@ struct ProjectCreatedTemplate {
     public_key: String,
     dsn: String,
     platform: String,
-    csrf_token: String,
+    chrome: PageChrome,
 }
 
-pub async fn form(Csrf(csrf): Csrf) -> axum::response::Response {
+pub async fn form(Chrome(chrome): Chrome) -> axum::response::Response {
     let tmpl = NewProjectTemplate {
         message: None,
-        csrf_token: csrf,
+        chrome,
     };
     render_template(&tmpl)
 }
@@ -42,7 +43,7 @@ pub struct CreateProjectForm {
 
 pub async fn create(
     State(state): State<AppState>,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     active_org: ActiveOrg,
     Form(form): Form<CreateProjectForm>,
 ) -> axum::response::Response {
@@ -52,10 +53,8 @@ pub async fn create(
 
     let name = form.name.trim().to_string();
     if name.is_empty() {
-        let tmpl = NewProjectTemplate {
-            message: Some("Project name is required".into()),
-            csrf_token: csrf,
-        };
+        let message = Some(chrome.t("flash-project-name-required"));
+        let tmpl = NewProjectTemplate { message, chrome };
         return render_template(&tmpl);
     }
 
@@ -85,14 +84,14 @@ pub async fn create(
                 public_key,
                 dsn,
                 platform,
-                csrf_token: csrf,
+                chrome,
             };
             render_template(&tmpl)
         }
         Err(e) => {
             let tmpl = NewProjectTemplate {
-                message: Some(format!("Error: {e}")),
-                csrf_token: csrf,
+                message: Some(chrome.err(e)),
+                chrome,
             };
             render_template(&tmpl)
         }

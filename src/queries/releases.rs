@@ -667,11 +667,13 @@ mod tests {
     }
 
     async fn insert_org_rel(pool: &DbPool, slug: &str) -> i64 {
-        sqlx::query(sql!("INSERT INTO organizations (slug, name) VALUES (?1, ?1)"))
-            .bind(slug)
-            .execute(pool)
-            .await
-            .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO organizations (slug, name) VALUES (?1, ?1)"
+        ))
+        .bind(slug)
+        .execute(pool)
+        .await
+        .unwrap();
         sqlx::query(sql!("SELECT org_id FROM organizations WHERE slug = ?1"))
             .bind(slug)
             .fetch_one(pool)
@@ -708,14 +710,12 @@ mod tests {
         )
         .await;
         // Overwrite the placeholder release set by insert_test_event with the real value
-        sqlx::query(sql!(
-            "UPDATE events SET release = ?1 WHERE event_id = ?2"
-        ))
-        .bind(release)
-        .bind(event_id)
-        .execute(pool)
-        .await
-        .unwrap();
+        sqlx::query(sql!("UPDATE events SET release = ?1 WHERE event_id = ?2"))
+            .bind(release)
+            .bind(event_id)
+            .execute(pool)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

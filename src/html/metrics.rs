@@ -3,9 +3,10 @@ use axum::extract::{Path, Query};
 use serde::Deserialize;
 
 use crate::extractors::ReadPool;
-use crate::orgs::extractor::ActiveOrg;
+use crate::html::chrome::PageChrome;
 use crate::html::render_template;
-use crate::html::utils::{render_project_list, Csrf, ListParams};
+use crate::html::utils::{render_project_list, Chrome, ListParams};
+use crate::orgs::extractor::ActiveOrg;
 use crate::queries;
 use crate::queries::types::{MetricBucket, MetricInfo, PagedResult};
 use crate::queries::ProjectNavCounts;
@@ -21,13 +22,13 @@ struct MetricListTemplate {
     project_id: u64,
     result: PagedResult<MetricInfo>,
     nav: ProjectNavCounts,
-    csrf_token: String,
+    chrome: PageChrome,
 }
 
 pub async fn list_handler(
     active: ActiveOrg,
     ReadPool(pool): ReadPool,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path(project_id): Path<u64>,
     Query(params): Query<ListParams>,
 ) -> Result<axum::response::Response, HtmlError> {
@@ -40,13 +41,13 @@ pub async fn list_handler(
     Ok(render_project_list(
         &pool,
         project_id,
-        csrf,
+        chrome,
         result,
-        |project_id, result, nav, csrf_token| MetricListTemplate {
+        |project_id, result, nav, chrome| MetricListTemplate {
             project_id,
             result,
             nav,
-            csrf_token,
+            chrome,
         },
     )
     .await)
@@ -66,13 +67,13 @@ struct MetricDetailTemplate {
     metric_type: String,
     buckets: Vec<MetricBucket>,
     nav: ProjectNavCounts,
-    csrf_token: String,
+    chrome: PageChrome,
 }
 
 pub async fn detail_handler(
     active: ActiveOrg,
     ReadPool(pool): ReadPool,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path((project_id, raw_mri)): Path<(u64, String)>,
     Query(params): Query<DetailParams>,
 ) -> Result<axum::response::Response, HtmlError> {
@@ -100,7 +101,7 @@ pub async fn detail_handler(
         metric_type,
         buckets,
         nav,
-        csrf_token: csrf,
+        chrome,
     };
     Ok(render_template(&tmpl))
 }

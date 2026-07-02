@@ -1,28 +1,28 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
 
-{% block title %}Replays — {{ nav.label }} — Stackpit{% endblock %}
+{% block title %}{{ chrome.t("nav-replays") }} — {{ nav.label }} {{ chrome.t("replays-title-suffix") }}{% endblock %}
 
 {% block sidebar_nav %}
-  {% call m::project_sidebar(project_id, nav, "replays") %}
+  {% call m::project_sidebar(chrome, project_id, nav, "replays") %}
   {% endcall %}
 {% endblock %}
 
 {% block breadcrumbs %}
   <span class="breadcrumb-sep">/</span>
-  <a class="breadcrumb-link" href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
+  <a class="breadcrumb-link" href="/web/projects/{{ project_id }}/"><bdi>{{ nav.label }}</bdi></a>
   <span class="breadcrumb-sep">/</span>
-  <span class="breadcrumb-current">Replays</span>
+  <span class="breadcrumb-current">{{ chrome.t("nav-replays") }}</span>
 {% endblock %}
 
 {% block content %}
   <div class="page-header">
-    <h1>Replays</h1>
+    <h1>{{ chrome.t("nav-replays") }}</h1>
   </div>
 
   {% if result.items.is_empty() %}
     <div class="card">
-      <p class="empty">No replays found. Replay events will appear here.</p>
+      <p class="empty">{{ chrome.t("replays-list-empty") }}</p>
     </div>
   {% else %}
     <div class="card overflow-hidden">
@@ -30,11 +30,11 @@
         <table class="table">
           <thead>
             <tr>
-              <th>Event ID</th>
-              <th>Type</th>
-              <th>Release</th>
-              <th class="hide-mobile">Environment</th>
-              <th>Timestamp</th>
+              <th>{{ chrome.t("replays-col-event-id") }}</th>
+              <th>{{ chrome.t("replays-col-type") }}</th>
+              <th>{{ chrome.t("replays-col-release") }}</th>
+              <th class="hide-mobile">{{ chrome.t("replays-col-environment") }}</th>
+              <th>{{ chrome.t("replays-col-timestamp") }}</th>
             </tr>
           </thead>
           <tbody>
@@ -49,35 +49,34 @@
                 </td>
                 <td class="text-mono text-[12px]">
                   {% match r.release %}{% when Some with (rel) %}{{ rel }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
-                </td>
-                <td class="hide-mobile text-mono text-[12px]">
-                  {% match r.environment %}{% when Some with (e) %}{{ e }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
-                </td>
-                <td class="text-muted">
-                  <time datetime="{{ r.timestamp|format_ts }}"
-                        title="{{ r.timestamp|format_ts }}">{{ r.timestamp|format_relative }}</time>
-                </td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </div>
+              </td>
+              <td class="hide-mobile text-mono text-[12px]">
+                {% match r.environment %}{% when Some with (e) %}{{ e }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
+            </td>
+            <td class="text-muted">
+              <time datetime="{{ r.timestamp|format_ts }}"
+                    title="{{ r.timestamp|format_ts }}">{{ chrome.rel_time(r.timestamp) }}</time>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
 
-    <nav class="pagination" aria-label="Pagination">
-      <span>{{ result.total }} replay
-        {%- if result.total != 1 %}s{% endif %}
-      </span>
-      <span class="flex gap-2">
-        {% if result.has_prev() %}
-          <a class="btn btn-ghost"
-             href="/web/projects/{{ project_id }}/replays/?offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}">« Previous</a>
-        {% endif %}
-        {% if result.has_next() %}
-          <a class="btn btn-ghost"
-             href="/web/projects/{{ project_id }}/replays/?offset={{ result.next_offset() }}&amp;limit={{ result.limit }}">Next »</a>
-        {% endif %}
-      </span>
-    </nav>
-  {% endif %}
+<nav class="pagination"
+     aria-label="{{ chrome.t("replays-pagination-label") }}">
+  <span>{{ chrome.tv_count("replays-count", result.total as i64) }}</span>
+  <span class="flex gap-2">
+    {% if result.has_prev() %}
+      <a class="btn btn-ghost"
+         href="/web/projects/{{ project_id }}/replays/?offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}">{{ chrome.t("replays-pagination-prev") }}</a>
+    {% endif %}
+    {% if result.has_next() %}
+      <a class="btn btn-ghost"
+         href="/web/projects/{{ project_id }}/replays/?offset={{ result.next_offset() }}&amp;limit={{ result.limit }}">{{ chrome.t("replays-pagination-next") }}</a>
+    {% endif %}
+  </span>
+</nav>
+{% endif %}
 {% endblock %}

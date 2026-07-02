@@ -1,244 +1,240 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
 
-{% block title %}Integrations — {{ nav.label }} — Stackpit{% endblock %}
+{% block title %}{{ chrome.t("projects-tab-integrations") }} — {{ nav.label }} — Stackpit{% endblock %}
 
 {% block sidebar_nav %}
-  {% call m::project_sidebar(project_id, nav, "settings") %}
+  {% call m::project_sidebar(chrome, project_id, nav, "settings") %}
   {% endcall %}
 {% endblock %}
 
 {% block breadcrumbs %}
   <span class="breadcrumb-sep">/</span>
-  <a class="breadcrumb-link" href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
+  <a class="breadcrumb-link" href="/web/projects/{{ project_id }}/"><bdi>{{ nav.label }}</bdi></a>
   <span class="breadcrumb-sep">/</span>
   <a class="breadcrumb-link"
-     href="/web/projects/{{ project_id }}/settings/">Settings</a>
+     href="/web/projects/{{ project_id }}/settings/">{{ chrome.t("projects-settings-heading") }}</a>
   <span class="breadcrumb-sep">/</span>
-  <span class="breadcrumb-current">Integrations</span>
+  <span class="breadcrumb-current">{{ chrome.t("projects-tab-integrations") }}</span>
 {% endblock %}
 
 {% block content %}
   <div class="page-header">
-    <h1>Integrations</h1>
+    <h1>{{ chrome.t("projects-tab-integrations") }}</h1>
   </div>
 
   <nav class="flex gap-1 mb-6 border-b border-outline-variant -mx-6 px-6"
-       aria-label="Settings sections">
+       aria-label="{{ chrome.t("settings-aria-sections") }}">
     <a href="/web/projects/{{ project_id }}/settings/"
-       class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-transparent text-muted hover:text-on-surface">General</a>
+       class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-transparent text-muted hover:text-on-surface">{{ chrome.t("projects-tab-general") }}</a>
     <a href="/web/projects/{{ project_id }}/settings/keys/"
-       class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-transparent text-muted hover:text-on-surface">SDK setup</a>
+       class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-transparent text-muted hover:text-on-surface">{{ chrome.t("projects-tab-sdk") }}</a>
     <a href="/web/projects/{{ project_id }}/settings/sourcemaps/"
-       class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-transparent text-muted hover:text-on-surface">Source maps</a>
+       class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-transparent text-muted hover:text-on-surface">{{ chrome.t("projects-tab-sourcemaps") }}</a>
     <a href="/web/projects/{{ project_id }}/settings/filters/"
-       class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-transparent text-muted hover:text-on-surface">Filters</a>
+       class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-transparent text-muted hover:text-on-surface">{{ chrome.t("projects-tab-filters") }}</a>
     <a href="/web/projects/{{ project_id }}/settings/integrations/"
-       class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-primary text-on-surface">Integrations</a>
+       class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-primary text-on-surface">{{ chrome.t("projects-tab-integrations") }}</a>
   </nav>
 
   {% match message %}{% when Some with (msg) %}
   <div class="settings-message mb-4">{{ msg }}</div>
   {% when None %}{% endmatch %}
 
-  <div class="space-y-6 max-w-3xl">
+<div class="space-y-6 max-w-3xl">
 
-    <h2 class="page-h2">Active integrations</h2>
-    {% if active.is_empty() %}
-      <div class="card">
-        <p class="empty">
-          No integrations activated. Add a global integration on the <a class="text-primary" href="/web/settings/integrations/">Integrations</a> page first, then enable it here. You can scope each one by minimum level and environment so dev-noise stays out of prod channels.
-        </p>
-      </div>
-    {% else %}
-      {% for pi in active %}
-        <div class="card card-pad">
-          <div class="flex items-start justify-between mb-3">
-            <div>
-              <h3 class="font-semibold text-[15px]">{{ pi.integration_name }}</h3>
-              <span class="badge badge-neutral mt-1">{{ pi.integration_kind }}</span>
-            </div>
-            <form method="post"
-                  action="/web/projects/{{ project_id }}/settings/integrations/{{ pi.id }}/delete">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-              <button type="submit"
-                      class="btn btn-danger"
-                      data-confirm="Deactivate this integration for the project?">Deactivate</button>
-            </form>
+  <h2 class="page-h2">{{ chrome.t("projects-integrations-active-heading") }}</h2>
+  {% if active.is_empty() %}
+    <div class="card">
+      <p class="empty">{{ chrome.t("projects-integrations-active-empty") |safe }}</p>
+    </div>
+  {% else %}
+    {% for pi in active %}
+      <div class="card card-pad">
+        <div class="flex items-start justify-between mb-3">
+          <div>
+            <h3 class="font-semibold text-[15px]"><bdi>{{ pi.integration_name }}</bdi></h3>
+            <span class="badge badge-neutral mt-1">{{ pi.integration_kind }}</span>
           </div>
-          <form class="settings-form"
-                method="post"
-                action="/web/projects/{{ project_id }}/settings/integrations/{{ pi.id }}/update">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <div class="flex flex-wrap gap-4 text-[13px]">
-              <label class="flex items-center gap-2">
-                <input type="checkbox"
-                       name="notify_new_issues"
-                       value="1"
-                       {% if pi.notify_new_issues %}checked{% endif %}>
-                New issues
-              </label>
-              <label class="flex items-center gap-2">
-                <input type="checkbox"
-                       name="notify_regressions"
-                       value="1"
-                       {% if pi.notify_regressions %}checked{% endif %}>
-                Regressions
-              </label>
-              <label class="flex items-center gap-2">
-                <input type="checkbox"
-                       name="notify_threshold"
-                       value="1"
-                       {% if pi.notify_threshold %}checked{% endif %}>
-                Threshold alerts
-              </label>
-              <label class="flex items-center gap-2">
-                <input type="checkbox"
-                       name="notify_digests"
-                       value="1"
-                       {% if pi.notify_digests %}checked{% endif %}>
-                Digests
-              </label>
-            </div>
-            <div class="grid grid-cols-2 gap-3">
-              <div>
-                <label class="field-label" for="min_level_{{ pi.id }}">Minimum level</label>
-                <select class="select" id="min_level_{{ pi.id }}" name="min_level">
-                  <option value="">Any</option>
-                  <option value="debug"
-                          {% match pi.min_level %}
-                          {% when Some with (l) %}
-                          {% if l == "debug" %}selected{% endif %}
-                          {% when None %}
-                          {% endmatch %}>debug</option>
-                  <option value="info"
-                          {% match pi.min_level %}
-                          {% when Some with (l) %}
-                          {% if l == "info" %}selected{% endif %}
-                          {% when None %}
-                          {% endmatch %}>info</option>
-                  <option value="warning"
-                          {% match pi.min_level %}
-                          {% when Some with (l) %}
-                          {% if l == "warning" %}selected{% endif %}
-                          {% when None %}
-                          {% endmatch %}>warning</option>
-                  <option value="error"
-                          {% match pi.min_level %}
-                          {% when Some with (l) %}
-                          {% if l == "error" %}selected{% endif %}
-                          {% when None %}
-                          {% endmatch %}>error</option>
-                  <option value="fatal"
-                          {% match pi.min_level %}
-                          {% when Some with (l) %}
-                          {% if l == "fatal" %}selected{% endif %}
-                          {% when None %}
-                          {% endmatch %}>fatal</option>
-                </select>
-              </div>
-              <div>
-                <label class="field-label" for="env_{{ pi.id }}">Environment filter</label>
-                <input class="input"
-                       type="text"
-                       id="env_{{ pi.id }}"
-                       name="environment_filter"
-                       placeholder="e.g. production"
-                       value="{% match pi.environment_filter %}{% when Some with (e) %}{{ e }}{% when None %}{% endmatch %}">
-              </div>
-            </div>
-            {% if pi.integration_kind == "email" %}
-              <div>
-                <label class="field-label" for="to_{{ pi.id }}">To address</label>
-                <input class="input"
-                       type="email"
-                       id="to_{{ pi.id }}"
-                       name="to_address"
-                       placeholder="alerts@example.com"
-                       value="{% match pi.config %}{% when Some with (c) %}{{ c }}{% when None %}{% endmatch %}">
-              </div>
-            {% endif %}
-            <div>
-              <button type="submit" class="btn btn-primary">Save</button>
-            </div>
+          <form method="post"
+                action="/web/projects/{{ project_id }}/settings/integrations/{{ pi.id }}/delete">
+            <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+            <button type="submit"
+                    class="btn btn-danger"
+                    data-confirm="{{ chrome.t("projects-integrations-deactivate-confirm") }}">{{ chrome.t("projects-integrations-deactivate") }}</button>
           </form>
         </div>
-      {% endfor %}
-    {% endif %}
-
-    {% if !available.is_empty() %}
-      <div class="card card-pad">
-        <h2 class="page-h2 mb-3">Activate integration</h2>
         <form class="settings-form"
               method="post"
-              action="/web/projects/{{ project_id }}/settings/integrations/activate">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <div>
-            <label class="field-label" for="pi_integration_id">Integration</label>
-            <select class="select" id="pi_integration_id" name="integration_id">
-              {% for i in available %}<option value="{{ i.id }}">{{ i.name }} ({{ i.kind }})</option>{% endfor %}
-            </select>
-          </div>
+              action="/web/projects/{{ project_id }}/settings/integrations/{{ pi.id }}/update">
+          <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
           <div class="flex flex-wrap gap-4 text-[13px]">
             <label class="flex items-center gap-2">
-              <input type="checkbox" name="notify_new_issues" value="1" checked>
-              New issues
+              <input type="checkbox"
+                     name="notify_new_issues"
+                     value="1"
+                     {% if pi.notify_new_issues %}checked{% endif %}>
+              {{ chrome.t("projects-integrations-notify-new-issues") }}
             </label>
             <label class="flex items-center gap-2">
-              <input type="checkbox" name="notify_regressions" value="1" checked>
-              Regressions
+              <input type="checkbox"
+                     name="notify_regressions"
+                     value="1"
+                     {% if pi.notify_regressions %}checked{% endif %}>
+              {{ chrome.t("projects-integrations-notify-regressions") }}
             </label>
             <label class="flex items-center gap-2">
-              <input type="checkbox" name="notify_threshold" value="1" checked>
-              Threshold alerts
+              <input type="checkbox"
+                     name="notify_threshold"
+                     value="1"
+                     {% if pi.notify_threshold %}checked{% endif %}>
+              {{ chrome.t("projects-integrations-notify-threshold") }}
             </label>
             <label class="flex items-center gap-2">
-              <input type="checkbox" name="notify_digests" value="1" checked>
-              Digests
+              <input type="checkbox"
+                     name="notify_digests"
+                     value="1"
+                     {% if pi.notify_digests %}checked{% endif %}>
+              {{ chrome.t("projects-integrations-notify-digests") }}
             </label>
           </div>
           <div class="grid grid-cols-2 gap-3">
             <div>
-              <label class="field-label" for="pi_min_level">Minimum level</label>
-              <select class="select" id="pi_min_level" name="min_level">
-                <option value="">Any</option>
-                <option value="debug">debug</option>
-                <option value="info">info</option>
-                <option value="warning">warning</option>
-                <option value="error">error</option>
-                <option value="fatal">fatal</option>
-              </select>
-            </div>
-            <div>
-              <label class="field-label" for="pi_env">Environment filter</label>
-              <input class="input"
-                     type="text"
-                     id="pi_env"
-                     name="environment_filter"
-                     placeholder="e.g. production">
-            </div>
-          </div>
-          <div>
-            <label class="field-label" for="pi_to">
-              To address <span class="text-muted normal-case tracking-normal font-normal">(email integrations only)</span>
-            </label>
-            <input class="input"
-                   type="email"
-                   id="pi_to"
-                   name="to_address"
-                   placeholder="alerts@example.com">
-          </div>
-          <div>
-            <button type="submit" class="btn btn-primary">Activate</button>
-          </div>
-        </form>
-      </div>
-    {% else %}
-      <div class="card">
-        <p class="empty">
-          No integrations available. <a class="text-primary" href="/web/settings/integrations/">Create one first</a>.
-        </p>
-      </div>
-    {% endif %}
+              <label class="field-label" for="min_level_{{ pi.id }}">{{ chrome.t("projects-integrations-min-level") }}</label>
+              <select class="select" id="min_level_{{ pi.id }}" name="min_level">
+                <option value="">{{ chrome.t("projects-integrations-level-any") }}</option>
+                <option value="debug"
+                        {% match pi.min_level %}
+                        {% when Some with (l) %}
+                        {% if l == "debug" %}selected{% endif %}
+                        {% when None %}
+                        {% endmatch %}>debug</option>
+              <option value="info"
+                      {% match pi.min_level %}
+                      {% when Some with (l) %}
+                      {% if l == "info" %}selected{% endif %}
+                      {% when None %}
+                      {% endmatch %}>info</option>
+            <option value="warning"
+                    {% match pi.min_level %}
+                    {% when Some with (l) %}
+                    {% if l == "warning" %}selected{% endif %}
+                    {% when None %}
+                    {% endmatch %}>warning</option>
+          <option value="error"
+                  {% match pi.min_level %}
+                  {% when Some with (l) %}
+                  {% if l == "error" %}selected{% endif %}
+                  {% when None %}
+                  {% endmatch %}>error</option>
+        <option value="fatal"
+                {% match pi.min_level %}
+                {% when Some with (l) %}
+                {% if l == "fatal" %}selected{% endif %}
+                {% when None %}
+                {% endmatch %}>fatal</option>
+    </select>
   </div>
+  <div>
+    <label class="field-label" for="env_{{ pi.id }}">{{ chrome.t("projects-integrations-env-filter") }}</label>
+    <input class="input"
+           type="text"
+           id="env_{{ pi.id }}"
+           name="environment_filter"
+           placeholder="{{ chrome.t("projects-integrations-env-placeholder") }}"
+           value="{% match pi.environment_filter %}{% when Some with (e) %}{{ e }}{% when None %}{% endmatch %}">
+</div>
+</div>
+{% if pi.integration_kind == "email" %}
+  <div>
+    <label class="field-label" for="to_{{ pi.id }}">{{ chrome.t("projects-integrations-to-address") }}</label>
+    <input class="input"
+           type="email"
+           id="to_{{ pi.id }}"
+           name="to_address"
+           placeholder="alerts@example.com"
+           value="{% match pi.config %}{% when Some with (c) %}{{ c }}{% when None %}{% endmatch %}">
+</div>
+{% endif %}
+<div>
+  <button type="submit" class="btn btn-primary">{{ chrome.t("common-action-save") }}</button>
+</div>
+</form>
+</div>
+{% endfor %}
+{% endif %}
+
+{% if !available.is_empty() %}
+  <div class="card card-pad">
+    <h2 class="page-h2 mb-3">{{ chrome.t("projects-integrations-activate-heading") }}</h2>
+    <form class="settings-form"
+          method="post"
+          action="/web/projects/{{ project_id }}/settings/integrations/activate">
+      <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+      <div>
+        <label class="field-label" for="pi_integration_id">{{ chrome.t("projects-integrations-integration-label") }}</label>
+        <select class="select" id="pi_integration_id" name="integration_id">
+          {% for i in available %}<option value="{{ i.id }}">{{ i.name }} ({{ i.kind }})</option>{% endfor %}
+        </select>
+      </div>
+      <div class="flex flex-wrap gap-4 text-[13px]">
+        <label class="flex items-center gap-2">
+          <input type="checkbox" name="notify_new_issues" value="1" checked>
+          {{ chrome.t("projects-integrations-notify-new-issues") }}
+        </label>
+        <label class="flex items-center gap-2">
+          <input type="checkbox" name="notify_regressions" value="1" checked>
+          {{ chrome.t("projects-integrations-notify-regressions") }}
+        </label>
+        <label class="flex items-center gap-2">
+          <input type="checkbox" name="notify_threshold" value="1" checked>
+          {{ chrome.t("projects-integrations-notify-threshold") }}
+        </label>
+        <label class="flex items-center gap-2">
+          <input type="checkbox" name="notify_digests" value="1" checked>
+          {{ chrome.t("projects-integrations-notify-digests") }}
+        </label>
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="field-label" for="pi_min_level">{{ chrome.t("projects-integrations-min-level") }}</label>
+          <select class="select" id="pi_min_level" name="min_level">
+            <option value="">{{ chrome.t("projects-integrations-level-any") }}</option>
+            <option value="debug">debug</option>
+            <option value="info">info</option>
+            <option value="warning">warning</option>
+            <option value="error">error</option>
+            <option value="fatal">fatal</option>
+          </select>
+        </div>
+        <div>
+          <label class="field-label" for="pi_env">{{ chrome.t("projects-integrations-env-filter") }}</label>
+          <input class="input"
+                 type="text"
+                 id="pi_env"
+                 name="environment_filter"
+                 placeholder="{{ chrome.t("projects-integrations-env-placeholder") }}">
+        </div>
+      </div>
+      <div>
+        <label class="field-label" for="pi_to">
+          {{ chrome.t("projects-integrations-to-address") }} <span class="text-muted normal-case tracking-normal font-normal">{{ chrome.t("projects-integrations-to-address-note") }}</span>
+        </label>
+        <input class="input"
+               type="email"
+               id="pi_to"
+               name="to_address"
+               placeholder="alerts@example.com">
+      </div>
+      <div>
+        <button type="submit" class="btn btn-primary">{{ chrome.t("projects-integrations-activate-submit") }}</button>
+      </div>
+    </form>
+  </div>
+{% else %}
+  <div class="card">
+    <p class="empty">{{ chrome.t("projects-integrations-available-empty") |safe }}</p>
+  </div>
+{% endif %}
+</div>
 {% endblock %}

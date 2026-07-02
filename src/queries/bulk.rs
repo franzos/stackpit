@@ -211,8 +211,10 @@ pub async fn bulk_delete_events(
         }
 
         // Tracks whether push_filter emitted WHERE/AND, to pick the right connector for org constraint.
-        let has_field_filter =
-            f.level.is_some() || f.project_id.is_some() || f.query.is_some() || f.item_type.is_some();
+        let has_field_filter = f.level.is_some()
+            || f.project_id.is_some()
+            || f.query.is_some()
+            || f.item_type.is_some();
 
         // Collect distinct fingerprints that will be affected before deleting.
         let mut sel_qb =
@@ -290,9 +292,8 @@ pub async fn bulk_delete_issues(
     let mut tx = pool.begin().await?;
 
     for chunk in fps.chunks(500) {
-        let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new(
-            "DELETE FROM events WHERE project_id = ",
-        );
+        let mut qb =
+            sqlx::QueryBuilder::<crate::db::Db>::new("DELETE FROM events WHERE project_id = ");
         qb.push_bind(project_id as i64);
         qb.push(" AND fingerprint IN (");
         let mut sep = qb.separated(", ");
@@ -317,9 +318,8 @@ pub async fn bulk_delete_issues(
 
     let mut deleted: u64 = 0;
     for chunk in fps.chunks(500) {
-        let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new(
-            "DELETE FROM issues WHERE project_id = ",
-        );
+        let mut qb =
+            sqlx::QueryBuilder::<crate::db::Db>::new("DELETE FROM issues WHERE project_id = ");
         qb.push_bind(project_id as i64);
         qb.push(" AND fingerprint IN (");
         let mut sep = qb.separated(", ");
@@ -387,12 +387,14 @@ mod tests {
     use sqlx::Row;
 
     async fn insert_test_org(pool: &DbPool, slug: &str) -> i64 {
-        sqlx::query(sql!("INSERT INTO organizations (slug, name) VALUES (?1, ?2)"))
-            .bind(slug)
-            .bind(slug)
-            .execute(pool)
-            .await
-            .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO organizations (slug, name) VALUES (?1, ?2)"
+        ))
+        .bind(slug)
+        .bind(slug)
+        .execute(pool)
+        .await
+        .unwrap();
         sqlx::query(sql!("SELECT org_id FROM organizations WHERE slug = ?1"))
             .bind(slug)
             .fetch_one(pool)
@@ -641,29 +643,42 @@ mod tests {
 
         // Project 801: own issue with fp "sec-fp-a".
         // Project 802: foreign issue with fp "sec-fp-b".
-        insert_test_issue(&pool, "sec-fp-a", 801, Some("A"), Some("error"), 1, 1, 1, "unresolved")
-            .await;
-        insert_test_issue(&pool, "sec-fp-b", 802, Some("B"), Some("error"), 1, 1, 1, "unresolved")
-            .await;
+        insert_test_issue(
+            &pool,
+            "sec-fp-a",
+            801,
+            Some("A"),
+            Some("error"),
+            1,
+            1,
+            1,
+            "unresolved",
+        )
+        .await;
+        insert_test_issue(
+            &pool,
+            "sec-fp-b",
+            802,
+            Some("B"),
+            Some("error"),
+            1,
+            1,
+            1,
+            "unresolved",
+        )
+        .await;
 
         // Try to delete project 802's fingerprint while scoped to project 801.
-        let deleted = bulk_delete_issues(
-            &pool,
-            Some(&["sec-fp-b".to_string()]),
-            None,
-            801,
-            None,
-        )
-        .await
-        .unwrap();
+        let deleted = bulk_delete_issues(&pool, Some(&["sec-fp-b".to_string()]), None, 801, None)
+            .await
+            .unwrap();
         assert_eq!(deleted, 0, "cross-project fingerprint must not delete");
 
-        let count: i64 =
-            sqlx::query("SELECT COUNT(*) FROM issues WHERE fingerprint = 'sec-fp-b'")
-                .fetch_one(&pool)
-                .await
-                .unwrap()
-                .get(0);
+        let count: i64 = sqlx::query("SELECT COUNT(*) FROM issues WHERE fingerprint = 'sec-fp-b'")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get(0);
         assert_eq!(count, 1, "project 802 issue must survive");
     }
 
@@ -696,7 +711,10 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(updated, 0, "cross-project fingerprint must not update status");
+        assert_eq!(
+            updated, 0,
+            "cross-project fingerprint must not update status"
+        );
 
         let status: String =
             sqlx::query("SELECT status FROM issues WHERE fingerprint = 'upd-fp-b'")
@@ -704,6 +722,9 @@ mod tests {
                 .await
                 .unwrap()
                 .get(0);
-        assert_eq!(status, "unresolved", "project 802 issue status must not change");
+        assert_eq!(
+            status, "unresolved",
+            "project 802 issue status must not change"
+        );
     }
 }

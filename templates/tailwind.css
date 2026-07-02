@@ -521,4 +521,8 @@
   .table-wrap { overflow-x: auto; }
   .nowrap { white-space: nowrap; }
   .truncate-cell { max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* directional glyphs (back-nav arrow): flip under RTL */
+  .rtl-flip { display: inline-block; }
+  [dir="rtl"] .rtl-flip { transform: scaleX(-1); }
 }

@@ -1,19 +1,19 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
 
-{% block title %}{{ mri }} — Metrics — {{ nav.label }} — Stackpit{% endblock %}
+{% block title %}{{ mri }} — {{ chrome.t("nav-metrics") }} — {{ nav.label }} {{ chrome.t("metrics-title-suffix") }}{% endblock %}
 
 {% block sidebar_nav %}
-  {% call m::project_sidebar(project_id, nav, "metrics") %}
+  {% call m::project_sidebar(chrome, project_id, nav, "metrics") %}
   {% endcall %}
 {% endblock %}
 
 {% block breadcrumbs %}
   <span class="breadcrumb-sep">/</span>
-  <a class="breadcrumb-link" href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
+  <a class="breadcrumb-link" href="/web/projects/{{ project_id }}/"><bdi>{{ nav.label }}</bdi></a>
   <span class="breadcrumb-sep">/</span>
   <a class="breadcrumb-link"
-     href="/web/projects/{{ project_id }}/metrics/">Metrics</a>
+     href="/web/projects/{{ project_id }}/metrics/">{{ chrome.t("nav-metrics") }}</a>
   <span class="breadcrumb-sep">/</span>
   <span class="breadcrumb-current text-mono">{{ mri }}</span>
 {% endblock %}
@@ -30,7 +30,7 @@
 
   {% if buckets.is_empty() %}
     <div class="card">
-      <p class="empty">No data points in the selected time range.</p>
+      <p class="empty">{{ chrome.t("metrics-detail-empty") }}</p>
     </div>
   {% else %}
     <div class="card overflow-hidden">
@@ -38,12 +38,12 @@
         <table class="table">
           <thead>
             <tr>
-              <th>Time (hourly bucket)</th>
-              <th>Count</th>
-              <th>Sum</th>
-              <th>Min</th>
-              <th>Max</th>
-              <th>Avg</th>
+              <th>{{ chrome.t("metrics-detail-col-time") }}</th>
+              <th>{{ chrome.t("metrics-detail-col-count") }}</th>
+              <th>{{ chrome.t("metrics-detail-col-sum") }}</th>
+              <th>{{ chrome.t("metrics-detail-col-min") }}</th>
+              <th>{{ chrome.t("metrics-detail-col-max") }}</th>
+              <th>{{ chrome.t("metrics-detail-col-avg") }}</th>
             </tr>
           </thead>
           <tbody>

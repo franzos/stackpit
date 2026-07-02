@@ -89,11 +89,21 @@ mod tests {
     }
 
     fn acme_member_claim() -> OrgClaim {
-        OrgClaim { id: "acme".into(), slug: "acme".into(), role: "member".into(), name: None }
+        OrgClaim {
+            id: "acme".into(),
+            slug: "acme".into(),
+            role: "member".into(),
+            name: None,
+        }
     }
 
     fn acme_owner_claim() -> OrgClaim {
-        OrgClaim { id: "acme".into(), slug: "acme".into(), role: "owner".into(), name: None }
+        OrgClaim {
+            id: "acme".into(),
+            slug: "acme".into(),
+            role: "owner".into(),
+            name: None,
+        }
     }
 
     async fn role_for(pool: &DbPool, user_id: i64, org_id: i64) -> String {
@@ -112,16 +122,26 @@ mod tests {
         let u = seed_user(&pool).await;
         // second owner so the gate, not the guard, must retain the membership
         let u2 = seed_user2(&pool).await;
-        let org =
-            provision_forseti_org(&pool, u, "https://idp", "acme", "acme", "Acme").await.unwrap();
+        let org = provision_forseti_org(&pool, u, "https://idp", "acme", "acme", "Acme")
+            .await
+            .unwrap();
         add_member(&pool, u2, org, Role::Owner).await.unwrap();
         reconcile(
             &pool,
-            ReconcileInput { user_id: u, iss: "https://idp", orgs: None, orgs_truncated: false },
+            ReconcileInput {
+                user_id: u,
+                iss: "https://idp",
+                orgs: None,
+                orgs_truncated: false,
+            },
         )
         .await
         .unwrap();
-        assert!(list_memberships(&pool, u).await.unwrap().iter().any(|m| m.org_id == org));
+        assert!(list_memberships(&pool, u)
+            .await
+            .unwrap()
+            .iter()
+            .any(|m| m.org_id == org));
     }
 
     #[tokio::test]
@@ -130,8 +150,9 @@ mod tests {
         let u = seed_user(&pool).await;
         // second owner so the gate, not the guard, must retain the membership
         let u2 = seed_user2(&pool).await;
-        let org =
-            provision_forseti_org(&pool, u, "https://idp", "acme", "acme", "Acme").await.unwrap();
+        let org = provision_forseti_org(&pool, u, "https://idp", "acme", "acme", "Acme")
+            .await
+            .unwrap();
         add_member(&pool, u2, org, Role::Owner).await.unwrap();
         reconcile(
             &pool,
@@ -144,7 +165,11 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(list_memberships(&pool, u).await.unwrap().iter().any(|m| m.org_id == org));
+        assert!(list_memberships(&pool, u)
+            .await
+            .unwrap()
+            .iter()
+            .any(|m| m.org_id == org));
     }
 
     #[tokio::test]
@@ -156,8 +181,9 @@ mod tests {
             .await
             .unwrap()
             .user_id;
-        let org =
-            provision_forseti_org(&pool, u, "https://idp", "acme", "acme", "Acme").await.unwrap();
+        let org = provision_forseti_org(&pool, u, "https://idp", "acme", "acme", "Acme")
+            .await
+            .unwrap();
         add_member(&pool, u2, org, Role::Owner).await.unwrap();
         reconcile(
             &pool,
@@ -170,15 +196,20 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(!list_memberships(&pool, u).await.unwrap().iter().any(|m| m.org_id == org));
+        assert!(!list_memberships(&pool, u)
+            .await
+            .unwrap()
+            .iter()
+            .any(|m| m.org_id == org));
     }
 
     #[tokio::test]
     async fn last_owner_is_never_removed() {
         let pool = crate::db::open_test_pool().await;
         let u = seed_user(&pool).await;
-        let org =
-            provision_forseti_org(&pool, u, "https://idp", "acme", "acme", "Acme").await.unwrap();
+        let org = provision_forseti_org(&pool, u, "https://idp", "acme", "acme", "Acme")
+            .await
+            .unwrap();
         reconcile(
             &pool,
             ReconcileInput {
@@ -191,17 +222,29 @@ mod tests {
         .await
         .unwrap();
         // retained: u is the last owner
-        assert!(list_memberships(&pool, u).await.unwrap().iter().any(|m| m.org_id == org));
+        assert!(list_memberships(&pool, u)
+            .await
+            .unwrap()
+            .iter()
+            .any(|m| m.org_id == org));
     }
 
     #[tokio::test]
     async fn unknown_org_owner_is_provisionable_member_is_not() {
         let pool = crate::db::open_test_pool().await;
         let u = seed_user(&pool).await;
-        let owner_claim =
-            OrgClaim { id: "new".into(), slug: "new".into(), role: "owner".into(), name: Some("New".into()) };
-        let member_claim =
-            OrgClaim { id: "other".into(), slug: "other".into(), role: "member".into(), name: None };
+        let owner_claim = OrgClaim {
+            id: "new".into(),
+            slug: "new".into(),
+            role: "owner".into(),
+            name: Some("New".into()),
+        };
+        let member_claim = OrgClaim {
+            id: "other".into(),
+            slug: "other".into(),
+            role: "member".into(),
+            name: None,
+        };
         let r = reconcile(
             &pool,
             ReconcileInput {
@@ -221,8 +264,12 @@ mod tests {
     async fn default_org_id_skipped_no_extra_membership() {
         let pool = crate::db::open_test_pool().await;
         let u = seed_user(&pool).await;
-        let default_claim =
-            OrgClaim { id: "default".into(), slug: "default".into(), role: "member".into(), name: None };
+        let default_claim = OrgClaim {
+            id: "default".into(),
+            slug: "default".into(),
+            role: "member".into(),
+            name: None,
+        };
         reconcile(
             &pool,
             ReconcileInput {
@@ -246,8 +293,9 @@ mod tests {
         let pool = crate::db::open_test_pool().await;
         let u = seed_user(&pool).await;
         let u2 = seed_user2(&pool).await;
-        let org =
-            provision_forseti_org(&pool, u, "https://idp", "acme", "acme", "Acme").await.unwrap();
+        let org = provision_forseti_org(&pool, u, "https://idp", "acme", "acme", "Acme")
+            .await
+            .unwrap();
         add_member(&pool, u2, org, Role::Owner).await.unwrap();
         reconcile(
             &pool,
@@ -268,8 +316,9 @@ mod tests {
     async fn role_sync_last_owner_blocks_downgrade() {
         let pool = crate::db::open_test_pool().await;
         let u = seed_user(&pool).await;
-        let org =
-            provision_forseti_org(&pool, u, "https://idp", "acme", "acme", "Acme").await.unwrap();
+        let org = provision_forseti_org(&pool, u, "https://idp", "acme", "acme", "Acme")
+            .await
+            .unwrap();
         reconcile(
             &pool,
             ReconcileInput {
@@ -290,8 +339,9 @@ mod tests {
         let pool = crate::db::open_test_pool().await;
         let u = seed_user(&pool).await;
         let u2 = seed_user2(&pool).await;
-        let org =
-            provision_forseti_org(&pool, u2, "https://idp", "acme", "acme", "Acme").await.unwrap();
+        let org = provision_forseti_org(&pool, u2, "https://idp", "acme", "acme", "Acme")
+            .await
+            .unwrap();
         add_member(&pool, u, org, Role::Member).await.unwrap();
         reconcile(
             &pool,

@@ -6,9 +6,12 @@ use axum::response::{IntoResponse, Redirect, Response};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
-use stackpit_auth::AuthContext;
 use stackpit_auth::read_cookie;
+use stackpit_auth::AuthContext;
 
+use crate::html::chrome::Localized;
+use crate::html::utils::Chrome;
+use crate::locale::LanguageIdentifier;
 use crate::oidc::client::OrgClaim;
 use crate::queries::{orgs as orgs_queries, users};
 use crate::server::AppState;
@@ -50,7 +53,11 @@ pub fn new_state(orgs: Vec<OrgClaim>, iss: String) -> ProvisionState {
 
 /// Returns only ids present in BOTH the signed set and the submitted set.
 pub fn intersect_provisionable(signed: &[String], submitted: &[String]) -> Vec<String> {
-    submitted.iter().filter(|id| signed.contains(id)).cloned().collect()
+    submitted
+        .iter()
+        .filter(|id| signed.contains(id))
+        .cloned()
+        .collect()
 }
 
 pub fn build_provision_cookie(blob: &str, secure: bool) -> HeaderValue {
@@ -74,10 +81,23 @@ fn clear_provision_cookie(secure: bool) -> HeaderValue {
 #[template(path = "provision.html")]
 struct ProvisionTemplate {
     orgs: Vec<OrgClaim>,
+    /// Standalone page (no PageChrome), so it carries its own locale and looks
+    /// strings up directly.
+    locale: LanguageIdentifier,
+}
+
+impl Localized for ProvisionTemplate {
+    fn locale(&self) -> &LanguageIdentifier {
+        &self.locale
+    }
 }
 
 /// `GET /web/provision` -- render the provisioning interstitial from the signed cookie.
-pub async fn provision_form(State(state): State<AppState>, headers: HeaderMap) -> Response {
+pub async fn provision_form(
+    State(state): State<AppState>,
+    Chrome(chrome): Chrome,
+    headers: HeaderMap,
+) -> Response {
     let Some(enc) = state.encryptor.as_deref() else {
         return Redirect::to("/web/").into_response();
     };
@@ -90,7 +110,10 @@ pub async fn provision_form(State(state): State<AppState>, headers: HeaderMap) -
     if chrono::Utc::now().timestamp() > ps.expires_at {
         return Redirect::to("/web/").into_response();
     }
-    crate::html::render_template(&ProvisionTemplate { orgs: ps.orgs })
+    crate::html::render_template(&ProvisionTemplate {
+        orgs: ps.orgs,
+        locale: chrome.locale,
+    })
 }
 
 /// `POST /web/provision` -- validate cookie, intersect submitted ids with signed set, provision.
@@ -110,12 +133,14 @@ pub async fn provision_submit(
     };
     let Some(ps) = unpack(enc, blob) else {
         let mut resp = Redirect::to("/web/").into_response();
-        resp.headers_mut().append(SET_COOKIE, clear_provision_cookie(secure));
+        resp.headers_mut()
+            .append(SET_COOKIE, clear_provision_cookie(secure));
         return resp;
     };
     if chrono::Utc::now().timestamp() > ps.expires_at {
         let mut resp = Redirect::to("/web/").into_response();
-        resp.headers_mut().append(SET_COOKIE, clear_provision_cookie(secure));
+        resp.headers_mut()
+            .append(SET_COOKIE, clear_provision_cookie(secure));
         return resp;
     }
 
@@ -164,13 +189,31 @@ pub async fn provision_submit(
 
     // Single-use: clear the cookie on every POST (success, partial, or skip).
     let mut resp = Redirect::to("/web/").into_response();
-    resp.headers_mut().append(SET_COOKIE, clear_provision_cookie(secure));
+    resp.headers_mut()
+        .append(SET_COOKIE, clear_provision_cookie(secure));
     resp
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use askama::Template;
+    use unic_langid::langid;
+
+    #[test]
+    fn provision_renders_without_missing_keys() {
+        for locale in [langid!("en"), langid!("de")] {
+            let tmpl = ProvisionTemplate {
+                orgs: Vec::new(),
+                locale: locale.clone(),
+            };
+            let html = tmpl.render().expect("provision renders");
+            assert!(
+                !html.contains(crate::i18n::MISSING_PREFIX),
+                "provision ({locale}) leaked a missing localization key: {html}"
+            );
+        }
+    }
 
     #[test]
     fn provision_selection_is_intersected_with_signed_set() {

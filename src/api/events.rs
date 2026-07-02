@@ -96,20 +96,24 @@ mod tests {
     use sqlx::Row;
 
     async fn insert_project(pool: &crate::db::DbPool, project_id: i64, org_id: i64) {
-        sqlx::query(sql!("INSERT INTO projects (project_id, org_id) VALUES (?1, ?2)"))
-            .bind(project_id)
-            .bind(org_id)
-            .execute(pool)
-            .await
-            .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO projects (project_id, org_id) VALUES (?1, ?2)"
+        ))
+        .bind(project_id)
+        .bind(org_id)
+        .execute(pool)
+        .await
+        .unwrap();
     }
 
     async fn insert_org(pool: &crate::db::DbPool, slug: &str) -> i64 {
-        sqlx::query(sql!("INSERT INTO organizations (slug, name) VALUES (?1, 'T')"))
-            .bind(slug)
-            .execute(pool)
-            .await
-            .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO organizations (slug, name) VALUES (?1, 'T')"
+        ))
+        .bind(slug)
+        .execute(pool)
+        .await
+        .unwrap();
         sqlx::query(sql!("SELECT org_id FROM organizations WHERE slug = ?1"))
             .bind(slug)
             .fetch_one(pool)
@@ -132,8 +136,14 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let member_a = ActiveOrg { org_id: org_a, role: Some(Role::Member) };
-        let member_b = ActiveOrg { org_id: org_b, role: Some(Role::Member) };
+        let member_a = ActiveOrg {
+            org_id: org_a,
+            role: Some(Role::Member),
+        };
+        let member_b = ActiveOrg {
+            org_id: org_b,
+            role: Some(Role::Member),
+        };
 
         assert!(require_project_scope(&member_a, &pool, pid).await.is_ok());
         assert!(require_project_scope(&member_b, &pool, pid).await.is_err());
@@ -152,7 +162,10 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let superuser = ActiveOrg { org_id: 999, role: None };
+        let superuser = ActiveOrg {
+            org_id: 999,
+            role: None,
+        };
         assert!(require_project_scope(&superuser, &pool, pid).await.is_ok());
     }
 

@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{{ self.locale }}" dir="{{ self.dir() }}">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
-    <title>Organisation invite - Stackpit</title>
+    <title>{{ self.t("invite-page-title") }}</title>
     <link rel="preload"
           href="/web/_assets/fonts/Inter-Regular.woff2"
           as="font"
@@ -25,7 +25,7 @@
           <img src="/web/_assets/icon.svg" alt="" width="28" height="28">
           <span class="text-xl font-semibold tracking-tight">Stackpit</span>
         </div>
-        <h1 class="page-h1">Organisation invite</h1>
+        <h1 class="page-h1">{{ self.t("invite-heading") }}</h1>
       </div>
 
       <div class="card card-pad space-y-4">
@@ -33,21 +33,18 @@
           <div class="badge badge-error w-full justify-start h-auto py-1.5 normal-case tracking-normal text-[12px]">
             {{ err }}
           </div>
-          <a href="/web/" class="btn btn-secondary w-full justify-center h-10">Back to projects</a>
+          <a href="/web/" class="btn btn-secondary w-full justify-center h-10">{{ self.t("invite-back-projects") }}</a>
         {% else %}
           <p class="text-[13px]">
-            You have been invited to join
-            <strong class="text-on-surface">{{ org_name }}</strong>
-            as <strong class="text-on-surface">{{ role }}</strong>.
+            {{ self.t("invite-intro-pre") }}
+            <strong class="text-on-surface"><bdi>{{ org_name }}</bdi></strong>
+            {{ self.t("invite-intro-as") }} <strong class="text-on-surface">{{ role }}</strong>{{ self.t("invite-intro-post") }}
           </p>
           <form method="POST" action="/web/invite/{{ token }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <button type="submit"
-                    class="btn btn-primary w-full justify-center h-10">
-              Accept invite
-            </button>
+            <button type="submit" class="btn btn-primary w-full justify-center h-10">{{ self.t("invite-accept-btn") }}</button>
           </form>
-          <a href="/web/" class="btn btn-secondary w-full justify-center h-10">Decline</a>
+          <a href="/web/" class="btn btn-secondary w-full justify-center h-10">{{ self.t("invite-decline") }}</a>
         {% endif %}
       </div>
     </div>

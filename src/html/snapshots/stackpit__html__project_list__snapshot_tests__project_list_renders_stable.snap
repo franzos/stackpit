@@ -1,0 +1,133 @@
+---
+source: src/html/project_list.rs
+expression: tmpl.render().unwrap()
+---
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>Projects — Stackpit</title>
+    <link rel="preload"
+          href="/web/_assets/fonts/Inter-Regular.woff2"
+          as="font"
+          type="font/woff2"
+          crossorigin>
+    <link rel="preload"
+          href="/web/_assets/fonts/Inter-SemiBold.woff2"
+          as="font"
+          type="font/woff2"
+          crossorigin>
+    <link rel="stylesheet" href="/web/_assets/style.css">
+    <link rel="icon" type="image/svg+xml" href="/web/_assets/icon.svg">
+    <script src="/web/_assets/bulk.js" defer></script>
+    <script src="/web/_assets/confirm.js" defer></script>
+    <script src="/web/_assets/stop-propagation.js" defer></script>
+  </head>
+  <body class="min-h-screen">
+    
+      <div class="flex min-h-screen">
+        <aside class="w-[var(--spacing-sidebar)] shrink-0 border-e border-outline-variant flex flex-col"
+               style="background: var(--color-surface-container-low)">
+          <a href="/web/projects/"
+             class="flex items-center gap-2 px-4 h-14 border-b border-outline-variant">
+            <img src="/web/_assets/icon.svg" alt="" width="22" height="22">
+            <span class="font-semibold">Stackpit</span>
+          </a>
+          <nav class="flex-1 py-3 overflow-y-auto"
+               aria-label="Primary">
+            
+  
+  <div class="px-2 space-y-0.5">
+    <a href="/web/projects/"
+       class="sidebar-link sidebar-link-active">
+      <span>Projects</span>
+    </a>
+  </div>
+
+
+          </nav>
+          <div class="border-t border-outline-variant py-2 px-2 space-y-0.5">
+            <a href="/web/organizations" class="sidebar-link"><span>Organizations</span></a>
+            <a href="/web/settings/integrations/" class="sidebar-link"><span>Settings</span></a>
+            <a href="/web/settings/defaults/" class="sidebar-link"><span>Defaults</span></a>
+            <details>
+              <summary class="sidebar-link cursor-pointer select-none"><span>English</span></summary>
+              <div class="mt-1 space-y-0.5">
+                
+                  <a href="/web/lang/en?next=/web/projects/"
+                     class="sidebar-link sidebar-link-active"><span>English</span></a>
+                
+                  <a href="/web/lang/de?next=/web/projects/"
+                     class="sidebar-link"><span>Deutsch</span></a>
+                
+              </div>
+            </details>
+            <form method="post" action="/web/logout" class="contents">
+              <input type="hidden" name="csrf_token" value="test-csrf-token">
+              <button type="submit" class="sidebar-link">
+                <span>Logout</span>
+              </button>
+            </form>
+          </div>
+        </aside>
+        <div class="flex-1 min-w-0 flex flex-col">
+          <header class="h-14 border-b border-outline-variant px-6 flex items-center"
+                  style="background: var(--color-surface)">
+            <nav class="text-[13px] flex items-center gap-1.5"
+                 aria-label="Breadcrumb">
+              <a href="/web/projects/" class="breadcrumb-link">Projects</a>
+              
+            </nav>
+          </header>
+          <main class="flex-1 px-6 py-6 min-w-0">
+            
+  <div class="page-header">
+    <div>
+      <h1>Projects</h1>
+      <p class="text-muted text-[13px] mt-1">Monitor health across your entire architecture.</p>
+    </div>
+    <div class="page-actions">
+      <a href="/web/events/" class="btn btn-secondary">All events</a>
+      <a href="/web/releases/" class="btn btn-secondary">All releases</a>
+      <a href="/web/projects/new" class="btn btn-primary">+ New project</a>
+    </div>
+  </div>
+
+  <form class="filter-form" method="get" action="/web/projects/">
+    
+    <input class="input"
+           type="text"
+           name="query"
+           placeholder="Query projects by name, platform, or owner…"
+           value=""
+           aria-label="Search projects">
+    <select class="select w-auto"
+            name="period"
+            aria-label="Time range">
+      <option value="">All time</option>
+      <option value="1h">Last hour</option>
+      <option value="24h">Last 24 hours</option>
+      <option value="7d" selected>Last 7 days</option>
+      <option value="14d">Last 14 days</option>
+      <option value="30d">Last 30 days</option>
+      <option value="90d">Last 90 days</option>
+      <option value="365d">Last 365 days</option>
+    </select>
+    <button type="submit" class="btn btn-secondary">Filter</button>
+  </form>
+
+  
+    <div class="card">
+      <p class="empty">No projects found. Events will appear here once ingested.</p>
+    </div>
+  
+
+          </main>
+        </div>
+      </div>
+    
+    
+  </body>
+</html>

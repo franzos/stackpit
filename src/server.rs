@@ -57,6 +57,7 @@ pub struct AppState {
     pub mcp: Option<Arc<McpRuntime>>,
 }
 
+// Static English-only landing page (no request context, no i18n chrome).
 async fn ingest_landing() -> axum::response::Html<&'static str> {
     axum::response::Html(
         r#"<!DOCTYPE html>

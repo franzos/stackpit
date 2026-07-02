@@ -1,25 +1,25 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
 
-{% block title %}{{ nav.label }} — Stackpit{% endblock %}
+{% block title %}{{ nav.label }} {{ chrome.t("issues-title-suffix") }}{% endblock %}
 
 {% block sidebar_nav %}
-  {% call m::project_sidebar(project_id, nav, "issues") %}
+  {% call m::project_sidebar(chrome, project_id, nav, "issues") %}
   {% endcall %}
 {% endblock %}
 
 {% block breadcrumbs %}
   <span class="breadcrumb-sep">/</span>
-  <span class="breadcrumb-current">{{ nav.label }}</span>
+  <span class="breadcrumb-current"><bdi>{{ nav.label }}</bdi></span>
   <span class="breadcrumb-sep">/</span>
-  <span class="breadcrumb-link">Issues</span>
+  <span class="breadcrumb-link">{{ chrome.t("nav-issues") }}</span>
 {% endblock %}
 
 {% block content %}
   <div class="page-header">
     <div>
-      <h1>{{ nav.label }}</h1>
-      <p class="text-muted text-[13px] mt-1">Issues grouped by fingerprint.</p>
+      <h1><bdi>{{ nav.label }}</bdi></h1>
+      <p class="text-muted text-[13px] mt-1">{{ chrome.t("issues-list-subtitle") }}</p>
     </div>
   </div>
 
@@ -29,10 +29,10 @@
 
   {% if !tag.is_empty() %}
     <div class="active-filter">
-      Filtered by tag: <strong>{{ tag }}</strong>
+      {{ chrome.t("issues-list-filtered-by-tag") }} <strong>{{ tag }}</strong>
       <a href="/web/projects/{{ project_id }}/?{% if !query.is_empty() %}query={{ query }}&amp;{% endif %}{% if !level.is_empty() %}level={{ level }}&amp;{% endif %}{% if !status.is_empty() %}status={{ status }}&amp;{% endif %}{% if !release.is_empty() %}release={{ release }}&amp;{% endif %}{% if !sort.is_empty() %}sort={{ sort }}&amp;{% endif %}{% if !period.is_empty() %}period={{ period }}{% endif %}"
-         title="Clear tag filter"
-         aria-label="Clear tag filter">×</a>
+         title="{{ chrome.t("issues-list-clear-tag") }}"
+         aria-label="{{ chrome.t("issues-list-clear-tag") }}">×</a>
     </div>
   {% endif %}
 
@@ -48,17 +48,21 @@
     <input class="input"
            type="text"
            name="query"
-           placeholder="Search issues…"
+           placeholder="{{ chrome.t("issues-list-search-placeholder") }}"
            value="{{ query }}"
-           aria-label="Search issues">
-    <select class="select w-auto" name="status" aria-label="Filter by status">
-      <option value="">All statuses</option>
-      <option value="unresolved"{% if status == "unresolved" %} selected{% endif %}>Unresolved</option>
-      <option value="resolved"{% if status == "resolved" %} selected{% endif %}>Resolved</option>
-      <option value="ignored"{% if status == "ignored" %} selected{% endif %}>Ignored</option>
+           aria-label="{{ chrome.t("issues-list-search-label") }}">
+    <select class="select w-auto"
+            name="status"
+            aria-label="{{ chrome.t("issues-list-filter-status") }}">
+      <option value="">{{ chrome.t("issues-list-status-all") }}</option>
+      <option value="unresolved"{% if status == "unresolved" %} selected{% endif %}>{{ chrome.t("issues-status-unresolved") }}</option>
+      <option value="resolved"{% if status == "resolved" %} selected{% endif %}>{{ chrome.t("issues-status-resolved") }}</option>
+      <option value="ignored"{% if status == "ignored" %} selected{% endif %}>{{ chrome.t("issues-status-ignored") }}</option>
     </select>
-    <select class="select w-auto" name="level" aria-label="Filter by level">
-      <option value="">All levels</option>
+    <select class="select w-auto"
+            name="level"
+            aria-label="{{ chrome.t("issues-list-filter-level") }}">
+      <option value="">{{ chrome.t("issues-list-level-all") }}</option>
       <option value="fatal"{% if level == "fatal" %} selected{% endif %}>fatal</option>
       <option value="error"{% if level == "error" %} selected{% endif %}>error</option>
       <option value="warning"{% if level == "warning" %} selected{% endif %}>warning</option>
@@ -66,29 +70,33 @@
       <option value="debug"{% if level == "debug" %} selected{% endif %}>debug</option>
     </select>
     {% if !releases.is_empty() %}
-      <select class="select w-auto" name="release" aria-label="Filter by release">
-        <option value="">All releases</option>
+      <select class="select w-auto"
+              name="release"
+              aria-label="{{ chrome.t("issues-list-filter-release") }}">
+        <option value="">{{ chrome.t("issues-list-release-all") }}</option>
         {% for r in releases %}
           <option value="{{ r }}"{% if release == *r %} selected{% endif %}>{{ r }}</option>
         {% endfor %}
       </select>
     {% endif %}
-    <select class="select w-auto" name="period" aria-label="Time range">
-      <option value="">All time</option>
-      <option value="1h"{% if period == "1h" %} selected{% endif %}>Last hour</option>
-      <option value="24h"{% if period == "24h" %} selected{% endif %}>Last 24h</option>
-      <option value="7d"{% if period == "7d" %} selected{% endif %}>Last 7 days</option>
-      <option value="14d"{% if period == "14d" %} selected{% endif %}>Last 14 days</option>
-      <option value="30d"{% if period == "30d" %} selected{% endif %}>Last 30 days</option>
-      <option value="90d"{% if period == "90d" %} selected{% endif %}>Last 90 days</option>
-      <option value="365d"{% if period == "365d" %} selected{% endif %}>Last 365 days</option>
+    <select class="select w-auto"
+            name="period"
+            aria-label="{{ chrome.t("issues-period-label") }}">
+      <option value="">{{ chrome.t("issues-period-all") }}</option>
+      <option value="1h"{% if period == "1h" %} selected{% endif %}>{{ chrome.t("issues-period-1h") }}</option>
+      <option value="24h"{% if period == "24h" %} selected{% endif %}>{{ chrome.t("issues-period-24h") }}</option>
+      <option value="7d"{% if period == "7d" %} selected{% endif %}>{{ chrome.t("issues-period-7d") }}</option>
+      <option value="14d"{% if period == "14d" %} selected{% endif %}>{{ chrome.t("issues-period-14d") }}</option>
+      <option value="30d"{% if period == "30d" %} selected{% endif %}>{{ chrome.t("issues-period-30d") }}</option>
+      <option value="90d"{% if period == "90d" %} selected{% endif %}>{{ chrome.t("issues-period-90d") }}</option>
+      <option value="365d"{% if period == "365d" %} selected{% endif %}>{{ chrome.t("issues-period-365d") }}</option>
     </select>
-    <button class="btn btn-secondary" type="submit">Filter</button>
+    <button class="btn btn-secondary" type="submit">{{ chrome.t("issues-list-filter-submit") }}</button>
   </form>
 
   {% if result.items.is_empty() %}
     <div class="card">
-      <p class="empty">No issues match the current filters.</p>
+      <p class="empty">{{ chrome.t("issues-list-empty") }}</p>
     </div>
   {% else %}
 
@@ -96,9 +104,11 @@
       <form class="flex gap-2 mb-3"
             method="post"
             action="/web/projects/{{ project_id }}/bulk">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
         <input type="hidden" name="mode" value="all_matching">
-        {% if !query.is_empty() %}<input type="hidden" name="query" value="{{ query }}">{% endif %}
+        {% if !query.is_empty() %}
+          <input type="hidden" name="query" value="{{ query }}">
+        {% endif %}
         {% if !level.is_empty() %}<input type="hidden" name="level" value="{{ level }}">{% endif %}
         {% if !status.is_empty() %}<input type="hidden" name="status" value="{{ status }}">{% endif %}
         {% if !release.is_empty() %}<input type="hidden" name="release" value="{{ release }}">{% endif %}
@@ -108,34 +118,34 @@
                 name="action"
                 value="resolve"
                 class="btn btn-secondary"
-                data-confirm="Resolve all {{ result.total }} matching issues?">Resolve all {{ result.total }}</button>
+                data-confirm="{{ chrome.tv_count("issues-bulk-resolve-confirm", result.total as i64) }}">{{ chrome.tv_count("issues-bulk-resolve-all", result.total as i64) }}</button>
         <button type="submit"
                 name="action"
                 value="ignore"
                 class="btn btn-secondary"
-                data-confirm="Ignore all {{ result.total }} matching issues?">Ignore all {{ result.total }}</button>
+                data-confirm="{{ chrome.tv_count("issues-bulk-ignore-confirm", result.total as i64) }}">{{ chrome.tv_count("issues-bulk-ignore-all", result.total as i64) }}</button>
         <button type="submit"
                 name="action"
                 value="delete"
                 class="btn btn-danger"
-                data-confirm="Permanently delete all {{ result.total }} matching issues?">
-          Delete all {{ result.total }}
+                data-confirm="{{ chrome.tv_count("issues-bulk-delete-all-confirm", result.total as i64) }}">
+          {{ chrome.tv_count("issues-bulk-delete-all", result.total as i64) }}
         </button>
       </form>
     {% endif %}
 
     <form method="post" action="/web/projects/{{ project_id }}/bulk">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
       <input type="hidden" name="mode" value="selected">
       {% if !period.is_empty() %}<input type="hidden" name="period" value="{{ period }}">{% endif %}
       <div class="bulk-bar">
-        <button type="submit" name="action" value="resolve" class="btn btn-secondary">Resolve</button>
-        <button type="submit" name="action" value="ignore" class="btn btn-secondary">Ignore</button>
+        <button type="submit" name="action" value="resolve" class="btn btn-secondary">{{ chrome.t("issues-bulk-resolve") }}</button>
+        <button type="submit" name="action" value="ignore" class="btn btn-secondary">{{ chrome.t("issues-bulk-ignore") }}</button>
         <button type="submit"
                 name="action"
                 value="delete"
                 class="btn btn-danger"
-                data-confirm="Permanently delete selected issues?">Delete</button>
+                data-confirm="{{ chrome.t("issues-bulk-delete-selected-confirm") }}">{{ chrome.t("issues-bulk-delete") }}</button>
       </div>
 
       <div class="card overflow-hidden">
@@ -144,22 +154,22 @@
             <thead>
               <tr>
                 <th class="col-check"></th>
-                <th class="col-title">Title</th>
-                <th class="col-narrow">Level</th>
+                <th class="col-title">{{ chrome.t("issues-label-title") }}</th>
+                <th class="col-narrow">{{ chrome.t("issues-label-level") }}</th>
                 <th class="col-narrow">
                   <a href="/web/projects/{{ project_id }}/?sort=event_count{{ base_qs }}"
-                     {% if sort == "event_count" %}class="active-sort"{% endif %}>Events</a>
+                     {% if sort == "event_count" %}class="active-sort"{% endif %}>{{ chrome.t("issues-label-events") }}</a>
                 </th>
-                <th class="col-narrow">Users</th>
+                <th class="col-narrow">{{ chrome.t("issues-label-users") }}</th>
                 <th class="hide-mobile col-time">
                   <a href="/web/projects/{{ project_id }}/?sort=first_seen{{ base_qs }}"
-                     {% if sort == "first_seen" %}class="active-sort"{% endif %}>First seen</a>
+                     {% if sort == "first_seen" %}class="active-sort"{% endif %}>{{ chrome.t("issues-label-first-seen") }}</a>
                 </th>
                 <th class="col-time">
                   <a href="/web/projects/{{ project_id }}/?{{ base_qs }}"
-                     {% if sort.is_empty() %}class="active-sort"{% endif %}>Last seen</a>
+                     {% if sort.is_empty() %}class="active-sort"{% endif %}>{{ chrome.t("issues-label-last-seen") }}</a>
                 </th>
-                <th class="col-narrow">Status</th>
+                <th class="col-narrow">{{ chrome.t("issues-label-status") }}</th>
               </tr>
             </thead>
             <tbody>
@@ -169,62 +179,61 @@
                     data-level="{{ lvl }}"
                     {% when None %}
                     {% endmatch %}>
-                  <td class="col-check">
-                    <input type="checkbox"
-                           name="ids"
-                           value="{{ issue.fingerprint }}"
-                           aria-label="Select issue">
-                  </td>
-                  <td class="col-title min-w-0"
-                      title="{% match issue.title %}{% when Some with (t) %}{{ t }}{% when None %}(untitled){% endmatch %}">
-                    <div class="flex items-center gap-2 min-w-0">
-                      <span class="type-icon type-icon-{{ issue.item_type }}"
-                            title="{{ issue.item_type }}"></span>
-                      <a class="font-semibold truncate"
-                         href="/web/projects/{{ project_id }}/issues/{{ issue.fingerprint }}/">{% match issue.title %}{% when Some with (t) %}{{ t|split_error_type }}{% when None %}(untitled){% endmatch %}</a>
-                    </div>
-                    {% match issue.title %}{% when Some with (t) %}
-                    <div class="issue-title-msg">{{ t|split_error_message }}</div>
-                    {% when None %}{% endmatch %}
-                  </td>
-                  <td>
-                    {% match issue.level %}{% when Some with (lvl) %}<span class="badge badge-{{ lvl }}">{{ lvl }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
-                  </td>
-                  <td class="text-tabular">{{ issue.event_count }}</td>
-                  <td class="text-tabular">{{ issue.user_count }}</td>
-                  <td class="hide-mobile text-muted">
-                    <time datetime="{{ issue.first_seen|format_ts }}"
-                          title="{{ issue.first_seen|format_ts }}">{{ issue.first_seen|format_relative }}</time>
-                  </td>
-                  <td class="text-muted">
-                    <time datetime="{{ issue.last_seen|format_ts }}"
-                          title="{{ issue.last_seen|format_ts }}">{{ issue.last_seen|format_relative }}</time>
-                  </td>
-                  <td>
-                    <span class="badge badge-{{ issue.status }}">{{ issue.status }}</span>
-                  </td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </form>
+                <td class="col-check">
+                  <input type="checkbox"
+                         name="ids"
+                         value="{{ issue.fingerprint }}"
+                         aria-label="{{ chrome.t("issues-list-select") }}">
+                </td>
+                <td class="col-title min-w-0"
+                    title="{% match issue.title %}{% when Some with (t) %}{{ t }}{% when None %}{{ chrome.t("issues-untitled") }}{% endmatch %}">
+                <div class="flex items-center gap-2 min-w-0">
+                  <span class="type-icon type-icon-{{ issue.item_type }}"
+                        title="{{ issue.item_type }}"></span>
+                  <a class="font-semibold truncate"
+                     href="/web/projects/{{ project_id }}/issues/{{ issue.fingerprint }}/">{% match issue.title %}{% when Some with (t) %}{{ t|split_error_type }}{% when None %}{{ chrome.t("issues-untitled") }}{% endmatch %}</a>
+              </div>
+              {% match issue.title %}{% when Some with (t) %}
+              <div class="issue-title-msg">{{ t|split_error_message }}</div>
+              {% when None %}{% endmatch %}
+          </td>
+          <td>
+            {% match issue.level %}{% when Some with (lvl) %}<span class="badge badge-{{ lvl }}">{{ lvl }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
+        </td>
+        <td class="text-tabular">{{ issue.event_count }}</td>
+        <td class="text-tabular">{{ issue.user_count }}</td>
+        <td class="hide-mobile text-muted">
+          <time datetime="{{ issue.first_seen|format_ts }}"
+                title="{{ issue.first_seen|format_ts }}">{{ chrome.rel_time(issue.first_seen) }}</time>
+        </td>
+        <td class="text-muted">
+          <time datetime="{{ issue.last_seen|format_ts }}"
+                title="{{ issue.last_seen|format_ts }}">{{ chrome.rel_time(issue.last_seen) }}</time>
+        </td>
+        <td>
+          <span class="badge badge-{{ issue.status }}">{{ issue.status }}</span>
+        </td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+</div>
+</form>
 
-    <nav class="pagination" aria-label="Pagination">
-      <span>{{ result.total }} issue
-        {%- if result.total != 1 %}s{% endif %}
-      </span>
-      <span class="flex gap-2">
-        {% if result.has_prev() %}
-          <a class="btn btn-ghost"
-             href="/web/projects/{{ project_id }}/?offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}{{ filter_qs }}">« Previous</a>
-        {% endif %}
-        {% if result.has_next() %}
-          <a class="btn btn-ghost"
-             href="/web/projects/{{ project_id }}/?offset={{ result.next_offset() }}&amp;limit={{ result.limit }}{{ filter_qs }}">Next »</a>
-        {% endif %}
-      </span>
-    </nav>
-  {% endif %}
+<nav class="pagination"
+     aria-label="{{ chrome.t("issues-pagination-label") }}">
+  <span>{{ chrome.tv_count("issues-count", result.total as i64) }}</span>
+  <span class="flex gap-2">
+    {% if result.has_prev() %}
+      <a class="btn btn-ghost"
+         href="/web/projects/{{ project_id }}/?offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}{{ filter_qs }}">{{ chrome.t("issues-pagination-prev") }}</a>
+    {% endif %}
+    {% if result.has_next() %}
+      <a class="btn btn-ghost"
+         href="/web/projects/{{ project_id }}/?offset={{ result.next_offset() }}&amp;limit={{ result.limit }}{{ filter_qs }}">{{ chrome.t("issues-pagination-next") }}</a>
+    {% endif %}
+  </span>
+</nav>
+{% endif %}
 {% endblock %}

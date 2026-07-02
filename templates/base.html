@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{{ chrome.locale }}" dir="{{ chrome.dir() }}">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -24,28 +24,38 @@
   <body class="min-h-screen">
     {% block layout %}
       <div class="flex min-h-screen">
-        <aside class="w-[var(--spacing-sidebar)] shrink-0 border-r border-outline-variant flex flex-col"
+        <aside class="w-[var(--spacing-sidebar)] shrink-0 border-e border-outline-variant flex flex-col"
                style="background: var(--color-surface-container-low)">
           <a href="/web/projects/"
              class="flex items-center gap-2 px-4 h-14 border-b border-outline-variant">
             <img src="/web/_assets/icon.svg" alt="" width="22" height="22">
             <span class="font-semibold">Stackpit</span>
           </a>
-          <nav class="flex-1 py-3 overflow-y-auto" aria-label="Primary">
+          <nav class="flex-1 py-3 overflow-y-auto"
+               aria-label="{{ chrome.t("nav-aria-primary") }}">
             {% block sidebar_nav %}
               <div class="px-2 space-y-0.5">
-                <a href="/web/projects/" class="sidebar-link"><span>Projects</span></a>
+                <a href="/web/projects/" class="sidebar-link"><span>{{ chrome.t("nav-projects") }}</span></a>
               </div>
             {% endblock %}
           </nav>
           <div class="border-t border-outline-variant py-2 px-2 space-y-0.5">
-            <a href="/web/organizations" class="sidebar-link"><span>Organizations</span></a>
-            <a href="/web/settings/integrations/" class="sidebar-link"><span>Settings</span></a>
-            <a href="/web/settings/defaults/" class="sidebar-link"><span>Defaults</span></a>
+            <a href="/web/organizations" class="sidebar-link"><span>{{ chrome.t("nav-organizations") }}</span></a>
+            <a href="/web/settings/integrations/" class="sidebar-link"><span>{{ chrome.t("nav-settings") }}</span></a>
+            <a href="/web/settings/defaults/" class="sidebar-link"><span>{{ chrome.t("nav-defaults") }}</span></a>
+            <details>
+              <summary class="sidebar-link cursor-pointer select-none"><span>{{ chrome.locale_name() }}</span></summary>
+              <div class="mt-1 space-y-0.5">
+                {% for l in chrome.locales() %}
+                  <a href="/web/lang/{{ l.code }}?next={{ chrome.path }}"
+                     class="sidebar-link{% if l.active %} sidebar-link-active{% endif %}"><span>{{ l.name }}</span></a>
+                {% endfor %}
+              </div>
+            </details>
             <form method="post" action="/web/logout" class="contents">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
               <button type="submit" class="sidebar-link">
-                <span>Logout</span>
+                <span>{{ chrome.t("nav-logout") }}</span>
               </button>
             </form>
           </div>
@@ -53,8 +63,9 @@
         <div class="flex-1 min-w-0 flex flex-col">
           <header class="h-14 border-b border-outline-variant px-6 flex items-center"
                   style="background: var(--color-surface)">
-            <nav class="text-[13px] flex items-center gap-1.5" aria-label="Breadcrumb">
-              <a href="/web/projects/" class="breadcrumb-link">Projects</a>
+            <nav class="text-[13px] flex items-center gap-1.5"
+                 aria-label="{{ chrome.t("nav-aria-breadcrumb") }}">
+              <a href="/web/projects/" class="breadcrumb-link">{{ chrome.t("nav-projects") }}</a>
               {% block breadcrumbs %}
               {% endblock %}
             </nav>

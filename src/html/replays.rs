@@ -2,8 +2,9 @@ use askama::Template;
 use axum::extract::{Path, Query};
 
 use crate::extractors::ReadPool;
+use crate::html::chrome::PageChrome;
+use crate::html::utils::{render_project_detail, render_project_list, Chrome, ListParams};
 use crate::orgs::extractor::ActiveOrg;
-use crate::html::utils::{render_project_detail, render_project_list, Csrf, ListParams};
 use crate::queries;
 use crate::queries::types::{PagedResult, ReplaySummary};
 use crate::queries::ProjectNavCounts;
@@ -19,13 +20,13 @@ struct ReplayListTemplate {
     project_id: u64,
     result: PagedResult<ReplaySummary>,
     nav: ProjectNavCounts,
-    csrf_token: String,
+    chrome: PageChrome,
 }
 
 pub async fn list_handler(
     active: ActiveOrg,
     ReadPool(pool): ReadPool,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path(project_id): Path<u64>,
     Query(params): Query<ListParams>,
 ) -> Result<axum::response::Response, HtmlError> {
@@ -38,13 +39,13 @@ pub async fn list_handler(
     Ok(render_project_list(
         &pool,
         project_id,
-        csrf,
+        chrome,
         result,
-        |project_id, result, nav, csrf_token| ReplayListTemplate {
+        |project_id, result, nav, chrome| ReplayListTemplate {
             project_id,
             result,
             nav,
-            csrf_token,
+            chrome,
         },
     )
     .await)
@@ -57,13 +58,13 @@ struct ReplayDetailTemplate {
     replay: queries::types::ReplayDetail,
     raw_json: String,
     nav: ProjectNavCounts,
-    csrf_token: String,
+    chrome: PageChrome,
 }
 
 pub async fn detail_handler(
     active: ActiveOrg,
     ReadPool(pool): ReadPool,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path((project_id, event_id)): Path<(u64, String)>,
 ) -> Result<axum::response::Response, HtmlError> {
     crate::orgs::extractor::require_project_scope(&active, &pool, project_id as i64)
@@ -74,17 +75,17 @@ pub async fn detail_handler(
     render_project_detail(
         &pool,
         project_id,
-        csrf,
+        chrome,
         replay,
         "Replay not found",
-        |project_id, replay, nav, csrf_token| {
+        |project_id, replay, nav, chrome| {
             let raw_json = serde_json::to_string_pretty(&replay.payload).unwrap_or_default();
             ReplayDetailTemplate {
                 project_id,
                 replay,
                 raw_json,
                 nav,
-                csrf_token,
+                chrome,
             }
         },
     )

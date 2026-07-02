@@ -9,7 +9,10 @@ async fn admin_deletes_native_org_with_slug_confirmation() {
     let csrf = common::csrf_token(&c, &form_path).await;
 
     let ok = c
-        .post(format!("{}/web/organizations/{org_id}/delete", common::admin_url()))
+        .post(format!(
+            "{}/web/organizations/{org_id}/delete",
+            common::admin_url()
+        ))
         .form(&[("csrf_token", csrf.as_str()), ("confirm_slug", "kill-me")])
         .send()
         .await
@@ -27,7 +30,10 @@ async fn delete_org_rejects_wrong_slug() {
     let csrf = common::csrf_token(&c, &form_path).await;
 
     let bad = c
-        .post(format!("{}/web/organizations/{org_id}/delete", common::admin_url()))
+        .post(format!(
+            "{}/web/organizations/{org_id}/delete",
+            common::admin_url()
+        ))
         .form(&[("csrf_token", csrf.as_str()), ("confirm_slug", "wrong")])
         .send()
         .await
@@ -42,7 +48,10 @@ async fn delete_org_requires_csrf() {
     let c = common::login().await;
     let org_id = common::seed_native_org(&c, "csrf-org").await;
     let no_tok = c
-        .post(format!("{}/web/organizations/{org_id}/delete", common::admin_url()))
+        .post(format!(
+            "{}/web/organizations/{org_id}/delete",
+            common::admin_url()
+        ))
         .form(&[("confirm_slug", "csrf-org")])
         .send()
         .await

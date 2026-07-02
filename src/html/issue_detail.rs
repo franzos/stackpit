@@ -8,8 +8,9 @@ use crate::domain::{
     Breadcrumb, ContextGroup, ExceptionData, IssueStatus, RequestInfo, SummaryTag, Tag, UserInfo,
 };
 use crate::extractors::ReadPool;
+use crate::html::chrome::PageChrome;
 use crate::html::render_template;
-use crate::html::utils::Csrf;
+use crate::html::utils::Chrome;
 use crate::orgs::extractor::ActiveOrg;
 use crate::queries;
 use crate::queries::types::{AttachmentInfo, EventNav, PagedResult, Pagination, TagFacet};
@@ -63,14 +64,14 @@ struct IssueDetailTemplate {
     chart_svg: String,
     first_seen_release: Option<String>,
     last_seen_release: Option<String>,
-    csrf_token: String,
+    chrome: PageChrome,
 }
 
 pub async fn handler(
     active: ActiveOrg,
     State(_state): State<AppState>,
     ReadPool(pool): ReadPool,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path((project_id, fingerprint)): Path<(u64, String)>,
     Query(params): Query<PageParams>,
 ) -> Result<axum::response::Response, HtmlError> {
@@ -138,7 +139,7 @@ pub async fn handler(
             chart_svg,
             first_seen_release,
             last_seen_release,
-            csrf_token: csrf,
+            chrome,
         };
         return Ok(render_template(&tmpl));
     }
@@ -232,7 +233,7 @@ pub async fn handler(
         chart_svg,
         first_seen_release,
         last_seen_release,
-        csrf_token: csrf,
+        chrome,
     };
     Ok(render_template(&tmpl))
 }
@@ -243,15 +244,18 @@ pub async fn toggle_discard(
     Path((project_id, fingerprint)): Path<(u64, String)>,
 ) -> axum::response::Response {
     // Bind fingerprint to its owning project, then verify project belongs to active org.
-    let fp_project = match crate::queries::orgs::project_of_fingerprint(&state.pool, &fingerprint).await {
-        Ok(Some(p)) => p,
-        Ok(None) => return html_error(StatusCode::NOT_FOUND, "Issue not found"),
-        Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
+    let fp_project =
+        match crate::queries::orgs::project_of_fingerprint(&state.pool, &fingerprint).await {
+            Ok(Some(p)) => p,
+            Ok(None) => return html_error(StatusCode::NOT_FOUND, "Issue not found"),
+            Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        };
     if fp_project != project_id as i64 {
         return html_error(StatusCode::NOT_FOUND, "Issue not found");
     }
-    if let Err(r) = crate::orgs::extractor::require_project_scope(&active, &state.pool, project_id as i64).await {
+    if let Err(r) =
+        crate::orgs::extractor::require_project_scope(&active, &state.pool, project_id as i64).await
+    {
         return r;
     }
     if let Err(r) = crate::orgs::extractor::require_owner(&active) {
@@ -289,15 +293,18 @@ pub async fn update_status(
     Form(form): Form<StatusForm>,
 ) -> axum::response::Response {
     // Bind fingerprint to its owning project, then verify project belongs to active org.
-    let fp_project = match crate::queries::orgs::project_of_fingerprint(&state.pool, &fingerprint).await {
-        Ok(Some(p)) => p,
-        Ok(None) => return html_error(StatusCode::NOT_FOUND, "Issue not found"),
-        Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
+    let fp_project =
+        match crate::queries::orgs::project_of_fingerprint(&state.pool, &fingerprint).await {
+            Ok(Some(p)) => p,
+            Ok(None) => return html_error(StatusCode::NOT_FOUND, "Issue not found"),
+            Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        };
     if fp_project != project_id as i64 {
         return html_error(StatusCode::NOT_FOUND, "Issue not found");
     }
-    if let Err(r) = crate::orgs::extractor::require_project_scope(&active, &state.pool, project_id as i64).await {
+    if let Err(r) =
+        crate::orgs::extractor::require_project_scope(&active, &state.pool, project_id as i64).await
+    {
         return r;
     }
     if let Err(r) = crate::orgs::extractor::require_owner(&active) {

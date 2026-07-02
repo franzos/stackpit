@@ -1,29 +1,29 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
 
-{% block title %}Organizations - Stackpit{% endblock %}
+{% block title %}{{ chrome.t("orgs-page-title") }}{% endblock %}
 
 {% block sidebar_nav %}
-  {% call m::top_sidebar("") %}
+  {% call m::top_sidebar(chrome, "") %}
   {% endcall %}
 {% endblock %}
 
 {% block breadcrumbs %}
   <span class="breadcrumb-sep">/</span>
-  <span class="breadcrumb-current">Organizations</span>
+  <span class="breadcrumb-current">{{ chrome.t("nav-organizations") }}</span>
 {% endblock %}
 
 {% block content %}
   <div class="page-header">
     <div>
-      <h1>Organizations</h1>
-      <p class="text-muted text-[13px] mt-1">The organizations you belong to. Switch between them or create a new one.</p>
+      <h1>{{ chrome.t("nav-organizations") }}</h1>
+      <p class="text-muted text-[13px] mt-1">{{ chrome.t("orgs-subtitle") }}</p>
     </div>
   </div>
 
   {% if rows.is_empty() %}
     <div class="card">
-      <p class="empty">You are not a member of any organization yet.</p>
+      <p class="empty">{{ chrome.t("orgs-empty") }}</p>
     </div>
   {% else %}
     <div class="card overflow-hidden">
@@ -31,10 +31,10 @@
         <table class="table">
           <thead>
             <tr>
-              <th>Organization</th>
-              <th>Kind</th>
+              <th>{{ chrome.t("orgs-col-organization") }}</th>
+              <th>{{ chrome.t("orgs-col-kind") }}</th>
               {% if show_create %}
-                <th>Role</th>
+                <th>{{ chrome.t("orgs-role") }}</th>
               {% endif %}
               <th></th>
               <th></th>
@@ -44,64 +44,65 @@
             {% for r in rows %}
               <tr>
                 <td>
-                  <span class="font-semibold">{{ r.name }}</span>
-                  <div class="text-muted text-[12px] text-mono mt-0.5">{{ r.slug }}</div>
+                  <span class="font-semibold"><bdi>{{ r.name }}</bdi></span>
+                  <div class="text-muted text-[12px] text-mono mt-0.5"><bdi>{{ r.slug }}</bdi></div>
                 </td>
                 <td class="text-muted">{{ r.kind }}</td>
                 {% if show_create %}
                   <td class="text-muted">{% match r.role %}{% when Some with (role) %}{{ role }}{% when None %}<span class="text-muted">-</span>{% endmatch %}</td>
+              {% endif %}
+              <td>
+                <a href="/web/organizations/{{ r.org_id }}/members"
+                   class="btn btn-secondary">{{ chrome.t("orgs-members-btn") }}</a>
+              </td>
+              <td>
+                {% if r.active %}
+                  <span class="text-[12px] font-semibold">{{ chrome.t("orgs-active") }}</span>
+                {% else %}
+                  <form method="post" action="/web/organizations/switch">
+                    <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+                    <input type="hidden" name="org_id" value="{{ r.org_id }}">
+                    <button type="submit" class="btn btn-secondary">{{ chrome.t("orgs-switch") }}</button>
+                  </form>
                 {% endif %}
-                <td>
-                  <a href="/web/organizations/{{ r.org_id }}/members" class="btn btn-secondary">Members</a>
-                </td>
-                <td>
-                  {% if r.active %}
-                    <span class="text-[12px] font-semibold">Active</span>
-                  {% else %}
-                    <form method="post" action="/web/organizations/switch">
-                      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                      <input type="hidden" name="org_id" value="{{ r.org_id }}">
-                      <button type="submit" class="btn btn-secondary">Switch</button>
-                    </form>
-                  {% endif %}
-                </td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
     </div>
-  {% endif %}
+  </div>
+{% endif %}
 
-  {% if show_create %}
-    <div class="card card-pad mt-6 max-w-lg">
-      <h2 class="page-h2 mb-1">Create organization</h2>
-      <p class="text-muted text-[13px] mb-4">You become the owner. The slug is derived from the name when left blank.</p>
-      <form class="settings-form" method="post" action="/web/organizations">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <div>
-          <label class="field-label" for="org-name">Name</label>
-          <input id="org-name"
-                 name="name"
-                 type="text"
-                 required
-                 class="input"
-                 placeholder="Acme Corp">
-        </div>
-        <div>
-          <label class="field-label" for="org-slug">
-            Slug <span class="text-muted normal-case tracking-normal font-normal">(optional)</span>
-          </label>
-          <input id="org-slug"
-                 name="slug"
-                 type="text"
-                 class="input"
-                 placeholder="acme-corp">
-        </div>
-        <div>
-          <button type="submit" class="btn btn-primary">Create organization</button>
-        </div>
-      </form>
-    </div>
-  {% endif %}
+{% if show_create %}
+  <div class="card card-pad mt-6 max-w-lg">
+    <h2 class="page-h2 mb-1">{{ chrome.t("orgs-create-heading") }}</h2>
+    <p class="text-muted text-[13px] mb-4">{{ chrome.t("orgs-create-desc") }}</p>
+    <form class="settings-form" method="post" action="/web/organizations">
+      <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+      <div>
+        <label class="field-label" for="org-name">{{ chrome.t("orgs-name") }}</label>
+        <input id="org-name"
+               name="name"
+               type="text"
+               required
+               class="input"
+               placeholder="Acme Corp">
+      </div>
+      <div>
+        <label class="field-label" for="org-slug">
+          {{ chrome.t("orgs-slug") }} <span class="text-muted normal-case tracking-normal font-normal">{{ chrome.t("orgs-optional") }}</span>
+        </label>
+        <input id="org-slug"
+               name="slug"
+               type="text"
+               class="input"
+               placeholder="acme-corp">
+      </div>
+      <div>
+        <button type="submit" class="btn btn-primary">{{ chrome.t("orgs-create-submit") }}</button>
+      </div>
+    </form>
+  </div>
+{% endif %}
 {% endblock %}

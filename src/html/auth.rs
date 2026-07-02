@@ -142,6 +142,17 @@ pub async fn callback(
         }
     };
 
+    // The OIDC claim seeds the language only when the user has not set one.
+    if let Some(loc) = success.claims.locale.as_deref() {
+        if let Err(e) = users::set_preferred_language_if_unset(&state.pool, user.user_id, loc).await
+        {
+            tracing::warn!(
+                "failed to persist preferred_language for user {}: {e:#}",
+                user.user_id
+            );
+        }
+    }
+
     warn_orgs_claim_absent_once(success.claims.orgs.is_none());
 
     let recon = crate::orgs::reconcile::reconcile(
@@ -190,7 +201,9 @@ pub async fn callback(
     let provision_cookie = if !recon.provisionable.is_empty() {
         let ps = crate::html::provision::new_state(recon.provisionable, success.claims.iss.clone());
         match crate::html::provision::pack(encryptor, &ps) {
-            Some(blob) => Some(crate::html::provision::build_provision_cookie(&blob, secure)),
+            Some(blob) => Some(crate::html::provision::build_provision_cookie(
+                &blob, secure,
+            )),
             None => {
                 tracing::error!("provisionable orgs present but sp_provision cookie could not be built; skipping interstitial");
                 None
@@ -200,7 +213,11 @@ pub async fn callback(
         None
     };
 
-    let redirect_target = if provision_cookie.is_some() { "/web/provision" } else { "/web/" };
+    let redirect_target = if provision_cookie.is_some() {
+        "/web/provision"
+    } else {
+        "/web/"
+    };
     let mut resp = Redirect::to(redirect_target).into_response();
     append_set_cookie(&mut resp, build_grant_cookie(&handle.to_hex(), secure));
     append_set_cookie(&mut resp, clear_login_cookie(secure));

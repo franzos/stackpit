@@ -4,6 +4,9 @@ use axum::response::IntoResponse;
 use secrecy::ExposeSecret;
 use serde::Deserialize;
 
+use crate::html::chrome::Localized;
+use crate::html::utils::Chrome;
+use crate::locale::LanguageIdentifier;
 use crate::oidc::cookies::{append_set_cookie, clear_grant_cookie_all_variants};
 use crate::oidc::{grants, logout};
 use crate::server::AppState;
@@ -67,6 +70,15 @@ struct LoginTemplate {
     /// IdP's `end_session_endpoint`. Kept separate from `error` so the user
     /// gets neutral phrasing (this isn't a failure -- just a heads-up).
     info: Option<String>,
+    /// Resolved request locale. LoginTemplate is standalone (no PageChrome),
+    /// so it carries its own locale and looks strings up directly.
+    locale: LanguageIdentifier,
+}
+
+impl Localized for LoginTemplate {
+    fn locale(&self) -> &LanguageIdentifier {
+        &self.locale
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -83,11 +95,13 @@ pub fn render_login(
     error: Option<String>,
     oauth_enabled: bool,
     status: StatusCode,
+    locale: LanguageIdentifier,
 ) -> axum::response::Response {
     let tmpl = LoginTemplate {
         error,
         oauth_enabled,
         info: None,
+        locale,
     };
     match askama::Template::render(&tmpl) {
         Ok(html) => (status, axum::response::Html(html)).into_response(),
@@ -98,13 +112,9 @@ pub fn render_login(
 /// Map a `?logout=` value to an info banner. Only `local` is meaningful
 /// today; anything else returns `None` so we never echo attacker-controlled
 /// strings into rendered HTML.
-fn logout_message(code: &str) -> Option<String> {
+fn logout_message(locale: &LanguageIdentifier, code: &str) -> Option<String> {
     match code {
-        "local" => Some(
-            "Signed out of Stackpit. Your identity provider session was not ended -- sign \
-             out there separately if needed."
-                .into(),
-        ),
+        "local" => Some(crate::i18n::lookup(locale, "login-logout-local")),
         _ => None,
     }
 }
@@ -113,35 +123,18 @@ fn logout_message(code: &str) -> Option<String> {
 /// fall through to a deliberately generic line so we don't echo arbitrary
 /// strings into rendered HTML; the original code lands in server logs at
 /// `warn` so support can still trace it.
-fn error_message(code: &str) -> String {
-    match code {
-        "state_mismatch" => {
-            "Your sign-in session was tampered with or expired. Please try again.".into()
+fn error_message(locale: &LanguageIdentifier, code: &str) -> String {
+    let key = match code {
+        "state_mismatch" | "flow_cookie_missing" | "flow_cookie_mismatch" => {
+            "login-error-state-mismatch"
         }
-        "flow_cookie_missing" | "flow_cookie_mismatch" => {
-            "Your sign-in session was tampered with or expired. Please try again.".into()
-        }
-        "session_expired" => "Your session expired. Please sign in again.".into(),
-        "missing_code" | "missing_state" => {
-            "Your identity provider returned an incomplete response. Please try again.".into()
-        }
-        "token_exchange_failed" => {
-            "We couldn't complete sign-in with your identity provider. Please try again in a \
-             moment."
-                .into()
-        }
-        "provisioning_failed" => {
-            "Your account couldn't be created. Contact your administrator.".into()
-        }
-        "email_conflict" => {
-            "An account with this email already exists. Contact your administrator.".into()
-        }
-        "session_unavailable" => {
-            "Sign-in is temporarily unavailable. Please try again in a moment.".into()
-        }
-        "encryption_unconfigured" => {
-            "Sign-in is misconfigured on this deployment. Contact your administrator.".into()
-        }
+        "session_expired" => "login-error-session-expired",
+        "missing_code" | "missing_state" => "login-error-missing-response",
+        "token_exchange_failed" => "login-error-token-exchange",
+        "provisioning_failed" => "login-error-provisioning",
+        "email_conflict" => "login-error-email-conflict",
+        "session_unavailable" => "login-error-session-unavailable",
+        "encryption_unconfigured" => "login-error-encryption",
         other => {
             // Log unknown codes (usually a new error path missing here) but
             // render a generic message so we never echo arbitrary input into HTML.
@@ -150,22 +143,26 @@ fn error_message(code: &str) -> String {
                 code = %other,
                 "login redirect carried unknown error code; rendering generic message",
             );
-            "Sign-in failed. Please try again.".into()
+            "login-error-generic"
         }
-    }
+    };
+    crate::i18n::lookup(locale, key)
 }
 
 pub async fn login_form(
     State(state): State<AppState>,
+    Chrome(chrome): Chrome,
     Query(q): Query<LoginQuery>,
 ) -> impl IntoResponse {
+    let locale = chrome.locale;
     let oauth_enabled = state.oidc.is_some();
-    let error = q.error.as_deref().map(error_message);
-    let info = q.logout.as_deref().and_then(logout_message);
+    let error = q.error.as_deref().map(|c| error_message(&locale, c));
+    let info = q.logout.as_deref().and_then(|c| logout_message(&locale, c));
     let tmpl = LoginTemplate {
         error,
         oauth_enabled,
         info,
+        locale,
     };
     let status = StatusCode::OK;
     match askama::Template::render(&tmpl) {
@@ -176,6 +173,7 @@ pub async fn login_form(
 
 pub async fn handle_login(
     State(state): State<AppState>,
+    Chrome(chrome): Chrome,
     Form(form): Form<LoginForm>,
 ) -> impl IntoResponse {
     let token = form.token.trim().to_string();
@@ -207,10 +205,12 @@ pub async fn handle_login(
         }
         resp
     } else {
+        let msg = crate::i18n::lookup(&chrome.locale, "login-error-invalid-token");
         render_login(
-            Some("Invalid token".to_string()),
+            Some(msg),
             oauth_enabled,
             StatusCode::UNAUTHORIZED,
+            chrome.locale,
         )
     }
 }
@@ -275,6 +275,9 @@ pub async fn handle_logout(State(state): State<AppState>, headers: HeaderMap) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::locale::default_locale;
+    use askama::Template;
+    use unic_langid::langid;
 
     /// Every known error code emitted by `src/html/auth.rs` must map to a
     /// non-default message (i.e. *not* the generic fallback). Catalogue is
@@ -282,6 +285,7 @@ mod tests {
     /// call sites in auth.rs as of writing.
     #[test]
     fn known_codes_have_specific_messages() {
+        let en = default_locale();
         let known = [
             "state_mismatch",
             "flow_cookie_missing",
@@ -295,9 +299,9 @@ mod tests {
             "session_unavailable",
             "encryption_unconfigured",
         ];
-        let generic = error_message("__definitely_unknown_code__");
+        let generic = error_message(&en, "__definitely_unknown_code__");
         for code in known {
-            let msg = error_message(code);
+            let msg = error_message(&en, code);
             assert_ne!(
                 msg, generic,
                 "code `{code}` maps to the generic fallback; add a specific message"
@@ -311,7 +315,8 @@ mod tests {
 
     #[test]
     fn logout_local_renders_info_banner() {
-        let msg = super::logout_message("local").expect("local must map to a banner");
+        let msg =
+            super::logout_message(&default_locale(), "local").expect("local must map to a banner");
         assert!(
             msg.contains("Stackpit"),
             "info banner should mention Stackpit: {msg}"
@@ -325,14 +330,15 @@ mod tests {
     #[test]
     fn logout_unknown_codes_render_nothing() {
         // Attacker-controlled / unknown values must not echo through.
-        assert!(super::logout_message("").is_none());
-        assert!(super::logout_message("remote").is_none());
-        assert!(super::logout_message("<script>").is_none());
+        let en = default_locale();
+        assert!(super::logout_message(&en, "").is_none());
+        assert!(super::logout_message(&en, "remote").is_none());
+        assert!(super::logout_message(&en, "<script>").is_none());
     }
 
     #[test]
     fn unknown_code_falls_back_to_generic_message() {
-        let msg = error_message("not_a_real_code_xyz");
+        let msg = error_message(&default_locale(), "not_a_real_code_xyz");
         assert!(
             !msg.contains("not_a_real_code_xyz"),
             "unknown codes must not echo into the message: {msg}"
@@ -340,6 +346,29 @@ mod tests {
         assert!(
             msg.starts_with("Sign-in failed"),
             "unknown codes must use the generic fallback, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn login_renders_german_without_missing_keys() {
+        let tmpl = LoginTemplate {
+            error: None,
+            oauth_enabled: true,
+            info: None,
+            locale: langid!("de"),
+        };
+        let html = tmpl.render().expect("login renders");
+        assert!(
+            html.contains(r#"lang="de""#),
+            "expected the German language attribute on the standalone login page"
+        );
+        assert!(
+            html.contains("Anmelden"),
+            "expected the German sign-in label in the output"
+        );
+        assert!(
+            !html.contains(crate::i18n::MISSING_PREFIX),
+            "German login render leaked a missing localization key: {html}"
         );
     }
 }

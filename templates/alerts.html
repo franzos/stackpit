@@ -1,27 +1,27 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
 
-{% block title %}Alerts &amp; digests — Stackpit{% endblock %}
+{% block title %}{{ chrome.t("alerts-page-title") |safe }}{% endblock %}
 
 {% block sidebar_nav %}
-  {% call m::settings_sidebar("alerts") %}
+  {% call m::settings_sidebar(chrome, "alerts") %}
   {% endcall %}
 {% endblock %}
 
 {% block breadcrumbs %}
   <span class="breadcrumb-sep">/</span>
-  <span class="breadcrumb-link">Settings</span>
+  <span class="breadcrumb-link">{{ chrome.t("nav-settings") }}</span>
   <span class="breadcrumb-sep">/</span>
-  <span class="breadcrumb-current">Alerts &amp; digests</span>
+  <span class="breadcrumb-current">{{ chrome.t("nav-alerts-digests") |safe }}</span>
 {% endblock %}
 
 {% block content %}
   <div class="page-header">
     <div>
-      <h1>Alerts &amp; digests</h1>
+      <h1>{{ chrome.t("nav-alerts-digests") |safe }}</h1>
       <p class="text-muted text-[13px] mt-1">
-        Notifications fire through the integrations on the <a class="text-primary hover:underline"
-    href="/web/settings/integrations/">Integrations</a> page.
+        {{ chrome.t("alerts-notify-help-pre") }} <a class="text-primary hover:underline"
+    href="/web/settings/integrations/">{{ chrome.t("nav-integrations") }}</a> {{ chrome.t("alerts-notify-help-post") }}
       </p>
     </div>
   </div>
@@ -30,239 +30,235 @@
   <div class="settings-message mb-4">{{ msg }}</div>
   {% when None %}{% endmatch %}
 
-  <div class="grid gap-6 grid-cols-1 xl:grid-cols-2">
+<div class="grid gap-6 grid-cols-1 xl:grid-cols-2">
 
-    {# ============ Threshold alert rules ============ #}
-    <section class="space-y-4">
-      <div>
-        <h2 class="page-h2">Threshold rules</h2>
-        <p class="text-muted text-[13px] mt-1">Fire when an issue receives more than N events in a time window.</p>
-      </div>
-
-      {% if alert_rules.is_empty() %}
-        <div class="card card-pad text-muted text-[13px]">No alert rules yet.</div>
-      {% else %}
-        <div class="card overflow-hidden">
-          <div class="table-wrap">
-            <table class="table">
-              <thead>
-                <tr>
-                  <th>Scope</th>
-                  <th>Issue</th>
-                  <th>Threshold</th>
-                  <th>Window</th>
-                  <th>Cooldown</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for r in alert_rules %}
-                  <tr>
-                    <td>
-                      {% match r.project_id %}
-                      {% when Some with (pid) %}<a class="font-semibold" href="/web/projects/{{ pid }}/">Project {{ pid }}</a>
-                      {% when None %}<span class="badge badge-neutral">Global</span>
-                    {% endmatch %}
-                  </td>
-                  <td>
-                    {% match r.fingerprint %}{% when Some with (fp) %}<code class="text-mono text-[11px]" title="{{ fp }}">{{ fp|truncate_url }}</code>{% when None %}<span class="text-muted">Any</span>{% endmatch %}
-                  </td>
-                  <td class="text-tabular">
-                    {% match r.threshold_count %}{% when Some with (c) %}{{ c }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
-                  </td>
-                  <td class="text-tabular">
-                    {% match r.window_secs %}{% when Some with (w) %}{{ w }}s{% when None %}<span class="text-muted">—</span>{% endmatch %}
-                  </td>
-                  <td class="text-tabular">{{ r.cooldown_secs }}s</td>
-                  <td class="text-right nowrap">
-                    <form method="post"
-                          action="/web/settings/alerts/rules/{{ r.id }}/delete"
-                          class="inline">
-                      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                      <button type="submit"
-                              class="btn btn-ghost"
-                              data-confirm="Delete this alert rule?"
-                              aria-label="Delete">✕</button>
-                    </form>
-                  </td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    {% endif %}
-
-    <details class="card">
-      <summary class="card-header cursor-pointer select-none">+ Add alert rule</summary>
-      <form class="settings-form p-4"
-            method="post"
-            action="/web/settings/alerts/rules/create">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <div class="grid grid-cols-2 gap-3">
-          <div>
-            <label class="field-label" for="ar_project">Scope</label>
-            <select class="select" id="ar_project" name="project_id">
-              <option value="">All projects</option>
-              {% for p in projects %}
-                <option value="{{ p.0 }}">{{ p.1 }}</option>
-              {% endfor %}
-            </select>
-          </div>
-          <div>
-            <label class="field-label" for="ar_fp">
-              Issue fingerprint <span class="text-muted normal-case tracking-normal font-normal">(blank = any)</span>
-            </label>
-            <input class="input text-mono"
-                   type="text"
-                   id="ar_fp"
-                   name="fingerprint"
-                   placeholder="any issue">
-            <p class="field-hint">
-              A fingerprint identifies one issue (grouped events). Visible in the URL on any issue page. Leave blank to match every issue in scope.
-            </p>
-          </div>
-        </div>
-        <div class="grid grid-cols-3 gap-3">
-          <div>
-            <label class="field-label" for="ar_threshold">Threshold</label>
-            <input class="input"
-                   type="number"
-                   id="ar_threshold"
-                   name="threshold_count"
-                   value="100"
-                   min="1"
-                   required>
-          </div>
-          <div>
-            <label class="field-label" for="ar_window">
-              Window <span class="text-muted normal-case tracking-normal font-normal">(s)</span>
-            </label>
-            <input class="input"
-                   type="number"
-                   id="ar_window"
-                   name="window_secs"
-                   value="3600"
-                   min="60"
-                   required>
-          </div>
-          <div>
-            <label class="field-label" for="ar_cooldown">
-              Cooldown <span class="text-muted normal-case tracking-normal font-normal">(s)</span>
-            </label>
-            <input class="input"
-                   type="number"
-                   id="ar_cooldown"
-                   name="cooldown_secs"
-                   value="3600"
-                   min="60">
-          </div>
-        </div>
-        <div>
-          <button type="submit" class="btn btn-primary">Create rule</button>
-        </div>
-      </form>
-    </details>
-  </section>
-
-  {# ============ Digest schedules ============ #}
+  {# ============ Threshold alert rules ============ #}
   <section class="space-y-4">
     <div>
-      <h2 class="page-h2">Digest schedules</h2>
-      <p class="text-muted text-[13px] mt-1">
-        Periodic activity summaries — daily or weekly stand-ups instead of per-event noise.
-      </p>
+      <h2 class="page-h2">{{ chrome.t("alerts-threshold-heading") }}</h2>
+      <p class="text-muted text-[13px] mt-1">{{ chrome.t("alerts-threshold-desc") }}</p>
     </div>
 
-    {% if digest_schedules.is_empty() %}
-      <div class="card card-pad text-muted text-[13px]">No digest schedules yet.</div>
+    {% if alert_rules.is_empty() %}
+      <div class="card card-pad text-muted text-[13px]">{{ chrome.t("alerts-rules-empty") }}</div>
     {% else %}
       <div class="card overflow-hidden">
         <div class="table-wrap">
           <table class="table">
             <thead>
               <tr>
-                <th>Scope</th>
-                <th>Interval</th>
-                <th>Last sent</th>
-                <th>Enabled</th>
+                <th>{{ chrome.t("alerts-col-scope") }}</th>
+                <th>{{ chrome.t("alerts-col-issue") }}</th>
+                <th>{{ chrome.t("alerts-col-threshold") }}</th>
+                <th>{{ chrome.t("alerts-col-window") }}</th>
+                <th>{{ chrome.t("alerts-col-cooldown") }}</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
-              {% for s in digest_schedules %}
+              {% for r in alert_rules %}
                 <tr>
                   <td>
-                    {% match s.project_id %}
-                    {% when Some with (pid) %}<a class="font-semibold" href="/web/projects/{{ pid }}/">Project {{ pid }}</a>
-                    {% when None %}<span class="badge badge-neutral">Global</span>
+                    {% match r.project_id %}
+                    {% when Some with (pid) %}<a class="font-semibold" href="/web/projects/{{ pid }}/">{{ chrome.t("nav-project") }} {{ pid }}</a>
+                    {% when None %}<span class="badge badge-neutral">{{ chrome.t("alerts-scope-global") }}</span>
                   {% endmatch %}
                 </td>
-                <td class="text-tabular">{{ s.interval_secs }}s</td>
-                <td class="text-muted">
-                  {% if s.last_sent == 0 %}
-                    Never
-                  {% else %}
-                    <time datetime="{{ s.last_sent|format_ts }}"
-                          title="{{ s.last_sent|format_ts }}">{{ s.last_sent|format_relative }}</time>
-                  {% endif %}
-                </td>
                 <td>
-                  {% if s.enabled %}
-                    <span class="badge badge-resolved">Yes</span>
-                  {% else %}
-                    <span class="badge badge-ignored">No</span>
-                  {% endif %}
-                </td>
-                <td class="text-right nowrap">
-                  <form method="post"
-                        action="/web/settings/alerts/digests/{{ s.id }}/delete"
-                        class="inline">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                    <button type="submit"
-                            class="btn btn-ghost"
-                            data-confirm="Delete this digest schedule?"
-                            aria-label="Delete">✕</button>
-                  </form>
-                </td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  {% endif %}
+                  {% match r.fingerprint %}{% when Some with (fp) %}<code class="text-mono text-[11px]" title="{{ fp }}">{{ fp|truncate_url }}</code>{% when None %}<span class="text-muted">{{ chrome.t("alerts-fingerprint-any") }}</span>{% endmatch %}
+              </td>
+              <td class="text-tabular">
+                {% match r.threshold_count %}{% when Some with (c) %}{{ c }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
+            </td>
+            <td class="text-tabular">
+              {% match r.window_secs %}{% when Some with (w) %}{{ w }}s{% when None %}<span class="text-muted">—</span>{% endmatch %}
+          </td>
+          <td class="text-tabular">{{ r.cooldown_secs }}s</td>
+          <td class="text-end nowrap">
+            <form method="post"
+                  action="/web/settings/alerts/rules/{{ r.id }}/delete"
+                  class="inline">
+              <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+              <button type="submit"
+                      class="btn btn-ghost"
+                      data-confirm="{{ chrome.t("alerts-rule-delete-confirm") }}"
+                      aria-label="{{ chrome.t("alerts-delete-label") }}">✕</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+</div>
+{% endif %}
 
-  <details class="card">
-    <summary class="card-header cursor-pointer select-none">+ Add digest schedule</summary>
-    <form class="settings-form p-4"
-          method="post"
-          action="/web/settings/alerts/digests/create">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <div class="grid grid-cols-2 gap-3">
-        <div>
-          <label class="field-label" for="ds_project">Scope</label>
-          <select class="select" id="ds_project" name="project_id">
-            <option value="">All projects</option>
-            {% for p in projects %}
-              <option value="{{ p.0 }}">{{ p.1 }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div>
-          <label class="field-label" for="ds_interval">Interval</label>
-          <select class="select" id="ds_interval" name="interval_secs">
-            <option value="86400">Daily (24h)</option>
-            <option value="604800">Weekly (7d)</option>
-            <option value="3600">Hourly</option>
-          </select>
-        </div>
+<details class="card">
+  <summary class="card-header cursor-pointer select-none">{{ chrome.t("alerts-add-rule") }}</summary>
+  <form class="settings-form p-4"
+        method="post"
+        action="/web/settings/alerts/rules/create">
+    <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+    <div class="grid grid-cols-2 gap-3">
+      <div>
+        <label class="field-label" for="ar_project">{{ chrome.t("alerts-col-scope") }}</label>
+        <select class="select" id="ar_project" name="project_id">
+          <option value="">{{ chrome.t("alerts-all-projects") }}</option>
+          {% for p in projects %}
+            <option value="{{ p.0 }}">{{ p.1 }}</option>
+          {% endfor %}
+        </select>
       </div>
       <div>
-        <button type="submit" class="btn btn-primary">Create schedule</button>
+        <label class="field-label" for="ar_fp">
+          {{ chrome.t("alerts-fingerprint-label") }} <span class="text-muted normal-case tracking-normal font-normal">{{ chrome.t("alerts-fingerprint-hint") }}</span>
+        </label>
+        <input class="input text-mono"
+               type="text"
+               id="ar_fp"
+               name="fingerprint"
+               placeholder="{{ chrome.t("alerts-fingerprint-placeholder") }}">
+        <p class="field-hint">{{ chrome.t("alerts-fingerprint-help") }}</p>
       </div>
-    </form>
-  </details>
+    </div>
+    <div class="grid grid-cols-3 gap-3">
+      <div>
+        <label class="field-label" for="ar_threshold">{{ chrome.t("alerts-col-threshold") }}</label>
+        <input class="input"
+               type="number"
+               id="ar_threshold"
+               name="threshold_count"
+               value="100"
+               min="1"
+               required>
+      </div>
+      <div>
+        <label class="field-label" for="ar_window">
+          {{ chrome.t("alerts-col-window") }} <span class="text-muted normal-case tracking-normal font-normal">{{ chrome.t("alerts-unit-s") }}</span>
+        </label>
+        <input class="input"
+               type="number"
+               id="ar_window"
+               name="window_secs"
+               value="3600"
+               min="60"
+               required>
+      </div>
+      <div>
+        <label class="field-label" for="ar_cooldown">
+          {{ chrome.t("alerts-col-cooldown") }} <span class="text-muted normal-case tracking-normal font-normal">{{ chrome.t("alerts-unit-s") }}</span>
+        </label>
+        <input class="input"
+               type="number"
+               id="ar_cooldown"
+               name="cooldown_secs"
+               value="3600"
+               min="60">
+      </div>
+    </div>
+    <div>
+      <button type="submit" class="btn btn-primary">{{ chrome.t("alerts-create-rule") }}</button>
+    </div>
+  </form>
+</details>
+</section>
+
+{# ============ Digest schedules ============ #}
+<section class="space-y-4">
+  <div>
+    <h2 class="page-h2">{{ chrome.t("alerts-digest-heading") }}</h2>
+    <p class="text-muted text-[13px] mt-1">{{ chrome.t("alerts-digest-desc") }}</p>
+  </div>
+
+  {% if digest_schedules.is_empty() %}
+    <div class="card card-pad text-muted text-[13px]">{{ chrome.t("alerts-digests-empty") }}</div>
+  {% else %}
+    <div class="card overflow-hidden">
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>{{ chrome.t("alerts-col-scope") }}</th>
+              <th>{{ chrome.t("alerts-col-interval") }}</th>
+              <th>{{ chrome.t("alerts-col-last-sent") }}</th>
+              <th>{{ chrome.t("alerts-col-enabled") }}</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for s in digest_schedules %}
+              <tr>
+                <td>
+                  {% match s.project_id %}
+                  {% when Some with (pid) %}<a class="font-semibold" href="/web/projects/{{ pid }}/">{{ chrome.t("nav-project") }} {{ pid }}</a>
+                  {% when None %}<span class="badge badge-neutral">{{ chrome.t("alerts-scope-global") }}</span>
+                {% endmatch %}
+              </td>
+              <td class="text-tabular">{{ s.interval_secs }}s</td>
+              <td class="text-muted">
+                {% if s.last_sent == 0 %}
+                  {{ chrome.t("alerts-never") }}
+                {% else %}
+                  <time datetime="{{ s.last_sent|format_ts }}"
+                        title="{{ s.last_sent|format_ts }}">{{ chrome.rel_time(s.last_sent) }}</time>
+                {% endif %}
+              </td>
+              <td>
+                {% if s.enabled %}
+                  <span class="badge badge-resolved">{{ chrome.t("alerts-yes") }}</span>
+                {% else %}
+                  <span class="badge badge-ignored">{{ chrome.t("alerts-no") }}</span>
+                {% endif %}
+              </td>
+              <td class="text-end nowrap">
+                <form method="post"
+                      action="/web/settings/alerts/digests/{{ s.id }}/delete"
+                      class="inline">
+                  <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+                  <button type="submit"
+                          class="btn btn-ghost"
+                          data-confirm="{{ chrome.t("alerts-digest-delete-confirm") }}"
+                          aria-label="{{ chrome.t("alerts-delete-label") }}">✕</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% endif %}
+
+<details class="card">
+  <summary class="card-header cursor-pointer select-none">{{ chrome.t("alerts-add-digest") }}</summary>
+  <form class="settings-form p-4"
+        method="post"
+        action="/web/settings/alerts/digests/create">
+    <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+    <div class="grid grid-cols-2 gap-3">
+      <div>
+        <label class="field-label" for="ds_project">{{ chrome.t("alerts-col-scope") }}</label>
+        <select class="select" id="ds_project" name="project_id">
+          <option value="">{{ chrome.t("alerts-all-projects") }}</option>
+          {% for p in projects %}
+            <option value="{{ p.0 }}">{{ p.1 }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="field-label" for="ds_interval">{{ chrome.t("alerts-col-interval") }}</label>
+        <select class="select" id="ds_interval" name="interval_secs">
+          <option value="86400">{{ chrome.t("alerts-interval-daily") }}</option>
+          <option value="604800">{{ chrome.t("alerts-interval-weekly") }}</option>
+          <option value="3600">{{ chrome.t("alerts-interval-hourly") }}</option>
+        </select>
+      </div>
+    </div>
+    <div>
+      <button type="submit" class="btn btn-primary">{{ chrome.t("alerts-create-schedule") }}</button>
+    </div>
+  </form>
+</details>
 </section>
 
 </div>

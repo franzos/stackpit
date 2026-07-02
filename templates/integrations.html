@@ -1,33 +1,31 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
 
-{% block title %}Integrations — Stackpit{% endblock %}
+{% block title %}{{ chrome.t("integrations-page-title") }}{% endblock %}
 
 {% block sidebar_nav %}
-  {% call m::settings_sidebar("integrations") %}
+  {% call m::settings_sidebar(chrome, "integrations") %}
   {% endcall %}
 {% endblock %}
 
 {% block breadcrumbs %}
   <span class="breadcrumb-sep">/</span>
-  <span class="breadcrumb-link">Settings</span>
+  <span class="breadcrumb-link">{{ chrome.t("nav-settings") }}</span>
   <span class="breadcrumb-sep">/</span>
-  <span class="breadcrumb-current">Integrations</span>
+  <span class="breadcrumb-current">{{ chrome.t("nav-integrations") }}</span>
 {% endblock %}
 
 {% block content %}
   <div class="page-header">
     <div>
-      <h1>Integrations</h1>
-      <p class="text-muted text-[13px] mt-1">
-        Webhook, Slack and email outputs. Per-project routing is set under each project's settings.
-      </p>
+      <h1>{{ chrome.t("nav-integrations") }}</h1>
+      <p class="text-muted text-[13px] mt-1">{{ chrome.t("integrations-subtitle") }}</p>
     </div>
     <div class="page-actions">
       <a href="/web/settings/integrations/new/webhook"
-         class="btn btn-secondary">+ Webhook</a>
-      <a href="/web/settings/integrations/new/slack" class="btn btn-secondary">+ Slack</a>
-      <a href="/web/settings/integrations/new/email" class="btn btn-primary">+ Email</a>
+         class="btn btn-secondary">{{ chrome.t("integrations-add-webhook") }}</a>
+      <a href="/web/settings/integrations/new/slack" class="btn btn-secondary">{{ chrome.t("integrations-add-slack") }}</a>
+      <a href="/web/settings/integrations/new/email" class="btn btn-primary">{{ chrome.t("integrations-add-email") }}</a>
     </div>
   </div>
 
@@ -35,66 +33,64 @@
   <div class="settings-message mb-4">{{ msg }}</div>
   {% when None %}{% endmatch %}
 
-  {% if integrations.is_empty() %}
-    <div class="card">
-      <p class="empty">
-        No integrations yet. Add one above to start receiving notifications. After adding, enable it per-project under <strong>Project settings → Integrations</strong>.
-      </p>
-    </div>
-  {% else %}
-    <div class="card overflow-hidden">
-      <div class="table-wrap">
-        <table class="table">
-          <thead>
+{% if integrations.is_empty() %}
+  <div class="card">
+    <p class="empty">{{ chrome.t("integrations-empty") |safe }}</p>
+  </div>
+{% else %}
+  <div class="card overflow-hidden">
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>{{ chrome.t("integrations-col-name") }}</th>
+            <th>{{ chrome.t("integrations-col-type") }}</th>
+            <th>{{ chrome.t("integrations-col-endpoint") }}</th>
+            <th>{{ chrome.t("integrations-col-created") }}</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for i in integrations %}
             <tr>
-              <th>Name</th>
-              <th>Type</th>
-              <th>Endpoint</th>
-              <th>Created</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for i in integrations %}
-              <tr>
-                <td class="font-semibold">{{ i.name }}</td>
-                <td>
-                  <span class="badge badge-neutral">{{ i.kind }}</span>
-                </td>
-                <td class="text-mono text-[12px]">
-                  {% if i.kind == "email" %}
-                    {% match i.provider_label() %}{% when Some with (label) %}{{ label }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
-                  {% else %}
-                    {% match i.url.as_deref() %}{% when Some with (u) %}<code title="{{ u }}">{{ u|truncate_url }}</code>{% when None %}<span class="text-muted">—</span>{% endmatch %}
-                  {% endif %}
-                </td>
-                <td class="text-muted">
-                  <time datetime="{{ i.created_at|format_ts }}"
-                        title="{{ i.created_at|format_ts }}">{{ i.created_at|format_relative }}</time>
-                </td>
-                <td class="nowrap">
-                  <form method="post"
-                        action="/web/settings/integrations/{{ i.id }}/test"
-                        class="inline">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                    <button type="submit" class="btn btn-secondary">Test</button>
-                  </form>
-                  <form method="post"
-                        action="/web/settings/integrations/{{ i.id }}/delete"
-                        class="inline ml-1">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                    <button type="submit"
-                            class="btn btn-danger"
-                            data-confirm="Delete this integration? It will be removed from all projects.">
-                      Delete
-                    </button>
-                  </form>
-                </td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  {% endif %}
+              <td class="font-semibold"><bdi>{{ i.name }}</bdi></td>
+              <td>
+                <span class="badge badge-neutral">{{ i.kind }}</span>
+              </td>
+              <td class="text-mono text-[12px]">
+                {% if i.kind == "email" %}
+                  {% match i.provider_label() %}{% when Some with (label) %}<bdi>{{ label }}</bdi>{% when None %}<span class="text-muted">—</span>{% endmatch %}
+              {% else %}
+                {% match i.url.as_deref() %}{% when Some with (u) %}<code title="{{ u }}">{{ u|truncate_url }}</code>{% when None %}<span class="text-muted">—</span>{% endmatch %}
+            {% endif %}
+          </td>
+          <td class="text-muted">
+            <time datetime="{{ i.created_at|format_ts }}"
+                  title="{{ i.created_at|format_ts }}">{{ chrome.rel_time(i.created_at) }}</time>
+          </td>
+          <td class="nowrap">
+            <form method="post"
+                  action="/web/settings/integrations/{{ i.id }}/test"
+                  class="inline">
+              <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+              <button type="submit" class="btn btn-secondary">{{ chrome.t("integrations-test") }}</button>
+            </form>
+            <form method="post"
+                  action="/web/settings/integrations/{{ i.id }}/delete"
+                  class="inline ms-1">
+              <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+              <button type="submit"
+                      class="btn btn-danger"
+                      data-confirm="{{ chrome.t("integrations-delete-confirm") }}">
+                {{ chrome.t("integrations-delete") }}
+              </button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+</div>
+{% endif %}
 {% endblock %}

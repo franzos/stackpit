@@ -4,8 +4,9 @@ use axum::response::IntoResponse;
 use serde::Deserialize;
 
 use crate::forge;
+use crate::html::chrome::PageChrome;
 use crate::html::render_template;
-use crate::html::utils::{self, Csrf};
+use crate::html::utils::{self, Chrome};
 use crate::orgs::extractor::{require_owner, require_project_scope, ActiveOrg};
 use crate::queries;
 use crate::queries::types::{ProjectKey, ProjectRepo};
@@ -28,19 +29,19 @@ struct ProjectSettingsTemplate {
     repos: Vec<ProjectRepo>,
     message: Option<String>,
     nav: ProjectNavCounts,
-    csrf_token: String,
+    chrome: PageChrome,
 }
 
 pub async fn handler(
     State(state): State<AppState>,
     active: ActiveOrg,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path(project_id): Path<u64>,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
         return r;
     }
-    render_general(&state, project_id, None, &csrf).await
+    render_general(&state, project_id, None, &chrome).await
 }
 
 #[derive(Deserialize)]
@@ -53,7 +54,7 @@ const MAX_FIELD_LENGTH: usize = 255;
 pub async fn set_name(
     State(state): State<AppState>,
     active: ActiveOrg,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path(project_id): Path<u64>,
     Form(form): Form<SetNameForm>,
 ) -> axum::response::Response {
@@ -69,19 +70,24 @@ pub async fn set_name(
         return render_general(
             &state,
             project_id,
-            Some(format!(
-                "Project name exceeds max length of {MAX_FIELD_LENGTH} characters"
+            Some(chrome.tv1(
+                "flash-project-name-too-long",
+                "max",
+                &MAX_FIELD_LENGTH.to_string(),
             )),
-            &csrf,
+            &chrome,
         )
         .await;
     }
 
     let s = state.clone();
+    let success = chrome.t("flash-project-name-updated");
+    let render_chrome = chrome.clone();
     utils::query_then_render(
         queries::projects::set_project_name(&state.writer_pool, project_id, &name).await,
-        "Project name updated",
-        move |msg| async move { render_general(&s, project_id, msg, &csrf).await },
+        &chrome,
+        &success,
+        move |msg| async move { render_general(&s, project_id, msg, &render_chrome).await },
     )
     .await
 }
@@ -95,7 +101,7 @@ pub struct AddRepoForm {
 pub async fn add_repo(
     State(state): State<AppState>,
     active: ActiveOrg,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path(project_id): Path<u64>,
     Form(form): Form<AddRepoForm>,
 ) -> axum::response::Response {
@@ -111,8 +117,8 @@ pub async fn add_repo(
         return render_general(
             &state,
             project_id,
-            Some("Repository URL is required".into()),
-            &csrf,
+            Some(chrome.t("flash-repo-url-required")),
+            &chrome,
         )
         .await;
     }
@@ -120,8 +126,8 @@ pub async fn add_repo(
         return render_general(
             &state,
             project_id,
-            Some("Repository URL exceeds max length of 2048 characters".into()),
-            &csrf,
+            Some(chrome.t("flash-repo-url-too-long")),
+            &chrome,
         )
         .await;
     }
@@ -133,6 +139,8 @@ pub async fn add_repo(
         .map(|s| s.trim().to_string());
 
     let s = state.clone();
+    let success = chrome.t("flash-repo-added");
+    let render_chrome = chrome.clone();
     utils::query_then_render(
         queries::projects::upsert_project_repo(
             &state.writer_pool,
@@ -142,8 +150,9 @@ pub async fn add_repo(
             url_template.as_deref(),
         )
         .await,
-        "Repository added",
-        move |msg| async move { render_general(&s, project_id, msg, &csrf).await },
+        &chrome,
+        &success,
+        move |msg| async move { render_general(&s, project_id, msg, &render_chrome).await },
     )
     .await
 }
@@ -151,7 +160,7 @@ pub async fn add_repo(
 pub async fn delete_repo(
     State(state): State<AppState>,
     active: ActiveOrg,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path((project_id, repo_id)): Path<(u64, i64)>,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
@@ -164,17 +173,21 @@ pub async fn delete_repo(
     let msg = match queries::projects::delete_project_repo(&state.writer_pool, project_id, repo_id)
         .await
     {
-        Ok(0) => format!("Error: not found: repo: {repo_id}"),
-        Ok(_) => "Repository removed".to_string(),
-        Err(e) => format!("Error: {e}"),
+        Ok(0) => format!(
+            "{} {}",
+            chrome.t("common-error-prefix"),
+            chrome.tv1("flash-not-found-repo", "id", &repo_id.to_string())
+        ),
+        Ok(_) => chrome.t("flash-repo-removed"),
+        Err(e) => chrome.err(e),
     };
-    render_general(&state, project_id, Some(msg), &csrf).await
+    render_general(&state, project_id, Some(msg), &chrome).await
 }
 
 pub async fn archive_project(
     State(state): State<AppState>,
     active: ActiveOrg,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path(project_id): Path<u64>,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
@@ -189,24 +202,34 @@ pub async fn archive_project(
             render_general(
                 &state,
                 project_id,
-                Some(format!("Error: not found: project: {project_id}")),
-                &csrf,
+                Some(format!(
+                    "{} {}",
+                    chrome.t("common-error-prefix"),
+                    chrome.tv1("flash-not-found-project", "id", &project_id.to_string())
+                )),
+                &chrome,
             )
             .await
         }
         Ok(_) => {
             // Flush the auth cache or ingestion keeps working until the entry expires.
             crate::ingest::auth::invalidate_project(&state.auth_cache, project_id);
-            render_general(&state, project_id, Some("Project archived".into()), &csrf).await
+            render_general(
+                &state,
+                project_id,
+                Some(chrome.t("flash-project-archived")),
+                &chrome,
+            )
+            .await
         }
-        Err(e) => render_general(&state, project_id, Some(format!("Error: {e}")), &csrf).await,
+        Err(e) => render_general(&state, project_id, Some(chrome.err(e)), &chrome).await,
     }
 }
 
 pub async fn unarchive_project(
     State(state): State<AppState>,
     active: ActiveOrg,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path(project_id): Path<u64>,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
@@ -217,17 +240,21 @@ pub async fn unarchive_project(
     }
 
     let msg = match queries::projects::unarchive_project(&state.writer_pool, project_id).await {
-        Ok(0) => format!("Error: not found: project: {project_id}"),
-        Ok(_) => "Project unarchived".to_string(),
-        Err(e) => format!("Error: {e}"),
+        Ok(0) => format!(
+            "{} {}",
+            chrome.t("common-error-prefix"),
+            chrome.tv1("flash-not-found-project", "id", &project_id.to_string())
+        ),
+        Ok(_) => chrome.t("flash-project-unarchived"),
+        Err(e) => chrome.err(e),
     };
-    render_general(&state, project_id, Some(msg), &csrf).await
+    render_general(&state, project_id, Some(msg), &chrome).await
 }
 
 pub async fn delete_project(
     State(state): State<AppState>,
     active: ActiveOrg,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path(project_id): Path<u64>,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
@@ -239,7 +266,7 @@ pub async fn delete_project(
 
     match queries::projects::delete_project(&state.writer_pool, project_id).await {
         Ok(()) => axum::response::Redirect::to("/web/projects/").into_response(),
-        Err(e) => render_general(&state, project_id, Some(format!("Error: {e}")), &csrf).await,
+        Err(e) => render_general(&state, project_id, Some(chrome.err(e)), &chrome).await,
     }
 }
 
@@ -247,7 +274,7 @@ async fn render_general(
     state: &AppState,
     project_id: u64,
     message: Option<String>,
-    csrf: &str,
+    chrome: &PageChrome,
 ) -> axum::response::Response {
     let repos = queries::projects::get_project_repos(&state.pool, project_id)
         .await
@@ -280,7 +307,7 @@ async fn render_general(
         repos,
         message,
         nav,
-        csrf_token: csrf.to_string(),
+        chrome: chrome.clone(),
     };
 
     render_template(&tmpl)
@@ -296,19 +323,19 @@ struct ProjectKeysTemplate {
     keys: Vec<ProjectKey>,
     message: Option<String>,
     nav: ProjectNavCounts,
-    csrf_token: String,
+    chrome: PageChrome,
 }
 
 pub async fn keys_handler(
     State(state): State<AppState>,
     active: ActiveOrg,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path(project_id): Path<u64>,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
         return r;
     }
-    render_keys(&state, project_id, None, &csrf).await
+    render_keys(&state, project_id, None, &chrome).await
 }
 
 #[derive(Deserialize)]
@@ -319,7 +346,7 @@ pub struct CreateKeyForm {
 pub async fn create_key(
     State(state): State<AppState>,
     active: ActiveOrg,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path(project_id): Path<u64>,
     Form(form): Form<CreateKeyForm>,
 ) -> axum::response::Response {
@@ -336,11 +363,14 @@ pub async fn create_key(
         .map(|s| s.trim().to_string());
 
     let s = state.clone();
+    let success = chrome.t("flash-key-created");
+    let render_chrome = chrome.clone();
     utils::query_then_render(
         queries::projects::create_project_key(&state.writer_pool, project_id, label.as_deref())
             .await,
-        "Key created",
-        move |msg| async move { render_keys(&s, project_id, msg, &csrf).await },
+        &chrome,
+        &success,
+        move |msg| async move { render_keys(&s, project_id, msg, &render_chrome).await },
     )
     .await
 }
@@ -348,7 +378,7 @@ pub async fn create_key(
 pub async fn delete_key(
     State(state): State<AppState>,
     active: ActiveOrg,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path((project_id, public_key)): Path<(u64, String)>,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
@@ -363,16 +393,26 @@ pub async fn delete_key(
             render_keys(
                 &state,
                 project_id,
-                Some(format!("Error: not found: key: {public_key}")),
-                &csrf,
+                Some(format!(
+                    "{} {}",
+                    chrome.t("common-error-prefix"),
+                    chrome.tv1("flash-not-found-key", "id", &public_key)
+                )),
+                &chrome,
             )
             .await
         }
         Ok(_) => {
             crate::ingest::auth::invalidate_key(&state.auth_cache, &public_key);
-            render_keys(&state, project_id, Some("Key deleted".into()), &csrf).await
+            render_keys(
+                &state,
+                project_id,
+                Some(chrome.t("flash-key-deleted")),
+                &chrome,
+            )
+            .await
         }
-        Err(e) => render_keys(&state, project_id, Some(format!("Error: {e}")), &csrf).await,
+        Err(e) => render_keys(&state, project_id, Some(chrome.err(e)), &chrome).await,
     }
 }
 
@@ -380,7 +420,7 @@ async fn render_keys(
     state: &AppState,
     project_id: u64,
     message: Option<String>,
-    csrf: &str,
+    chrome: &PageChrome,
 ) -> axum::response::Response {
     let keys = queries::projects::list_project_keys(&state.pool, project_id)
         .await
@@ -403,7 +443,7 @@ async fn render_keys(
         keys,
         message,
         nav,
-        csrf_token: csrf.to_string(),
+        chrome: chrome.clone(),
     };
 
     render_template(&tmpl)
@@ -421,25 +461,25 @@ struct SourceMapsTemplate {
     message: Option<String>,
     sentry_url: String,
     nav: ProjectNavCounts,
-    csrf_token: String,
+    chrome: PageChrome,
 }
 
 pub async fn sourcemaps_handler(
     State(state): State<AppState>,
     active: ActiveOrg,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path(project_id): Path<u64>,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
         return r;
     }
-    render_sourcemaps(&state, project_id, String::new(), None, &csrf).await
+    render_sourcemaps(&state, project_id, String::new(), None, &chrome).await
 }
 
 pub async fn generate_sourcemap_key(
     State(state): State<AppState>,
     active: ActiveOrg,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path(project_id): Path<u64>,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
@@ -461,14 +501,14 @@ pub async fn generate_sourcemap_key(
     match queries::api_keys::create_api_key(&state.pool, project_id, "sourcemap", &hash, prefix)
         .await
     {
-        Ok(()) => render_sourcemaps(&state, project_id, raw_key, None, &csrf).await,
+        Ok(()) => render_sourcemaps(&state, project_id, raw_key, None, &chrome).await,
         Err(e) => {
             render_sourcemaps(
                 &state,
                 project_id,
                 String::new(),
-                Some(format!("Error: {e}")),
-                &csrf,
+                Some(chrome.err(e)),
+                &chrome,
             )
             .await
         }
@@ -480,7 +520,7 @@ async fn render_sourcemaps(
     project_id: u64,
     new_key: String,
     message: Option<String>,
-    csrf: &str,
+    chrome: &PageChrome,
 ) -> axum::response::Response {
     let existing = queries::api_keys::get_api_key_for_project(&state.pool, project_id, "sourcemap")
         .await
@@ -501,7 +541,7 @@ async fn render_sourcemaps(
         message,
         sentry_url,
         nav,
-        csrf_token: csrf.to_string(),
+        chrome: chrome.clone(),
     };
 
     render_template(&tmpl)

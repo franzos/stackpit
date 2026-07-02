@@ -75,3 +75,116 @@ pub async fn upsert_from_oidc(
         .ok_or_else(|| anyhow::anyhow!("user disappeared between upsert and read"))?;
     Ok(row)
 }
+
+/// Persist the resolved OIDC `locale` claim. `None` writes NULL (clears any
+/// stale value). Dialect handling is via `sql!`, same as the rest of this file.
+pub async fn set_preferred_language(
+    pool: &DbPool,
+    user_id: i64,
+    value: Option<&str>,
+) -> Result<()> {
+    sqlx::query(sql!(
+        "UPDATE users SET preferred_language = ?1 WHERE user_id = ?2"
+    ))
+    .bind(value)
+    .bind(user_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Seed `preferred_language` from an OIDC `locale` claim, first-write-wins: the
+/// `WHERE ... preferred_language IS NULL` guard makes this a no-op once the user
+/// has an explicit choice, so a claim sent on every login never clobbers it.
+/// Atomic (no read-modify-write race).
+pub async fn set_preferred_language_if_unset(
+    pool: &DbPool,
+    user_id: i64,
+    value: &str,
+) -> Result<()> {
+    sqlx::query(sql!(
+        "UPDATE users SET preferred_language = ?1 WHERE user_id = ?2 AND preferred_language IS NULL"
+    ))
+    .bind(value)
+    .bind(user_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Read the persisted `preferred_language` (nullable). `None` when the user is
+/// absent or the column is NULL. Used by the locale ladder's persisted step.
+pub async fn get_preferred_language(pool: &DbPool, user_id: i64) -> Result<Option<String>> {
+    let row = sqlx::query(sql!(
+        "SELECT preferred_language FROM users WHERE user_id = ?1"
+    ))
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.and_then(|r| r.get::<Option<String>, _>("preferred_language")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn preferred_language_round_trips() {
+        let pool = crate::db::open_test_pool().await;
+        let user = upsert_from_oidc(&pool, "https://idp", "sub-lang", None, None)
+            .await
+            .unwrap();
+
+        // Fresh row defaults to NULL.
+        assert_eq!(
+            get_preferred_language(&pool, user.user_id).await.unwrap(),
+            None
+        );
+
+        set_preferred_language(&pool, user.user_id, Some("de"))
+            .await
+            .unwrap();
+        assert_eq!(
+            get_preferred_language(&pool, user.user_id).await.unwrap(),
+            Some("de".to_string())
+        );
+
+        // None clears the stored value back to NULL.
+        set_preferred_language(&pool, user.user_id, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            get_preferred_language(&pool, user.user_id).await.unwrap(),
+            None
+        );
+
+        // Absent user reads as None, not an error.
+        assert_eq!(get_preferred_language(&pool, 999_999).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn set_preferred_language_if_unset_is_first_write_wins() {
+        let pool = crate::db::open_test_pool().await;
+        let user = upsert_from_oidc(&pool, "https://idp", "sub-seed", None, None)
+            .await
+            .unwrap();
+
+        // NULL pref: the claim seeds it.
+        set_preferred_language_if_unset(&pool, user.user_id, "de")
+            .await
+            .unwrap();
+        assert_eq!(
+            get_preferred_language(&pool, user.user_id).await.unwrap(),
+            Some("de".to_string())
+        );
+
+        // Non-NULL pref: a later claim must not overwrite the user's choice.
+        set_preferred_language_if_unset(&pool, user.user_id, "en")
+            .await
+            .unwrap();
+        assert_eq!(
+            get_preferred_language(&pool, user.user_id).await.unwrap(),
+            Some("de".to_string())
+        );
+    }
+}

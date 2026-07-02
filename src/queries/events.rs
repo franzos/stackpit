@@ -743,11 +743,13 @@ mod tests {
     }
 
     async fn insert_org(pool: &crate::db::DbPool, slug: &str) -> i64 {
-        sqlx::query(sql!("INSERT INTO organizations (slug, name) VALUES (?1, ?1)"))
-            .bind(slug)
-            .execute(pool)
-            .await
-            .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO organizations (slug, name) VALUES (?1, ?1)"
+        ))
+        .bind(slug)
+        .execute(pool)
+        .await
+        .unwrap();
         sqlx::query(sql!("SELECT org_id FROM organizations WHERE slug = ?1"))
             .bind(slug)
             .fetch_one(pool)
@@ -774,8 +776,26 @@ mod tests {
         let org_b = insert_org(&pool, "ev-org-b").await;
         insert_project(&pool, 101, org_a).await;
         insert_project(&pool, 102, org_b).await;
-        insert_test_event(&pool, "ea1", 101, 100, Some("fpa"), Some("error"), Some("A")).await;
-        insert_test_event(&pool, "eb1", 102, 200, Some("fpb"), Some("error"), Some("B")).await;
+        insert_test_event(
+            &pool,
+            "ea1",
+            101,
+            100,
+            Some("fpa"),
+            Some("error"),
+            Some("A"),
+        )
+        .await;
+        insert_test_event(
+            &pool,
+            "eb1",
+            102,
+            200,
+            Some("fpb"),
+            Some("error"),
+            Some("B"),
+        )
+        .await;
 
         let filter = EventFilter::default();
         let page = Page::new(None, None);
@@ -786,9 +806,7 @@ mod tests {
         assert_eq!(scoped.total, 1);
         assert_eq!(scoped.items[0].event_id, "ea1");
 
-        let all = list_all_events(&pool, &filter, &page, None)
-            .await
-            .unwrap();
+        let all = list_all_events(&pool, &filter, &page, None).await.unwrap();
         assert_eq!(all.total, 2);
     }
 
@@ -799,9 +817,36 @@ mod tests {
         let org_b = insert_org(&pool, "ev2-org-b").await;
         insert_project(&pool, 201, org_a).await;
         insert_project(&pool, 202, org_b).await;
-        insert_test_event(&pool, "ec1", 201, 100, Some("fpc"), Some("error"), Some("C")).await;
-        insert_test_event(&pool, "ec2", 201, 150, Some("fpc2"), Some("error"), Some("C2")).await;
-        insert_test_event(&pool, "ed1", 202, 200, Some("fpd"), Some("error"), Some("D")).await;
+        insert_test_event(
+            &pool,
+            "ec1",
+            201,
+            100,
+            Some("fpc"),
+            Some("error"),
+            Some("C"),
+        )
+        .await;
+        insert_test_event(
+            &pool,
+            "ec2",
+            201,
+            150,
+            Some("fpc2"),
+            Some("error"),
+            Some("C2"),
+        )
+        .await;
+        insert_test_event(
+            &pool,
+            "ed1",
+            202,
+            200,
+            Some("fpd"),
+            Some("error"),
+            Some("D"),
+        )
+        .await;
 
         let filter = EventFilter::default();
         let page = Page::new(None, None);

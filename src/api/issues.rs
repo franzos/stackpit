@@ -113,11 +113,13 @@ mod tests {
     use sqlx::Row;
 
     async fn insert_org(pool: &crate::db::DbPool, slug: &str) -> i64 {
-        sqlx::query(sql!("INSERT INTO organizations (slug, name) VALUES (?1, 'T')"))
-            .bind(slug)
-            .execute(pool)
-            .await
-            .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO organizations (slug, name) VALUES (?1, 'T')"
+        ))
+        .bind(slug)
+        .execute(pool)
+        .await
+        .unwrap();
         sqlx::query(sql!("SELECT org_id FROM organizations WHERE slug = ?1"))
             .bind(slug)
             .fetch_one(pool)
@@ -127,32 +129,43 @@ mod tests {
     }
 
     async fn insert_project(pool: &crate::db::DbPool, project_id: i64, org_id: i64) {
-        sqlx::query(sql!("INSERT INTO projects (project_id, org_id) VALUES (?1, ?2)"))
-            .bind(project_id)
-            .bind(org_id)
-            .execute(pool)
-            .await
-            .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO projects (project_id, org_id) VALUES (?1, ?2)"
+        ))
+        .bind(project_id)
+        .bind(org_id)
+        .execute(pool)
+        .await
+        .unwrap();
     }
 
     // Member is blocked by require_owner (update_status gate).
     #[test]
     fn update_status_member_blocked_by_require_owner() {
-        let member = ActiveOrg { org_id: 1, role: Some(Role::Member) };
+        let member = ActiveOrg {
+            org_id: 1,
+            role: Some(Role::Member),
+        };
         assert!(require_owner(&member).is_err());
     }
 
     // Owner passes require_owner.
     #[test]
     fn update_status_owner_allowed_by_require_owner() {
-        let owner = ActiveOrg { org_id: 1, role: Some(Role::Owner) };
+        let owner = ActiveOrg {
+            org_id: 1,
+            role: Some(Role::Owner),
+        };
         assert!(require_owner(&owner).is_ok());
     }
 
     // Superuser passes require_owner.
     #[test]
     fn update_status_superuser_allowed_by_require_owner() {
-        let su = ActiveOrg { org_id: 1, role: None };
+        let su = ActiveOrg {
+            org_id: 1,
+            role: None,
+        };
         assert!(require_owner(&su).is_ok());
     }
 
@@ -163,15 +176,32 @@ mod tests {
         let org_a = insert_org(&pool, "iss-guard-a").await;
         let org_b = insert_org(&pool, "iss-guard-b").await;
         insert_project(&pool, 6001, org_a).await;
-        insert_test_issue(&pool, "iss-fp-guard", 6001, None, None, 0, 0, 0, "unresolved").await;
+        insert_test_issue(
+            &pool,
+            "iss-fp-guard",
+            6001,
+            None,
+            None,
+            0,
+            0,
+            0,
+            "unresolved",
+        )
+        .await;
 
         let pid = project_of_fingerprint(&pool, "iss-fp-guard")
             .await
             .unwrap()
             .unwrap();
 
-        let owner_a = ActiveOrg { org_id: org_a, role: Some(Role::Owner) };
-        let owner_b = ActiveOrg { org_id: org_b, role: Some(Role::Owner) };
+        let owner_a = ActiveOrg {
+            org_id: org_a,
+            role: Some(Role::Owner),
+        };
+        let owner_b = ActiveOrg {
+            org_id: org_b,
+            role: Some(Role::Owner),
+        };
 
         assert!(require_project_scope(&owner_a, &pool, pid).await.is_ok());
         assert!(require_project_scope(&owner_b, &pool, pid).await.is_err());
@@ -190,7 +220,10 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let member = ActiveOrg { org_id: org, role: Some(Role::Member) };
+        let member = ActiveOrg {
+            org_id: org,
+            role: Some(Role::Member),
+        };
 
         // Scope check passes (correct org).
         assert!(require_project_scope(&member, &pool, pid).await.is_ok());

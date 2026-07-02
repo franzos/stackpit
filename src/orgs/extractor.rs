@@ -9,6 +9,7 @@ use crate::server::AppState;
 use crate::util::crypto::SecretEncryptor;
 
 /// Returns 403 when the caller is a plain member; owners and superusers (role=None) pass.
+#[allow(clippy::result_large_err)]
 pub fn require_owner(active: &ActiveOrg) -> Result<(), Response> {
     match active.role {
         Some(Role::Member) => Err(StatusCode::FORBIDDEN.into_response()),
@@ -17,6 +18,7 @@ pub fn require_owner(active: &ActiveOrg) -> Result<(), Response> {
 }
 
 /// Returns 403 for any caller with a role (member or owner); only superusers (role=None) pass.
+#[allow(clippy::result_large_err)]
 pub fn require_superuser(active: &ActiveOrg) -> Result<(), Response> {
     if active.role.is_some() {
         Err(StatusCode::FORBIDDEN.into_response())
@@ -55,7 +57,11 @@ pub fn unpack(enc: &SecretEncryptor, blob_b64: &str) -> Option<i64> {
 }
 
 /// Return cookie's org if still a member, else fall back to the personal org.
-pub fn resolve_active_org(cookie_org: Option<i64>, memberships: &[i64], personal_org_id: i64) -> i64 {
+pub fn resolve_active_org(
+    cookie_org: Option<i64>,
+    memberships: &[i64],
+    personal_org_id: i64,
+) -> i64 {
     match cookie_org {
         Some(id) if memberships.contains(&id) => id,
         _ => personal_org_id,
@@ -99,44 +105,65 @@ mod tests {
 
     #[test]
     fn require_owner_blocks_members() {
-        let member = ActiveOrg { org_id: 1, role: Some(Role::Member) };
+        let member = ActiveOrg {
+            org_id: 1,
+            role: Some(Role::Member),
+        };
         assert!(require_owner(&member).is_err());
     }
 
     #[test]
     fn require_owner_allows_owner() {
-        let owner = ActiveOrg { org_id: 1, role: Some(Role::Owner) };
+        let owner = ActiveOrg {
+            org_id: 1,
+            role: Some(Role::Owner),
+        };
         assert!(require_owner(&owner).is_ok());
     }
 
     #[test]
     fn require_owner_allows_superuser() {
-        let superuser = ActiveOrg { org_id: 1, role: None };
+        let superuser = ActiveOrg {
+            org_id: 1,
+            role: None,
+        };
         assert!(require_owner(&superuser).is_ok());
     }
 
     #[test]
     fn require_superuser_blocks_member() {
-        let member = ActiveOrg { org_id: 1, role: Some(Role::Member) };
+        let member = ActiveOrg {
+            org_id: 1,
+            role: Some(Role::Member),
+        };
         assert!(require_superuser(&member).is_err());
     }
 
     #[test]
     fn require_superuser_blocks_owner() {
-        let owner = ActiveOrg { org_id: 1, role: Some(Role::Owner) };
+        let owner = ActiveOrg {
+            org_id: 1,
+            role: Some(Role::Owner),
+        };
         assert!(require_superuser(&owner).is_err());
     }
 
     #[test]
     fn require_superuser_allows_superuser() {
-        let su = ActiveOrg { org_id: 1, role: None };
+        let su = ActiveOrg {
+            org_id: 1,
+            role: None,
+        };
         assert!(require_superuser(&su).is_ok());
     }
 
     #[tokio::test]
     async fn require_project_scope_superuser_bypasses() {
         let pool = crate::db::open_test_pool().await;
-        let su = ActiveOrg { org_id: 999, role: None };
+        let su = ActiveOrg {
+            org_id: 999,
+            role: None,
+        };
         assert!(require_project_scope(&su, &pool, 99999).await.is_ok());
     }
 
@@ -147,11 +174,13 @@ mod tests {
 
         let pool = crate::db::open_test_pool().await;
 
-        sqlx::query(sql!("INSERT INTO organizations (slug, name) VALUES (?1, 'Scope A')"))
-            .bind("pscope-org-a")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO organizations (slug, name) VALUES (?1, 'Scope A')"
+        ))
+        .bind("pscope-org-a")
+        .execute(&pool)
+        .await
+        .unwrap();
         let org_a: i64 = sqlx::query(sql!("SELECT org_id FROM organizations WHERE slug = ?1"))
             .bind("pscope-org-a")
             .fetch_one(&pool)
@@ -159,11 +188,13 @@ mod tests {
             .unwrap()
             .get("org_id");
 
-        sqlx::query(sql!("INSERT INTO organizations (slug, name) VALUES (?1, 'Scope B')"))
-            .bind("pscope-org-b")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO organizations (slug, name) VALUES (?1, 'Scope B')"
+        ))
+        .bind("pscope-org-b")
+        .execute(&pool)
+        .await
+        .unwrap();
         let org_b: i64 = sqlx::query(sql!("SELECT org_id FROM organizations WHERE slug = ?1"))
             .bind("pscope-org-b")
             .fetch_one(&pool)
@@ -171,18 +202,28 @@ mod tests {
             .unwrap()
             .get("org_id");
 
-        sqlx::query(sql!("INSERT INTO projects (project_id, org_id) VALUES (?1, ?2)"))
-            .bind(8001i64)
-            .bind(org_a)
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO projects (project_id, org_id) VALUES (?1, ?2)"
+        ))
+        .bind(8001i64)
+        .bind(org_a)
+        .execute(&pool)
+        .await
+        .unwrap();
 
-        let member_a = ActiveOrg { org_id: org_a, role: Some(Role::Member) };
-        let member_b = ActiveOrg { org_id: org_b, role: Some(Role::Member) };
+        let member_a = ActiveOrg {
+            org_id: org_a,
+            role: Some(Role::Member),
+        };
+        let member_b = ActiveOrg {
+            org_id: org_b,
+            role: Some(Role::Member),
+        };
 
         assert!(require_project_scope(&member_a, &pool, 8001).await.is_ok());
         assert!(require_project_scope(&member_b, &pool, 8001).await.is_err());
-        assert!(require_project_scope(&member_b, &pool, 99999).await.is_err());
+        assert!(require_project_scope(&member_b, &pool, 99999)
+            .await
+            .is_err());
     }
 }

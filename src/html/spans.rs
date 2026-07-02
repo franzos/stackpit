@@ -2,9 +2,10 @@ use askama::Template;
 use axum::extract::{Path, Query};
 
 use crate::extractors::{ProjectPageCtx, ReadPool};
-use crate::orgs::extractor::ActiveOrg;
+use crate::html::chrome::PageChrome;
 use crate::html::render_template;
-use crate::html::utils::{Csrf, ListParams};
+use crate::html::utils::{Chrome, ListParams};
+use crate::orgs::extractor::ActiveOrg;
 use crate::queries;
 use crate::queries::types::{
     Page, PagedResult, SpanSummary, TraceError, TraceRoot, TraceSummary, Waterfall,
@@ -23,7 +24,7 @@ struct SpanListTemplate {
     result: PagedResult<SpanSummary>,
     traces: PagedResult<TraceSummary>,
     nav: ProjectNavCounts,
-    csrf_token: String,
+    chrome: PageChrome,
 }
 
 #[derive(Template)]
@@ -35,7 +36,7 @@ struct TraceDetailTemplate {
     root: Option<TraceRoot>,
     errors: Vec<TraceError>,
     nav: ProjectNavCounts,
-    csrf_token: String,
+    chrome: PageChrome,
 }
 
 pub async fn list_handler(
@@ -58,7 +59,7 @@ pub async fn list_handler(
         result,
         traces,
         nav: ctx.nav,
-        csrf_token: ctx.csrf_token,
+        chrome: ctx.chrome,
     };
     Ok(render_template(&tmpl))
 }
@@ -66,7 +67,7 @@ pub async fn list_handler(
 pub async fn trace_detail_handler(
     active: ActiveOrg,
     ReadPool(pool): ReadPool,
-    Csrf(csrf): Csrf,
+    Chrome(chrome): Chrome,
     Path((project_id, trace_id)): Path<(u64, String)>,
 ) -> Result<axum::response::Response, HtmlError> {
     crate::orgs::extractor::require_project_scope(&active, &pool, project_id as i64)
@@ -94,7 +95,7 @@ pub async fn trace_detail_handler(
         root,
         errors,
         nav,
-        csrf_token: csrf,
+        chrome,
     };
     Ok(render_template(&tmpl))
 }

@@ -1,28 +1,28 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
 
-{% block title %}Metrics — {{ nav.label }} — Stackpit{% endblock %}
+{% block title %}{{ chrome.t("nav-metrics") }} — {{ nav.label }} {{ chrome.t("metrics-title-suffix") }}{% endblock %}
 
 {% block sidebar_nav %}
-  {% call m::project_sidebar(project_id, nav, "metrics") %}
+  {% call m::project_sidebar(chrome, project_id, nav, "metrics") %}
   {% endcall %}
 {% endblock %}
 
 {% block breadcrumbs %}
   <span class="breadcrumb-sep">/</span>
-  <a class="breadcrumb-link" href="/web/projects/{{ project_id }}/">{{ nav.label }}</a>
+  <a class="breadcrumb-link" href="/web/projects/{{ project_id }}/"><bdi>{{ nav.label }}</bdi></a>
   <span class="breadcrumb-sep">/</span>
-  <span class="breadcrumb-current">Metrics</span>
+  <span class="breadcrumb-current">{{ chrome.t("nav-metrics") }}</span>
 {% endblock %}
 
 {% block content %}
   <div class="page-header">
-    <h1>Metrics</h1>
+    <h1>{{ chrome.t("nav-metrics") }}</h1>
   </div>
 
   {% if result.items.is_empty() %}
     <div class="card">
-      <p class="empty">No metrics found. Metric events will appear here once received.</p>
+      <p class="empty">{{ chrome.t("metrics-list-empty") }}</p>
     </div>
   {% else %}
     <div class="card overflow-hidden">
@@ -30,11 +30,11 @@
         <table class="table">
           <thead>
             <tr>
-              <th>MRI</th>
-              <th>Type</th>
-              <th>Data points</th>
-              <th>First seen</th>
-              <th>Last seen</th>
+              <th>{{ chrome.t("metrics-col-mri") }}</th>
+              <th>{{ chrome.t("metrics-col-type") }}</th>
+              <th>{{ chrome.t("metrics-col-data-points") }}</th>
+              <th>{{ chrome.t("metrics-col-first-seen") }}</th>
+              <th>{{ chrome.t("metrics-col-last-seen") }}</th>
             </tr>
           </thead>
           <tbody>
@@ -50,11 +50,11 @@
                 <td class="text-tabular">{{ metric.data_points }}</td>
                 <td class="text-muted">
                   <time datetime="{{ metric.first_seen|format_ts }}"
-                        title="{{ metric.first_seen|format_ts }}">{{ metric.first_seen|format_relative }}</time>
+                        title="{{ metric.first_seen|format_ts }}">{{ chrome.rel_time(metric.first_seen) }}</time>
                 </td>
                 <td class="text-muted">
                   <time datetime="{{ metric.last_seen|format_ts }}"
-                        title="{{ metric.last_seen|format_ts }}">{{ metric.last_seen|format_relative }}</time>
+                        title="{{ metric.last_seen|format_ts }}">{{ chrome.rel_time(metric.last_seen) }}</time>
                 </td>
               </tr>
             {% endfor %}
@@ -63,18 +63,17 @@
       </div>
     </div>
 
-    <nav class="pagination" aria-label="Pagination">
-      <span>{{ result.total }} metric
-        {%- if result.total != 1 %}s{% endif %}
-      </span>
+    <nav class="pagination"
+         aria-label="{{ chrome.t("metrics-pagination-label") }}">
+      <span>{{ chrome.tv_count("metrics-count", result.total as i64) }}</span>
       <span class="flex gap-2">
         {% if result.has_prev() %}
           <a class="btn btn-ghost"
-             href="/web/projects/{{ project_id }}/metrics/?offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}">« Previous</a>
+             href="/web/projects/{{ project_id }}/metrics/?offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}">{{ chrome.t("metrics-pagination-prev") }}</a>
         {% endif %}
         {% if result.has_next() %}
           <a class="btn btn-ghost"
-             href="/web/projects/{{ project_id }}/metrics/?offset={{ result.next_offset() }}&amp;limit={{ result.limit }}">Next »</a>
+             href="/web/projects/{{ project_id }}/metrics/?offset={{ result.next_offset() }}&amp;limit={{ result.limit }}">{{ chrome.t("metrics-pagination-next") }}</a>
         {% endif %}
       </span>
     </nav>

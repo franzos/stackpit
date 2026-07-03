@@ -1,4 +1,8 @@
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
 use anyhow::Result;
+use dashmap::DashMap;
 use sqlx::Row;
 
 use crate::db::sql;
@@ -6,6 +10,33 @@ use crate::db::sql;
 use crate::domain::ProjectStatus;
 
 use super::types::{ProjectKey, ProjectNavCounts, ProjectRepo, ProjectSummary};
+
+/// Per-project nav badge counts cached with a short TTL, shared via `AppState` (not a global) so each app instance and each test keeps its own map.
+pub type NavCountsCache = Arc<DashMap<u64, (ProjectNavCounts, Instant)>>;
+
+/// Nav badges are a display convenience, so 30s trades slight staleness for far fewer full-table aggregations on busy projects.
+const NAV_COUNTS_TTL: Duration = Duration::from_secs(30);
+
+/// True while a cache entry of the given age is still within the TTL window.
+fn nav_cache_fresh(entry_age: Duration, ttl: Duration) -> bool {
+    entry_age < ttl
+}
+
+/// Cached wrapper over [`get_nav_counts`]: returns a fresh clone on hit, otherwise recomputes, stores `(counts, now)`, and returns it.
+pub async fn nav_counts_cached(
+    pool: &crate::db::DbPool,
+    cache: &NavCountsCache,
+    project_id: u64,
+) -> ProjectNavCounts {
+    if let Some(entry) = cache.get(&project_id) {
+        if nav_cache_fresh(entry.1.elapsed(), NAV_COUNTS_TTL) {
+            return entry.0.clone();
+        }
+    }
+    let counts = get_nav_counts(pool, project_id).await;
+    cache.insert(project_id, (counts.clone(), Instant::now()));
+    counts
+}
 
 // --- Read queries ---
 
@@ -1031,5 +1062,38 @@ mod tests {
                  add it (and a delete_project case) or it will orphan rows"
             );
         }
+    }
+
+    #[test]
+    fn nav_cache_fresh_within_ttl_is_hit() {
+        assert!(nav_cache_fresh(
+            Duration::from_secs(5),
+            Duration::from_secs(30)
+        ));
+    }
+
+    #[test]
+    fn nav_cache_stale_past_ttl_is_miss() {
+        assert!(!nav_cache_fresh(
+            Duration::from_secs(31),
+            Duration::from_secs(30)
+        ));
+    }
+
+    #[test]
+    fn nav_cache_at_ttl_boundary_is_miss() {
+        assert!(!nav_cache_fresh(
+            Duration::from_secs(30),
+            Duration::from_secs(30)
+        ));
+    }
+
+    #[test]
+    fn nav_cache_absent_entry_is_miss() {
+        let cache: NavCountsCache = Arc::new(DashMap::new());
+        let fresh_hit = cache
+            .get(&42)
+            .is_some_and(|e| nav_cache_fresh(e.1.elapsed(), Duration::from_secs(30)));
+        assert!(!fresh_hit, "absent project_id must not be a cache hit");
     }
 }

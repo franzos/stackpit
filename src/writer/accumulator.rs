@@ -33,6 +33,7 @@ pub(super) fn is_failed(status: Option<&str>) -> bool {
 }
 
 /// Tracks accumulated changes for a single fingerprint between flushes.
+#[derive(Clone)]
 pub(super) struct IssueDelta {
     pub project_id: u64,
     pub event_count: u64,
@@ -46,6 +47,7 @@ pub(super) struct IssueDelta {
 }
 
 /// Tracks accumulated session rollup for a (project, release, environment).
+#[derive(Clone)]
 pub(super) struct SessionDelta {
     pub total: u64,
     pub crashed: u64,
@@ -78,6 +80,7 @@ impl SessionDelta {
 
 /// Tracks accumulated transaction performance rollup for a
 /// (project, transaction_name, hour_bucket).
+#[derive(Clone)]
 pub(super) struct TxnDelta {
     pub count: u64,
     pub sum_duration_ms: u64,
@@ -105,6 +108,7 @@ impl TxnDelta {
 }
 
 /// Holds in-memory issue and tag deltas until we're ready to flush them to SQLite.
+#[derive(Clone)]
 pub(super) struct Accumulators {
     pub issues: HashMap<String, IssueDelta>,
     /// Tag counts -- keyed by (fingerprint, tag_key, tag_value)
@@ -258,6 +262,74 @@ impl Accumulators {
         if let Some(ref user_id) = event.user_identifier {
             delta.users_hll.add_object(user_id);
             delta.has_user_data = true;
+        }
+    }
+
+    /// Fold `other` (a batch-local scratch) into `self` with the same combination semantics as `accumulate`, iterating only `other`'s batch-bounded entries and leaving `last_flush` untouched.
+    pub fn merge(&mut self, other: &Accumulators) {
+        for (fp, src) in &other.issues {
+            match self.issues.get_mut(fp) {
+                Some(dst) => {
+                    dst.event_count += src.event_count;
+                    dst.first_seen = dst.first_seen.min(src.first_seen);
+                    dst.last_seen = dst.last_seen.max(src.last_seen);
+                    if src.title.is_some() {
+                        dst.title.clone_from(&src.title);
+                    }
+                    if src.level.is_some() {
+                        dst.level = src.level;
+                    }
+                    dst.hll.merge(&src.hll);
+                    dst.has_hll_data |= src.has_hll_data;
+                }
+                None => {
+                    self.issues.insert(fp.clone(), src.clone());
+                }
+            }
+        }
+
+        for (key, count) in &other.tags {
+            *self.tags.entry(key.clone()).or_insert(0) += *count;
+        }
+
+        for (key, src) in &other.session_aggregates {
+            match self.session_aggregates.get_mut(key) {
+                Some(dst) => {
+                    dst.total += src.total;
+                    dst.crashed += src.crashed;
+                    dst.errored += src.errored;
+                    dst.abnormal += src.abnormal;
+                    dst.first_seen = dst.first_seen.min(src.first_seen);
+                    dst.last_seen = dst.last_seen.max(src.last_seen);
+                    dst.users_hll.merge(&src.users_hll);
+                    dst.users_crashed_hll.merge(&src.users_crashed_hll);
+                    dst.has_user_data |= src.has_user_data;
+                    dst.has_aggregate |= src.has_aggregate;
+                }
+                None => {
+                    self.session_aggregates.insert(key.clone(), src.clone());
+                }
+            }
+        }
+
+        for (key, src) in &other.transaction_metrics {
+            match self.transaction_metrics.get_mut(key) {
+                Some(dst) => {
+                    dst.count += src.count;
+                    dst.sum_duration_ms += src.sum_duration_ms;
+                    dst.failed_count += src.failed_count;
+                    for (d, s) in dst.buckets.iter_mut().zip(src.buckets.iter()) {
+                        *d += *s;
+                    }
+                    dst.users_hll.merge(&src.users_hll);
+                    dst.has_user_data |= src.has_user_data;
+                    dst.first_seen = dst.first_seen.min(src.first_seen);
+                    dst.last_seen = dst.last_seen.max(src.last_seen);
+                }
+                None => {
+                    self.transaction_metrics.insert(key.clone(), src.clone());
+                }
+            }
         }
     }
 
@@ -443,5 +515,126 @@ mod tests {
         e.duration_ms = None;
         acc.accumulate(&e);
         assert!(acc.transaction_metrics.is_empty());
+    }
+
+    fn issue_event(id: &str, fp: &str, ts: i64, user: Option<&str>) -> StorableEvent {
+        let mut e =
+            StorableEvent::new(id.to_string(), ItemType::Event, vec![0], 1, "k".to_string());
+        e.fingerprint = Some(fp.to_string());
+        e.timestamp = ts;
+        e.title = Some(format!("title-{fp}"));
+        e.level = Some(Level::Error);
+        e.user_identifier = user.map(String::from);
+        e
+    }
+
+    /// Pins `merge` to `accumulate`: folding a scratch accumulator into an empty one must yield the same rollups as accumulating the events directly.
+    #[test]
+    fn merge_is_equivalent_to_accumulate() {
+        let sess = |id: &str, ts: i64, total: u64, crashed: u64, did: Option<&str>| {
+            let mut b = sess_bucket(ts, total, crashed);
+            b.did = did.map(String::from);
+            session_event(id, ts, b)
+        };
+
+        let build = |acc: &mut Accumulators| {
+            let mut e1 = issue_event("m1", "fp-a", 100, Some("u1"));
+            e1.tags = vec![("browser".into(), "chrome".into())];
+            let mut e2 = issue_event("m2", "fp-a", 200, Some("u2"));
+            e2.tags = vec![
+                ("browser".into(), "chrome".into()),
+                ("os".into(), "linux".into()),
+            ];
+            let e3 = issue_event("m3", "fp-b", 150, Some("u1"));
+            acc.accumulate(&e1);
+            acc.accumulate(&e2);
+            acc.accumulate(&e3);
+            acc.accumulate(&sess("s1", 1000, 5, 1, Some("du1")));
+            acc.accumulate(&sess("s2", 1000, 3, 0, Some("du2")));
+            acc.accumulate(&txn_event("/api/x", 1000, 100, Some("ok")));
+            acc.accumulate(&txn_event("/api/x", 1500, 200, Some("internal_error")));
+        };
+
+        // Direct accumulate.
+        let mut direct = Accumulators::new();
+        build(&mut direct);
+
+        // Scratch, then merge into an empty accumulator.
+        let mut scratch = Accumulators::new();
+        build(&mut scratch);
+        let mut merged = Accumulators::new();
+        merged.merge(&scratch);
+
+        // Issues.
+        assert_eq!(direct.issues.len(), merged.issues.len());
+        for (fp, d) in &direct.issues {
+            let m = merged.issues.get(fp).expect("fingerprint present");
+            assert_eq!(d.event_count, m.event_count, "event_count {fp}");
+            assert_eq!(d.first_seen, m.first_seen, "first_seen {fp}");
+            assert_eq!(d.last_seen, m.last_seen, "last_seen {fp}");
+            assert_eq!(d.title, m.title, "title {fp}");
+            assert_eq!(d.level, m.level, "level {fp}");
+            assert_eq!(d.has_hll_data, m.has_hll_data, "has_hll_data {fp}");
+            assert_eq!(d.hll.count(), m.hll.count(), "hll {fp}");
+        }
+
+        // Tags.
+        assert_eq!(direct.tags, merged.tags);
+
+        // Sessions.
+        assert_eq!(
+            direct.session_aggregates.len(),
+            merged.session_aggregates.len()
+        );
+        for (k, d) in &direct.session_aggregates {
+            let m = merged
+                .session_aggregates
+                .get(k)
+                .expect("session key present");
+            assert_eq!(d.total, m.total);
+            assert_eq!(d.crashed, m.crashed);
+            assert_eq!(d.errored, m.errored);
+            assert_eq!(d.abnormal, m.abnormal);
+            assert_eq!(d.first_seen, m.first_seen);
+            assert_eq!(d.last_seen, m.last_seen);
+            assert_eq!(d.has_user_data, m.has_user_data);
+            assert_eq!(d.has_aggregate, m.has_aggregate);
+            assert_eq!(d.users_hll.count(), m.users_hll.count());
+            assert_eq!(d.users_crashed_hll.count(), m.users_crashed_hll.count());
+        }
+
+        // Transactions.
+        assert_eq!(
+            direct.transaction_metrics.len(),
+            merged.transaction_metrics.len()
+        );
+        for (k, d) in &direct.transaction_metrics {
+            let m = merged.transaction_metrics.get(k).expect("txn key present");
+            assert_eq!(d.count, m.count);
+            assert_eq!(d.sum_duration_ms, m.sum_duration_ms);
+            assert_eq!(d.failed_count, m.failed_count);
+            assert_eq!(d.buckets, m.buckets);
+            assert_eq!(d.first_seen, m.first_seen);
+            assert_eq!(d.last_seen, m.last_seen);
+            assert_eq!(d.has_user_data, m.has_user_data);
+            assert_eq!(d.users_hll.count(), m.users_hll.count());
+        }
+    }
+
+    /// Merging into an occupied accumulator must combine deltas, matching what accumulating every event into one accumulator would produce.
+    #[test]
+    fn merge_into_occupied_combines_deltas() {
+        let mut base = Accumulators::new();
+        base.accumulate(&issue_event("a", "fp", 100, Some("u1")));
+
+        let mut scratch = Accumulators::new();
+        scratch.accumulate(&issue_event("b", "fp", 300, Some("u2")));
+        base.merge(&scratch);
+
+        let d = base.issues.get("fp").unwrap();
+        assert_eq!(d.event_count, 2);
+        assert_eq!(d.first_seen, 100);
+        assert_eq!(d.last_seen, 300);
+        assert_eq!(d.hll.count(), 2);
     }
 }

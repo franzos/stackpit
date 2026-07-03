@@ -1,5 +1,5 @@
 use askama::Template;
-use axum::extract::{Path, Query};
+use axum::extract::{Path, Query, State};
 
 use crate::extractors::{ProjectPageCtx, ReadPool};
 use crate::html::chrome::PageChrome;
@@ -11,6 +11,7 @@ use crate::queries::types::{
     Page, PagedResult, SpanSummary, TraceError, TraceRoot, TraceSummary, Waterfall,
 };
 use crate::queries::ProjectNavCounts;
+use crate::server::AppState;
 
 use super::HtmlError;
 
@@ -66,6 +67,7 @@ pub async fn list_handler(
 
 pub async fn trace_detail_handler(
     active: ActiveOrg,
+    State(state): State<AppState>,
     ReadPool(pool): ReadPool,
     Chrome(chrome): Chrome,
     Path((project_id, trace_id)): Path<(u64, String)>,
@@ -86,7 +88,7 @@ pub async fn trace_detail_handler(
     let root_duration_ms = root.as_ref().and_then(|r| r.duration_ms).unwrap_or(0);
     let waterfall = queries::spans::build_waterfall(&span_rows, root_duration_ms);
 
-    let nav = queries::projects::get_nav_counts(&pool, project_id).await;
+    let nav = state.nav_counts(project_id).await;
 
     let tmpl = TraceDetailTemplate {
         project_id,

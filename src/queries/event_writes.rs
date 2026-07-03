@@ -3,7 +3,7 @@
 //! - **Writer**: `insert_event_row` → accumulators → batched issue/tag/HLL upserts
 //! - **Sync CLI**: `insert_event_row` → per-event issue/tag/HLL upserts
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 use simple_hll::HyperLogLog;
@@ -131,12 +131,14 @@ fn insert_ignore(table: &str, cols: &str, conflict_col: Option<&str>) -> InsertI
 ///
 /// Spans go to the spans table, metrics to the metrics table, logs to
 /// the logs table, and everything else to the events table.
+///
+/// Returns the set of events-table `event_id`s that were genuinely inserted (duplicates dropped by `INSERT OR IGNORE`/`ON CONFLICT DO NOTHING` are excluded so callers don't over-count retried events); spans, metrics, and logs never contribute to this set.
 pub async fn insert_event_rows_bulk(
     tx: &mut sqlx::Transaction<'_, crate::db::Db>,
     events: &[&StorableEvent],
-) -> Result<()> {
+) -> Result<HashSet<String>> {
     if events.is_empty() {
-        return Ok(());
+        return Ok(HashSet::new());
     }
 
     let mut regular: Vec<&&StorableEvent> = Vec::new();
@@ -153,8 +155,9 @@ pub async fn insert_event_rows_bulk(
         }
     }
 
+    let mut inserted_ids = HashSet::new();
     if !regular.is_empty() {
-        bulk_insert_events_table(tx, &regular).await?;
+        inserted_ids = bulk_insert_events_table(tx, &regular).await?;
     }
     if !spans.is_empty() {
         bulk_insert_spans_table(tx, &spans).await?;
@@ -172,26 +175,30 @@ pub async fn insert_event_rows_bulk(
         bulk_insert_logs_table(tx, &logs).await?;
     }
 
-    Ok(())
+    Ok(inserted_ids)
 }
 
+/// Bulk-insert into the events table, returning only the `event_id`s actually inserted via `RETURNING event_id`; both SQLite (>= 3.35) and Postgres return only genuinely-inserted rows through the conflict clause.
 async fn bulk_insert_events_table(
     tx: &mut sqlx::Transaction<'_, crate::db::Db>,
     events: &[&&StorableEvent],
-) -> Result<()> {
+) -> Result<HashSet<String>> {
     let dialect = insert_ignore("events", EVENT_COLUMNS, Some("event_id"));
 
+    let mut inserted = HashSet::with_capacity(events.len());
     for chunk in events.chunks(BULK_CHUNK_SIZE) {
         let mut builder = QueryBuilder::<crate::db::Db>::new(&dialect.prefix);
 
         builder.push_values(chunk.iter(), |b, event| push_event_row(b, event));
 
         builder.push(&dialect.suffix);
+        builder.push(" RETURNING event_id");
 
-        builder.build().execute(&mut **tx).await?;
+        let ids: Vec<String> = builder.build_query_scalar().fetch_all(&mut **tx).await?;
+        inserted.extend(ids);
     }
 
-    Ok(())
+    Ok(inserted)
 }
 
 struct SpanRow {

@@ -4,7 +4,8 @@ use crate::db::{self, DbPool};
 use crate::endpoints;
 use crate::filter::FilterEngine;
 use crate::html;
-use crate::ingest::auth::AuthCache;
+use crate::ingest::auth::{AuthCache, NegativeAuthCache, ProjectCountCache};
+use crate::ingest::failure_limiter::{new_failure_limiter, SharedFailureLimiter};
 use crate::mcp::{McpRuntime, ResourceMetadata};
 use crate::middleware;
 use crate::oidc::client::OidcClient;
@@ -46,6 +47,12 @@ pub struct AppState {
     pub filter_engine: Arc<FilterEngine>,
     pub discard_stats: Arc<DiscardStats>,
     pub auth_cache: AuthCache,
+    /// Definitive-denial cache in front of the DB for the unknown-key path.
+    pub negative_auth_cache: NegativeAuthCache,
+    /// Short-TTL open-mode project count, avoids a `COUNT(DISTINCT)` per miss.
+    pub project_count_cache: ProjectCountCache,
+    /// Per-IP ingest auth-failure limiter (never counts successful ingest).
+    pub ingest_failure_limiter: SharedFailureLimiter,
     pub encryptor: Option<Arc<SecretEncryptor>>,
     #[allow(dead_code)]
     pub ingest_stats: Arc<IngestStats>,
@@ -55,6 +62,15 @@ pub struct AppState {
     pub web_bearer_gate: Option<BearerGate>,
     /// `Some` iff both `[auth.oauth]` and `[auth.mcp]` are configured.
     pub mcp: Option<Arc<McpRuntime>>,
+    /// Short-TTL cache of per-project nav badge counts (display convenience).
+    pub nav_cache: crate::queries::projects::NavCountsCache,
+}
+
+impl AppState {
+    /// Nav badge counts for a project, served from a short-TTL cache to avoid re-aggregating the events table on every per-project page render.
+    pub async fn nav_counts(&self, project_id: u64) -> crate::queries::ProjectNavCounts {
+        crate::queries::projects::nav_counts_cached(&self.pool, &self.nav_cache, project_id).await
+    }
 }
 
 // Static English-only landing page (no request context, no i18n chrome).
@@ -185,11 +201,18 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
         bg_cancel.child_token(),
     );
     crate::background::spawn_wal_checkpoint_task(bg_writer_pool.clone(), bg_cancel.child_token());
-    crate::background::spawn_digest_task(pool.clone(), digest_notify_tx, bg_cancel.child_token());
+    crate::background::spawn_digest_task(
+        bg_writer_pool.clone(),
+        digest_notify_tx,
+        bg_cancel.child_token(),
+    );
     // OIDC grants / revocation markers / JTI dedupe -- hourly purge.
     crate::background::spawn_oidc_cleanup_task(bg_writer_pool.clone(), bg_cancel.child_token());
 
     let auth_cache: AuthCache = Arc::new(dashmap::DashMap::new());
+    let negative_auth_cache: NegativeAuthCache = Arc::new(dashmap::DashMap::new());
+    let project_count_cache: ProjectCountCache = Arc::new(parking_lot::Mutex::new(None));
+    let ingest_failure_limiter = new_failure_limiter();
 
     let encryptor = SecretEncryptor::from_config_or_env(config.server.master_key.as_ref())
         .map_err(anyhow::Error::msg)?
@@ -291,11 +314,15 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
         filter_engine,
         discard_stats,
         auth_cache,
+        negative_auth_cache,
+        project_count_cache,
+        ingest_failure_limiter,
         encryptor,
         ingest_stats,
         oidc: oidc.clone(),
         web_bearer_gate: web_bearer_gate.clone(),
         mcp: mcp.clone(),
+        nav_cache: Arc::new(dashmap::DashMap::new()),
     };
 
     // Rate limiting: handled by filter engine at handler level.

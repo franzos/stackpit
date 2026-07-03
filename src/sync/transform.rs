@@ -97,6 +97,7 @@ pub fn to_storable_event(sentry_event: &SentryEvent, project_id: u64) -> Result<
         event_id,
         item_type,
         payload: compressed,
+        compressed: true,
         project_id,
         public_key: "synced".to_string(),
         timestamp,

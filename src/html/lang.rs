@@ -64,7 +64,7 @@ pub async fn post_language(
         match crate::queries::users::find_by_iss_sub(&state.pool, iss, sub).await {
             Ok(Some(user)) => {
                 let write = crate::queries::users::set_preferred_language(
-                    &state.pool,
+                    &state.auth_pool,
                     user.user_id,
                     Some(&code),
                 )

@@ -68,7 +68,7 @@ pub async fn assign_project(
     if let Err(r) = require_superuser(&active) {
         return r;
     }
-    match reassign_project(&state.pool, project_id, form.org_id).await {
+    match reassign_project(&state.writer_pool, project_id, form.org_id).await {
         Ok(_) => Redirect::to("/web/admin/unassigned").into_response(),
         Err(e) => {
             tracing::error!("reassign_project failed: {e:#}");

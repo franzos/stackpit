@@ -110,6 +110,7 @@ mod tests {
             event_id: "test-id".to_string(),
             item_type,
             payload: raw,
+            compressed: false,
             project_id: 1,
             public_key: "testkey".to_string(),
             timestamp: 1000,
@@ -224,6 +225,7 @@ mod tests {
             event_id: "bad".to_string(),
             item_type: ItemType::Event,
             payload: vec![0, 1, 2, 3], // not valid JSON
+            compressed: false,
             project_id: 1,
             public_key: "k".to_string(),
             timestamp: 0,

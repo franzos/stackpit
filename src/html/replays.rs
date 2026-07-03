@@ -1,5 +1,5 @@
 use askama::Template;
-use axum::extract::{Path, Query};
+use axum::extract::{Path, Query, State};
 
 use crate::extractors::ReadPool;
 use crate::html::chrome::PageChrome;
@@ -8,6 +8,7 @@ use crate::orgs::extractor::ActiveOrg;
 use crate::queries;
 use crate::queries::types::{PagedResult, ReplaySummary};
 use crate::queries::ProjectNavCounts;
+use crate::server::AppState;
 
 use super::HtmlError;
 
@@ -25,6 +26,7 @@ struct ReplayListTemplate {
 
 pub async fn list_handler(
     active: ActiveOrg,
+    State(state): State<AppState>,
     ReadPool(pool): ReadPool,
     Chrome(chrome): Chrome,
     Path(project_id): Path<u64>,
@@ -38,6 +40,7 @@ pub async fn list_handler(
 
     Ok(render_project_list(
         &pool,
+        &state.nav_cache,
         project_id,
         chrome,
         result,
@@ -63,6 +66,7 @@ struct ReplayDetailTemplate {
 
 pub async fn detail_handler(
     active: ActiveOrg,
+    State(state): State<AppState>,
     ReadPool(pool): ReadPool,
     Chrome(chrome): Chrome,
     Path((project_id, event_id)): Path<(u64, String)>,
@@ -74,6 +78,7 @@ pub async fn detail_handler(
 
     render_project_detail(
         &pool,
+        &state.nav_cache,
         project_id,
         chrome,
         replay,

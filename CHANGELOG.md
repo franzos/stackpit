@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.9] - 2026-07-03
+
+### Security
+- Source maps are now isolated per project. They were keyed globally by debug id, so one tenant could read or overwrite another tenant's source maps and original source
+- Ingest authentication caches denials and the open-mode project count, and caps per-IP authentication-failure floods, so a stream of unknown-key requests can no longer hammer the database
+
+### Fixed
+- Event batches that hit a transient write failure and retry no longer double-count issue, tag, session, and transaction metrics, lose counts, or store unreadable double-compressed payloads
+- Retried SDK envelopes no longer inflate counts; the ingest endpoint now accepts a whole envelope or none
+- Retention deletion reconciles issue counts against exactly the rows it deletes
+
+### Changed
+- Per-project navigation badge counts are cached briefly instead of recomputed on every page render
+- The writer bounds queued memory by bytes, not just message count, to avoid running out of memory under bursts of large payloads
+- Admin bulk deletes run in chunks so they no longer stall ingestion
+- Organization, auth, and background writes go through the write pool, and the read pool is enforced read-only
+
 ## [0.3.8] - 2026-06-28
 
 ### Fixed

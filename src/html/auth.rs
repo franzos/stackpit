@@ -120,7 +120,7 @@ pub async fn callback(
     };
 
     let user = match users::upsert_from_oidc(
-        &state.pool,
+        &state.auth_pool,
         &success.claims.iss,
         &success.claims.sub,
         success.claims.email.as_deref(),
@@ -144,7 +144,8 @@ pub async fn callback(
 
     // The OIDC claim seeds the language only when the user has not set one.
     if let Some(loc) = success.claims.locale.as_deref() {
-        if let Err(e) = users::set_preferred_language_if_unset(&state.pool, user.user_id, loc).await
+        if let Err(e) =
+            users::set_preferred_language_if_unset(&state.auth_pool, user.user_id, loc).await
         {
             tracing::warn!(
                 "failed to persist preferred_language for user {}: {e:#}",
@@ -156,7 +157,7 @@ pub async fn callback(
     warn_orgs_claim_absent_once(success.claims.orgs.is_none());
 
     let recon = crate::orgs::reconcile::reconcile(
-        &state.pool,
+        &state.auth_pool,
         crate::orgs::reconcile::ReconcileInput {
             user_id: user.user_id,
             iss: &success.claims.iss,
@@ -172,7 +173,7 @@ pub async fn callback(
 
     // cookie carries only the handle; tokens persist encrypted server-side
     let handle = match grants::insert(
-        &state.pool,
+        &state.auth_pool,
         encryptor,
         &NewGrant {
             user_id: user.user_id,
@@ -267,7 +268,7 @@ pub async fn backchannel_logout(
     );
 
     match logout::apply_logout(
-        &state.pool,
+        &state.auth_pool,
         &iss,
         sub.as_deref(),
         sid.as_deref(),

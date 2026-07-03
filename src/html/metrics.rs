@@ -1,5 +1,5 @@
 use askama::Template;
-use axum::extract::{Path, Query};
+use axum::extract::{Path, Query, State};
 use serde::Deserialize;
 
 use crate::extractors::ReadPool;
@@ -10,6 +10,7 @@ use crate::orgs::extractor::ActiveOrg;
 use crate::queries;
 use crate::queries::types::{MetricBucket, MetricInfo, PagedResult};
 use crate::queries::ProjectNavCounts;
+use crate::server::AppState;
 
 use super::HtmlError;
 
@@ -27,6 +28,7 @@ struct MetricListTemplate {
 
 pub async fn list_handler(
     active: ActiveOrg,
+    State(state): State<AppState>,
     ReadPool(pool): ReadPool,
     Chrome(chrome): Chrome,
     Path(project_id): Path<u64>,
@@ -40,6 +42,7 @@ pub async fn list_handler(
 
     Ok(render_project_list(
         &pool,
+        &state.nav_cache,
         project_id,
         chrome,
         result,
@@ -72,6 +75,7 @@ struct MetricDetailTemplate {
 
 pub async fn detail_handler(
     active: ActiveOrg,
+    State(state): State<AppState>,
     ReadPool(pool): ReadPool,
     Chrome(chrome): Chrome,
     Path((project_id, raw_mri)): Path<(u64, String)>,
@@ -93,7 +97,7 @@ pub async fn detail_handler(
         .await
         .unwrap_or_default();
 
-    let nav = queries::projects::get_nav_counts(&pool, project_id).await;
+    let nav = state.nav_counts(project_id).await;
 
     let tmpl = MetricDetailTemplate {
         project_id,

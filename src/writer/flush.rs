@@ -15,10 +15,13 @@ fn compress_batch(batch: &mut [WriteMsg]) {
     tokio::task::block_in_place(|| {
         for msg in batch.iter_mut() {
             match msg {
-                WriteMsg::Event(event) | WriteMsg::EventWithAttachments(event, _) => {
+                WriteMsg::Event(event) | WriteMsg::EventWithAttachments(event, _)
+                    if !event.compressed =>
+                {
                     match zstd::encode_all(event.payload.as_slice(), 3) {
                         Ok(compressed) => {
                             event.payload = compressed;
+                            event.compressed = true;
                         }
                         Err(e) => {
                             tracing::warn!(
@@ -49,78 +52,69 @@ pub(super) async fn flush_batch(
 
     compress_batch(batch);
 
+    // should_flush is evaluated on the pre-batch state, matching prior behavior.
     let should_agg = accumulators.should_flush();
-    let mut pending_notifications = Vec::new();
 
-    let result = do_flush_tx(
-        pool,
-        batch,
-        should_agg,
-        accumulators,
-        &mut pending_notifications,
-    )
-    .await;
+    let mut pending = Vec::new();
 
-    match result {
-        Ok(()) => {
-            tracing::debug!("flushed batch of {} items", batch.len());
-            if should_agg {
-                accumulators.issues.clear();
-                accumulators.tags.clear();
-                accumulators.session_aggregates.clear();
-                accumulators.transaction_metrics.clear();
-                send_notifications(pending_notifications, notify_tx);
-                accumulators.last_flush = Instant::now();
+    if !should_agg {
+        // Common path: no clone; do_flush_tx merges the batch scratch into the accumulators only after its commit succeeds, so a failed attempt leaves them clean and the retry is idempotent.
+        match do_flush_tx(pool, batch, false, accumulators, &mut pending).await {
+            Ok(()) => {
+                tracing::debug!("flushed batch of {} items", batch.len());
+                return true;
             }
-            true
+            Err(e) => {
+                tracing::warn!("batch flush failed, retrying once: {e}");
+            }
         }
-        Err(e) => {
-            tracing::warn!("batch flush failed, retrying once: {e}");
-            pending_notifications.clear();
-            match do_flush_tx(
-                pool,
-                batch,
-                should_agg,
-                accumulators,
-                &mut pending_notifications,
-            )
-            .await
-            {
-                Ok(()) => {
-                    tracing::info!("batch flush retry succeeded ({} items)", batch.len());
-                    if should_agg {
-                        accumulators.issues.clear();
-                        accumulators.tags.clear();
-                        accumulators.session_aggregates.clear();
-                        accumulators.transaction_metrics.clear();
-                        send_notifications(pending_notifications, notify_tx);
-                        accumulators.last_flush = Instant::now();
-                    }
-                    true
-                }
-                Err(e2) => {
-                    tracing::error!(
-                        "batch flush failed after retry ({} items), pending re-queue: {e2}",
-                        batch.len()
-                    );
-                    if should_agg {
-                        accumulators.issues.clear();
-                        accumulators.tags.clear();
-                        accumulators.session_aggregates.clear();
-                        accumulators.transaction_metrics.clear();
-                        accumulators.last_flush = Instant::now();
-                    }
-                    false
-                }
+        match do_flush_tx(pool, batch, false, accumulators, &mut pending).await {
+            Ok(()) => {
+                tracing::info!("batch flush retry succeeded ({} items)", batch.len());
+                true
+            }
+            Err(e2) => {
+                tracing::error!(
+                    "batch flush failed after retry ({} items), pending re-queue: {e2}",
+                    batch.len()
+                );
+                false
+            }
+        }
+    } else {
+        // Aggregation path: do_flush_tx merges the batch scratch into the accumulators before the aggregation flush, so keep a snapshot to revert on failure (neither double-counting nor losing prior deltas).
+        let snapshot = accumulators.clone();
+        match do_flush_tx(pool, batch, true, accumulators, &mut pending).await {
+            Ok(()) => {
+                finalize_agg_flush(accumulators, pending, notify_tx);
+                tracing::debug!("flushed batch of {} items", batch.len());
+                return true;
+            }
+            Err(e) => {
+                tracing::warn!("batch flush failed, retrying once: {e}");
+                pending.clear();
+                *accumulators = snapshot.clone();
+            }
+        }
+        match do_flush_tx(pool, batch, true, accumulators, &mut pending).await {
+            Ok(()) => {
+                finalize_agg_flush(accumulators, pending, notify_tx);
+                tracing::info!("batch flush retry succeeded ({} items)", batch.len());
+                true
+            }
+            Err(e2) => {
+                tracing::error!(
+                    "batch flush failed after retry ({} items), pending re-queue: {e2}",
+                    batch.len()
+                );
+                *accumulators = snapshot;
+                false
             }
         }
     }
 }
 
-/// Inserts events, accumulates them, and (if ready) flushes aggregated
-/// issue/tag data -- all in one transaction. Accumulation happens after
-/// event insertion but before the aggregation flush so that events in the
-/// current batch are always included when their issues are upserted.
+/// Inserts events and (if ready) flushes aggregated issue/tag/session/txn data in one transaction, building a batch-local scratch from only the rows the insert actually created (SDK-retried duplicates are dropped by the conflict clause and must not inflate counts) and folding it into `accumulators` after commit on the non-agg path, or before the aggregation flush on the agg path so the flush includes this batch.
 async fn do_flush_tx(
     pool: &DbPool,
     batch: &[WriteMsg],
@@ -129,23 +123,44 @@ async fn do_flush_tx(
     pending: &mut Vec<crate::notify::NotificationEvent>,
 ) -> Result<()> {
     let mut tx = pool.begin().await?;
-    let new_events = do_flush_inner(&mut tx, batch).await?;
+    let new_ids = do_flush_inner(&mut tx, batch).await?;
 
-    for event in &new_events {
-        accumulators.accumulate(event);
+    let mut scratch = Accumulators::new();
+    for msg in batch {
+        if let WriteMsg::Event(event) | WriteMsg::EventWithAttachments(event, _) = msg {
+            if new_ids.contains(&event.event_id) {
+                scratch.accumulate(event);
+            }
+        }
     }
 
-    let threshold_candidates = if should_agg {
-        flush_aggregation_inner(&mut tx, accumulators, pending).await?
+    if should_agg {
+        accumulators.merge(&scratch);
+        let threshold_candidates = flush_aggregation_inner(&mut tx, accumulators, pending).await?;
+        tx.commit().await?;
+        // Threshold checks run outside the write TX against the pool
+        if !threshold_candidates.is_empty() {
+            check_threshold_alerts(pool, &threshold_candidates, pending).await;
+        }
     } else {
-        Vec::new()
-    };
-    tx.commit().await?;
-    // Threshold checks run outside the write TX against the pool
-    if !threshold_candidates.is_empty() {
-        check_threshold_alerts(pool, &threshold_candidates, pending).await;
+        tx.commit().await?;
+        accumulators.merge(&scratch);
     }
     Ok(())
+}
+
+/// Post-commit protocol for an aggregation flush: clear the drained deltas, emit notifications, and reset the flush timer.
+fn finalize_agg_flush(
+    accumulators: &mut Accumulators,
+    pending: Vec<crate::notify::NotificationEvent>,
+    notify_tx: Option<&tokio::sync::mpsc::Sender<crate::notify::NotificationEvent>>,
+) {
+    accumulators.issues.clear();
+    accumulators.tags.clear();
+    accumulators.session_aggregates.clear();
+    accumulators.transaction_metrics.clear();
+    send_notifications(pending, notify_tx);
+    accumulators.last_flush = Instant::now();
 }
 
 /// Does the actual event/attachment inserts inside a transaction.
@@ -153,12 +168,11 @@ async fn do_flush_tx(
 /// Collects all events into a single multi-row INSERT for throughput,
 /// then handles attachments individually (they're rare).
 ///
-/// Returns references to inserted events (all are considered new since
-/// duplicate event IDs are rare UUIDs).
-async fn do_flush_inner<'a>(
+/// Returns the set of events-table `event_id`s that were genuinely inserted, so the caller accumulates issue/tag/session/txn rollups for new rows only.
+async fn do_flush_inner(
     tx: &mut sqlx::Transaction<'_, crate::db::Db>,
-    batch: &'a [WriteMsg],
-) -> Result<Vec<&'a StorableEvent>> {
+    batch: &[WriteMsg],
+) -> Result<std::collections::HashSet<String>> {
     let mut all_events: Vec<&StorableEvent> = Vec::with_capacity(batch.len());
     let mut attachment_msgs: Vec<usize> = Vec::new();
 
@@ -175,7 +189,7 @@ async fn do_flush_inner<'a>(
         }
     }
 
-    event_writes::insert_event_rows_bulk(tx, &all_events).await?;
+    let new_ids = event_writes::insert_event_rows_bulk(tx, &all_events).await?;
 
     for &idx in &attachment_msgs {
         if let WriteMsg::EventWithAttachments(_, attachments) = &batch[idx] {
@@ -185,7 +199,7 @@ async fn do_flush_inner<'a>(
         }
     }
 
-    Ok(all_events)
+    Ok(new_ids)
 }
 
 /// Inserts a single event row using the pool directly. Returns true if new.
@@ -220,12 +234,7 @@ pub(super) async fn flush_aggregation(
         check_threshold_alerts(pool, &threshold_candidates, &mut pending).await;
     }
 
-    accumulators.issues.clear();
-    accumulators.tags.clear();
-    accumulators.session_aggregates.clear();
-    accumulators.transaction_metrics.clear();
-    send_notifications(pending, notify_tx);
-    accumulators.last_flush = Instant::now();
+    finalize_agg_flush(accumulators, pending, notify_tx);
     Ok(())
 }
 
@@ -239,5 +248,39 @@ fn send_notifications(
                 tracing::warn!("notify: dropped notification (channel full): {e}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ingest::models::{ItemType, StorableEvent};
+    use crate::queries::events::decompress_payload;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn compress_batch_is_idempotent() {
+        let json = serde_json::json!({"event_id": "idem1", "message": "hello world"});
+        let raw = serde_json::to_vec(&json).unwrap();
+        let event = StorableEvent::new(
+            "idem1".to_string(),
+            ItemType::Event,
+            raw,
+            1,
+            "k".to_string(),
+        );
+        let mut batch = vec![WriteMsg::Event(event)];
+
+        // Two passes simulate the retry_pending re-entry into flush_batch.
+        compress_batch(&mut batch);
+        compress_batch(&mut batch);
+
+        let WriteMsg::Event(e) = &batch[0] else {
+            panic!("expected event");
+        };
+        let decoded = decompress_payload(&e.payload).expect("payload must round-trip");
+        assert_eq!(
+            decoded, json,
+            "double-compressed payload must decode to original"
+        );
     }
 }

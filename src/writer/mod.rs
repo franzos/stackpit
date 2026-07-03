@@ -11,11 +11,13 @@ pub use msg::WriteMsg;
 use crate::db::DbPool;
 use crate::util::stats::IngestStats;
 use anyhow::Result;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use accumulator::{Accumulators, BATCH_SIZE};
 use flush::flush_aggregation;
 use flush::flush_batch;
+use msg::msg_bytes;
 use msg::WriteMsg::*;
 
 pub async fn spawn(
@@ -24,14 +26,19 @@ pub async fn spawn(
     ingest_stats: Arc<IngestStats>,
 ) -> Result<(WriterHandle, tokio::task::JoinHandle<()>)> {
     let (tx, rx) = tokio::sync::mpsc::channel::<WriteMsg>(50_000);
+    let queued_bytes = Arc::new(AtomicUsize::new(0));
 
     let stats = ingest_stats.clone();
+    let loop_bytes = Arc::clone(&queued_bytes);
     let join_handle = tokio::spawn(async move {
-        writer_loop(&pool, rx, notify_tx.as_ref(), &stats).await;
+        writer_loop(&pool, rx, notify_tx.as_ref(), &stats, &loop_bytes).await;
         tracing::info!("writer task exiting");
     });
 
-    Ok((WriterHandle::new(tx, ingest_stats), join_handle))
+    Ok((
+        WriterHandle::new(tx, ingest_stats, queued_bytes),
+        join_handle,
+    ))
 }
 
 fn count_events_in(batch: &[WriteMsg]) -> u64 {
@@ -41,16 +48,23 @@ fn count_events_in(batch: &[WriteMsg]) -> u64 {
         .count() as u64
 }
 
+fn batch_bytes(batch: &[WriteMsg]) -> usize {
+    batch.iter().map(msg_bytes).sum()
+}
+
 async fn writer_loop(
     pool: &DbPool,
     mut rx: tokio::sync::mpsc::Receiver<WriteMsg>,
     notify_tx: Option<&tokio::sync::mpsc::Sender<crate::notify::NotificationEvent>>,
     ingest_stats: &IngestStats,
+    queued_bytes: &AtomicUsize,
 ) {
     use accumulator::AGGREGATION_FLUSH_INTERVAL_MS;
 
     let mut accumulators = Accumulators::new();
     let mut retry_pending: Vec<WriteMsg> = Vec::new();
+    // Reserved byte weight of retry_pending, captured before compression so the decrement matches what send reserved (compression shrinks payloads in place).
+    let mut retry_pending_bytes: usize = 0;
 
     let flush_interval = std::time::Duration::from_millis(AGGREGATION_FLUSH_INTERVAL_MS as u64);
     let mut tick = tokio::time::interval(flush_interval);
@@ -62,14 +76,18 @@ async fn writer_loop(
         // Retry a previously failed batch before accepting new work.
         if !retry_pending.is_empty() {
             if flush_batch(pool, &mut retry_pending, &mut accumulators, notify_tx).await {
+                queued_bytes.fetch_sub(retry_pending_bytes, Ordering::Relaxed);
                 retry_pending.clear();
+                retry_pending_bytes = 0;
             } else {
                 let dropped = count_events_in(&retry_pending);
                 tracing::error!("dropping {dropped} events after repeated flush failures");
                 ingest_stats
                     .events_dropped
-                    .fetch_add(dropped, std::sync::atomic::Ordering::Relaxed);
+                    .fetch_add(dropped, Ordering::Relaxed);
+                queued_bytes.fetch_sub(retry_pending_bytes, Ordering::Relaxed);
                 retry_pending.clear();
+                retry_pending_bytes = 0;
             }
         }
 
@@ -109,7 +127,9 @@ async fn writer_loop(
         while batch.len() < BATCH_SIZE {
             match rx.try_recv() {
                 Ok(Shutdown) => {
+                    let bytes = batch_bytes(&batch);
                     flush_batch(pool, &mut batch, &mut accumulators, notify_tx).await;
+                    queued_bytes.fetch_sub(bytes, Ordering::Relaxed);
                     if !accumulators.is_empty() {
                         if let Err(e) = flush_aggregation(pool, &mut accumulators, notify_tx).await
                         {
@@ -123,7 +143,9 @@ async fn writer_loop(
                 }
                 Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
                 Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                    let bytes = batch_bytes(&batch);
                     flush_batch(pool, &mut batch, &mut accumulators, notify_tx).await;
+                    queued_bytes.fetch_sub(bytes, Ordering::Relaxed);
                     if !accumulators.is_empty() {
                         if let Err(e) = flush_aggregation(pool, &mut accumulators, notify_tx).await
                         {
@@ -135,8 +157,12 @@ async fn writer_loop(
             }
         }
 
+        let bytes = batch_bytes(&batch);
         if !flush_batch(pool, &mut batch, &mut accumulators, notify_tx).await {
             std::mem::swap(&mut retry_pending, &mut batch);
+            retry_pending_bytes = bytes;
+        } else {
+            queued_bytes.fetch_sub(bytes, Ordering::Relaxed);
         }
     }
 }
@@ -203,6 +229,29 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(row.0, 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn queued_bytes_returns_to_zero_after_flush() {
+        let pool = test_pool().await;
+        let (handle, _join) = spawn(pool.clone(), None, test_stats()).await.unwrap();
+
+        for i in 0..5 {
+            let mut e = make_event(&format!("qb{i}"));
+            e.payload = vec![0u8; 1024];
+            handle.send_event(e).unwrap();
+        }
+        assert!(handle.queued_bytes() > 0, "sends must reserve bytes");
+
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert_eq!(
+            handle.queued_bytes(),
+            0,
+            "flushed messages must release every reserved byte"
+        );
+
+        let _ = handle.shutdown();
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -276,6 +325,43 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(row.0, 1);
+    }
+
+    /// A batch that re-sends an already-inserted event_id (SDK envelope retry) must raise the issue event_count only for genuinely new rows; the duplicate is dropped by INSERT OR IGNORE / ON CONFLICT DO NOTHING and must not be accumulated.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn retried_event_id_not_double_counted_in_batch() {
+        let pool = test_pool().await;
+        let mut acc = Accumulators::new();
+
+        // First flush: insert one event for the fingerprint.
+        let mut e1 = make_event("dedup1");
+        e1.fingerprint = Some("dedup_fp".to_string());
+        let mut batch1 = vec![WriteMsg::Event(e1)];
+        acc.last_flush = std::time::Instant::now() - std::time::Duration::from_secs(2);
+        assert!(flush_batch(&pool, &mut batch1, &mut acc, None).await);
+
+        let row: (i64,) =
+            sqlx::query_as("SELECT event_count FROM issues WHERE fingerprint = 'dedup_fp'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(row.0, 1);
+
+        // Second flush: the same event_id (a retry, silently dropped) plus one genuinely new event_id on the same fingerprint; event_count must rise by exactly 1, not 2.
+        let mut dup = make_event("dedup1");
+        dup.fingerprint = Some("dedup_fp".to_string());
+        let mut fresh = make_event("dedup2");
+        fresh.fingerprint = Some("dedup_fp".to_string());
+        let mut batch2 = vec![WriteMsg::Event(dup), WriteMsg::Event(fresh)];
+        acc.last_flush = std::time::Instant::now() - std::time::Duration::from_secs(2);
+        assert!(flush_batch(&pool, &mut batch2, &mut acc, None).await);
+
+        let row: (i64,) =
+            sqlx::query_as("SELECT event_count FROM issues WHERE fingerprint = 'dedup_fp'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(row.0, 2, "retried event_id must not inflate issue count");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -434,6 +520,67 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(row.0, 1, "batch-2 fingerprint must have an issue row");
+    }
+
+    /// A flush that fails on both the attempt and its retry must not fold the batch into the accumulators (merge-on-commit); injected via a closed pool.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn failed_flush_does_not_accumulate() {
+        let pool = test_pool().await;
+        pool.close().await;
+
+        let mut acc = Accumulators::new();
+        let mut e = make_event("failx");
+        e.fingerprint = Some("fail_x_fp".to_string());
+        let mut batch = vec![WriteMsg::Event(e)];
+
+        assert!(
+            !flush_batch(&pool, &mut batch, &mut acc, None).await,
+            "flush against a closed pool must fail"
+        );
+        assert!(
+            acc.issues.is_empty(),
+            "a failed flush must not accumulate its batch"
+        );
+    }
+
+    /// Regression for the accumulator-lifecycle bug: a prior non-flushed delta (committed batch, still in memory) must survive a later batch whose aggregation flush fails twice, and the failed batch must not pollute the accumulators (old code cleared the maps in the double-failure branch).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn failed_agg_flush_preserves_prior_deltas() {
+        let pool = test_pool().await;
+        let mut acc = Accumulators::new();
+
+        // Batch 1: non-agg path commits its rows and merges into the accumulators (the issue delta is in memory, not yet in the DB).
+        let mut e1 = make_event("prior1");
+        e1.fingerprint = Some("prior_fp".to_string());
+        let mut batch1 = vec![WriteMsg::Event(e1)];
+        assert!(flush_batch(&pool, &mut batch1, &mut acc, None).await);
+        assert_eq!(
+            acc.issues.get("prior_fp").map(|d| d.event_count),
+            Some(1),
+            "prior batch must be held in the accumulators"
+        );
+
+        // Force the aggregation path for the next batch, then close the pool so both the attempt and its retry fail.
+        acc.last_flush = std::time::Instant::now() - std::time::Duration::from_secs(2);
+        pool.close().await;
+
+        let mut e2 = make_event("fail1");
+        e2.fingerprint = Some("fail_fp".to_string());
+        let mut batch2 = vec![WriteMsg::Event(e2)];
+        assert!(
+            !flush_batch(&pool, &mut batch2, &mut acc, None).await,
+            "aggregation flush against a closed pool must fail"
+        );
+
+        assert_eq!(
+            acc.issues.get("prior_fp").map(|d| d.event_count),
+            Some(1),
+            "prior committed delta must survive a double failure"
+        );
+        assert!(
+            !acc.issues.contains_key("fail_fp"),
+            "the failed batch must not be merged into the accumulators"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -225,7 +225,7 @@ async fn render_page(
             .await
             .unwrap_or_default();
 
-    let nav = queries::projects::get_nav_counts(&state.pool, project_id).await;
+    let nav = state.nav_counts(project_id).await;
 
     let tmpl = ProjectIntegrationsTemplate {
         project_id,

@@ -95,7 +95,7 @@ impl FromRequestParts<AppState> for ProjectPageCtx {
             }
             Ok(None) => {}
         }
-        let nav = crate::queries::projects::get_nav_counts(&pool, project_id).await;
+        let nav = state.nav_counts(project_id).await;
         Ok(ProjectPageCtx {
             pool,
             project_id,

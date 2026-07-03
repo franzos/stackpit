@@ -8,6 +8,7 @@ use crate::endpoints::{
     sentry_response, sentry_response_with_discarded,
 };
 use crate::ingest::envelope;
+use crate::ingest::models::{StorableAttachment, StorableEvent};
 use crate::server::AppState;
 
 pub async fn handle(
@@ -38,10 +39,11 @@ pub async fn handle(
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     let event_count = parsed.events.len();
-    let mut accepted = 0usize;
     let mut filtered = 0usize;
     let mut pending_attachments = parsed.attachments;
 
+    // Enrich, filter, and resolve attachments for every event first, so the whole envelope can queue all-or-nothing below; accepting a prefix and then 503-ing would make a retrying SDK re-send already-accepted events.
+    let mut to_send: Vec<(StorableEvent, Vec<StorableAttachment>)> = Vec::new();
     for mut event in parsed.events {
         crate::ingest::enrich::enrich_event(&mut event);
 
@@ -71,14 +73,12 @@ pub async fn handle(
             Vec::new()
         };
 
-        if state
-            .writer
-            .send_event_with_attachments(event, atts)
-            .is_err()
-        {
-            return overloaded_response().into_response();
-        }
-        accepted += 1;
+        to_send.push((event, atts));
+    }
+
+    let accepted = to_send.len();
+    if !state.writer.send_envelope(to_send) {
+        return overloaded_response().into_response();
     }
 
     // Return 200 even when fully filtered: don't leak filter info to clients.

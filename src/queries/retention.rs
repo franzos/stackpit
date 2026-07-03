@@ -13,16 +13,17 @@ pub async fn delete_old_events(pool: &DbPool, retention_days: u32) -> Result<usi
     loop {
         let mut tx = pool.begin().await?;
 
+        // Both subqueries share an identical WHERE + total ORDER BY (unique rowid/ctid) + LIMIT, so within one tx they select the exact same rows, keeping the reconciled fingerprints matched to the actually deleted rows.
         #[cfg(feature = "sqlite")]
         let delete_sql = sql!(
             "DELETE FROM events WHERE rowid IN (
-                SELECT rowid FROM events WHERE received_at < ?1 LIMIT ?2
+                SELECT rowid FROM events WHERE received_at < ?1 ORDER BY received_at, rowid LIMIT ?2
             )"
         );
         #[cfg(not(feature = "sqlite"))]
         let delete_sql = sql!(
             "DELETE FROM events WHERE ctid IN (
-                SELECT ctid FROM events WHERE received_at < ?1 LIMIT ?2
+                SELECT ctid FROM events WHERE received_at < ?1 ORDER BY received_at, ctid LIMIT ?2
             )"
         );
 
@@ -31,14 +32,14 @@ pub async fn delete_old_events(pool: &DbPool, retention_days: u32) -> Result<usi
         let fp_sql = sql!(
             "SELECT DISTINCT fingerprint FROM events \
              WHERE fingerprint IS NOT NULL AND rowid IN (\
-                 SELECT rowid FROM events WHERE received_at < ?1 LIMIT ?2\
+                 SELECT rowid FROM events WHERE received_at < ?1 ORDER BY received_at, rowid LIMIT ?2\
              )"
         );
         #[cfg(not(feature = "sqlite"))]
         let fp_sql = sql!(
             "SELECT DISTINCT fingerprint FROM events \
              WHERE fingerprint IS NOT NULL AND ctid IN (\
-                 SELECT ctid FROM events WHERE received_at < ?1 LIMIT ?2\
+                 SELECT ctid FROM events WHERE received_at < ?1 ORDER BY received_at, ctid LIMIT ?2\
              )"
         );
 
@@ -264,4 +265,66 @@ pub async fn reconcile_after_event_delete(pool: &DbPool, fingerprints: &[String]
     reconcile_affected_issues(&mut tx, fingerprints).await?;
     tx.commit().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::sql;
+    use crate::queries::test_helpers::*;
+
+    async fn insert_issue(pool: &DbPool, fingerprint: &str, event_count: i64) {
+        sqlx::query(sql!(
+            "INSERT INTO issues (fingerprint, project_id, title, level, first_seen, last_seen, event_count)
+             VALUES (?1, 1, 'test', 'error', 0, 0, ?2)"
+        ))
+        .bind(fingerprint)
+        .bind(event_count)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn issue_count(pool: &DbPool, fingerprint: &str) -> Option<i64> {
+        sqlx::query_scalar::<_, i64>(sql!(
+            "SELECT event_count FROM issues WHERE fingerprint = ?1"
+        ))
+        .bind(fingerprint)
+        .fetch_optional(pool)
+        .await
+        .unwrap()
+    }
+
+    async fn event_rows(pool: &DbPool) -> i64 {
+        sqlx::query_scalar::<_, i64>(sql!("SELECT COUNT(*) FROM events"))
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    // Guards the reconcile-correctness contract: fingerprints reconciled after a delete must exactly cover the deleted rows; asserts the happy-path invariant, since the real divergence is a nondeterministic LIMIT-scan race.
+    #[tokio::test]
+    async fn delete_old_events_reconciles_affected_issues() {
+        let pool = open_test_db().await;
+        let old = 1_000; // received_at well before any sane cutoff
+        let now = chrono::Utc::now().timestamp();
+
+        // fp1: two old events (deleted), one recent event (survives) -> count 1.
+        insert_test_event(&pool, "e1", 1, old, Some("fp1"), Some("error"), None).await;
+        insert_test_event(&pool, "e2", 1, old, Some("fp1"), Some("error"), None).await;
+        insert_test_event(&pool, "e3", 1, now, Some("fp1"), Some("error"), None).await;
+        insert_issue(&pool, "fp1", 3).await;
+
+        // fp2: two old events, all deleted -> issue drops.
+        insert_test_event(&pool, "e4", 1, old, Some("fp2"), Some("error"), None).await;
+        insert_test_event(&pool, "e5", 1, old, Some("fp2"), Some("error"), None).await;
+        insert_issue(&pool, "fp2", 2).await;
+
+        let deleted = delete_old_events(&pool, 1).await.unwrap();
+
+        assert_eq!(deleted, 4);
+        assert_eq!(event_rows(&pool).await, 1);
+        assert_eq!(issue_count(&pool, "fp1").await, Some(1));
+        assert_eq!(issue_count(&pool, "fp2").await, None); // reconciled to 0, dropped
+    }
 }

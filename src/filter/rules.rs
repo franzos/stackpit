@@ -217,6 +217,7 @@ mod tests {
             event_id: "test".to_string(),
             item_type: ItemType::Event,
             payload: vec![],
+            compressed: false,
             project_id: 1,
             public_key: "key".to_string(),
             timestamp: 0,

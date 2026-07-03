@@ -69,7 +69,7 @@ struct IssueDetailTemplate {
 
 pub async fn handler(
     active: ActiveOrg,
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     ReadPool(pool): ReadPool,
     Chrome(chrome): Chrome,
     Path((project_id, fingerprint)): Path<(u64, String)>,
@@ -93,7 +93,7 @@ pub async fn handler(
 
     let tab = params.tab.unwrap_or_else(|| "details".to_string());
 
-    let nav = queries::projects::get_nav_counts(&pool, project_id).await;
+    let nav = state.nav_counts(project_id).await;
 
     let is_discarded = queries::filters::is_fingerprint_discarded(&pool, &fingerprint)
         .await
@@ -166,7 +166,7 @@ pub async fn handler(
             .await
             .unwrap_or_default();
         let sourcemaps: std::collections::HashMap<String, ::sourcemap::SourceMap> =
-            event_supplements::preload_sourcemaps(&pool, &ev.payload).await;
+            event_supplements::preload_sourcemaps(&pool, &ev.payload, ev.project_id).await;
         let resolver = move |debug_id: &str,
                              line: u32,
                              col: u32|

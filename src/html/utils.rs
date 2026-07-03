@@ -9,6 +9,7 @@ use crate::html::chrome::PageChrome;
 use crate::html::{render_template, HtmlError};
 use crate::middleware::CsrfToken;
 use crate::queries;
+use crate::queries::projects::NavCountsCache;
 use crate::queries::types::Pagination;
 use crate::queries::ProjectNavCounts;
 
@@ -77,6 +78,7 @@ where
 /// nav-counts and render boilerplate.
 pub async fn render_project_list<T, F, Tmpl>(
     pool: &DbPool,
+    cache: &NavCountsCache,
     project_id: u64,
     chrome: PageChrome,
     result: T,
@@ -86,7 +88,7 @@ where
     F: FnOnce(u64, T, ProjectNavCounts, PageChrome) -> Tmpl,
     Tmpl: Template,
 {
-    let nav = queries::projects::get_nav_counts(pool, project_id).await;
+    let nav = queries::projects::nav_counts_cached(pool, cache, project_id).await;
     render_template(&build(project_id, result, nav, chrome))
 }
 
@@ -94,6 +96,7 @@ where
 /// 404s with `not_found` when absent, then renders via `build`.
 pub async fn render_project_detail<T, F, Tmpl>(
     pool: &DbPool,
+    cache: &NavCountsCache,
     project_id: u64,
     chrome: PageChrome,
     item: Option<T>,
@@ -107,7 +110,7 @@ where
     let Some(item) = item else {
         return Err(HtmlError(StatusCode::NOT_FOUND, not_found.into()));
     };
-    let nav = queries::projects::get_nav_counts(pool, project_id).await;
+    let nav = queries::projects::nav_counts_cached(pool, cache, project_id).await;
     Ok(render_template(&build(project_id, item, nav, chrome)))
 }
 

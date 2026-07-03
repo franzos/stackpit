@@ -16,3 +16,6 @@ tests/e2e/.auth/
 # Python
 __pycache__/
 *.pyc
+
+# insta pending snapshots
+*.snap.new

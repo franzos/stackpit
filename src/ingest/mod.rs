@@ -2,6 +2,7 @@ pub mod auth;
 pub mod enrich;
 pub mod envelope;
 pub mod event_data;
+pub mod failure_limiter;
 pub mod fingerprint;
 pub mod models;
 pub mod parse_log;

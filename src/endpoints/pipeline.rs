@@ -17,7 +17,26 @@ pub async fn authenticate_and_prefilter(
     project_id: u64,
     addr: std::net::SocketAddr,
 ) -> Result<SentryAuth, axum::response::Response> {
-    let auth = super::auth::authenticate(state, headers, uri, project_id).await?;
+    // Per-IP auth-failure cutoff: an IP flooding bad keys is rejected before any DB lookup, and successful auth records nothing so a valid key is never limited.
+    let client_ip = network::extract_client_ip(headers, Some(addr));
+    if let Some(ip) = client_ip.as_deref() {
+        if state.ingest_failure_limiter.is_over_budget(ip) {
+            return Err(rate_limited_response_with_retry(60).into_response());
+        }
+    }
+
+    let auth = match super::auth::authenticate(state, headers, uri, project_id).await {
+        Ok(auth) => auth,
+        Err(resp) => {
+            // Only client-fault denials spend the budget; a 500 is our own DB outage.
+            if is_client_fault(resp.status()) {
+                if let Some(ip) = client_ip.as_deref() {
+                    state.ingest_failure_limiter.record_failure(ip);
+                }
+            }
+            return Err(resp);
+        }
+    };
     pre_filter(
         &state.filter_engine,
         headers,
@@ -26,6 +45,11 @@ pub async fn authenticate_and_prefilter(
         Some(addr),
     )?;
     Ok(auth)
+}
+
+/// Whether an auth rejection is the client's fault (bad/unknown key, archived, max projects) rather than an internal 500, which must not spend a budget.
+fn is_client_fault(status: axum::http::StatusCode) -> bool {
+    status != axum::http::StatusCode::INTERNAL_SERVER_ERROR
 }
 
 /// Run the event through the filter engine. Returns `true` when dropped, and
@@ -63,5 +87,36 @@ pub fn pre_filter(
             let placeholder = uuid::Uuid::new_v4().to_string();
             Err(sentry_response(&placeholder).into_response())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ingest::failure_limiter::new_failure_limiter;
+    use axum::http::StatusCode;
+
+    #[test]
+    fn only_internal_errors_are_exempt_from_the_budget() {
+        assert!(!is_client_fault(StatusCode::INTERNAL_SERVER_ERROR));
+        assert!(is_client_fault(StatusCode::UNAUTHORIZED));
+        assert!(is_client_fault(StatusCode::FORBIDDEN));
+    }
+
+    #[test]
+    fn internal_errors_never_trip_the_limiter_but_denials_do() {
+        let limiter = new_failure_limiter();
+        for _ in 0..500 {
+            if is_client_fault(StatusCode::INTERNAL_SERVER_ERROR) {
+                limiter.record_failure("ip");
+            }
+        }
+        assert!(!limiter.is_over_budget("ip"));
+        for _ in 0..500 {
+            if is_client_fault(StatusCode::UNAUTHORIZED) {
+                limiter.record_failure("ip");
+            }
+        }
+        assert!(limiter.is_over_budget("ip"));
     }
 }

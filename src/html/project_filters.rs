@@ -170,7 +170,7 @@ async fn build_filters_template(
     let ip_blocks = queries::filters::list_ip_blocks(&state.pool, project_id).await?;
     let discard_stats = queries::filters::list_discard_stats(&state.pool, project_id).await?;
 
-    let nav = queries::projects::get_nav_counts(&state.pool, project_id).await;
+    let nav = state.nav_counts(project_id).await;
 
     Ok(ProjectFiltersTemplate {
         project_id,

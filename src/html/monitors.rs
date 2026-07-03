@@ -1,5 +1,5 @@
 use askama::Template;
-use axum::extract::{Path, Query};
+use axum::extract::{Path, Query, State};
 
 use crate::extractors::{ProjectPageCtx, ReadPool};
 use crate::html::chrome::PageChrome;
@@ -10,6 +10,7 @@ use crate::queries;
 use crate::queries::types::{PagedResult, Pagination};
 use crate::queries::MonitorSummary;
 use crate::queries::ProjectNavCounts;
+use crate::server::AppState;
 
 use super::HtmlError;
 
@@ -49,6 +50,7 @@ struct MonitorDetailTemplate {
 
 pub async fn detail_handler(
     active: ActiveOrg,
+    State(state): State<AppState>,
     ReadPool(pool): ReadPool,
     Chrome(chrome): Chrome,
     Path((project_id, slug)): Path<(u64, String)>,
@@ -61,7 +63,7 @@ pub async fn detail_handler(
     let checkins =
         queries::monitors::list_checkins_for_monitor(&pool, project_id, &slug, &page).await?;
 
-    let nav = queries::projects::get_nav_counts(&pool, project_id).await;
+    let nav = state.nav_counts(project_id).await;
 
     let tmpl = MonitorDetailTemplate {
         project_id,

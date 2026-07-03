@@ -1,5 +1,5 @@
 use askama::Template;
-use axum::extract::{Path, Query, RawQuery};
+use axum::extract::{Path, Query, RawQuery, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 
@@ -13,8 +13,10 @@ use crate::html::utils::{
 };
 use crate::orgs::extractor::ActiveOrg;
 use crate::queries;
+use crate::queries::projects::NavCountsCache;
 use crate::queries::types::PagedResult;
 use crate::queries::ProjectNavCounts;
+use crate::server::AppState;
 
 use super::charts;
 use super::HtmlError;
@@ -44,6 +46,7 @@ struct IssueListTemplate {
 
 pub async fn handler(
     active: ActiveOrg,
+    State(state): State<AppState>,
     BrowserDefaults(defaults): BrowserDefaults,
     RawQuery(raw_qs): RawQuery,
     ReadPool(pool): ReadPool,
@@ -62,11 +65,12 @@ pub async fn handler(
     crate::orgs::extractor::require_project_scope(&active, &pool, project_id as i64)
         .await
         .map_err(|_| HtmlError(StatusCode::NOT_FOUND, "Not found".into()))?;
-    issue_or_transaction_handler(&pool, project_id, params, "event", chrome).await
+    issue_or_transaction_handler(&pool, &state.nav_cache, project_id, params, "event", chrome).await
 }
 
 async fn issue_or_transaction_handler(
     pool: &DbPool,
+    cache: &NavCountsCache,
     project_id: u64,
     params: ListParams,
     item_type: &str,
@@ -87,7 +91,7 @@ async fn issue_or_transaction_handler(
 
     let result = queries::issues::list_issues(pool, project_id, &filter, &page, since).await?;
 
-    let nav = queries::projects::get_nav_counts(pool, project_id).await;
+    let nav = queries::projects::nav_counts_cached(pool, cache, project_id).await;
 
     let releases = queries::releases::list_releases_for_project(pool, project_id)
         .await

@@ -42,7 +42,7 @@ struct EventDetailTemplate {
 
 pub async fn handler(
     active: ActiveOrg,
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     ReadPool(pool): ReadPool,
     Chrome(chrome): Chrome,
     Path((project_id, event_id)): Path<(u64, String)>,
@@ -62,14 +62,14 @@ pub async fn handler(
         ));
     }
 
-    let nav = queries::projects::get_nav_counts(&pool, project_id).await;
+    let nav = state.nav_counts(project_id).await;
 
     let supplements = event_supplements::get_event_supplements(&pool, &event)
         .await
         .unwrap_or_default();
 
     let sourcemaps: std::collections::HashMap<String, ::sourcemap::SourceMap> =
-        event_supplements::preload_sourcemaps(&pool, &event.payload).await;
+        event_supplements::preload_sourcemaps(&pool, &event.payload, event.project_id).await;
     let resolver = move |debug_id: &str,
                          line: u32,
                          col: u32|

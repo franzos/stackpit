@@ -180,10 +180,11 @@ pub async fn get_attachment_data(
     Ok(row.map(|r| (r.get("data"), r.get("content_type"))))
 }
 
-/// Preload sourcemaps referenced by debug_meta.images (returns debug_id → SourceMap map).
+/// Preload sourcemaps referenced by debug_meta.images (returns debug_id -> SourceMap map).
 pub async fn preload_sourcemaps(
     pool: &DbPool,
     payload: &serde_json::Value,
+    project_id: u64,
 ) -> std::collections::HashMap<String, ::sourcemap::SourceMap> {
     let mut map = std::collections::HashMap::new();
 
@@ -211,7 +212,7 @@ pub async fn preload_sourcemaps(
             continue;
         }
 
-        match crate::ingest::sourcemap::load_sourcemap(pool, &debug_id).await {
+        match crate::ingest::sourcemap::load_sourcemap(pool, &debug_id, project_id).await {
             Ok(Some(sm)) => {
                 map.insert(debug_id, sm);
             }

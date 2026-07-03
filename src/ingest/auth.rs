@@ -80,13 +80,87 @@ pub type AuthCache = Arc<dashmap::DashMap<String, CacheEntry>>;
 
 pub const AUTH_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(300);
 
-/// Drops all cached entries for a project (call when project settings change).
-pub fn invalidate_project(cache: &AuthCache, project_id: u64) {
-    cache.retain(|_, entry| entry.project_id != project_id);
+/// A definitive denial worth caching so an unknown-key flood can't re-hit the DB.
+#[derive(Clone, Copy)]
+pub enum Denial {
+    Archived,
+    Denied(&'static str),
+    MaxProjects,
 }
 
-pub fn invalidate_key(cache: &AuthCache, key: &str) {
+impl From<Denial> for AuthError {
+    fn from(d: Denial) -> Self {
+        match d {
+            Denial::Archived => AuthError::Archived,
+            Denial::Denied(msg) => AuthError::Denied(msg),
+            Denial::MaxProjects => AuthError::MaxProjects,
+        }
+    }
+}
+
+pub struct NegativeEntry {
+    pub denial: Denial,
+    pub inserted_at: std::time::Instant,
+}
+
+/// Keyed by `(sentry_key, project_id)` so a denial for one pair never masks a valid pair, and per-project/per-key invalidation stays exact.
+pub type NegativeAuthCache = Arc<dashmap::DashMap<(String, u64), NegativeEntry>>;
+
+/// Short so a key that later becomes valid is denied for at most this long.
+pub const NEGATIVE_AUTH_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(45);
+
+const NEGATIVE_AUTH_CACHE_MAX_ENTRIES: usize = 50_000;
+
+/// Cached open-mode project count with a short TTL so the unknown-key path skips the `COUNT(DISTINCT)` most of the time; a few seconds of staleness only risks briefly over/under-admitting at the `max_projects` boundary.
+pub type ProjectCountCache = Arc<parking_lot::Mutex<Option<(usize, std::time::Instant)>>>;
+
+pub const PROJECT_COUNT_TTL: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// True while a cache entry of the given age is still within the TTL window.
+fn cache_fresh(entry_age: std::time::Duration, ttl: std::time::Duration) -> bool {
+    entry_age < ttl
+}
+
+/// Drops all cached entries (positive and negative) for a project; call when project settings change so an unarchive/registration clears stale denials.
+pub fn invalidate_project(cache: &AuthCache, negative: &NegativeAuthCache, project_id: u64) {
+    cache.retain(|_, entry| entry.project_id != project_id);
+    negative.retain(|(_, pid), _| *pid != project_id);
+}
+
+pub fn invalidate_key(cache: &AuthCache, negative: &NegativeAuthCache, key: &str) {
     cache.remove(key);
+    negative.retain(|(k, _), _| k != key);
+}
+
+fn negative_cache_insert(state: &AppState, sentry_key: &str, project_id: u64, denial: Denial) {
+    let cache = &state.negative_auth_cache;
+    if cache.len() > NEGATIVE_AUTH_CACHE_MAX_ENTRIES {
+        cache.retain(|_, e| cache_fresh(e.inserted_at.elapsed(), NEGATIVE_AUTH_CACHE_TTL));
+    }
+    cache.insert(
+        (sentry_key.to_owned(), project_id),
+        NegativeEntry {
+            denial,
+            inserted_at: std::time::Instant::now(),
+        },
+    );
+}
+
+/// Cached open-mode project count. Recomputes and stores on a stale/absent entry.
+async fn cached_project_count(state: &AppState) -> usize {
+    {
+        let guard = state.project_count_cache.lock();
+        if let Some((count, at)) = guard.as_ref() {
+            if cache_fresh(at.elapsed(), PROJECT_COUNT_TTL) {
+                return *count;
+            }
+        }
+    }
+    let count = queries::projects::count_distinct_projects(&state.pool)
+        .await
+        .unwrap_or(0);
+    *state.project_count_cache.lock() = Some((count, std::time::Instant::now()));
+    count
 }
 
 const AUTH_CACHE_MAX_ENTRIES: usize = 50_000;
@@ -131,10 +205,26 @@ pub async fn validate_project_key(
             .remove_if(sentry_key, |_, e| e.inserted_at.elapsed() >= AUTH_CACHE_TTL);
     }
 
+    // Serve definitive denials from the negative cache without any DB query; a deliberate timing side channel, since absorbing an unknown-key DB flood is worth more than uniform response latency here.
+    if let Some(entry) = state
+        .negative_auth_cache
+        .get(&(sentry_key.to_owned(), project_id))
+    {
+        if cache_fresh(entry.inserted_at.elapsed(), NEGATIVE_AUTH_CACHE_TTL) {
+            return Err(entry.denial.into());
+        }
+    }
+
     let pool = &state.pool;
 
-    if let Ok(Some(status)) = queries::projects::get_project_status(pool, project_id).await {
+    // Single status lookup shared between the archived check and the open-mode project-exists check below.
+    let project_status = queries::projects::get_project_status(pool, project_id)
+        .await
+        .ok()
+        .flatten();
+    if let Some(status) = &project_status {
         if status.is_archived() {
+            negative_cache_insert(state, sentry_key, project_id, Denial::Archived);
             return Err(AuthError::Archived);
         }
     }
@@ -162,6 +252,12 @@ pub async fn validate_project_key(
                     );
                 }
                 _ => {
+                    negative_cache_insert(
+                        state,
+                        sentry_key,
+                        project_id,
+                        Denial::Denied("project or key denied"),
+                    );
                     return Err(AuthError::Denied("project or key denied"));
                 }
             }
@@ -170,6 +266,12 @@ pub async fn validate_project_key(
             match queries::projects::get_project_key(pool, sentry_key).await {
                 Ok(Some(key)) => {
                     if key.project_id != project_id {
+                        negative_cache_insert(
+                            state,
+                            sentry_key,
+                            project_id,
+                            Denial::Denied("key/project mismatch"),
+                        );
                         return Err(AuthError::Denied("key/project mismatch"));
                     }
                     state.auth_cache.insert(
@@ -184,22 +286,22 @@ pub async fn validate_project_key(
                 Ok(None) => {
                     // First DSN wins: auto-provision only when the project doesn't exist yet,
                     // else a client could mint a key by guessing project_id with random hex.
-                    let project_exists = queries::projects::get_project_status(pool, project_id)
-                        .await
-                        .ok()
-                        .flatten()
-                        .is_some();
-                    if project_exists {
+                    if project_status.is_some() {
+                        negative_cache_insert(
+                            state,
+                            sentry_key,
+                            project_id,
+                            Denial::Denied("unknown key for existing project"),
+                        );
                         return Err(AuthError::Denied("unknown key for existing project"));
                     }
-                    let project_count = queries::projects::count_distinct_projects(pool)
-                        .await
-                        .unwrap_or(0);
+                    let project_count = cached_project_count(state).await;
                     if project_count >= state.config.filter.max_projects {
                         tracing::warn!(
                             "open mode: max projects ({}) reached, rejecting unknown key",
                             state.config.filter.max_projects
                         );
+                        negative_cache_insert(state, sentry_key, project_id, Denial::MaxProjects);
                         return Err(AuthError::MaxProjects);
                     }
                     auto_register_key(state, sentry_key, project_id).await;
@@ -339,5 +441,147 @@ mod tests {
         let (auth, project_id) = extract_from_dsn("https://key@host/42/").unwrap();
         assert_eq!(auth.sentry_key, "key");
         assert_eq!(project_id, 42);
+    }
+
+    use std::time::{Duration, Instant};
+
+    fn new_negative_cache() -> NegativeAuthCache {
+        Arc::new(dashmap::DashMap::new())
+    }
+
+    fn stale_instant(secs: u64) -> Instant {
+        Instant::now()
+            .checked_sub(Duration::from_secs(secs))
+            .expect("test clock underflow")
+    }
+
+    #[test]
+    fn cache_fresh_respects_ttl() {
+        assert!(cache_fresh(Duration::from_secs(5), Duration::from_secs(15)));
+        assert!(!cache_fresh(
+            Duration::from_secs(15),
+            Duration::from_secs(15)
+        ));
+        assert!(!cache_fresh(
+            Duration::from_secs(20),
+            Duration::from_secs(15)
+        ));
+    }
+
+    #[test]
+    fn denial_roundtrips_to_auth_error() {
+        assert!(matches!(
+            AuthError::from(Denial::Archived),
+            AuthError::Archived
+        ));
+        assert!(matches!(
+            AuthError::from(Denial::Denied("x")),
+            AuthError::Denied("x")
+        ));
+        assert!(matches!(
+            AuthError::from(Denial::MaxProjects),
+            AuthError::MaxProjects
+        ));
+    }
+
+    #[test]
+    fn negative_entry_fresh_within_ttl_and_expires() {
+        let cache = new_negative_cache();
+        cache.insert(
+            ("k".to_owned(), 7),
+            NegativeEntry {
+                denial: Denial::Denied("nope"),
+                inserted_at: Instant::now(),
+            },
+        );
+        let entry = cache.get(&("k".to_owned(), 7)).unwrap();
+        assert!(cache_fresh(
+            entry.inserted_at.elapsed(),
+            NEGATIVE_AUTH_CACHE_TTL
+        ));
+        drop(entry);
+
+        cache.insert(
+            ("k".to_owned(), 7),
+            NegativeEntry {
+                denial: Denial::Denied("nope"),
+                inserted_at: stale_instant(NEGATIVE_AUTH_CACHE_TTL.as_secs() + 1),
+            },
+        );
+        let entry = cache.get(&("k".to_owned(), 7)).unwrap();
+        assert!(!cache_fresh(
+            entry.inserted_at.elapsed(),
+            NEGATIVE_AUTH_CACHE_TTL
+        ));
+    }
+
+    #[test]
+    fn invalidate_key_clears_negative_entries() {
+        let positive: AuthCache = Arc::new(dashmap::DashMap::new());
+        let negative = new_negative_cache();
+        negative.insert(
+            ("k".to_owned(), 1),
+            NegativeEntry {
+                denial: Denial::Archived,
+                inserted_at: Instant::now(),
+            },
+        );
+        negative.insert(
+            ("other".to_owned(), 1),
+            NegativeEntry {
+                denial: Denial::Archived,
+                inserted_at: Instant::now(),
+            },
+        );
+        invalidate_key(&positive, &negative, "k");
+        assert!(negative.get(&("k".to_owned(), 1)).is_none());
+        assert!(negative.get(&("other".to_owned(), 1)).is_some());
+    }
+
+    #[test]
+    fn invalidate_project_clears_negative_entries() {
+        let positive: AuthCache = Arc::new(dashmap::DashMap::new());
+        let negative = new_negative_cache();
+        negative.insert(
+            ("k".to_owned(), 1),
+            NegativeEntry {
+                denial: Denial::MaxProjects,
+                inserted_at: Instant::now(),
+            },
+        );
+        negative.insert(
+            ("k".to_owned(), 2),
+            NegativeEntry {
+                denial: Denial::MaxProjects,
+                inserted_at: Instant::now(),
+            },
+        );
+        invalidate_project(&positive, &negative, 1);
+        assert!(negative.get(&("k".to_owned(), 1)).is_none());
+        assert!(negative.get(&("k".to_owned(), 2)).is_some());
+    }
+
+    // Mirrors the archive -> denied-ingest -> unarchive flow: an Archived denial cached while the project was archived must be gone once it's unarchived, so a valid key passes without waiting out NEGATIVE_AUTH_CACHE_TTL.
+    #[test]
+    fn unarchive_clears_cached_archived_denial() {
+        let positive: AuthCache = Arc::new(dashmap::DashMap::new());
+        let negative = new_negative_cache();
+        negative.insert(
+            ("valid_key".to_owned(), 42),
+            NegativeEntry {
+                denial: Denial::Archived,
+                inserted_at: Instant::now(),
+            },
+        );
+        let entry = negative.get(&("valid_key".to_owned(), 42)).unwrap();
+        assert!(matches!(entry.denial, Denial::Archived));
+        assert!(cache_fresh(
+            entry.inserted_at.elapsed(),
+            NEGATIVE_AUTH_CACHE_TTL
+        ));
+        drop(entry);
+
+        invalidate_project(&positive, &negative, 42);
+        assert!(negative.get(&("valid_key".to_owned(), 42)).is_none());
     }
 }

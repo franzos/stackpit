@@ -21,12 +21,12 @@ const ISSUE_UPSERT_CHUNK_SIZE: usize = 3600;
 async fn detect_existing_issue_statuses(
     tx: &mut sqlx::Transaction<'_, crate::db::Db>,
     fingerprints: &[&str],
-) -> HashMap<String, String> {
+) -> Result<HashMap<String, String>> {
     use sqlx::Row;
 
     let mut statuses = HashMap::with_capacity(fingerprints.len());
     if fingerprints.is_empty() {
-        return statuses;
+        return Ok(statuses);
     }
 
     for chunk in fingerprints.chunks(TRIGGER_CHUNK_SIZE) {
@@ -39,13 +39,8 @@ async fn detect_existing_issue_statuses(
         }
         sep.push_unseparated(")");
 
-        let rows = match builder.build().fetch_all(&mut **tx).await {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!("detect_existing_issue_statuses failed: {e}");
-                return statuses;
-            }
-        };
+        // Propagate so a transient DB error aborts the tx (and retries) instead of returning a partial map that misreads existing issues as new.
+        let rows = builder.build().fetch_all(&mut **tx).await?;
 
         for row in &rows {
             let fp: String = row.get("fingerprint");
@@ -54,7 +49,7 @@ async fn detect_existing_issue_statuses(
         }
     }
 
-    statuses
+    Ok(statuses)
 }
 
 /// The actual aggregation logic inside a transaction.
@@ -74,7 +69,7 @@ pub(super) async fn flush_aggregation_inner(
     let mut threshold_candidates = Vec::new();
 
     let fingerprints: Vec<&str> = accumulators.issues.keys().map(|s| s.as_str()).collect();
-    let existing_statuses = detect_existing_issue_statuses(tx, &fingerprints).await;
+    let existing_statuses = detect_existing_issue_statuses(tx, &fingerprints).await?;
 
     let now = chrono::Utc::now().timestamp();
 

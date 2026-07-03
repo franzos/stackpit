@@ -282,7 +282,7 @@ pub async fn store_sourcemap(pool: &DbPool, entry: &SourcemapEntry, project_id: 
     sqlx::query(sql!(
         "INSERT INTO sourcemaps (debug_id, source_url, data, project_id)
          VALUES (?1, ?2, ?3, ?4)
-         ON CONFLICT (debug_id) DO UPDATE SET data = ?3, source_url = ?2"
+         ON CONFLICT (project_id, debug_id) DO UPDATE SET data = ?3, source_url = ?2"
     ))
     .bind(&entry.debug_id)
     .bind(entry.source_url.as_deref())
@@ -388,12 +388,19 @@ pub async fn delete_chunks(pool: &DbPool, checksums: &[String], project_id: u64)
     Ok(())
 }
 
-/// Load and decompress a sourcemap by debug_id, then parse it.
-pub async fn load_sourcemap(pool: &DbPool, debug_id: &str) -> Result<Option<sourcemap::SourceMap>> {
-    let row = sqlx::query(sql!("SELECT data FROM sourcemaps WHERE debug_id = ?1"))
-        .bind(debug_id)
-        .fetch_optional(pool)
-        .await?;
+/// Load and decompress a sourcemap by debug_id (scoped to project_id), then parse it.
+pub async fn load_sourcemap(
+    pool: &DbPool,
+    debug_id: &str,
+    project_id: u64,
+) -> Result<Option<sourcemap::SourceMap>> {
+    let row = sqlx::query(sql!(
+        "SELECT data FROM sourcemaps WHERE debug_id = ?1 AND project_id = ?2"
+    ))
+    .bind(debug_id)
+    .bind(project_id as i64)
+    .fetch_optional(pool)
+    .await?;
 
     let row = match row {
         Some(r) => r,
@@ -428,4 +435,52 @@ pub async fn cleanup_stale_chunks(pool: &DbPool, max_age_secs: i64) -> Result<u6
         .await?;
 
     Ok(result.rows_affected())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::open_test_pool;
+
+    fn map_with_source(source: &str) -> Vec<u8> {
+        format!(
+            r#"{{"version":3,"sources":["{source}"],"names":[],"mappings":"AAAA","sourcesContent":["x"]}}"#
+        )
+        .into_bytes()
+    }
+
+    fn entry(debug_id: &str, source: &str) -> SourcemapEntry {
+        SourcemapEntry {
+            debug_id: debug_id.to_string(),
+            source_url: None,
+            data: map_with_source(source),
+        }
+    }
+
+    #[tokio::test]
+    async fn load_is_scoped_by_project() {
+        let pool = open_test_pool().await;
+        store_sourcemap(&pool, &entry("dead", "a.js"), 1)
+            .await
+            .unwrap();
+
+        assert!(load_sourcemap(&pool, "dead", 1).await.unwrap().is_some());
+        assert!(load_sourcemap(&pool, "dead", 2).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn upsert_does_not_overwrite_other_project() {
+        let pool = open_test_pool().await;
+        store_sourcemap(&pool, &entry("beef", "a.js"), 1)
+            .await
+            .unwrap();
+        store_sourcemap(&pool, &entry("beef", "b.js"), 2)
+            .await
+            .unwrap();
+
+        let sm1 = load_sourcemap(&pool, "beef", 1).await.unwrap().unwrap();
+        let sm2 = load_sourcemap(&pool, "beef", 2).await.unwrap().unwrap();
+        assert_eq!(sm1.get_source(0), Some("a.js"));
+        assert_eq!(sm2.get_source(0), Some("b.js"));
+    }
 }

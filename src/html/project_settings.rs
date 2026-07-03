@@ -213,7 +213,11 @@ pub async fn archive_project(
         }
         Ok(_) => {
             // Flush the auth cache or ingestion keeps working until the entry expires.
-            crate::ingest::auth::invalidate_project(&state.auth_cache, project_id);
+            crate::ingest::auth::invalidate_project(
+                &state.auth_cache,
+                &state.negative_auth_cache,
+                project_id,
+            );
             render_general(
                 &state,
                 project_id,
@@ -245,7 +249,15 @@ pub async fn unarchive_project(
             chrome.t("common-error-prefix"),
             chrome.tv1("flash-not-found-project", "id", &project_id.to_string())
         ),
-        Ok(_) => chrome.t("flash-project-unarchived"),
+        Ok(_) => {
+            // Drop the negative Archived denials or valid keys stay rejected until TTL.
+            crate::ingest::auth::invalidate_project(
+                &state.auth_cache,
+                &state.negative_auth_cache,
+                project_id,
+            );
+            chrome.t("flash-project-unarchived")
+        }
         Err(e) => chrome.err(e),
     };
     render_general(&state, project_id, Some(msg), &chrome).await
@@ -297,7 +309,7 @@ async fn render_general(
         .and_then(|i| i.source.clone())
         .unwrap_or_else(|| "auto".to_string());
 
-    let nav = queries::projects::get_nav_counts(&state.pool, project_id).await;
+    let nav = state.nav_counts(project_id).await;
 
     let tmpl = ProjectSettingsTemplate {
         project_id,
@@ -403,7 +415,11 @@ pub async fn delete_key(
             .await
         }
         Ok(_) => {
-            crate::ingest::auth::invalidate_key(&state.auth_cache, &public_key);
+            crate::ingest::auth::invalidate_key(
+                &state.auth_cache,
+                &state.negative_auth_cache,
+                &public_key,
+            );
             render_keys(
                 &state,
                 project_id,
@@ -426,7 +442,7 @@ async fn render_keys(
         .await
         .unwrap_or_default();
 
-    let nav = queries::projects::get_nav_counts(&state.pool, project_id).await;
+    let nav = state.nav_counts(project_id).await;
 
     let dsn = if let Some(first_key) = keys.first() {
         state
@@ -498,8 +514,14 @@ pub async fn generate_sourcemap_key(
 
     let prefix = &raw_key[..12];
 
-    match queries::api_keys::create_api_key(&state.pool, project_id, "sourcemap", &hash, prefix)
-        .await
+    match queries::api_keys::create_api_key(
+        &state.writer_pool,
+        project_id,
+        "sourcemap",
+        &hash,
+        prefix,
+    )
+    .await
     {
         Ok(()) => render_sourcemaps(&state, project_id, raw_key, None, &chrome).await,
         Err(e) => {
@@ -526,7 +548,7 @@ async fn render_sourcemaps(
         .await
         .unwrap_or(None);
 
-    let nav = queries::projects::get_nav_counts(&state.pool, project_id).await;
+    let nav = state.nav_counts(project_id).await;
 
     let sentry_url = state.config.server.dsn_base();
 

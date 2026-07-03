@@ -7,6 +7,12 @@ use super::types::{EventFilter, IssueFilter};
 
 use crate::db::DbPool;
 
+/// Per-chunk row cap; keeps each delete transaction short so the ingest writer can interleave.
+const CHUNK_LIMIT: i64 = 5000;
+
+/// Pause between chunks so a waiting writer can grab the DB write lock.
+const CHUNK_PAUSE: std::time::Duration = std::time::Duration::from_millis(100);
+
 /// Resolve a filter down to a list of fingerprints.
 async fn fingerprints_by_filter(
     pool: &DbPool,
@@ -91,12 +97,27 @@ pub async fn bulk_delete_events(
     project_id: Option<u64>,
     org_id: Option<i64>,
 ) -> Result<u64> {
+    bulk_delete_events_chunked(pool, ids, filter, project_id, org_id, CHUNK_LIMIT).await
+}
+
+async fn bulk_delete_events_chunked(
+    pool: &DbPool,
+    ids: Option<&[String]>,
+    filter: Option<&EventFilter>,
+    project_id: Option<u64>,
+    org_id: Option<i64>,
+    chunk_limit: i64,
+) -> Result<u64> {
+    // rowid (sqlite) / ctid (postgres) give a stable per-chunk ordering; see retention.rs.
+    #[cfg(feature = "sqlite")]
+    let rid = "rowid";
+    #[cfg(not(feature = "sqlite"))]
+    let rid = "ctid";
+
     if let Some(ids) = ids {
         if ids.is_empty() {
             return Ok(0);
         }
-
-        let mut tx = pool.begin().await?;
 
         // Collect distinct fingerprints that will be affected before deleting.
         let mut affected_fps: Vec<String> = Vec::new();
@@ -117,27 +138,37 @@ pub async fn bulk_delete_events(
                 qb.push(" AND project_id = ");
                 qb.push_bind(pid as i64);
             }
-            let rows = qb.build().fetch_all(&mut *tx).await?;
+            let rows = qb.build().fetch_all(pool).await?;
             affected_fps.extend(rows.into_iter().map(|row| row.get::<String, _>(0)));
         }
 
-        let mut qb =
-            sqlx::QueryBuilder::<crate::db::Db>::new("DELETE FROM events WHERE event_id IN (");
-        let mut sep = qb.separated(", ");
-        for id in ids {
-            sep.push_bind(id.as_str());
-        }
-        qb.push(")");
-        if let Some(oid) = org_id {
-            qb.push(" AND project_id IN (SELECT project_id FROM projects WHERE org_id = ");
-            qb.push_bind(oid);
+        // Delete one id-chunk per short transaction so the writer actor can interleave.
+        let id_chunks: Vec<&[String]> = ids.chunks(500).collect();
+        let mut deleted: u64 = 0;
+        for (i, chunk) in id_chunks.iter().enumerate() {
+            let mut tx = pool.begin().await?;
+            let mut qb =
+                sqlx::QueryBuilder::<crate::db::Db>::new("DELETE FROM events WHERE event_id IN (");
+            let mut sep = qb.separated(", ");
+            for id in *chunk {
+                sep.push_bind(id.as_str());
+            }
             qb.push(")");
-        } else if let Some(pid) = project_id {
-            qb.push(" AND project_id = ");
-            qb.push_bind(pid as i64);
+            if let Some(oid) = org_id {
+                qb.push(" AND project_id IN (SELECT project_id FROM projects WHERE org_id = ");
+                qb.push_bind(oid);
+                qb.push(")");
+            } else if let Some(pid) = project_id {
+                qb.push(" AND project_id = ");
+                qb.push_bind(pid as i64);
+            }
+            deleted += qb.build().execute(&mut *tx).await?.rows_affected();
+            tx.commit().await?;
+
+            if i + 1 < id_chunks.len() {
+                tokio::time::sleep(CHUNK_PAUSE).await;
+            }
         }
-        let deleted = qb.build().execute(&mut *tx).await?.rows_affected();
-        tx.commit().await?;
 
         if deleted > 0 {
             super::retention::reconcile_after_event_delete(pool, &affected_fps).await?;
@@ -155,8 +186,6 @@ pub async fn bulk_delete_events(
         if f.project_id.is_none() {
             f.project_id = project_id;
         }
-
-        let mut tx = pool.begin().await?;
 
         // Build filter conditions once, apply to both SELECT and DELETE.
         macro_rules! push_filter {
@@ -234,29 +263,45 @@ pub async fn bulk_delete_events(
         }
         let affected_fps: Vec<String> = sel_qb
             .build()
-            .fetch_all(&mut *tx)
+            .fetch_all(pool)
             .await?
             .into_iter()
             .filter_map(|row| row.get::<Option<String>, _>(0))
             .collect();
 
-        let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new("DELETE FROM events");
-        push_filter!(qb, f);
-        if let Some(oid) = org_id {
-            if f.project_id.is_none() {
-                if has_field_filter {
-                    qb.push(" AND ");
-                } else {
-                    qb.push(" WHERE ");
+        // Chunked delete: each chunk is its own short transaction so the writer actor can interleave flushes, with scoping entirely in the inner SELECT so the outer DELETE only touches in-scope rows.
+        let mut deleted: u64 = 0;
+        loop {
+            let mut tx = pool.begin().await?;
+            let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new(format!(
+                "DELETE FROM events WHERE {rid} IN (SELECT {rid} FROM events"
+            ));
+            push_filter!(qb, f);
+            if let Some(oid) = org_id {
+                if f.project_id.is_none() {
+                    if has_field_filter {
+                        qb.push(" AND ");
+                    } else {
+                        qb.push(" WHERE ");
+                    }
+                    qb.push("project_id IN (SELECT project_id FROM projects WHERE org_id = ");
+                    qb.push_bind(oid);
+                    qb.push(")");
                 }
-                qb.push("project_id IN (SELECT project_id FROM projects WHERE org_id = ");
-                qb.push_bind(oid);
-                qb.push(")");
             }
-        }
+            qb.push(format!(" ORDER BY {rid} LIMIT "));
+            qb.push_bind(chunk_limit);
+            qb.push(")");
 
-        let deleted = qb.build().execute(&mut *tx).await?.rows_affected();
-        tx.commit().await?;
+            let n = qb.build().execute(&mut *tx).await?.rows_affected();
+            tx.commit().await?;
+            deleted += n;
+
+            if n < chunk_limit as u64 {
+                break;
+            }
+            tokio::time::sleep(CHUNK_PAUSE).await;
+        }
 
         if deleted > 0 {
             super::retention::reconcile_after_event_delete(pool, &affected_fps).await?;
@@ -276,6 +321,17 @@ pub async fn bulk_delete_issues(
     project_id: u64,
     since: Option<i64>,
 ) -> Result<u64> {
+    bulk_delete_issues_chunked(pool, fingerprints, filter, project_id, since, CHUNK_LIMIT).await
+}
+
+async fn bulk_delete_issues_chunked(
+    pool: &DbPool,
+    fingerprints: Option<&[String]>,
+    filter: Option<&IssueFilter>,
+    project_id: u64,
+    since: Option<i64>,
+    chunk_limit: i64,
+) -> Result<u64> {
     let fps: Vec<String> = if let Some(fps) = fingerprints {
         // Constrain to project_id before acting; prevents cross-project id injection.
         filter_fingerprints_to_project(pool, fps, project_id).await?
@@ -289,20 +345,42 @@ pub async fn bulk_delete_issues(
         return Ok(0);
     }
 
-    let mut tx = pool.begin().await?;
+    // rowid (sqlite) / ctid (postgres) give a stable per-chunk ordering; see retention.rs.
+    #[cfg(feature = "sqlite")]
+    let rid = "rowid";
+    #[cfg(not(feature = "sqlite"))]
+    let rid = "ctid";
 
+    // Event deletion is the unbounded part (one fingerprint can own hundreds of thousands of events), so delete in row-chunks, each its own short transaction, with project_id + fingerprint scoping inside every inner SELECT.
     for chunk in fps.chunks(500) {
-        let mut qb =
-            sqlx::QueryBuilder::<crate::db::Db>::new("DELETE FROM events WHERE project_id = ");
-        qb.push_bind(project_id as i64);
-        qb.push(" AND fingerprint IN (");
-        let mut sep = qb.separated(", ");
-        for fp in chunk {
-            sep.push_bind(fp.as_str());
+        loop {
+            let mut tx = pool.begin().await?;
+            let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new(format!(
+                "DELETE FROM events WHERE {rid} IN (SELECT {rid} FROM events WHERE project_id = "
+            ));
+            qb.push_bind(project_id as i64);
+            qb.push(" AND fingerprint IN (");
+            let mut sep = qb.separated(", ");
+            for fp in chunk {
+                sep.push_bind(fp.as_str());
+            }
+            qb.push(")");
+            qb.push(format!(" ORDER BY {rid} LIMIT "));
+            qb.push_bind(chunk_limit);
+            qb.push(")");
+
+            let n = qb.build().execute(&mut *tx).await?.rows_affected();
+            tx.commit().await?;
+
+            if n < chunk_limit as u64 {
+                break;
+            }
+            tokio::time::sleep(CHUNK_PAUSE).await;
         }
-        qb.push(")");
-        qb.build().execute(&mut *tx).await?;
     }
+
+    // Metadata cleanup is bounded by the fingerprint (issue) count, so it stays a single final transaction.
+    let mut tx = pool.begin().await?;
 
     for chunk in fps.chunks(500) {
         let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new(
@@ -330,14 +408,16 @@ pub async fn bulk_delete_issues(
         deleted += qb.build().execute(&mut *tx).await?.rows_affected();
     }
 
+    tx.commit().await?;
+
+    // Vacuum outside any transaction so it doesn't hold the write lock.
+    #[cfg(feature = "sqlite")]
     if deleted > 0 {
-        #[cfg(feature = "sqlite")]
-        sqlx::query("PRAGMA incremental_vacuum")
-            .execute(&mut *tx)
-            .await?;
+        if let Err(e) = sqlx::query("PRAGMA incremental_vacuum").execute(pool).await {
+            tracing::warn!("bulk_delete_issues: incremental_vacuum failed: {e}");
+        }
     }
 
-    tx.commit().await?;
     Ok(deleted)
 }
 
@@ -562,6 +642,159 @@ mod tests {
             .unwrap()
             .get(0);
         assert_eq!(status, "resolved");
+    }
+
+    // A by-filter delete that spans more than one chunk removes every targeted row, leaves other projects untouched, and reconciles the emptied issue.
+    #[tokio::test]
+    async fn bulk_delete_events_filter_spans_multiple_chunks() {
+        let pool = open_test_db().await;
+        for i in 0..5 {
+            insert_test_event(
+                &pool,
+                &format!("m{i}"),
+                1,
+                100 + i,
+                Some("fp1"),
+                Some("error"),
+                Some("A"),
+            )
+            .await;
+        }
+        insert_test_event(&pool, "keep", 2, 100, Some("fp2"), Some("error"), Some("B")).await;
+        insert_test_issue(
+            &pool,
+            "fp1",
+            1,
+            Some("A"),
+            Some("error"),
+            100,
+            104,
+            5,
+            "unresolved",
+        )
+        .await;
+        insert_test_issue(
+            &pool,
+            "fp2",
+            2,
+            Some("B"),
+            Some("error"),
+            100,
+            100,
+            1,
+            "unresolved",
+        )
+        .await;
+
+        let filter = EventFilter {
+            level: Some("error".to_string()),
+            project_id: Some(1),
+            ..Default::default()
+        };
+        // chunk_limit 2 over 5 rows forces three chunks.
+        let deleted = bulk_delete_events_chunked(&pool, None, Some(&filter), None, None, 2)
+            .await
+            .unwrap();
+        assert_eq!(deleted, 5);
+
+        let p1: i64 = sqlx::query("SELECT COUNT(*) FROM events WHERE project_id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(p1, 0, "all targeted rows gone");
+
+        let p2: i64 = sqlx::query("SELECT COUNT(*) FROM events WHERE project_id = 2")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(p2, 1, "other project untouched");
+
+        // fp1 emptied -> reconciled away; fp2 untouched.
+        let fp1: Option<i64> =
+            sqlx::query_scalar("SELECT event_count FROM issues WHERE fingerprint = 'fp1'")
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
+        assert_eq!(fp1, None, "emptied issue reconciled away");
+        let fp2: Option<i64> =
+            sqlx::query_scalar("SELECT event_count FROM issues WHERE fingerprint = 'fp2'")
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
+        assert_eq!(fp2, Some(1), "other project's issue survives");
+    }
+
+    // Deleting an issue whose events span more than one chunk removes all its events and the issue, leaving other projects untouched.
+    #[tokio::test]
+    async fn bulk_delete_issues_events_span_multiple_chunks() {
+        let pool = open_test_db().await;
+        for i in 0..5 {
+            insert_test_event(
+                &pool,
+                &format!("i{i}"),
+                1,
+                100 + i,
+                Some("fp1"),
+                Some("error"),
+                Some("A"),
+            )
+            .await;
+        }
+        insert_test_event(&pool, "keep", 2, 100, Some("fp2"), Some("error"), Some("B")).await;
+        insert_test_issue(
+            &pool,
+            "fp1",
+            1,
+            Some("A"),
+            Some("error"),
+            100,
+            104,
+            5,
+            "unresolved",
+        )
+        .await;
+        insert_test_issue(
+            &pool,
+            "fp2",
+            2,
+            Some("B"),
+            Some("error"),
+            100,
+            100,
+            1,
+            "unresolved",
+        )
+        .await;
+
+        // chunk_limit 2 over 5 events forces three chunks.
+        let deleted =
+            bulk_delete_issues_chunked(&pool, Some(&["fp1".to_string()]), None, 1, None, 2)
+                .await
+                .unwrap();
+        assert_eq!(deleted, 1, "one issue deleted");
+
+        let p1: i64 = sqlx::query("SELECT COUNT(*) FROM events WHERE project_id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(p1, 0, "all fp1 events gone");
+
+        let remaining: i64 = sqlx::query("SELECT COUNT(*) FROM events")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(remaining, 1, "other project's event survives");
+
+        let issues: i64 = sqlx::query("SELECT COUNT(*) FROM issues WHERE fingerprint = 'fp2'")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(issues, 1, "other project's issue survives");
     }
 
     #[tokio::test]

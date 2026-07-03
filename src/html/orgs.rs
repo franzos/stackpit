@@ -168,7 +168,7 @@ pub async fn create_org_invite(
     let ttl_secs = form.ttl_secs.unwrap_or(7 * 24 * 3600);
 
     let token = match create_invite(
-        &state.pool,
+        &state.writer_pool,
         path_org_id,
         role,
         email,
@@ -284,7 +284,7 @@ pub async fn set_org_slug(
         }
     }
 
-    match rename_org_slug(&state.pool, path_org_id, &form.slug).await {
+    match rename_org_slug(&state.writer_pool, path_org_id, &form.slug).await {
         Ok(RenameOutcome::Renamed) => {
             Redirect::to(&format!("/web/organizations/{path_org_id}/members")).into_response()
         }
@@ -359,7 +359,7 @@ pub async fn post_invite_accept(
         }
     };
 
-    match accept_invite(&state.pool, &token, user.user_id).await {
+    match accept_invite(&state.writer_pool, &token, user.user_id).await {
         Ok(_) => Redirect::to("/web/").into_response(),
         Err(e) => html_error(StatusCode::FORBIDDEN, &e.to_string()),
     }
@@ -567,7 +567,7 @@ pub async fn create_org(
         .unwrap_or(name);
     let slug = slugify(slug_src);
 
-    match create_native_org(&state.pool, user.user_id, &slug, name).await {
+    match create_native_org(&state.writer_pool, user.user_id, &slug, name).await {
         Ok(_) => Redirect::to("/web/organizations").into_response(),
         Err(e) => {
             tracing::error!("create_native_org failed: {e:#}");
@@ -652,7 +652,7 @@ pub async fn remove_org_member(
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     }
-    match remove_member_guarded(&state.pool, target_user_id, org_id).await {
+    match remove_member_guarded(&state.writer_pool, target_user_id, org_id).await {
         Ok(0) => html_error_localized(
             StatusCode::FORBIDDEN,
             &crate::i18n::lookup(&chrome.locale, "orgs-err-last-owner-remove"),
@@ -689,7 +689,7 @@ pub async fn set_org_member_role(
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     }
-    match set_member_role_guarded(&state.pool, target_user_id, org_id, new_role).await {
+    match set_member_role_guarded(&state.writer_pool, target_user_id, org_id, new_role).await {
         Ok(0) if new_role == Role::Member => html_error_localized(
             StatusCode::FORBIDDEN,
             &crate::i18n::lookup(&chrome.locale, "orgs-err-last-owner-demote"),
@@ -713,7 +713,7 @@ pub async fn revoke_org_invite(
     if let Err(resp) = check_native_org_owner(&state.pool, &active_org, &opt_auth, org_id).await {
         return resp;
     }
-    if let Err(e) = revoke_invite(&state.pool, invite_id, org_id).await {
+    if let Err(e) = revoke_invite(&state.writer_pool, invite_id, org_id).await {
         tracing::error!("revoke_invite failed: {e:#}");
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }

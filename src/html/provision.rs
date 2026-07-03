@@ -174,7 +174,7 @@ pub async fn provision_submit(
         let name = claim.name.as_deref().unwrap_or(claim.slug.as_str());
         // iss from the signed cookie, never from the form or AuthContext
         if let Err(e) = orgs_queries::provision_forseti_org(
-            &state.pool,
+            &state.writer_pool,
             user.user_id,
             &ps.iss,
             &claim.id,

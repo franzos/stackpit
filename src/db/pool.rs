@@ -20,8 +20,7 @@ pub type DbRow = sqlx::postgres::PgRow;
 
 /// Create a reader pool from a database URL.
 ///
-/// For SQLite this sets up WAL, busy timeout, and read-only PRAGMAs via
-/// `after_connect`. For PostgreSQL it's a straightforward pool.
+/// SQLite sets up WAL, busy timeout, and `query_only=ON` so a stray write on the read pool fails loudly instead of drifting onto it; PostgreSQL is a straightforward pool with no per-connection query_only.
 pub async fn create_read_pool(url: &str) -> Result<DbPool> {
     create_pool_inner(url, None, false).await
 }
@@ -82,7 +81,8 @@ async fn create_sqlite_pool(
             .pragma("mmap_size", "268435456")
             .pragma("wal_autocheckpoint", "1000")
     } else {
-        opts.foreign_keys(true)
+        // Enforce read-only: any write on the read pool errors instead of drifting.
+        opts.foreign_keys(true).pragma("query_only", "ON")
     };
 
     let pool = SqlitePoolOptions::new()
@@ -137,5 +137,25 @@ pub fn resolve_database_url(database_url: Option<&str>, path: &str) -> String {
         path.to_string()
     } else {
         format!("sqlite:{path}?mode=rwc")
+    }
+}
+
+#[cfg(all(test, feature = "sqlite", not(feature = "postgres")))]
+mod tests {
+    use super::*;
+
+    // Proves query_only is live: a write on the read pool must error, not drift on.
+    #[tokio::test]
+    async fn read_pool_rejects_writes() {
+        let pool = create_read_pool("sqlite::memory:").await.unwrap();
+        let err = sqlx::query("CREATE TABLE t (x INTEGER)")
+            .execute(&pool)
+            .await
+            .expect_err("write on read pool must fail under query_only");
+        let msg = err.to_string().to_lowercase();
+        assert!(
+            msg.contains("readonly") || msg.contains("read-only") || msg.contains("read only"),
+            "expected a read-only error, got: {msg}"
+        );
     }
 }

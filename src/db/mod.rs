@@ -91,6 +91,8 @@ pub fn translate_sql(s: &str) -> std::borrow::Cow<'_, str> {
 
 #[cfg(feature = "postgres")]
 pub use pool::create_bg_pool;
+#[cfg(feature = "postgres")]
+pub use pool::create_ingest_pool;
 pub use pool::create_read_pool as create_pool;
 pub use pool::create_write_pool as create_writer_pool;
 

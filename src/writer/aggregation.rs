@@ -145,6 +145,8 @@ pub(super) async fn flush_aggregation_inner(
             item_type: &delta.item_type,
         });
     }
+    // Deterministic key order so concurrent writers acquire row locks in the same order.
+    rows.sort_unstable_by(|a, b| a.fingerprint.cmp(b.fingerprint));
 
     for chunk in rows.chunks(ISSUE_UPSERT_CHUNK_SIZE) {
         let mut builder = QueryBuilder::<crate::db::Db>::new(
@@ -187,12 +189,13 @@ pub(super) async fn flush_aggregation_inner(
         builder.build().execute(&mut **tx).await?;
     }
 
-    let hll_fingerprints: Vec<&str> = accumulators
+    let mut hll_fingerprints: Vec<&str> = accumulators
         .issues
         .iter()
         .filter(|(_, d)| d.has_hll_data)
         .map(|(fp, _)| fp.as_str())
         .collect();
+    hll_fingerprints.sort_unstable();
 
     if !hll_fingerprints.is_empty() {
         let mut existing_hlls: HashMap<String, Vec<u8>> = HashMap::new();
@@ -306,6 +309,15 @@ async fn flush_session_aggregates(
             last_seen,
         });
     }
+    // Deterministic key order so concurrent writers acquire row locks in the same order.
+    rows.sort_unstable_by(|a, b| {
+        (a.project_id, a.release, a.environment, a.day_bucket).cmp(&(
+            b.project_id,
+            b.release,
+            b.environment,
+            b.day_bucket,
+        ))
+    });
 
     for chunk in rows.chunks(SESSION_UPSERT_CHUNK_SIZE) {
         let mut builder = QueryBuilder::<crate::db::Db>::new(
@@ -465,6 +477,10 @@ async fn flush_transaction_metrics(
             last_seen,
         });
     }
+    // Deterministic key order so concurrent writers acquire row locks in the same order.
+    rows.sort_unstable_by(|a, b| {
+        (a.project_id, a.name, a.hour_bucket).cmp(&(b.project_id, b.name, b.hour_bucket))
+    });
 
     // Build the "col = table.col + excluded.col" list for the 24 buckets once.
     let bucket_updates: String = (0..24)

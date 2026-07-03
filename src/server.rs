@@ -184,8 +184,29 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
     // Admin direct-writes reuse the actor's pool (same SQLite write connection).
     let admin_writer_pool = writer_pool.clone();
 
-    let (writer_tx, writer_join) =
-        writer::spawn(writer_pool, Some(notify_tx), Arc::clone(&ingest_stats)).await?;
+    // SQLite is single-writer by nature: one ingest task on the shared write pool.
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
+    let (ingest_pool, ingest_writers) = {
+        if config.storage.ingest_writers > 1 {
+            tracing::warn!("storage.ingest_writers > 1 has no effect on SQLite; using 1");
+        }
+        (writer_pool, 1usize)
+    };
+    // Postgres: dedicated pool sized to the configured concurrent writer count,
+    // plus one connection for the aggregation task.
+    #[cfg(all(feature = "postgres", not(feature = "sqlite")))]
+    let (ingest_pool, ingest_writers) = {
+        let n = config.storage.ingest_writers.clamp(1, 16);
+        (db::create_ingest_pool(&db_url, n + 1).await?, n as usize)
+    };
+
+    let (writer_tx, writer_join) = writer::spawn(
+        ingest_pool,
+        Some(notify_tx),
+        Arc::clone(&ingest_stats),
+        ingest_writers,
+    )
+    .await?;
 
     let discard_stats = Arc::new(DiscardStats::new());
 

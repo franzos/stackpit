@@ -613,7 +613,9 @@ pub async fn bulk_upsert_tag_counts(
         return Ok(());
     }
 
-    let entries: Vec<_> = tags.iter().collect();
+    let mut entries: Vec<_> = tags.iter().collect();
+    // Deterministic key order so concurrent writers acquire row locks in the same order.
+    entries.sort_unstable_by(|a, b| a.0.cmp(b.0));
 
     for chunk in entries.chunks(TAG_CHUNK_SIZE) {
         let mut builder = QueryBuilder::<crate::db::Db>::new(

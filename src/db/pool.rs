@@ -39,6 +39,13 @@ pub async fn create_bg_pool(url: &str) -> Result<DbPool> {
     create_pool_inner(url, Some(2), true).await
 }
 
+/// Create the ingest writer pool sized to the configured number of concurrent
+/// writer tasks. Postgres-only; SQLite is single-writer by nature.
+#[cfg(feature = "postgres")]
+pub async fn create_ingest_pool(url: &str, max_connections: u32) -> Result<DbPool> {
+    create_pool_inner(url, Some(max_connections), true).await
+}
+
 async fn create_pool_inner(
     url: &str,
     max_connections: Option<u32>,

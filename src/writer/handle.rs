@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::Sender;
+use tokio_util::sync::CancellationToken;
 
 use crate::ingest::models::{StorableAttachment, StorableEvent};
 use crate::util::stats::IngestStats;
@@ -15,45 +16,83 @@ type SendError = Box<tokio::sync::mpsc::error::TrySendError<WriteMsg>>;
 /// Cap on total queued payload bytes (channel + in-flight + retry), set above the 200MB per-envelope cumulative cap so a single large-but-legal envelope is never permanently rejected while still bounding memory on a small VM.
 const MAX_QUEUED_PAYLOAD_BYTES: usize = 512 * 1024 * 1024;
 
-/// Public handle to the writer task, wrapping the channel sender with domain
-/// methods so callers don't construct `WriteMsg` variants by hand.
+/// Public handle to the writer task(s), wrapping the channel senders with domain
+/// methods so callers don't construct `WriteMsg` variants by hand. With more
+/// than one writer, sends are distributed round-robin; an envelope always lands
+/// on one writer so its all-or-nothing admission stays a single-channel reserve.
 #[derive(Clone)]
 pub struct WriterHandle {
-    tx: Sender<WriteMsg>,
+    txs: Vec<Sender<WriteMsg>>,
+    rr: Arc<AtomicUsize>,
     ingest_stats: Arc<IngestStats>,
     backpressure_warn_throttle: Arc<Throttle>,
     queued_bytes: Arc<AtomicUsize>,
     max_queued_bytes: usize,
+    /// Out-of-band stop signal for the writer loops, delivered independently of
+    /// the (possibly full) data channel so shutdown can't be lost under backpressure.
+    shutdown: CancellationToken,
 }
 
 impl WriterHandle {
     pub fn new(
-        tx: Sender<WriteMsg>,
+        txs: Vec<Sender<WriteMsg>>,
         ingest_stats: Arc<IngestStats>,
         queued_bytes: Arc<AtomicUsize>,
+        shutdown: CancellationToken,
     ) -> Self {
+        assert!(!txs.is_empty(), "WriterHandle needs at least one sender");
         Self {
-            tx,
+            txs,
+            rr: Arc::new(AtomicUsize::new(0)),
             ingest_stats,
             backpressure_warn_throttle: Arc::new(Throttle::new()),
             queued_bytes,
             max_queued_bytes: MAX_QUEUED_PAYLOAD_BYTES,
+            shutdown,
         }
     }
 
     #[cfg(test)]
     fn new_with_byte_cap(
-        tx: Sender<WriteMsg>,
+        txs: Vec<Sender<WriteMsg>>,
         ingest_stats: Arc<IngestStats>,
         queued_bytes: Arc<AtomicUsize>,
         max_queued_bytes: usize,
     ) -> Self {
         Self {
-            tx,
+            txs,
+            rr: Arc::new(AtomicUsize::new(0)),
             ingest_stats,
             backpressure_warn_throttle: Arc::new(Throttle::new()),
             queued_bytes,
             max_queued_bytes,
+            shutdown: CancellationToken::new(),
+        }
+    }
+
+    fn shard(&self) -> &Sender<WriteMsg> {
+        if self.txs.len() == 1 {
+            return &self.txs[0];
+        }
+        &self.txs[self.rr.fetch_add(1, Ordering::Relaxed) % self.txs.len()]
+    }
+
+    /// Compress on the accept path so the CPU cost spreads across request tasks
+    /// instead of serializing on the writer. Large payloads go through
+    /// `block_in_place` (multi-thread runtime only) to not stall the worker.
+    fn compress_event(event: &mut StorableEvent) {
+        const INLINE_COMPRESS_MAX: usize = 64 * 1024;
+        if event.compressed {
+            return;
+        }
+        let large = event.payload.len() > INLINE_COMPRESS_MAX;
+        let multi_thread = tokio::runtime::Handle::try_current()
+            .map(|h| h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
+            .unwrap_or(false);
+        if large && multi_thread {
+            tokio::task::block_in_place(|| event.compress_payload());
+        } else {
+            event.compress_payload();
         }
     }
 
@@ -70,7 +109,7 @@ impl WriterHandle {
 
     #[cfg(any(test, feature = "integration-tests"))]
     pub fn raw_sender(&self) -> &Sender<WriteMsg> {
-        &self.tx
+        &self.txs[0]
     }
 
     #[cfg(any(test, feature = "integration-tests"))]
@@ -80,8 +119,10 @@ impl WriterHandle {
 
     // -- Event ingestion (fire-and-forget) -----------------------------------
 
-    pub fn send_event(&self, event: StorableEvent) -> Result<(), SendError> {
-        self.warn_if_backpressure();
+    pub fn send_event(&self, mut event: StorableEvent) -> Result<(), SendError> {
+        Self::compress_event(&mut event);
+        let tx = self.shard();
+        self.warn_if_backpressure(tx);
         let msg = WriteMsg::Event(event);
         let size = msg_bytes(&msg);
         if !self.try_reserve_bytes(size) {
@@ -90,7 +131,7 @@ impl WriterHandle {
                 .fetch_add(1, Ordering::Relaxed);
             return Err(Box::new(TrySendError::Full(msg)));
         }
-        match self.tx.try_send(msg) {
+        match tx.try_send(msg) {
             Ok(()) => {
                 self.ingest_stats
                     .events_accepted
@@ -107,9 +148,9 @@ impl WriterHandle {
         }
     }
 
-    fn warn_if_backpressure(&self) {
-        let capacity = self.tx.capacity();
-        let max = self.tx.max_capacity();
+    fn warn_if_backpressure(&self, tx: &Sender<WriteMsg>) {
+        let capacity = tx.capacity();
+        let max = tx.max_capacity();
         let used = max - capacity;
         let pct = (used * 100) / max;
         if pct < 80 {
@@ -129,10 +170,12 @@ impl WriterHandle {
 
     pub fn send_event_with_attachments(
         &self,
-        event: StorableEvent,
+        mut event: StorableEvent,
         attachments: Vec<StorableAttachment>,
     ) -> Result<(), SendError> {
-        self.warn_if_backpressure();
+        Self::compress_event(&mut event);
+        let tx = self.shard();
+        self.warn_if_backpressure(tx);
         let msg = if attachments.is_empty() {
             WriteMsg::Event(event)
         } else {
@@ -145,7 +188,7 @@ impl WriterHandle {
                 .fetch_add(1, Ordering::Relaxed);
             return Err(Box::new(TrySendError::Full(msg)));
         }
-        match self.tx.try_send(msg) {
+        match tx.try_send(msg) {
             Ok(()) => {
                 self.ingest_stats
                     .events_accepted
@@ -163,8 +206,12 @@ impl WriterHandle {
     }
 
     /// All-or-nothing envelope send: reserve the byte budget then one channel permit per event before sending any, so a full or closed channel rejects the whole envelope up front (503) without queuing a prefix, which stops a retrying SDK from re-sending already-accepted events; any rejection returns `false` and leaves the counter unchanged.
-    pub fn send_envelope(&self, events: Vec<(StorableEvent, Vec<StorableAttachment>)>) -> bool {
-        self.warn_if_backpressure();
+    pub fn send_envelope(&self, mut events: Vec<(StorableEvent, Vec<StorableAttachment>)>) -> bool {
+        for (event, _) in events.iter_mut() {
+            Self::compress_event(event);
+        }
+        let tx = self.shard();
+        self.warn_if_backpressure(tx);
         let n = events.len();
         if n == 0 {
             return true;
@@ -179,7 +226,7 @@ impl WriterHandle {
                 .fetch_add(n as u64, Ordering::Relaxed);
             return false;
         }
-        let permits = match self.tx.try_reserve_many(n) {
+        let permits = match tx.try_reserve_many(n) {
             Ok(p) => p,
             Err(_) => {
                 self.queued_bytes.fetch_sub(total, Ordering::Relaxed);
@@ -206,7 +253,18 @@ impl WriterHandle {
     // -- Lifecycle -----------------------------------------------------------
 
     pub fn shutdown(&self) -> Result<(), Box<tokio::sync::mpsc::error::TrySendError<WriteMsg>>> {
-        self.tx.try_send(WriteMsg::Shutdown).map_err(Box::new)
+        // Reliable path: the loops observe this even when the data channel is full.
+        self.shutdown.cancel();
+        // Best-effort sentinel too, so a non-full queue drains in FIFO order before exit.
+        let mut result = Ok(());
+        for tx in &self.txs {
+            if let Err(e) = tx.try_send(WriteMsg::Shutdown) {
+                if result.is_ok() {
+                    result = Err(Box::new(e));
+                }
+            }
+        }
+        result
     }
 }
 
@@ -219,23 +277,28 @@ mod tests {
         StorableEvent::new(id.to_string(), ItemType::Event, vec![0], 1, "k".to_string())
     }
 
+    // Pre-marked compressed so send paths don't shrink the payload; these tests
+    // assert byte-budget accounting against exact sizes.
     fn ev_bytes(id: &str, len: usize) -> StorableEvent {
-        StorableEvent::new(
+        let mut e = StorableEvent::new(
             id.to_string(),
             ItemType::Event,
             vec![0u8; len],
             1,
             "k".to_string(),
-        )
+        );
+        e.compressed = true;
+        e
     }
 
     fn handle_with_capacity(cap: usize) -> (WriterHandle, tokio::sync::mpsc::Receiver<WriteMsg>) {
         let (tx, rx) = tokio::sync::mpsc::channel::<WriteMsg>(cap);
         (
             WriterHandle::new(
-                tx,
+                vec![tx],
                 Arc::new(IngestStats::new()),
                 Arc::new(AtomicUsize::new(0)),
+                CancellationToken::new(),
             ),
             rx,
         )
@@ -248,7 +311,7 @@ mod tests {
         let (tx, rx) = tokio::sync::mpsc::channel::<WriteMsg>(msg_cap);
         (
             WriterHandle::new_with_byte_cap(
-                tx,
+                vec![tx],
                 Arc::new(IngestStats::new()),
                 Arc::new(AtomicUsize::new(0)),
                 byte_cap,

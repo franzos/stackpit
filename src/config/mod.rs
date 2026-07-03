@@ -83,6 +83,9 @@ pub struct StorageConfig {
     pub database_url: Option<String>,
     #[serde(default = "default_retention_days")]
     pub retention_days: u32,
+    /// Concurrent ingest writer tasks (PostgreSQL only; SQLite always uses 1).
+    #[serde(default = "default_ingest_writers")]
+    pub ingest_writers: u32,
 }
 
 #[derive(Debug, Default, Clone, Copy, Deserialize, PartialEq, Eq)]
@@ -275,6 +278,9 @@ fn default_db_path() -> String {
 fn default_retention_days() -> u32 {
     DEFAULT_RETENTION_DAYS
 }
+fn default_ingest_writers() -> u32 {
+    1
+}
 fn default_max_projects() -> usize {
     DEFAULT_MAX_PROJECTS
 }
@@ -354,6 +360,7 @@ impl Default for StorageConfig {
             path: DEFAULT_DB_PATH.to_string(),
             database_url: None,
             retention_days: DEFAULT_RETENTION_DAYS,
+            ingest_writers: default_ingest_writers(),
         }
     }
 }

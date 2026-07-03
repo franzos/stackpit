@@ -61,6 +61,31 @@ Stackpit covers the everyday error-tracking workflow and a useful slice of perfo
 
 Do take this with a grain of salt: the "basic" rows are genuinely basic, and the gaps are intentional. If deep APM, full-fidelity replay, or profiling are load-bearing for you, run the real thing.
 
+## How fast is it?
+
+The repo ships `stackpit-bench`, an open-loop load generator that ramps Sentry error envelopes against a running server until the write path falls behind, then soaks below that knee. The chart below is one run on a laptop: AMD Ryzen 5 7640U (6 cores / 12 threads), 64 GB RAM, NVMe SSD on LUKS-encrypted ext4, Linux 6.19, SQLite backend, with the load generator competing for the same cores.
+
+<img src="docs/benchmark.svg" alt="Ingestion benchmark: target vs accepted vs persisted events/sec" width="100%">
+
+- **Sustained 9,000 events/s for a 5-minute soak with zero rejections** (9,138 rows/s persisted on average), accept latency p50 1.4 ms / p99 4.1 ms, WAL peaking at 8.7 MiB.
+- During the overload probes (18,000 and 26,000/s offered) the server accepted and persisted **15,000-16,500 events/s in bursts** and shed the rest with HTTP 503 backpressure; nothing is dropped silently. Longer runs at 12,000-14,000/s eventually hit brief 503 bursts, hence the conservative sustained figure.
+- Payloads are ~2.9 KiB error events across 100 distinct issues.
+
+To reproduce (fresh database; the default `mode = "open"` auto-provisions the project on the first envelope):
+
+```bash
+cargo build --release -p stackpit-bench
+stackpit serve &
+./target/release/stackpit-bench \
+  --url http://127.0.0.1:3001 --project 1 --key 0123456789abcdef0123456789abcdef \
+  --db stackpit.db --ramp-start 10000 --ramp-step 8000 --ramp-interval 60 \
+  --out bench-results
+```
+
+It ramps until the knee, soaks at 90% of it for 5 minutes, and writes a per-second CSV plus the SVG chart above. Single-machine numbers, so take them with a grain of salt.
+
+Running PostgreSQL instead? Same methodology lands at the same ~9,000 events/s with a single writer; the bottleneck is Stackpit's write path, not the database. Unlike SQLite, PostgreSQL isn't stuck with one writer: set `ingest_writers` in `[storage]` and ingestion fans out across concurrent writer tasks, which comfortably handles 2-3x the single-writer rate.
+
 ## Install
 
 | Method | Command |

@@ -292,6 +292,28 @@ impl StorableEvent {
             trace_status: None,
         }
     }
+
+    /// Compress the payload in place with zstd (idempotent via the `compressed`
+    /// flag). On failure the raw payload is kept; the read path handles both.
+    pub fn compress_payload(&mut self) {
+        if self.compressed {
+            return;
+        }
+        match zstd::encode_all(self.payload.as_slice(), 3) {
+            Ok(compressed) => {
+                self.payload = compressed;
+                self.compressed = true;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    event_id = %self.event_id,
+                    item_type = %self.item_type,
+                    payload_len = self.payload.len(),
+                    "zstd compression failed, storing uncompressed: {e}"
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]

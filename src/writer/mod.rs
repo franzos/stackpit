@@ -16,27 +16,111 @@ use std::sync::Arc;
 
 use accumulator::{Accumulators, BATCH_SIZE};
 use flush::flush_aggregation;
+#[cfg(all(feature = "sqlite", not(feature = "postgres")))]
 use flush::flush_batch;
 use msg::msg_bytes;
 use msg::WriteMsg::*;
+
+/// Total queued-message capacity, split evenly across writer tasks.
+const TOTAL_QUEUE_CAPACITY: usize = 50_000;
 
 pub async fn spawn(
     pool: DbPool,
     notify_tx: Option<tokio::sync::mpsc::Sender<crate::notify::NotificationEvent>>,
     ingest_stats: Arc<IngestStats>,
+    writers: usize,
 ) -> Result<(WriterHandle, tokio::task::JoinHandle<()>)> {
-    let (tx, rx) = tokio::sync::mpsc::channel::<WriteMsg>(50_000);
-    let queued_bytes = Arc::new(AtomicUsize::new(0));
+    use tracing::Instrument;
 
-    let stats = ingest_stats.clone();
-    let loop_bytes = Arc::clone(&queued_bytes);
+    let writers = writers.max(1);
+    let capacity = (TOTAL_QUEUE_CAPACITY / writers).max(1024);
+    let queued_bytes = Arc::new(AtomicUsize::new(0));
+    let shutdown = tokio_util::sync::CancellationToken::new();
+
+    let mut senders = Vec::with_capacity(writers);
+    let mut loops = Vec::with_capacity(writers + 1);
+
+    // SQLite: combined loop(s) — inserts and aggregation share one transaction
+    // where possible, riding the same write connection.
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
+    for i in 0..writers {
+        let (tx, rx) = tokio::sync::mpsc::channel::<WriteMsg>(capacity);
+        senders.push(tx);
+        let pool = pool.clone();
+        let notify_tx = notify_tx.clone();
+        let stats = ingest_stats.clone();
+        let loop_bytes = Arc::clone(&queued_bytes);
+        let loop_shutdown = shutdown.clone();
+        loops.push(tokio::spawn(
+            async move {
+                writer_loop(
+                    &pool,
+                    rx,
+                    notify_tx.as_ref(),
+                    &stats,
+                    &loop_bytes,
+                    &loop_shutdown,
+                )
+                .await;
+                tracing::info!("writer task exiting");
+            }
+            .instrument(tracing::info_span!("writer", w = i)),
+        ));
+    }
+
+    // Postgres: split pipeline — N insert-only workers forward per-batch
+    // scratch accumulators to one aggregation task, so aggregation rows have a
+    // single owner (no cross-writer contention) and insert workers scale.
+    #[cfg(all(feature = "postgres", not(feature = "sqlite")))]
+    {
+        let (agg_tx, agg_rx) = tokio::sync::mpsc::channel::<Accumulators>(256);
+        for i in 0..writers {
+            let (tx, rx) = tokio::sync::mpsc::channel::<WriteMsg>(capacity);
+            senders.push(tx);
+            let pool = pool.clone();
+            let stats = ingest_stats.clone();
+            let loop_bytes = Arc::clone(&queued_bytes);
+            let loop_shutdown = shutdown.clone();
+            let agg_tx = agg_tx.clone();
+            loops.push(tokio::spawn(
+                async move {
+                    insert_worker_loop(&pool, rx, agg_tx, &stats, &loop_bytes, &loop_shutdown)
+                        .await;
+                    tracing::info!("insert worker exiting");
+                }
+                .instrument(tracing::info_span!("writer", w = i)),
+            ));
+        }
+        // Drop the template sender so the aggregation task sees channel close
+        // once every worker has exited.
+        drop(agg_tx);
+        let pool = pool.clone();
+        loops.push(tokio::spawn(
+            async move {
+                aggregation_loop(&pool, agg_rx, notify_tx.as_ref()).await;
+                tracing::info!("aggregation task exiting");
+            }
+            .instrument(tracing::info_span!("aggregator")),
+        ));
+    }
+
+    if writers > 1 {
+        tracing::info!("spawned {writers} concurrent ingest writer tasks");
+    }
+
+    // Single supervisor handle so shutdown code awaits one join; loop panics propagate.
     let join_handle = tokio::spawn(async move {
-        writer_loop(&pool, rx, notify_tx.as_ref(), &stats, &loop_bytes).await;
-        tracing::info!("writer task exiting");
+        for handle in loops {
+            if let Err(e) = handle.await {
+                if let Ok(panic) = e.try_into_panic() {
+                    std::panic::resume_unwind(panic);
+                }
+            }
+        }
     });
 
     Ok((
-        WriterHandle::new(tx, ingest_stats, queued_bytes),
+        WriterHandle::new(senders, ingest_stats, queued_bytes, shutdown),
         join_handle,
     ))
 }
@@ -52,12 +136,14 @@ fn batch_bytes(batch: &[WriteMsg]) -> usize {
     batch.iter().map(msg_bytes).sum()
 }
 
+#[cfg(all(feature = "sqlite", not(feature = "postgres")))]
 async fn writer_loop(
     pool: &DbPool,
     mut rx: tokio::sync::mpsc::Receiver<WriteMsg>,
     notify_tx: Option<&tokio::sync::mpsc::Sender<crate::notify::NotificationEvent>>,
     ingest_stats: &IngestStats,
     queued_bytes: &AtomicUsize,
+    shutdown: &tokio_util::sync::CancellationToken,
 ) {
     use accumulator::AGGREGATION_FLUSH_INTERVAL_MS;
 
@@ -106,6 +192,18 @@ async fn writer_loop(
                 Some(msg) => msg,
             },
 
+            // Reliable stop: fires once the channel has drained to empty (recv is
+            // biased-first, so pending data is always processed before this arm),
+            // even if the Shutdown sentinel never made it into a full channel.
+            _ = shutdown.cancelled() => {
+                if !accumulators.is_empty() {
+                    if let Err(e) = flush_aggregation(pool, &mut accumulators, notify_tx).await {
+                        tracing::error!("shutdown aggregation flush failed: {e}");
+                    }
+                }
+                return;
+            }
+
             _ = tick.tick() => {
                 if !accumulators.is_empty() {
                     if let Err(e) = flush_aggregation(pool, &mut accumulators, notify_tx).await {
@@ -128,7 +226,14 @@ async fn writer_loop(
             match rx.try_recv() {
                 Ok(Shutdown) => {
                     let bytes = batch_bytes(&batch);
-                    flush_batch(pool, &mut batch, &mut accumulators, notify_tx).await;
+                    if !flush_batch(pool, &mut batch, &mut accumulators, notify_tx).await {
+                        // No further loop iteration to retry in; drop with accounting.
+                        let dropped = count_events_in(&batch);
+                        tracing::error!("dropping {dropped} events after repeated flush failures");
+                        ingest_stats
+                            .events_dropped
+                            .fetch_add(dropped, Ordering::Relaxed);
+                    }
                     queued_bytes.fetch_sub(bytes, Ordering::Relaxed);
                     if !accumulators.is_empty() {
                         if let Err(e) = flush_aggregation(pool, &mut accumulators, notify_tx).await
@@ -144,7 +249,14 @@ async fn writer_loop(
                 Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
                 Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
                     let bytes = batch_bytes(&batch);
-                    flush_batch(pool, &mut batch, &mut accumulators, notify_tx).await;
+                    if !flush_batch(pool, &mut batch, &mut accumulators, notify_tx).await {
+                        // No further loop iteration to retry in; drop with accounting.
+                        let dropped = count_events_in(&batch);
+                        tracing::error!("dropping {dropped} events after repeated flush failures");
+                        ingest_stats
+                            .events_dropped
+                            .fetch_add(dropped, Ordering::Relaxed);
+                    }
                     queued_bytes.fetch_sub(bytes, Ordering::Relaxed);
                     if !accumulators.is_empty() {
                         if let Err(e) = flush_aggregation(pool, &mut accumulators, notify_tx).await
@@ -163,6 +275,169 @@ async fn writer_loop(
             retry_pending_bytes = bytes;
         } else {
             queued_bytes.fetch_sub(bytes, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Forward a batch scratch to the aggregation task (awaits if it's behind,
+/// which backpressures this worker naturally).
+#[cfg(all(feature = "postgres", not(feature = "sqlite")))]
+async fn forward_scratch(agg_tx: &tokio::sync::mpsc::Sender<Accumulators>, scratch: Accumulators) {
+    if scratch.is_empty() {
+        return;
+    }
+    if agg_tx.send(scratch).await.is_err() {
+        tracing::error!("aggregation task gone; dropping aggregate deltas");
+    }
+}
+
+/// Insert-only worker for the Postgres split pipeline: drains its queue in
+/// batches, runs the bulk-insert transaction, and forwards the resulting
+/// scratch accumulators to the aggregation task.
+#[cfg(all(feature = "postgres", not(feature = "sqlite")))]
+async fn insert_worker_loop(
+    pool: &DbPool,
+    mut rx: tokio::sync::mpsc::Receiver<WriteMsg>,
+    agg_tx: tokio::sync::mpsc::Sender<Accumulators>,
+    ingest_stats: &IngestStats,
+    queued_bytes: &AtomicUsize,
+    shutdown: &tokio_util::sync::CancellationToken,
+) {
+    use flush::flush_batch_insert_only;
+
+    let mut retry_pending: Vec<WriteMsg> = Vec::new();
+    let mut retry_pending_bytes: usize = 0;
+
+    loop {
+        // Retry a previously failed batch before accepting new work.
+        if !retry_pending.is_empty() {
+            match flush_batch_insert_only(pool, &mut retry_pending).await {
+                Some(scratch) => {
+                    queued_bytes.fetch_sub(retry_pending_bytes, Ordering::Relaxed);
+                    retry_pending.clear();
+                    retry_pending_bytes = 0;
+                    forward_scratch(&agg_tx, scratch).await;
+                }
+                None => {
+                    let dropped = count_events_in(&retry_pending);
+                    tracing::error!("dropping {dropped} events after repeated flush failures");
+                    ingest_stats
+                        .events_dropped
+                        .fetch_add(dropped, Ordering::Relaxed);
+                    queued_bytes.fetch_sub(retry_pending_bytes, Ordering::Relaxed);
+                    retry_pending.clear();
+                    retry_pending_bytes = 0;
+                }
+            }
+        }
+
+        let first = tokio::select! {
+            biased;
+
+            msg = rx.recv() => match msg {
+                Some(Shutdown) | None => return,
+                Some(msg) => msg,
+            },
+
+            // Reliable stop, independent of the (possibly full) data channel.
+            // Biased recv drains pending work first; this arm fires only once empty.
+            _ = shutdown.cancelled() => return,
+        };
+
+        let mut batch = Vec::with_capacity(BATCH_SIZE);
+        batch.push(first);
+        let mut shutdown_after = false;
+        while batch.len() < BATCH_SIZE {
+            match rx.try_recv() {
+                Ok(Shutdown) => {
+                    shutdown_after = true;
+                    break;
+                }
+                Ok(msg @ Event(_)) | Ok(msg @ EventWithAttachments(_, _)) => {
+                    batch.push(msg);
+                }
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                    shutdown_after = true;
+                    break;
+                }
+            }
+        }
+
+        let bytes = batch_bytes(&batch);
+        match flush_batch_insert_only(pool, &mut batch).await {
+            Some(scratch) => {
+                queued_bytes.fetch_sub(bytes, Ordering::Relaxed);
+                forward_scratch(&agg_tx, scratch).await;
+            }
+            None if shutdown_after => {
+                // No further loop iteration to retry in; drop with accounting.
+                let dropped = count_events_in(&batch);
+                tracing::error!("dropping {dropped} events after repeated flush failures");
+                ingest_stats
+                    .events_dropped
+                    .fetch_add(dropped, Ordering::Relaxed);
+                queued_bytes.fetch_sub(bytes, Ordering::Relaxed);
+            }
+            None => {
+                std::mem::swap(&mut retry_pending, &mut batch);
+                retry_pending_bytes = bytes;
+            }
+        }
+        if shutdown_after {
+            return;
+        }
+    }
+}
+
+/// Sole owner of aggregation state and SQL in the Postgres split pipeline:
+/// merges scratch deltas from insert workers, flushes on the timer or size
+/// thresholds, and exits (after a final flush) when every worker is gone.
+#[cfg(all(feature = "postgres", not(feature = "sqlite")))]
+async fn aggregation_loop(
+    pool: &DbPool,
+    mut rx: tokio::sync::mpsc::Receiver<Accumulators>,
+    notify_tx: Option<&tokio::sync::mpsc::Sender<crate::notify::NotificationEvent>>,
+) {
+    use accumulator::AGGREGATION_FLUSH_INTERVAL_MS;
+
+    let mut accumulators = Accumulators::new();
+    let flush_interval = std::time::Duration::from_millis(AGGREGATION_FLUSH_INTERVAL_MS as u64);
+    let mut tick = tokio::time::interval(flush_interval);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // Interval fires immediately; skip that first tick.
+    tick.tick().await;
+
+    loop {
+        tokio::select! {
+            biased;
+
+            scratch = rx.recv() => match scratch {
+                Some(scratch) => {
+                    accumulators.merge(&scratch);
+                    if accumulators.should_flush() {
+                        if let Err(e) = flush_aggregation(pool, &mut accumulators, notify_tx).await {
+                            tracing::error!("aggregation flush failed: {e}");
+                        }
+                    }
+                }
+                None => {
+                    if !accumulators.is_empty() {
+                        if let Err(e) = flush_aggregation(pool, &mut accumulators, notify_tx).await {
+                            tracing::error!("final aggregation flush failed: {e}");
+                        }
+                    }
+                    return;
+                }
+            },
+
+            _ = tick.tick() => {
+                if !accumulators.is_empty() {
+                    if let Err(e) = flush_aggregation(pool, &mut accumulators, notify_tx).await {
+                        tracing::error!("periodic aggregation flush failed: {e}");
+                    }
+                }
+            }
         }
     }
 }
@@ -191,7 +466,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn spawn_and_send_event() {
         let pool = test_pool().await;
-        let (handle, _join) = spawn(pool.clone(), None, test_stats()).await.unwrap();
+        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1).await.unwrap();
 
         handle.send_event(make_event("w1")).unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -206,7 +481,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn spawn_and_send_event_with_attachment() {
         let pool = test_pool().await;
-        let (handle, _join) = spawn(pool.clone(), None, test_stats()).await.unwrap();
+        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1).await.unwrap();
 
         let att = StorableAttachment {
             event_id: "w2".to_string(),
@@ -234,7 +509,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn queued_bytes_returns_to_zero_after_flush() {
         let pool = test_pool().await;
-        let (handle, _join) = spawn(pool.clone(), None, test_stats()).await.unwrap();
+        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1).await.unwrap();
 
         for i in 0..5 {
             let mut e = make_event(&format!("qb{i}"));
@@ -257,7 +532,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn batch_flushing_multiple_events() {
         let pool = test_pool().await;
-        let (handle, _join) = spawn(pool.clone(), None, test_stats()).await.unwrap();
+        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1).await.unwrap();
 
         for i in 0..10 {
             handle.send_event(make_event(&format!("batch{i}"))).unwrap();
@@ -276,7 +551,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn shutdown_without_events() {
         let pool = test_pool().await;
-        let (handle, _join) = spawn(pool.clone(), None, test_stats()).await.unwrap();
+        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1).await.unwrap();
         let _ = handle.shutdown();
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
@@ -284,7 +559,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn insert_event_with_fingerprint_creates_issue() {
         let pool = test_pool().await;
-        let (handle, _join) = spawn(pool.clone(), None, test_stats()).await.unwrap();
+        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1).await.unwrap();
 
         let mut event = make_event("fp1");
         event.fingerprint = Some("abcdef0123456789".to_string());
@@ -619,7 +894,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn periodic_timer_flushes_issues_without_new_events() {
         let pool = test_pool().await;
-        let (handle, _join) = spawn(pool.clone(), None, test_stats()).await.unwrap();
+        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1).await.unwrap();
 
         let mut event = make_event("timer1");
         event.fingerprint = Some("timer_fp_1".to_string());
@@ -655,7 +930,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn periodic_timer_flushes_multiple_fingerprints() {
         let pool = test_pool().await;
-        let (handle, _join) = spawn(pool.clone(), None, test_stats()).await.unwrap();
+        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1).await.unwrap();
 
         for i in 0..5 {
             let mut e = make_event(&format!("multi{i}"));
@@ -682,7 +957,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn periodic_timer_same_fingerprint_across_cycles() {
         let pool = test_pool().await;
-        let (handle, _join) = spawn(pool.clone(), None, test_stats()).await.unwrap();
+        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1).await.unwrap();
 
         let mut e1 = make_event("cross1");
         e1.fingerprint = Some("cross_fp".to_string());
@@ -732,7 +1007,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn periodic_timer_flushes_tags_and_hll() {
         let pool = test_pool().await;
-        let (handle, _join) = spawn(pool.clone(), None, test_stats()).await.unwrap();
+        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1).await.unwrap();
 
         let mut e1 = make_event("th1");
         e1.fingerprint = Some("th_fp".to_string());
@@ -777,7 +1052,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn periodic_timer_handles_subsequent_events() {
         let pool = test_pool().await;
-        let (handle, _join) = spawn(pool.clone(), None, test_stats()).await.unwrap();
+        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1).await.unwrap();
 
         // First event, wait for periodic flush
         let mut e1 = make_event("seq1");
@@ -826,7 +1101,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn periodic_timer_noop_when_empty() {
         let pool = test_pool().await;
-        let (handle, _join) = spawn(pool.clone(), None, test_stats()).await.unwrap();
+        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1).await.unwrap();
 
         // Let a few timer ticks pass with no events sent
         tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
@@ -848,7 +1123,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn periodic_timer_events_near_tick_boundary() {
         let pool = test_pool().await;
-        let (handle, _join) = spawn(pool.clone(), None, test_stats()).await.unwrap();
+        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1).await.unwrap();
 
         // Send first event right away
         let mut e1 = make_event("boundary1");
@@ -1187,6 +1462,53 @@ mod tests {
             s.failure_rate
         );
         assert!(s.p95_ms >= s.p50_ms);
+    }
+
+    /// Two writers with overlapping fingerprints must aggregate exactly like
+    /// one: deltas split across shards, merged without loss or double count.
+    /// Covers the round-robin sharding plus (on Postgres) the split pipeline.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn multi_writer_overlapping_fingerprints_aggregate_exactly() {
+        let pool = test_pool().await;
+        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 2).await.unwrap();
+
+        for i in 0..200 {
+            let mut e = make_event(&format!("mw{i}"));
+            e.fingerprint = Some(format!("mw_fp_{}", i % 4));
+            e.user_identifier = Some(format!("mw-user-{}", i % 10));
+            handle.send_event(e).unwrap();
+        }
+
+        // Batch inserts plus at least one aggregation timer flush.
+        tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+        let _ = handle.shutdown();
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM events WHERE event_id LIKE 'mw%'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(row.0, 200, "all events must persist");
+
+        use sqlx::Row;
+        for fp_i in 0..4 {
+            let row = sqlx::query(crate::db::sql!(
+                "SELECT event_count, user_hll FROM issues WHERE fingerprint = ?1"
+            ))
+            .bind(format!("mw_fp_{fp_i}"))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(
+                row.get::<i64, _>("event_count"),
+                50,
+                "each fingerprint counted exactly once per event"
+            );
+            // Users cycle i % 10 within i % 4 == fp_i: 5 distinct per fingerprint.
+            let hll_blob: Vec<u8> = row.get("user_hll");
+            let hll: HyperLogLog<12> = HyperLogLog::with_registers(hll_blob);
+            assert_eq!(hll.count() as u64, 5, "distinct users per fingerprint");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

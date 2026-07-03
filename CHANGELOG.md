@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- Concurrent ingest writers, configurable via `ingest_writers` (PostgreSQL)
+- `stackpit-bench`: open-loop ingestion benchmark (ramp to knee, soak, CSV + SVG chart)
+
+### Changed
+- Payloads are compressed on the accept path instead of on the writer, raising sustained ingest throughput
+
+### Fixed
+- Writer shutdown is no longer lost under a full queue, and a flush failure during drain no longer drops events without accounting
+
 ## [0.3.9] - 2026-07-03
 
 ### Security

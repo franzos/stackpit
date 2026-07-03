@@ -2,44 +2,49 @@ use crate::db::DbPool;
 use crate::ingest::models::StorableEvent;
 use crate::queries::event_writes;
 use anyhow::Result;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use super::accumulator::Accumulators;
 use super::aggregation::flush_aggregation_inner;
 use super::alerting::check_threshold_alerts;
 use super::msg::WriteMsg;
 
-/// Compress event payloads with zstd. Uses `block_in_place` to move the
-/// CPU-bound compression off the async runtime's cooperative budget.
+/// Compress event payloads with zstd. A fallback: the accept path already
+/// compresses on send, so this is a no-op for events that came through the
+/// `WriterHandle`. Uses `block_in_place` to move any remaining CPU-bound
+/// compression off the async runtime's cooperative budget.
 fn compress_batch(batch: &mut [WriteMsg]) {
     tokio::task::block_in_place(|| {
         for msg in batch.iter_mut() {
-            match msg {
-                WriteMsg::Event(event) | WriteMsg::EventWithAttachments(event, _)
-                    if !event.compressed =>
-                {
-                    match zstd::encode_all(event.payload.as_slice(), 3) {
-                        Ok(compressed) => {
-                            event.payload = compressed;
-                            event.compressed = true;
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                event_id = %event.event_id,
-                                item_type = %event.item_type,
-                                payload_len = event.payload.len(),
-                                "zstd compression failed, storing uncompressed: {e}"
-                            );
-                        }
-                    }
-                }
-                _ => {}
+            if let WriteMsg::Event(event) | WriteMsg::EventWithAttachments(event, _) = msg {
+                event.compress_payload();
             }
         }
     });
 }
 
+/// Per-stage durations of one flush transaction, for bottleneck diagnosis.
+#[derive(Default)]
+struct TxTimings {
+    insert: Duration,
+    agg: Duration,
+    commit: Duration,
+}
+
+fn log_flush_timings(items: usize, agg: bool, compress: Duration, t: &TxTimings) {
+    tracing::debug!(
+        items,
+        agg,
+        compress_us = compress.as_micros() as u64,
+        insert_us = t.insert.as_micros() as u64,
+        agg_us = t.agg.as_micros() as u64,
+        commit_us = t.commit.as_micros() as u64,
+        "batch flush timings"
+    );
+}
+
 /// Flush batch of events + aggregated data in one transaction (retry-safe on failure).
+#[cfg(any(feature = "sqlite", test))]
 pub(super) async fn flush_batch(
     pool: &DbPool,
     batch: &mut [WriteMsg],
@@ -50,7 +55,9 @@ pub(super) async fn flush_batch(
         return true;
     }
 
+    let compress_started = Instant::now();
     compress_batch(batch);
+    let compress = compress_started.elapsed();
 
     // should_flush is evaluated on the pre-batch state, matching prior behavior.
     let should_agg = accumulators.should_flush();
@@ -60,8 +67,8 @@ pub(super) async fn flush_batch(
     if !should_agg {
         // Common path: no clone; do_flush_tx merges the batch scratch into the accumulators only after its commit succeeds, so a failed attempt leaves them clean and the retry is idempotent.
         match do_flush_tx(pool, batch, false, accumulators, &mut pending).await {
-            Ok(()) => {
-                tracing::debug!("flushed batch of {} items", batch.len());
+            Ok(t) => {
+                log_flush_timings(batch.len(), false, compress, &t);
                 return true;
             }
             Err(e) => {
@@ -69,7 +76,8 @@ pub(super) async fn flush_batch(
             }
         }
         match do_flush_tx(pool, batch, false, accumulators, &mut pending).await {
-            Ok(()) => {
+            Ok(t) => {
+                log_flush_timings(batch.len(), false, compress, &t);
                 tracing::info!("batch flush retry succeeded ({} items)", batch.len());
                 true
             }
@@ -85,9 +93,9 @@ pub(super) async fn flush_batch(
         // Aggregation path: do_flush_tx merges the batch scratch into the accumulators before the aggregation flush, so keep a snapshot to revert on failure (neither double-counting nor losing prior deltas).
         let snapshot = accumulators.clone();
         match do_flush_tx(pool, batch, true, accumulators, &mut pending).await {
-            Ok(()) => {
+            Ok(t) => {
                 finalize_agg_flush(accumulators, pending, notify_tx);
-                tracing::debug!("flushed batch of {} items", batch.len());
+                log_flush_timings(batch.len(), true, compress, &t);
                 return true;
             }
             Err(e) => {
@@ -97,8 +105,9 @@ pub(super) async fn flush_batch(
             }
         }
         match do_flush_tx(pool, batch, true, accumulators, &mut pending).await {
-            Ok(()) => {
+            Ok(t) => {
                 finalize_agg_flush(accumulators, pending, notify_tx);
+                log_flush_timings(batch.len(), true, compress, &t);
                 tracing::info!("batch flush retry succeeded ({} items)", batch.len());
                 true
             }
@@ -115,15 +124,19 @@ pub(super) async fn flush_batch(
 }
 
 /// Inserts events and (if ready) flushes aggregated issue/tag/session/txn data in one transaction, building a batch-local scratch from only the rows the insert actually created (SDK-retried duplicates are dropped by the conflict clause and must not inflate counts) and folding it into `accumulators` after commit on the non-agg path, or before the aggregation flush on the agg path so the flush includes this batch.
+#[cfg(any(feature = "sqlite", test))]
 async fn do_flush_tx(
     pool: &DbPool,
     batch: &[WriteMsg],
     should_agg: bool,
     accumulators: &mut Accumulators,
     pending: &mut Vec<crate::notify::NotificationEvent>,
-) -> Result<()> {
+) -> Result<TxTimings> {
+    let mut timings = TxTimings::default();
+    let insert_started = Instant::now();
     let mut tx = pool.begin().await?;
     let new_ids = do_flush_inner(&mut tx, batch).await?;
+    timings.insert = insert_started.elapsed();
 
     let mut scratch = Accumulators::new();
     for msg in batch {
@@ -136,17 +149,87 @@ async fn do_flush_tx(
 
     if should_agg {
         accumulators.merge(&scratch);
+        let agg_started = Instant::now();
         let threshold_candidates = flush_aggregation_inner(&mut tx, accumulators, pending).await?;
+        timings.agg = agg_started.elapsed();
+        let commit_started = Instant::now();
         tx.commit().await?;
+        timings.commit = commit_started.elapsed();
         // Threshold checks run outside the write TX against the pool
         if !threshold_candidates.is_empty() {
             check_threshold_alerts(pool, &threshold_candidates, pending).await;
         }
     } else {
+        let commit_started = Instant::now();
         tx.commit().await?;
+        timings.commit = commit_started.elapsed();
         accumulators.merge(&scratch);
     }
-    Ok(())
+    Ok(timings)
+}
+
+/// Insert-only flush for the split pipeline: one transaction of bulk inserts,
+/// no aggregation SQL. Returns the batch-local scratch of genuinely-new events
+/// for the aggregation task, or None after a failed inline retry (caller
+/// re-queues the batch). Compression is a no-op fallback here.
+#[cfg(all(feature = "postgres", not(feature = "sqlite")))]
+pub(super) async fn flush_batch_insert_only(
+    pool: &DbPool,
+    batch: &mut [WriteMsg],
+) -> Option<Accumulators> {
+    if batch.is_empty() {
+        return Some(Accumulators::new());
+    }
+
+    let compress_started = Instant::now();
+    compress_batch(batch);
+    let compress = compress_started.elapsed();
+
+    match do_insert_tx(pool, batch).await {
+        Ok((scratch, t)) => {
+            log_flush_timings(batch.len(), false, compress, &t);
+            return Some(scratch);
+        }
+        Err(e) => {
+            tracing::warn!("batch flush failed, retrying once: {e}");
+        }
+    }
+    match do_insert_tx(pool, batch).await {
+        Ok((scratch, t)) => {
+            log_flush_timings(batch.len(), false, compress, &t);
+            tracing::info!("batch flush retry succeeded ({} items)", batch.len());
+            Some(scratch)
+        }
+        Err(e2) => {
+            tracing::error!(
+                "batch flush failed after retry ({} items), pending re-queue: {e2}",
+                batch.len()
+            );
+            None
+        }
+    }
+}
+
+#[cfg(all(feature = "postgres", not(feature = "sqlite")))]
+async fn do_insert_tx(pool: &DbPool, batch: &[WriteMsg]) -> Result<(Accumulators, TxTimings)> {
+    let mut timings = TxTimings::default();
+    let insert_started = Instant::now();
+    let mut tx = pool.begin().await?;
+    let new_ids = do_flush_inner(&mut tx, batch).await?;
+    timings.insert = insert_started.elapsed();
+    let commit_started = Instant::now();
+    tx.commit().await?;
+    timings.commit = commit_started.elapsed();
+
+    let mut scratch = Accumulators::new();
+    for msg in batch {
+        if let WriteMsg::Event(event) | WriteMsg::EventWithAttachments(event, _) = msg {
+            if new_ids.contains(&event.event_id) {
+                scratch.accumulate(event);
+            }
+        }
+    }
+    Ok((scratch, timings))
 }
 
 /// Post-commit protocol for an aggregation flush: clear the drained deltas, emit notifications, and reset the flush timer.
@@ -225,9 +308,14 @@ pub(super) async fn flush_aggregation(
     }
 
     let mut pending = Vec::new();
+    let agg_started = Instant::now();
     let mut tx = pool.begin().await?;
     let threshold_candidates = flush_aggregation_inner(&mut tx, accumulators, &mut pending).await?;
     tx.commit().await?;
+    tracing::debug!(
+        agg_us = agg_started.elapsed().as_micros() as u64,
+        "standalone aggregation flush timings"
+    );
 
     // Threshold checks run outside the write TX against the pool
     if !threshold_candidates.is_empty() {

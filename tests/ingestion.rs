@@ -54,10 +54,14 @@ async fn ingest_event_then_query_back() {
     sqlx::query("INSERT INTO project_keys (public_key, project_id, status) VALUES ('test-key', 1, 'active')")
         .execute(&pool).await.unwrap();
 
-    let (writer, _join) =
-        writer::spawn(pool.clone(), None, std::sync::Arc::new(IngestStats::new()))
-            .await
-            .unwrap();
+    let (writer, _join) = writer::spawn(
+        pool.clone(),
+        None,
+        std::sync::Arc::new(IngestStats::new()),
+        1,
+    )
+    .await
+    .unwrap();
     let tx = writer.raw_sender();
 
     let event1 = make_event("evt-001", 1, "fp-001");
@@ -112,10 +116,14 @@ async fn ingest_and_update_issue_status() {
     sqlx::query("INSERT INTO project_keys (public_key, project_id, status) VALUES ('test-key', 1, 'active')")
         .execute(&pool).await.unwrap();
 
-    let (writer, _join) =
-        writer::spawn(pool.clone(), None, std::sync::Arc::new(IngestStats::new()))
-            .await
-            .unwrap();
+    let (writer, _join) = writer::spawn(
+        pool.clone(),
+        None,
+        std::sync::Arc::new(IngestStats::new()),
+        1,
+    )
+    .await
+    .unwrap();
 
     writer
         .send_event(make_event("evt-status-1", 1, "fp-status-001"))

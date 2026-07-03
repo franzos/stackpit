@@ -427,7 +427,7 @@ pub async fn list_all_releases(
         qb.push(")");
     }
 
-    qb.push(" GROUP BY e.project_id, e.release ORDER BY ");
+    qb.push(" GROUP BY e.project_id, e.release, p.name, pt.total ORDER BY ");
     qb.push(sort.as_sql_ident());
     qb.push(" LIMIT ");
     qb.push_bind(page.limit as i64);

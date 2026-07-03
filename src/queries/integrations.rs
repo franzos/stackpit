@@ -317,6 +317,19 @@ mod tests {
     use crate::queries::test_helpers::open_test_db;
     use sqlx::Row;
 
+    // Org 1 is seeded by migrations; any other org must exist to satisfy the FK.
+    async fn ensure_org(pool: &DbPool, org_id: i64) {
+        sqlx::query(sql!(
+            "INSERT INTO organizations (org_id, slug, name) VALUES (?1, ?2, ?2)
+             ON CONFLICT(org_id) DO NOTHING"
+        ))
+        .bind(org_id)
+        .bind(format!("org-{org_id}"))
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
     async fn seed_project_integration(pool: &DbPool, project_id: u64) -> i64 {
         create_integration(
             pool,
@@ -396,6 +409,7 @@ mod tests {
     #[tokio::test]
     async fn list_integrations_scoped_excludes_other_org() {
         let pool = open_test_db().await;
+        ensure_org(&pool, 2).await;
         create_integration(
             &pool,
             1,
@@ -481,6 +495,7 @@ mod tests {
     #[tokio::test]
     async fn list_available_for_project_excludes_other_org_integrations() {
         let pool = open_test_db().await;
+        ensure_org(&pool, 2).await;
         create_integration(
             &pool,
             1,
@@ -520,6 +535,7 @@ mod tests {
     #[tokio::test]
     async fn activate_cross_org_integration_guard_rejects() {
         let pool = open_test_db().await;
+        ensure_org(&pool, 2).await;
         // Integration belongs to org 2; project owner is in org 1.
         let foreign_id = create_integration(
             &pool,

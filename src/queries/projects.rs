@@ -808,18 +808,19 @@ mod tests {
 
     // Ensure the org row exists, then upsert the project with the given org_id.
     async fn set_project_org(pool: &crate::db::DbPool, project_id: i64, org_id: i64) {
-        sqlx::query(
-            "INSERT INTO organizations (org_id, slug, name) VALUES (?1, ?1, ?1)
-             ON CONFLICT(org_id) DO NOTHING",
-        )
+        sqlx::query(sql!(
+            "INSERT INTO organizations (org_id, slug, name) VALUES (?1, ?2, ?2)
+             ON CONFLICT(org_id) DO NOTHING"
+        ))
         .bind(org_id)
+        .bind(format!("org-{org_id}"))
         .execute(pool)
         .await
         .unwrap();
-        sqlx::query(
+        sqlx::query(sql!(
             "INSERT INTO projects (project_id, status, source, org_id) VALUES (?1, 'active', 'auto', ?2)
-             ON CONFLICT(project_id) DO UPDATE SET org_id = excluded.org_id",
-        )
+             ON CONFLICT(project_id) DO UPDATE SET org_id = excluded.org_id"
+        ))
         .bind(project_id)
         .bind(org_id)
         .execute(pool)

@@ -44,6 +44,8 @@ struct IssueListTemplate {
     chrome: PageChrome,
 }
 
+// axum extractors, not a real argument list
+#[allow(clippy::too_many_arguments)]
 pub async fn handler(
     active: ActiveOrg,
     State(state): State<AppState>,

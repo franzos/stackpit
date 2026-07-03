@@ -62,6 +62,27 @@ expression: tmpl.render().unwrap()
                   <a href="/web/lang/de?next=/web/projects/"
                      class="sidebar-link"><span>Deutsch</span></a>
                 
+                  <a href="/web/lang/fr?next=/web/projects/"
+                     class="sidebar-link"><span>Français</span></a>
+                
+                  <a href="/web/lang/es?next=/web/projects/"
+                     class="sidebar-link"><span>Español</span></a>
+                
+                  <a href="/web/lang/it?next=/web/projects/"
+                     class="sidebar-link"><span>Italiano</span></a>
+                
+                  <a href="/web/lang/pt?next=/web/projects/"
+                     class="sidebar-link"><span>Português</span></a>
+                
+                  <a href="/web/lang/ru?next=/web/projects/"
+                     class="sidebar-link"><span>Русский</span></a>
+                
+                  <a href="/web/lang/th?next=/web/projects/"
+                     class="sidebar-link"><span>ไทย</span></a>
+                
+                  <a href="/web/lang/ar?next=/web/projects/"
+                     class="sidebar-link"><span>العربية</span></a>
+                
               </div>
             </details>
             <form method="post" action="/web/logout" class="contents">

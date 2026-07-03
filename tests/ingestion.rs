@@ -16,6 +16,7 @@ fn make_event(event_id: &str, project_id: u64, fingerprint: &str) -> StorableEve
         event_id: event_id.to_string(),
         item_type: ItemType::Event,
         payload: raw,
+        compressed: false,
         project_id,
         public_key: "test-key".to_string(),
         timestamp: 1700000000,

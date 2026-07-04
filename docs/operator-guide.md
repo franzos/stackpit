@@ -6,6 +6,7 @@ Everything beyond getting the binary and starting it: the full configuration ref
 
 - [Configuration](#configuration)
 - [PostgreSQL](#postgresql)
+- [Ingestion tuning](#ingestion-tuning)
 - [Authentication](#authentication)
 - [Organizations & Roles](#organizations--roles)
 - [Secret encryption](#secret-encryption)
@@ -39,6 +40,8 @@ max_body_size = 10485760          # max decompressed body in bytes (default 10MB
 path = "stackpit.db"              # SQLite database path
 database_url = ""                 # full URL, e.g. "postgres://user:pass@host/stackpit" (overrides path)
 retention_days = 90               # auto-delete events older than this (0 = keep forever)
+ingest_writers = 1                # concurrent ingest writer tasks (PostgreSQL only; SQLite always uses 1)
+ingest_batch_size = 2000          # max events per ingest write transaction (see Ingestion tuning)
 
 [filter]
 mode = "open"                     # "open" = auto-provision new projects on first ingest; "closed" = pre-register everything
@@ -79,6 +82,15 @@ database_url = "postgres://user:pass@localhost/stackpit"
 ```
 
 When `database_url` is set it takes precedence over `path`. Migrations run automatically on startup for both backends.
+
+## Ingestion tuning
+
+The defaults are fine for most deployments; ingestion accepts events into a bounded in-memory queue and a writer drains it in batches, so accept latency stays low regardless of these settings. Two knobs matter when you push sustained load:
+
+- `ingest_writers` (default 1, PostgreSQL only) — number of concurrent writer tasks draining the ingest queue. On PostgreSQL, 2 comfortably handles 2-3x the single-writer rate; beyond 2 shows little gain unless the database runs on separate hardware. SQLite is single-writer by design; the setting warns and forces 1.
+- `ingest_batch_size` (default 2000, both backends) — max events committed per write transaction. The writer never waits to fill a batch: it drains whatever queued during the previous flush, capped here, so there's no latency cost when idle. Under load, larger batches amortize commit and checkpoint cost; raising it to 10000 lifted the SQLite burst ceiling by roughly 40% in our benchmarks. The trade-offs: a write transaction that fails twice drops up to this many events (with accounting, never silently), and each transaction holds the write lock longer.
+
+Do take the numbers with a grain of salt: they're from a single laptop (see the README benchmark section). If you tune these, watch the server logs under your own traffic before settling. Sustained overload shows up as HTTP 503 responses to SDKs and "writer channel at N% capacity" warnings; actual data loss (only after repeated write failures) is logged as "dropping N events".
 
 ## Authentication
 

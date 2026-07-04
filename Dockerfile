@@ -13,11 +13,13 @@ WORKDIR /app
 # stub, then build for real once the sources land.
 COPY Cargo.toml Cargo.lock ./
 COPY stackpit-auth/Cargo.toml stackpit-auth/
-RUN mkdir src stackpit-auth/src \
+COPY stackpit-bench/Cargo.toml stackpit-bench/
+RUN mkdir src stackpit-auth/src stackpit-bench/src \
     && echo "fn main() {}" > src/main.rs \
+    && echo "fn main() {}" > stackpit-bench/src/main.rs \
     && touch src/lib.rs stackpit-auth/src/lib.rs \
     && cargo build --release --no-default-features --features "$DB_FEATURE" \
-    && rm -rf src stackpit-auth/src
+    && rm -rf src stackpit-auth/src stackpit-bench/src
 COPY . .
 RUN touch src/main.rs stackpit-auth/src/lib.rs \
     && cargo build --release --no-default-features --features "$DB_FEATURE"

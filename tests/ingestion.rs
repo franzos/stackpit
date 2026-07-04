@@ -59,6 +59,7 @@ async fn ingest_event_then_query_back() {
         None,
         std::sync::Arc::new(IngestStats::new()),
         1,
+        2000,
     )
     .await
     .unwrap();
@@ -121,6 +122,7 @@ async fn ingest_and_update_issue_status() {
         None,
         std::sync::Arc::new(IngestStats::new()),
         1,
+        2000,
     )
     .await
     .unwrap();

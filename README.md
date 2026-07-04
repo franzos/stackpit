@@ -63,12 +63,21 @@ Do take this with a grain of salt: the "basic" rows are genuinely basic, and the
 
 ## How fast is it?
 
+Short version (one laptop, SQLite, ~2.9 KiB error envelopes):
+
+| `ingest_batch_size` | Sustained (5 min, zero rejections) | Burst |
+|---|---|---|
+| 2000 (default) | ~10,800 events/s | 12,000-13,000 events/s |
+| 10000 | ~15,000-18,000 events/s | ~20,700 events/s |
+
+Details and trade-offs below.
+
 The repo ships `stackpit-bench`, an open-loop load generator that ramps Sentry error envelopes against a running server until the write path falls behind, then soaks below that knee. The chart below is one run on a laptop: AMD Ryzen 5 7640U (6 cores / 12 threads), 64 GB RAM, NVMe SSD on LUKS-encrypted ext4, Linux 6.19, SQLite backend, with the load generator competing for the same cores.
 
 <img src="docs/benchmark.svg" alt="Ingestion benchmark: target vs accepted vs persisted events/sec" width="100%">
 
-- **Sustained 9,000 events/s for a 5-minute soak with zero rejections** (9,138 rows/s persisted on average), accept latency p50 1.4 ms / p99 4.1 ms, WAL peaking at 8.7 MiB.
-- During the overload probes (18,000 and 26,000/s offered) the server accepted and persisted **15,000-16,500 events/s in bursts** and shed the rest with HTTP 503 backpressure; nothing is dropped silently. Longer runs at 12,000-14,000/s eventually hit brief 503 bursts, hence the conservative sustained figure.
+- **Sustained 10,800 events/s for a 5-minute soak with zero rejections** (10,867 rows/s persisted on average), accept latency p50 1.7 ms / p99 6.9 ms, WAL peaking at 8.9 MiB.
+- During the overload probes (14,000 and 16,000/s offered) the server accepted and persisted **12,000-13,000 events/s in bursts** and shed the rest with HTTP 503 backpressure; nothing is dropped silently. The knee varies between 12,000 and 14,000/s run to run on this machine (some runs hold 12,600/s for the full soak), hence the conservative sustained figure.
 - Payloads are ~2.9 KiB error events across 100 distinct issues.
 
 To reproduce (fresh database; the default `mode = "open"` auto-provisions the project on the first envelope):
@@ -78,13 +87,15 @@ cargo build --release -p stackpit-bench
 stackpit serve &
 ./target/release/stackpit-bench \
   --url http://127.0.0.1:3001 --project 1 --key 0123456789abcdef0123456789abcdef \
-  --db stackpit.db --ramp-start 10000 --ramp-step 8000 --ramp-interval 60 \
+  --db stackpit.db --ramp-start 10000 --ramp-step 2000 --ramp-interval 60 \
   --out bench-results
 ```
 
 It ramps until the knee, soaks at 90% of it for 5 minutes, and writes a per-second CSV plus the SVG chart above. Single-machine numbers, so take them with a grain of salt.
 
-Running PostgreSQL instead? Same methodology lands at the same ~9,000 events/s with a single writer; the bottleneck is Stackpit's write path, not the database. Unlike SQLite, PostgreSQL isn't stuck with one writer: set `ingest_writers` in `[storage]` and ingestion fans out across concurrent writer tasks, which comfortably handles 2-3x the single-writer rate.
+There's more headroom in the batch size: the writer commits up to `ingest_batch_size` events per transaction (default 2000, set it in `[storage]`). Raising it to 10000 on the same laptop moved the knee from 14,000 to 20,000 events/s in back-to-back short-window runs, with ~20,700 rows/s persisted in the best 30-second windows: larger transactions amortize SQLite's commit and checkpoint cost. The trade-off is a bigger all-or-nothing unit: a write transaction that fails twice drops up to that many events, and each transaction holds the write lock longer. Sustained rates that high couldn't be verified here because the load generator saturates first; treat 10000 as burst-friendly tuning, not a validated sustained figure.
+
+Running PostgreSQL instead? The bottleneck is Stackpit's write path, not the database. Unlike SQLite, PostgreSQL isn't stuck with one writer: set `ingest_writers` in `[storage]` and ingestion fans out across concurrent writer tasks, which comfortably handles 2-3x the single-writer rate.
 
 ## Install
 

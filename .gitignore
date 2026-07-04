@@ -1,5 +1,6 @@
 target
 target-pg
+target-podman
 .bin/
 *.db
 *.db-*

@@ -14,7 +14,9 @@ use anyhow::Result;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use accumulator::{Accumulators, BATCH_SIZE};
+use accumulator::Accumulators;
+#[cfg(test)]
+use accumulator::BATCH_SIZE;
 use flush::flush_aggregation;
 #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
 use flush::flush_batch;
@@ -29,10 +31,12 @@ pub async fn spawn(
     notify_tx: Option<tokio::sync::mpsc::Sender<crate::notify::NotificationEvent>>,
     ingest_stats: Arc<IngestStats>,
     writers: usize,
+    batch_size: usize,
 ) -> Result<(WriterHandle, tokio::task::JoinHandle<()>)> {
     use tracing::Instrument;
 
     let writers = writers.max(1);
+    let batch_size = batch_size.max(1);
     let capacity = (TOTAL_QUEUE_CAPACITY / writers).max(1024);
     let queued_bytes = Arc::new(AtomicUsize::new(0));
     let shutdown = tokio_util::sync::CancellationToken::new();
@@ -60,6 +64,7 @@ pub async fn spawn(
                     &stats,
                     &loop_bytes,
                     &loop_shutdown,
+                    batch_size,
                 )
                 .await;
                 tracing::info!("writer task exiting");
@@ -84,8 +89,16 @@ pub async fn spawn(
             let agg_tx = agg_tx.clone();
             loops.push(tokio::spawn(
                 async move {
-                    insert_worker_loop(&pool, rx, agg_tx, &stats, &loop_bytes, &loop_shutdown)
-                        .await;
+                    insert_worker_loop(
+                        &pool,
+                        rx,
+                        agg_tx,
+                        &stats,
+                        &loop_bytes,
+                        &loop_shutdown,
+                        batch_size,
+                    )
+                    .await;
                     tracing::info!("insert worker exiting");
                 }
                 .instrument(tracing::info_span!("writer", w = i)),
@@ -144,6 +157,7 @@ async fn writer_loop(
     ingest_stats: &IngestStats,
     queued_bytes: &AtomicUsize,
     shutdown: &tokio_util::sync::CancellationToken,
+    batch_cap: usize,
 ) {
     use accumulator::AGGREGATION_FLUSH_INTERVAL_MS;
 
@@ -219,10 +233,10 @@ async fn writer_loop(
             Shutdown => continue,
         };
 
-        let mut batch = Vec::with_capacity(BATCH_SIZE);
+        let mut batch = Vec::with_capacity(batch_cap);
         batch.push(first);
 
-        while batch.len() < BATCH_SIZE {
+        while batch.len() < batch_cap {
             match rx.try_recv() {
                 Ok(Shutdown) => {
                     let bytes = batch_bytes(&batch);
@@ -302,6 +316,7 @@ async fn insert_worker_loop(
     ingest_stats: &IngestStats,
     queued_bytes: &AtomicUsize,
     shutdown: &tokio_util::sync::CancellationToken,
+    batch_cap: usize,
 ) {
     use flush::flush_batch_insert_only;
 
@@ -344,10 +359,10 @@ async fn insert_worker_loop(
             _ = shutdown.cancelled() => return,
         };
 
-        let mut batch = Vec::with_capacity(BATCH_SIZE);
+        let mut batch = Vec::with_capacity(batch_cap);
         batch.push(first);
         let mut shutdown_after = false;
-        while batch.len() < BATCH_SIZE {
+        while batch.len() < batch_cap {
             match rx.try_recv() {
                 Ok(Shutdown) => {
                     shutdown_after = true;
@@ -466,7 +481,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn spawn_and_send_event() {
         let pool = test_pool().await;
-        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1).await.unwrap();
+        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1, BATCH_SIZE)
+            .await
+            .unwrap();
 
         handle.send_event(make_event("w1")).unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -481,7 +498,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn spawn_and_send_event_with_attachment() {
         let pool = test_pool().await;
-        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1).await.unwrap();
+        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1, BATCH_SIZE)
+            .await
+            .unwrap();
 
         let att = StorableAttachment {
             event_id: "w2".to_string(),
@@ -509,7 +528,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn queued_bytes_returns_to_zero_after_flush() {
         let pool = test_pool().await;
-        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1).await.unwrap();
+        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1, BATCH_SIZE)
+            .await
+            .unwrap();
 
         for i in 0..5 {
             let mut e = make_event(&format!("qb{i}"));
@@ -532,7 +553,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn batch_flushing_multiple_events() {
         let pool = test_pool().await;
-        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1).await.unwrap();
+        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1, BATCH_SIZE)
+            .await
+            .unwrap();
 
         for i in 0..10 {
             handle.send_event(make_event(&format!("batch{i}"))).unwrap();
@@ -551,7 +574,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn shutdown_without_events() {
         let pool = test_pool().await;
-        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1).await.unwrap();
+        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1, BATCH_SIZE)
+            .await
+            .unwrap();
         let _ = handle.shutdown();
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
@@ -559,7 +584,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn insert_event_with_fingerprint_creates_issue() {
         let pool = test_pool().await;
-        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1).await.unwrap();
+        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1, BATCH_SIZE)
+            .await
+            .unwrap();
 
         let mut event = make_event("fp1");
         event.fingerprint = Some("abcdef0123456789".to_string());
@@ -894,7 +921,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn periodic_timer_flushes_issues_without_new_events() {
         let pool = test_pool().await;
-        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1).await.unwrap();
+        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1, BATCH_SIZE)
+            .await
+            .unwrap();
 
         let mut event = make_event("timer1");
         event.fingerprint = Some("timer_fp_1".to_string());
@@ -930,7 +959,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn periodic_timer_flushes_multiple_fingerprints() {
         let pool = test_pool().await;
-        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1).await.unwrap();
+        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1, BATCH_SIZE)
+            .await
+            .unwrap();
 
         for i in 0..5 {
             let mut e = make_event(&format!("multi{i}"));
@@ -957,7 +988,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn periodic_timer_same_fingerprint_across_cycles() {
         let pool = test_pool().await;
-        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1).await.unwrap();
+        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1, BATCH_SIZE)
+            .await
+            .unwrap();
 
         let mut e1 = make_event("cross1");
         e1.fingerprint = Some("cross_fp".to_string());
@@ -1007,7 +1040,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn periodic_timer_flushes_tags_and_hll() {
         let pool = test_pool().await;
-        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1).await.unwrap();
+        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1, BATCH_SIZE)
+            .await
+            .unwrap();
 
         let mut e1 = make_event("th1");
         e1.fingerprint = Some("th_fp".to_string());
@@ -1052,7 +1087,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn periodic_timer_handles_subsequent_events() {
         let pool = test_pool().await;
-        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1).await.unwrap();
+        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1, BATCH_SIZE)
+            .await
+            .unwrap();
 
         // First event, wait for periodic flush
         let mut e1 = make_event("seq1");
@@ -1101,7 +1138,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn periodic_timer_noop_when_empty() {
         let pool = test_pool().await;
-        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1).await.unwrap();
+        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1, BATCH_SIZE)
+            .await
+            .unwrap();
 
         // Let a few timer ticks pass with no events sent
         tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
@@ -1123,7 +1162,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn periodic_timer_events_near_tick_boundary() {
         let pool = test_pool().await;
-        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1).await.unwrap();
+        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 1, BATCH_SIZE)
+            .await
+            .unwrap();
 
         // Send first event right away
         let mut e1 = make_event("boundary1");
@@ -1470,7 +1511,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn multi_writer_overlapping_fingerprints_aggregate_exactly() {
         let pool = test_pool().await;
-        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 2).await.unwrap();
+        let (handle, _join) = spawn(pool.clone(), None, test_stats(), 2, BATCH_SIZE)
+            .await
+            .unwrap();
 
         for i in 0..200 {
             let mut e = make_event(&format!("mw{i}"));

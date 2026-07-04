@@ -86,6 +86,11 @@ pub struct StorageConfig {
     /// Concurrent ingest writer tasks (PostgreSQL only; SQLite always uses 1).
     #[serde(default = "default_ingest_writers")]
     pub ingest_writers: u32,
+    /// Max events per ingest write transaction. Larger batches amortize
+    /// commit/checkpoint cost under load (no latency cost when idle), at the
+    /// price of a bigger all-or-nothing failure unit.
+    #[serde(default = "default_ingest_batch_size")]
+    pub ingest_batch_size: u32,
 }
 
 #[derive(Debug, Default, Clone, Copy, Deserialize, PartialEq, Eq)]
@@ -281,6 +286,9 @@ fn default_retention_days() -> u32 {
 fn default_ingest_writers() -> u32 {
     1
 }
+fn default_ingest_batch_size() -> u32 {
+    2000
+}
 fn default_max_projects() -> usize {
     DEFAULT_MAX_PROJECTS
 }
@@ -361,6 +369,7 @@ impl Default for StorageConfig {
             database_url: None,
             retention_days: DEFAULT_RETENTION_DAYS,
             ingest_writers: default_ingest_writers(),
+            ingest_batch_size: default_ingest_batch_size(),
         }
     }
 }

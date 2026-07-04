@@ -200,11 +200,15 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
         (db::create_ingest_pool(&db_url, n + 1).await?, n as usize)
     };
 
+    // Clamp to the total queue capacity; a larger cap would never fill anyway.
+    let ingest_batch_size = config.storage.ingest_batch_size.clamp(1, 50_000) as usize;
+
     let (writer_tx, writer_join) = writer::spawn(
         ingest_pool,
         Some(notify_tx),
         Arc::clone(&ingest_stats),
         ingest_writers,
+        ingest_batch_size,
     )
     .await?;
 

@@ -3,6 +3,8 @@ use simple_hll::HyperLogLog;
 use std::collections::HashMap;
 use std::time::Instant;
 
+/// Test default; production batch size comes from `storage.ingest_batch_size`.
+#[cfg(test)]
 pub(super) const BATCH_SIZE: usize = 2000;
 pub(super) const AGGREGATION_FLUSH_INTERVAL_MS: u128 = 1000;
 pub(super) const AGGREGATION_FLUSH_FINGERPRINT_THRESHOLD: usize = 1000;

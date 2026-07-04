@@ -1,29 +1,24 @@
 # Changelog
 
-## [Unreleased]
-
-### Added
-- Concurrent ingest writers, configurable via `ingest_writers` (PostgreSQL)
-- `stackpit-bench`: open-loop ingestion benchmark (ramp to knee, soak, CSV + SVG chart)
-
-### Changed
-- Payloads are compressed on the accept path instead of on the writer, raising sustained ingest throughput
-
-### Fixed
-- Writer shutdown is no longer lost under a full queue, and a flush failure during drain no longer drops events without accounting
-
-## [0.3.9] - 2026-07-03
+## [0.3.9] - 2026-07-04
 
 ### Security
 - Source maps are now isolated per project. They were keyed globally by debug id, so one tenant could read or overwrite another tenant's source maps and original source
 - Ingest authentication caches denials and the open-mode project count, and caps per-IP authentication-failure floods, so a stream of unknown-key requests can no longer hammer the database
 
+### Added
+- Concurrent ingest writers, configurable via `ingest_writers` (PostgreSQL)
+- Configurable ingest write batch size via `ingest_batch_size`
+- `stackpit-bench`: open-loop ingestion benchmark (ramp to knee, soak, CSV + SVG chart)
+
 ### Fixed
 - Event batches that hit a transient write failure and retry no longer double-count issue, tag, session, and transaction metrics, lose counts, or store unreadable double-compressed payloads
 - Retried SDK envelopes no longer inflate counts; the ingest endpoint now accepts a whole envelope or none
 - Retention deletion reconciles issue counts against exactly the rows it deletes
+- Writer shutdown is no longer lost under a full queue, and a flush failure during drain no longer drops events without accounting
 
 ### Changed
+- Payloads are compressed on the accept path instead of on the writer, raising sustained ingest throughput
 - Per-project navigation badge counts are cached briefly instead of recomputed on every page render
 - The writer bounds queued memory by bytes, not just message count, to avoid running out of memory under bursts of large payloads
 - Admin bulk deletes run in chunks so they no longer stall ingestion

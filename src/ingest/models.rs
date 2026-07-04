@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+use crate::ingest::parse_log::ParsedLogEntry;
+use crate::ingest::parse_span::{EmbeddedSpan, SpanFields};
+
 /// Cap on tags stored per event; SDKs can send hundreds.
 pub const MAX_TAGS_PER_EVENT: usize = 200;
 
@@ -114,6 +117,14 @@ pub struct StorableEvent {
     pub duration_ms: Option<i64>,
     /// `contexts.trace.status`; drives transaction failure classification.
     pub trace_status: Option<String>,
+    /// Child spans pre-extracted from a transaction payload at parse time;
+    /// `None` when the event didn't come through envelope parsing, so the
+    /// writer flush falls back to re-parsing the payload.
+    pub embedded_spans: Option<Vec<EmbeddedSpan>>,
+    /// Pre-extracted fields of a standalone span item; same fallback contract.
+    pub span_fields: Option<SpanFields>,
+    /// Pre-extracted entries of a log batch item; same fallback contract.
+    pub log_entries: Option<Vec<ParsedLogEntry>>,
 }
 
 #[derive(Debug, Clone)]
@@ -290,7 +301,24 @@ impl StorableEvent {
             trace_id: None,
             duration_ms: None,
             trace_status: None,
+            embedded_spans: None,
+            span_fields: None,
+            log_entries: None,
         }
+    }
+
+    /// Byte weight against the queued-memory budget: the payload plus any
+    /// pre-extracted derived data carried alongside it to the flush.
+    pub fn queued_bytes(&self) -> usize {
+        let embedded: usize = self
+            .embedded_spans
+            .as_ref()
+            .map_or(0, |s| s.iter().map(|e| e.payload.len()).sum());
+        let logs: usize = self
+            .log_entries
+            .as_ref()
+            .map_or(0, |l| l.iter().map(|e| e.payload.len()).sum());
+        self.payload.len() + embedded + logs
     }
 
     /// Compress the payload in place with zstd (idempotent via the `compressed`
@@ -346,6 +374,9 @@ impl StorableEvent {
             trace_id: None,
             duration_ms: None,
             trace_status: None,
+            embedded_spans: None,
+            span_fields: None,
+            log_entries: None,
         }
     }
 }

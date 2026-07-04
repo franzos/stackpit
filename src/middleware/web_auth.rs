@@ -261,12 +261,25 @@ async fn resolve_session_active_org(
     encryptor: Option<&crate::util::crypto::SecretEncryptor>,
 ) -> crate::orgs::extractor::ActiveOrg {
     use crate::orgs::extractor::{resolve_active_org, unpack, ActiveOrg, ACTIVE_ORG_COOKIE};
-    use crate::queries::orgs::{ensure_personal_org, list_memberships};
+    use crate::queries::orgs::{ensure_personal_org, list_memberships, personal_org_id};
 
-    let personal_org_id = match ensure_personal_org(pool, user_id).await {
-        Ok(id) => id,
+    // Read-only on the hot path; login (OIDC reconcile) already ensured the
+    // personal org. The upsert fallback only fires for sessions that predate
+    // that guarantee (e.g. grants surviving an upgrade).
+    let personal_org_id = match personal_org_id(pool, user_id).await {
+        Ok(Some(id)) => id,
+        Ok(None) => match ensure_personal_org(pool, user_id).await {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::error!("ensure_personal_org failed for user {user_id}: {e:#}");
+                return ActiveOrg {
+                    org_id: 1,
+                    role: Some(crate::orgs::Role::Member),
+                };
+            }
+        },
         Err(e) => {
-            tracing::error!("ensure_personal_org failed for user {user_id}: {e:#}");
+            tracing::error!("personal org lookup failed for user {user_id}: {e:#}");
             return ActiveOrg {
                 org_id: 1,
                 role: Some(crate::orgs::Role::Member),
@@ -339,6 +352,29 @@ fn handle_to_uuid(handle: &GrantHandle) -> uuid::Uuid {
 #[cfg(test)]
 mod tests {
     use super::{is_public_path, session_expired};
+
+    #[tokio::test]
+    async fn resolve_active_org_reads_personal_org_and_backfills_when_missing() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        let u = crate::queries::users::upsert_from_oidc(&pool, "https://idp", "sub-mw", None, None)
+            .await
+            .unwrap();
+
+        // Pre-existing session without a personal org: fallback creates it once.
+        let headers = axum::http::HeaderMap::new();
+        let active = super::resolve_session_active_org(&pool, u.user_id, &headers, None).await;
+        let personal = crate::queries::orgs::personal_org_id(&pool, u.user_id)
+            .await
+            .unwrap()
+            .expect("fallback must create the personal org");
+        assert_eq!(active.org_id, personal);
+        assert_eq!(active.role, Some(crate::orgs::Role::Owner));
+
+        // Once it exists, the read-only path resolves the same org.
+        let active2 = super::resolve_session_active_org(&pool, u.user_id, &headers, None).await;
+        assert_eq!(active2.org_id, personal);
+        assert_eq!(active2.role, Some(crate::orgs::Role::Owner));
+    }
 
     #[test]
     fn session_not_expired_strictly_under_cap() {

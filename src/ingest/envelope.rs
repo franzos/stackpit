@@ -212,6 +212,11 @@ pub fn parse(body: &[u8], project_id: u64, auth: &SentryAuth) -> Result<ParsedEn
 
         if result.clock_drift_secs != 0 {
             event.timestamp += result.clock_drift_secs;
+            // Session buckets carry their own start time; correct it too or
+            // drifted clients bucket sessions to the wrong day.
+            for bucket in &mut event.session_buckets {
+                bucket.started_ts += result.clock_drift_secs;
+            }
         }
 
         // UserReport's event_id refers to the parent event; give it its own UUID.
@@ -251,12 +256,18 @@ fn extract_fields(
         Err(_) => return None,
     };
 
-    // Log items may arrive as a JSON array or {"items": [...]} batch. Per-item
-    // fields are extracted downstream in parse_log_entries; return None here so
+    // Log items may arrive as a JSON array or {"items": [...]} batch. Extract
+    // the per-entry data here while the parsed JSON is in hand; return None so
     // the event gets a generated UUID.
     if *item_type == ItemType::Log
         && (json.is_array() || json.get("items").and_then(|v| v.as_array()).is_some())
     {
+        event.log_entries = Some(
+            crate::ingest::parse_log::log_entries_from_value(json)
+                .iter()
+                .map(crate::ingest::parse_log::parse_log_entry)
+                .collect(),
+        );
         return None;
     }
 
@@ -265,23 +276,30 @@ fn extract_fields(
         .and_then(|v| v.as_str())
         .map(String::from);
 
+    // Magnitude distinguishes s / ms / us / ns, normalized to seconds:
+    // seconds up to ~1e11 (year ~5138), milliseconds to 1e14, microseconds
+    // to 1e17, nanoseconds above.
     if let Some(ts) = json.get("timestamp").and_then(|v| {
         v.as_f64()
             .filter(|f| f.is_finite())
             .map(|f| {
-                if f > 1e15 {
-                    (f / 1_000_000_000.0).round() as i64
-                } else if f > 1e12 {
-                    (f / 1_000.0).round() as i64
+                if f > 1e17 {
+                    (f / 1e9).round() as i64
+                } else if f > 1e14 {
+                    (f / 1e6).round() as i64
+                } else if f > 1e11 {
+                    (f / 1e3).round() as i64
                 } else {
                     f.round() as i64
                 }
             })
             .or_else(|| {
                 v.as_i64().map(|i| {
-                    if i > 1_000_000_000_000_000 {
+                    if i > 100_000_000_000_000_000 {
                         i / 1_000_000_000
-                    } else if i > 1_000_000_000_000 {
+                    } else if i > 100_000_000_000_000 {
+                        i / 1_000_000
+                    } else if i > 100_000_000_000 {
                         i / 1_000
                     } else {
                         i
@@ -335,6 +353,12 @@ fn extract_fields(
         extract_session_aggregates(&json, event);
     } else if *item_type == ItemType::Transaction {
         extract_transaction_perf(&json, event);
+        event.embedded_spans =
+            Some(crate::ingest::parse_span::extract_embedded_spans_from_value(&json));
+    } else if *item_type == ItemType::Span {
+        event.span_fields = Some(crate::ingest::parse_span::extract_span_fields_from_value(
+            &json,
+        ));
     }
 
     // Error and default events also carry a trace context; capture trace_id so
@@ -383,6 +407,11 @@ fn extract_fields(
     );
     event.title =
         crate::ingest::enrich::extract_title_from(&json, item_type, event.monitor_slug.as_deref());
+
+    // Single-object log item (batches returned early above).
+    if *item_type == ItemType::Log {
+        event.log_entries = Some(vec![crate::ingest::parse_log::parse_log_entry(&json)]);
+    }
 
     event_id
 }
@@ -1017,6 +1046,134 @@ mod tests {
         let second = &event.session_buckets[1];
         assert_eq!(second.total, 50);
         assert_eq!(second.crashed, 0);
+    }
+
+    // --- timestamp unit normalization ---
+
+    fn ts_event(json_ts: &str) -> i64 {
+        let payload = format!(r#"{{"timestamp":{json_ts}}}"#);
+        let mut event = StorableEvent::new(
+            String::new(),
+            ItemType::Event,
+            payload.as_bytes().to_vec(),
+            1,
+            "k".to_string(),
+        );
+        extract_fields(payload.as_bytes(), &ItemType::Event, &mut event);
+        event.timestamp
+    }
+
+    #[test]
+    fn timestamp_units_normalized_for_2026_era_values() {
+        let expected = 1_780_000_000;
+        assert_eq!(ts_event("1780000000"), expected); // seconds
+        assert_eq!(ts_event("1780000000.0"), expected);
+        assert_eq!(ts_event("1780000000000"), expected); // milliseconds
+        assert_eq!(ts_event("1780000000000.0"), expected);
+        assert_eq!(ts_event("1780000000000000"), expected); // microseconds
+        assert_eq!(ts_event("1780000000000000.0"), expected);
+        assert_eq!(ts_event("1780000000000000000"), expected); // nanoseconds
+        assert_eq!(ts_event("1.78e18"), expected);
+    }
+
+    // --- clock drift ---
+
+    #[test]
+    fn clock_drift_corrects_session_started_ts() {
+        // started = 2026-01-01T00:00:00Z
+        let started_ts = 1_767_225_600i64;
+        let sent_at = (chrono::Utc::now() - chrono::Duration::hours(2)).to_rfc3339();
+        let body = format!(
+            "{{\"sent_at\":\"{sent_at}\"}}\n{{\"type\":\"session\"}}\n{{\"sid\":\"s1\",\"init\":true,\"status\":\"ok\",\"errors\":0,\"started\":\"2026-01-01T00:00:00Z\",\"attrs\":{{}}}}\n"
+        );
+        let result = parse(body.as_bytes(), 1, &test_auth()).unwrap();
+        let drift = result.clock_drift_secs;
+        assert!((7195..=7205).contains(&drift), "drift={drift}");
+        let b = &result.events[0].session_buckets[0];
+        assert_eq!(
+            b.started_ts,
+            started_ts + drift,
+            "session bucket start must get the same drift correction as the event"
+        );
+    }
+
+    // --- parse-time pre-extraction (spans, logs) ---
+
+    #[test]
+    fn transaction_precomputes_embedded_spans() {
+        let payload = r#"{"type":"transaction","transaction":"/t",
+            "contexts":{"trace":{"trace_id":"tr1"}},
+            "spans":[
+                {"span_id":"c1","trace_id":"tr1","op":"db",
+                 "start_timestamp":1700000000.0,"timestamp":1700000000.5},
+                {"op":"no-id"}
+            ]}"#;
+        let event = extract_txn(payload);
+        let spans = event.embedded_spans.as_ref().unwrap();
+        assert_eq!(spans.len(), 1, "spans without span_id are skipped");
+        assert_eq!(spans[0].fields.span_id.as_deref(), Some("c1"));
+        assert_eq!(spans[0].fields.op.as_deref(), Some("db"));
+        assert_eq!(spans[0].timestamp, Some(1_700_000_001));
+    }
+
+    #[test]
+    fn standalone_span_precomputes_fields() {
+        let payload = r#"{"span_id":"sp1","trace_id":"tr","op":"http.client",
+            "start_timestamp":1700000000.0,"timestamp":1700000000.25}"#;
+        let mut event = StorableEvent::new(
+            String::new(),
+            ItemType::Span,
+            payload.as_bytes().to_vec(),
+            1,
+            "k".to_string(),
+        );
+        extract_fields(payload.as_bytes(), &ItemType::Span, &mut event);
+        let f = event.span_fields.as_ref().unwrap();
+        assert_eq!(f.span_id.as_deref(), Some("sp1"));
+        assert_eq!(f.trace_id.as_deref(), Some("tr"));
+        assert_eq!(f.duration_ms, Some(250));
+        assert_eq!(f.start_ms, Some(1_700_000_000_000));
+    }
+
+    #[test]
+    fn log_batch_precomputes_entries() {
+        let payload = r#"{"items":[
+            {"body":"first","level":"warn","timestamp":1780000000,"trace_id":"t1"},
+            {"body":"second","level":"error"}
+        ]}"#;
+        let mut event = StorableEvent::new(
+            String::new(),
+            ItemType::Log,
+            payload.as_bytes().to_vec(),
+            1,
+            "k".to_string(),
+        );
+        extract_fields(payload.as_bytes(), &ItemType::Log, &mut event);
+        let entries = event.log_entries.as_ref().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].fields.body.as_deref(), Some("first"));
+        assert_eq!(entries[0].fields.level.as_deref(), Some("warning"));
+        assert_eq!(entries[0].fields.trace_id.as_deref(), Some("t1"));
+        assert_eq!(entries[0].timestamp, Some(1_780_000_000));
+        let round: Value = serde_json::from_slice(&entries[1].payload).unwrap();
+        assert_eq!(round.get("body").and_then(|v| v.as_str()), Some("second"));
+    }
+
+    #[test]
+    fn single_log_object_precomputes_one_entry() {
+        let payload = r#"{"body":"only","level":"info"}"#;
+        let mut event = StorableEvent::new(
+            String::new(),
+            ItemType::Log,
+            payload.as_bytes().to_vec(),
+            1,
+            "k".to_string(),
+        );
+        extract_fields(payload.as_bytes(), &ItemType::Log, &mut event);
+        let entries = event.log_entries.as_ref().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].fields.body.as_deref(), Some("only"));
+        assert_eq!(entries[0].fields.level.as_deref(), Some("info"));
     }
 
     // --- title enrichment (via parse_store_body + enrich_event) ---

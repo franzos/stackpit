@@ -68,6 +68,11 @@ impl BearerGate {
             return self.check_scope(cached, iss, required_scope);
         }
 
+        if self.negative_cache_lookup(&token_key) {
+            tracing::debug!("bearer rejected: negative cache hit (opaque)");
+            return BearerAuthOutcome::InvalidToken;
+        }
+
         let body = match self.introspect(token).await {
             Ok(body) => body,
             Err(()) => return BearerAuthOutcome::InvalidToken,
@@ -75,6 +80,7 @@ impl BearerGate {
 
         if !body.active {
             tracing::debug!("bearer rejected: active=false");
+            self.negative_cache_store(token_key);
             return BearerAuthOutcome::InvalidToken;
         }
 
@@ -93,6 +99,7 @@ impl BearerGate {
                     expected_client = %self.inner.client_id,
                     "bearer rejected: opaque aud/client_id mismatch",
                 );
+                self.negative_cache_store(token_key);
                 return BearerAuthOutcome::InvalidToken;
             }
         }
@@ -106,6 +113,7 @@ impl BearerGate {
                         actual = %actual,
                         "bearer rejected: opaque iss mismatch",
                     );
+                    self.negative_cache_store(token_key);
                     return BearerAuthOutcome::InvalidToken;
                 }
                 None => {
@@ -118,12 +126,14 @@ impl BearerGate {
         if let Some(exp) = body.exp {
             if exp <= now {
                 tracing::debug!(exp, now, "bearer rejected: opaque token expired");
+                self.negative_cache_store(token_key);
                 return BearerAuthOutcome::InvalidToken;
             }
         }
 
         let Some(sub) = body.sub.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
             tracing::warn!("bearer rejected: introspection response missing sub");
+            self.negative_cache_store(token_key);
             return BearerAuthOutcome::InvalidToken;
         };
         let sub = sub.to_string();
@@ -145,6 +155,7 @@ impl BearerGate {
             tracing::warn!(
                 "bearer rejected: no resolvable non-empty issuer (introspection omitted iss and no expected_issuer configured)"
             );
+            self.negative_cache_store(token_key);
             return BearerAuthOutcome::InvalidToken;
         };
         let iss = iss.to_string();

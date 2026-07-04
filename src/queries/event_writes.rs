@@ -16,10 +16,13 @@ use crate::ingest::models::{
 };
 
 use crate::ingest::parse_log::{
-    compress_log_entry, extract_log_fields, extract_log_timestamp, parse_log_entries,
+    compress_log_bytes, compress_log_entry, extract_log_fields, extract_log_timestamp,
+    parse_log_entries,
 };
 use crate::ingest::parse_metric::parse_metric_payload;
-use crate::ingest::parse_span::{extract_span_fields, extract_span_fields_from_value, SpanFields};
+use crate::ingest::parse_span::{
+    extract_span_fields, extract_span_fields_from_value, SpanFields, MAX_EMBEDDED_SPANS,
+};
 
 /// Max events per multi-row INSERT chunk. 21 bind params per event;
 /// SQLite's SQLITE_MAX_VARIABLE_NUMBER is 32766, so 32766 / 21 = 1560.
@@ -29,9 +32,6 @@ const BULK_CHUNK_SIZE: usize = 1500;
 /// Max spans per multi-row INSERT chunk. 14 bind params per span;
 /// 32766 / 14 = 2340, use 2300 for margin.
 const SPAN_BULK_CHUNK_SIZE: usize = 2300;
-
-/// Cap on embedded child spans extracted from a single transaction payload.
-const MAX_EMBEDDED_SPANS: usize = 1000;
 
 /// Max metrics per multi-row INSERT chunk. 8 bind params per metric;
 /// 32766 / 8 = 4095, use 4000 for margin.
@@ -255,7 +255,12 @@ async fn bulk_insert_spans_table(
     let rows: Vec<SpanRow> = spans
         .iter()
         .map(|event| {
-            let fields = extract_span_fields(&event.payload);
+            // Prefer fields pre-extracted at parse time; fall back to the
+            // payload for events that didn't come through envelope parsing.
+            let fields = match &event.span_fields {
+                Some(f) => f.clone(),
+                None => extract_span_fields(&event.payload),
+            };
             let default_id = event.event_id.clone();
             span_row_from_fields(
                 fields,
@@ -279,6 +284,27 @@ fn extract_embedded_spans(events: &[&&StorableEvent]) -> Vec<SpanRow> {
         if event.item_type != ItemType::Transaction {
             continue;
         }
+
+        // Prefer spans pre-extracted at parse time. event.trace_id was set from
+        // the same contexts.trace.trace_id the old payload re-parse read.
+        if let Some(embedded) = &event.embedded_spans {
+            for es in embedded {
+                let Some(span_id) = es.fields.span_id.clone() else {
+                    continue;
+                };
+                rows.push(span_row_from_fields(
+                    es.fields.clone(),
+                    event,
+                    es.payload.clone(),
+                    es.timestamp.unwrap_or(event.timestamp),
+                    event.trace_id.as_deref(),
+                    span_id,
+                ));
+            }
+            continue;
+        }
+
+        // Fallback: decompress and re-parse the payload.
         let json: Option<serde_json::Value> = zstd::decode_all(event.payload.as_slice())
             .ok()
             .or_else(|| Some(event.payload.clone()))
@@ -458,6 +484,26 @@ async fn bulk_insert_logs_table(
     let rows: Vec<LogRow> = logs
         .iter()
         .flat_map(|event| {
+            // Prefer entries pre-extracted at parse time; fall back to
+            // decompressing and re-parsing the payload otherwise.
+            if let Some(entries) = &event.log_entries {
+                return entries
+                    .iter()
+                    .map(|entry| LogRow {
+                        payload: compress_log_bytes(&entry.payload),
+                        project_id: event.project_id as i64,
+                        public_key: event.public_key.clone(),
+                        timestamp: entry.timestamp.unwrap_or(event.timestamp),
+                        release: event.release.clone(),
+                        environment: event.environment.clone(),
+                        trace_id: entry.fields.trace_id.clone(),
+                        span_id: entry.fields.span_id.clone(),
+                        level: entry.fields.level.clone(),
+                        body: entry.fields.body.clone(),
+                        attributes: entry.fields.attributes.clone(),
+                    })
+                    .collect::<Vec<_>>();
+            }
             let entries = parse_log_entries(&event.payload);
             entries
                 .into_iter()
@@ -724,5 +770,36 @@ mod tests {
         let refs: Vec<&&StorableEvent> = vec![&r];
         let rows = extract_embedded_spans(&refs);
         assert_eq!(rows.len(), MAX_EMBEDDED_SPANS);
+    }
+
+    /// The parse-time pre-extracted path must produce the same span rows as
+    /// the payload re-parse fallback.
+    #[test]
+    fn precomputed_embedded_spans_match_payload_fallback() {
+        let e_fb = txn_with_spans(3);
+        let mut e_pre = txn_with_spans(3);
+        let raw = e_pre.payload.clone();
+        crate::ingest::envelope::extract_fields_for_test(&raw, &ItemType::Transaction, &mut e_pre);
+        assert!(e_pre.embedded_spans.is_some());
+
+        let r_fb = &e_fb;
+        let refs_fb: Vec<&&StorableEvent> = vec![&r_fb];
+        let r_pre = &e_pre;
+        let refs_pre: Vec<&&StorableEvent> = vec![&r_pre];
+        let rows_fb = extract_embedded_spans(&refs_fb);
+        let rows_pre = extract_embedded_spans(&refs_pre);
+
+        assert_eq!(rows_pre.len(), rows_fb.len());
+        for (a, b) in rows_pre.iter().zip(rows_fb.iter()) {
+            assert_eq!(a.span_id, b.span_id);
+            assert_eq!(a.trace_id, b.trace_id);
+            assert_eq!(a.parent_span_id, b.parent_span_id);
+            assert_eq!(a.op, b.op);
+            assert_eq!(a.status, b.status);
+            assert_eq!(a.duration_ms, b.duration_ms);
+            assert_eq!(a.start_ms, b.start_ms);
+            assert_eq!(a.timestamp, b.timestamp);
+            assert_eq!(a.payload, b.payload);
+        }
     }
 }

@@ -86,7 +86,7 @@ pub async fn callback(
             "OAuth callback returned error: {err} ({:?})",
             q.error_description
         );
-        return finish_with_error(&state, err);
+        return finish_with_error(&state, sanitize_oauth_error(err));
     }
 
     let Some(code) = q.code else {
@@ -317,6 +317,32 @@ fn login_error(code: &str) -> Response {
     Redirect::to(&format!("/web/login?error={code}")).into_response()
 }
 
+/// Error codes an IdP may legitimately return (RFC 6749 4.1.2.1 + OIDC Core).
+const KNOWN_OAUTH_ERRORS: &[&str] = &[
+    "invalid_request",
+    "unauthorized_client",
+    "access_denied",
+    "unsupported_response_type",
+    "invalid_scope",
+    "server_error",
+    "temporarily_unavailable",
+    "interaction_required",
+    "login_required",
+    "account_selection_required",
+    "consent_required",
+];
+
+/// `q.error` is attacker-controlled; anything off the allow-list collapses to
+/// a fixed code so it never reaches the Location header (control characters
+/// would panic HeaderValue conversion, and arbitrary values inject params).
+fn sanitize_oauth_error(code: &str) -> &'static str {
+    KNOWN_OAUTH_ERRORS
+        .iter()
+        .find(|k| **k == code)
+        .copied()
+        .unwrap_or("oauth_error")
+}
+
 fn finish_with_error(state: &AppState, code: &str) -> Response {
     let mut resp = login_error(code);
     append_set_cookie(
@@ -360,4 +386,39 @@ fn is_email_conflict(err: &anyhow::Error) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{login_error, sanitize_oauth_error};
+
+    #[test]
+    fn hostile_oauth_error_collapses_to_generic_and_builds_response() {
+        let long_garbage = "x".repeat(8192);
+        for hostile in [
+            "evil\r\nSet-Cookie: pwned=1",
+            "a\u{0}b",
+            "access_denied&admin=1",
+            "<script>alert(1)</script>",
+            "",
+            long_garbage.as_str(),
+        ] {
+            let code = sanitize_oauth_error(hostile);
+            assert_eq!(code, "oauth_error", "hostile input must not pass through");
+            // Building the redirect must not panic on HeaderValue conversion.
+            let resp = login_error(code);
+            assert_eq!(resp.status(), axum::http::StatusCode::SEE_OTHER);
+            assert_eq!(
+                resp.headers().get(axum::http::header::LOCATION).unwrap(),
+                "/web/login?error=oauth_error"
+            );
+        }
+    }
+
+    #[test]
+    fn known_oauth_error_codes_pass_through() {
+        for known in ["access_denied", "server_error", "login_required"] {
+            assert_eq!(sanitize_oauth_error(known), known);
+        }
+    }
 }

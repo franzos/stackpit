@@ -39,6 +39,9 @@ fn make_event(event_id: &str, project_id: u64, fingerprint: &str) -> StorableEve
         trace_id: None,
         duration_ms: None,
         trace_status: None,
+        embedded_spans: None,
+        span_fields: None,
+        log_entries: None,
     }
 }
 

@@ -18,7 +18,7 @@ pub async fn authenticate_and_prefilter(
     addr: std::net::SocketAddr,
 ) -> Result<SentryAuth, axum::response::Response> {
     // Per-IP auth-failure cutoff: an IP flooding bad keys is rejected before any DB lookup, and successful auth records nothing so a valid key is never limited.
-    let client_ip = network::extract_client_ip(headers, Some(addr));
+    let client_ip = network::extract_client_ip(headers, Some(addr), &state.trusted_proxies);
     if let Some(ip) = client_ip.as_deref() {
         if state.ingest_failure_limiter.is_over_budget(ip) {
             return Err(rate_limited_response_with_retry(60).into_response());
@@ -42,7 +42,7 @@ pub async fn authenticate_and_prefilter(
         headers,
         &auth.sentry_key,
         project_id,
-        Some(addr),
+        client_ip.as_deref(),
     )?;
     Ok(auth)
 }
@@ -73,12 +73,11 @@ pub fn pre_filter(
     headers: &HeaderMap,
     sentry_key: &str,
     project_id: u64,
-    connect_addr: Option<std::net::SocketAddr>,
+    client_ip: Option<&str>,
 ) -> Result<(), axum::response::Response> {
     let ua = headers.get("user-agent").and_then(|v| v.to_str().ok());
-    let client_ip = network::extract_client_ip(headers, connect_addr);
 
-    match filter_engine.pre_filter_check(sentry_key, project_id, ua, client_ip.as_deref()) {
+    match filter_engine.pre_filter_check(sentry_key, project_id, ua, client_ip) {
         Ok(()) => Ok(()),
         Err(PreFilterReject::RateLimited(retry_after)) => {
             Err(rate_limited_response_with_retry(retry_after).into_response())

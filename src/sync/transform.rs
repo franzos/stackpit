@@ -120,6 +120,9 @@ pub fn to_storable_event(sentry_event: &SentryEvent, project_id: u64) -> Result<
         trace_id: None,
         duration_ms: None,
         trace_status: None,
+        embedded_spans: None,
+        span_fields: None,
+        log_entries: None,
     })
 }
 

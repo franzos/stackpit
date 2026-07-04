@@ -32,6 +32,8 @@ external_ingest_url = ""          # public URL of the ingest surface; falls back
                                   # Set this when ingest lives on a different host or port than admin.
 admin_token = ""                  # shared bearer token for admin auth (min 16 chars)
 force_secure_cookies = false      # set true behind a TLS-terminating proxy on a non-loopback bind
+trusted_proxies = []              # reverse proxy IPs/CIDRs allowed to set X-Forwarded-For / X-Real-IP
+                                  # (e.g. ["172.17.0.0/16"]); loopback proxies are always trusted
 no_auth_loopback_acknowledged = false  # required to run with no auth at all; loopback bind only
 max_body_size = 10485760          # max decompressed body in bytes (default 10MB)
 # max_compressed_body_size = ...  # max compressed body in bytes (default: max_body_size / 5)
@@ -91,6 +93,10 @@ The defaults are fine for most deployments; ingestion accepts events into a boun
 - `ingest_batch_size` (default 2000, both backends) — max events committed per write transaction. The writer never waits to fill a batch: it drains whatever queued during the previous flush, capped here, so there's no latency cost when idle. Under load, larger batches amortize commit and checkpoint cost; raising it to 10000 lifted the SQLite burst ceiling by roughly 40% in our benchmarks. The trade-offs: a write transaction that fails twice drops up to this many events (with accounting, never silently), and each transaction holds the write lock longer.
 
 Do take the numbers with a grain of salt: they're from a single laptop (see the README benchmark section). If you tune these, watch the server logs under your own traffic before settling. Sustained overload shows up as HTTP 503 responses to SDKs and "writer channel at N% capacity" warnings; actual data loss (only after repeated write failures) is logged as "dropping N events".
+
+### SQLite: admin writes share the ingest writer
+
+On SQLite, admin and web UI writes intentionally go through the same single write connection as the ingest writer, since SQLite only allows one writer at a time. A long-running admin bulk operation (a large delete, org reconciliation) therefore holds that connection and delays ingest flushes behind it. The writer tolerates a stall only so far: each flush attempt waits up to 5 seconds for the connection, and a failed batch gets four attempts in total, so a bulk write that blocks ingest for roughly 20 seconds causes events to be dropped (with accounting, logged as "dropping N events after repeated flush failures"). If your ingest rate matters, schedule bulk cleanup and large deletes off-peak. PostgreSQL deployments are unaffected: admin writes use a separate connection there.
 
 ## Authentication
 

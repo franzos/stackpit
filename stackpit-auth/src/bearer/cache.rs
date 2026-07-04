@@ -12,6 +12,10 @@ pub(super) const CACHE_CAPACITY: usize = 4096;
 const CACHE_EXP_MARGIN_SECS: u64 = 5;
 const REVOCATION_CACHE_TTL_SECS: u64 = 5;
 pub(super) const REVOCATION_CACHE_CAPACITY: usize = 4096;
+/// Distinct forged opaque tokens must not each buy an introspection POST.
+/// Kept short so a token that becomes valid isn't locked out for long.
+const NEGATIVE_CACHE_TTL_SECS: u64 = 30;
+pub(super) const NEGATIVE_CACHE_CAPACITY: usize = 4096;
 
 pub(super) struct CacheEntry {
     pub(super) response: CachedResponse,
@@ -74,6 +78,26 @@ impl BearerGate {
             .revocation_cache
             .lock()
             .put(key, RevocationCacheEntry { expires_at });
+    }
+
+    /// True if this token hash was definitively rejected within the TTL.
+    pub(super) fn negative_cache_lookup(&self, key: &[u8; 32]) -> bool {
+        let mut cache = self.inner.negative_cache.lock();
+        match cache.get(key) {
+            Some(&expires_at) if expires_at > Instant::now() => true,
+            Some(_) => {
+                cache.pop(key);
+                false
+            }
+            None => false,
+        }
+    }
+
+    /// Only definitive rejections (introspection answered) land here;
+    /// transport errors don't, so an IdP blip can't lock out valid tokens.
+    pub(super) fn negative_cache_store(&self, key: [u8; 32]) {
+        let expires_at = Instant::now() + Duration::from_secs(NEGATIVE_CACHE_TTL_SECS);
+        self.inner.negative_cache.lock().put(key, expires_at);
     }
 
     pub(super) fn cache_evict(&self, key: &[u8; 32]) {

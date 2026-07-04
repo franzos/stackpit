@@ -5,6 +5,7 @@
 //! triggers refetch; transient failure leaves the previous set intact
 //! (stale-but-serving while the IdP recovers).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -23,6 +24,19 @@ const JWKS_MAX_BODY_BYTES: usize = 1 << 20;
 /// Defense-in-depth TTL floor (host validates at startup; this catches
 /// library users building `JwksCache` directly).
 const JWKS_TTL_FLOOR_SECS: u64 = 60;
+
+/// Forged-kid JWTs must not buy one IdP fetch per request: at most one fetch
+/// attempt (success or failure) per window. Legitimate key rotation waits at
+/// most this long.
+const JWKS_REFETCH_COOLDOWN: Duration = Duration::from_secs(15);
+
+/// Kids confirmed absent by the last successful fetch fail fast without
+/// touching the fetch mutex.
+const JWKS_NEGATIVE_KID_TTL: Duration = Duration::from_secs(30);
+
+/// Structurally the map holds one entry (cleared on every successful fetch,
+/// one insert after); this cap is defensive only.
+const JWKS_NEGATIVE_KID_CAPACITY: usize = 64;
 
 /// Shared between `prime` and the internal refetch path so the discovery
 /// surface can decide whether a startup failure is fatal.
@@ -101,6 +115,10 @@ struct Inner {
     ttl: Duration,
     state: Mutex<Option<CacheState>>,
     refetch_lock: AsyncMutex<()>,
+    /// Any fetch attempt (success or failure) arms the refetch cooldown.
+    last_fetch_attempt: Mutex<Option<Instant>>,
+    /// kid -> negative-entry expiry. See [`JWKS_NEGATIVE_KID_TTL`].
+    negative_kids: Mutex<HashMap<String, Instant>>,
 }
 
 impl JwksCache {
@@ -124,6 +142,8 @@ impl JwksCache {
                 ttl: Duration::from_secs(effective_ttl_secs),
                 state: Mutex::new(None),
                 refetch_lock: AsyncMutex::new(()),
+                last_fetch_attempt: Mutex::new(None),
+                negative_kids: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -181,13 +201,46 @@ impl JwksCache {
     }
 
     fn needs_refetch(&self, kid: &str) -> bool {
-        let state = self.inner.state.lock();
-        match state.as_ref() {
-            None => true,
-            Some(entry) => {
-                entry.fetched_at.elapsed() > self.inner.ttl || !has_kid(&entry.keys, kid)
-            }
+        if self.negative_kid_fresh(kid) {
+            return false;
         }
+        let stale = {
+            let state = self.inner.state.lock();
+            match state.as_ref() {
+                None => true,
+                Some(entry) => {
+                    entry.fetched_at.elapsed() > self.inner.ttl || !has_kid(&entry.keys, kid)
+                }
+            }
+        };
+        stale && !self.in_cooldown()
+    }
+
+    fn in_cooldown(&self) -> bool {
+        self.inner
+            .last_fetch_attempt
+            .lock()
+            .is_some_and(|t| t.elapsed() < JWKS_REFETCH_COOLDOWN)
+    }
+
+    fn negative_kid_fresh(&self, kid: &str) -> bool {
+        let mut map = self.inner.negative_kids.lock();
+        match map.get(kid) {
+            Some(&expires_at) if expires_at > Instant::now() => true,
+            Some(_) => {
+                map.remove(kid);
+                false
+            }
+            None => false,
+        }
+    }
+
+    fn remember_negative_kid(&self, kid: &str) {
+        let mut map = self.inner.negative_kids.lock();
+        if map.len() >= JWKS_NEGATIVE_KID_CAPACITY {
+            map.clear();
+        }
+        map.insert(kid.to_string(), Instant::now() + JWKS_NEGATIVE_KID_TTL);
     }
 
     fn lookup<T>(&self, project: impl FnOnce(&CacheState) -> Option<T>) -> Option<T> {
@@ -204,9 +257,18 @@ impl JwksCache {
         if !self.needs_refetch(kid) {
             return Ok(());
         }
-        self.do_fetch().await.map_err(|err| {
+        let result = self.do_fetch().await.map_err(|err| {
             tracing::warn!(error = %err, url = %self.inner.jwks_url, "JWKS fetch failed");
-        })
+        });
+        // Fresh set confirms the kid is unknown; remember so repeats fail fast.
+        if result.is_ok()
+            && self
+                .lookup(|s| has_kid(&s.keys, kid).then_some(()))
+                .is_none()
+        {
+            self.remember_negative_kid(kid);
+        }
+        result
     }
 
     /// Warm the cache so the first JWT request skips the RTT. Surfaces the
@@ -218,6 +280,7 @@ impl JwksCache {
     }
 
     async fn do_fetch(&self) -> Result<(), JwksError> {
+        *self.inner.last_fetch_attempt.lock() = Some(Instant::now());
         let mut resp = self
             .inner
             .http
@@ -261,6 +324,8 @@ impl JwksCache {
             raw: body,
             fetched_at: Instant::now(),
         });
+        // Old negatives may be stale against the rotated set.
+        self.inner.negative_kids.lock().clear();
         Ok(())
     }
 
@@ -274,6 +339,8 @@ impl JwksCache {
                 ttl: Duration::from_secs(ttl_secs.max(1)),
                 state: Mutex::new(None),
                 refetch_lock: AsyncMutex::new(()),
+                last_fetch_attempt: Mutex::new(None),
+                negative_kids: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -287,6 +354,7 @@ impl JwksCache {
             raw,
             fetched_at: Instant::now(),
         });
+        self.inner.negative_kids.lock().clear();
         Ok(())
     }
 
@@ -299,6 +367,13 @@ impl JwksCache {
             raw,
             fetched_at: Instant::now(),
         });
+        self.inner.negative_kids.lock().clear();
+    }
+
+    /// Test hook: disarm the refetch cooldown so tests can force refetches.
+    #[doc(hidden)]
+    pub fn _reset_cooldown(&self) {
+        *self.inner.last_fetch_attempt.lock() = None;
     }
 }
 
@@ -363,6 +438,8 @@ mod tests {
         // OLD populates the cache.
         assert!(cache.find("old").await.is_some());
         // `new` triggers refetch; rotated JWKS replaces the set wholesale.
+        // (Cooldown disarmed: rotation would otherwise wait it out.)
+        cache._reset_cooldown();
         assert!(cache.find("new").await.is_some());
         assert!(cache.find("old").await.is_none());
 
@@ -469,5 +546,96 @@ mod tests {
             Some(raw),
             "raw body should also survive a transient refetch failure",
         );
+    }
+
+    fn spawn_counting_jwks_server(body: &'static str) -> (std::net::SocketAddr, Arc<AtomicUsize>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_srv = hits.clone();
+
+        tokio::spawn(async move {
+            let listener = TcpListener::from_std(listener).unwrap();
+            loop {
+                let (mut sock, _) = match listener.accept().await {
+                    Ok(s) => s,
+                    Err(_) => return,
+                };
+                let hits = hits_srv.clone();
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 1024];
+                    let _ = sock.read(&mut buf).await;
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                    let _ = sock.shutdown().await;
+                });
+            }
+        });
+        (addr, hits)
+    }
+
+    /// Forged kids during the cooldown window must not trigger extra fetches.
+    #[tokio::test]
+    async fn forged_kids_during_cooldown_do_not_refetch() {
+        const JWKS_BODY: &str = r#"{"keys":[{"kty":"RSA","use":"sig","alg":"RS256","kid":"k1","n":"AQAB","e":"AQAB"}]}"#;
+        let (addr, hits) = spawn_counting_jwks_server(JWKS_BODY);
+        let cache = JwksCache::new(reqwest::Client::new(), format!("http://{addr}/jwks"), 3600);
+
+        // Empty cache: first find fetches and arms the cooldown.
+        assert!(cache.find("k1").await.is_some());
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+
+        // A storm of unknown kids must ride out the cooldown without fetching.
+        for i in 0..20 {
+            assert!(cache.find(&format!("forged-{i}")).await.is_none());
+        }
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            1,
+            "forged kids during cooldown must not fetch"
+        );
+
+        // Known kid still validates from cache.
+        assert!(cache.find("k1").await.is_some());
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+    }
+
+    /// A kid confirmed absent by a successful fetch is negative-cached: repeat
+    /// lookups skip the fetch even once the cooldown is disarmed.
+    #[tokio::test]
+    async fn negative_kid_cache_skips_fetch() {
+        const JWKS_BODY: &str = r#"{"keys":[{"kty":"RSA","use":"sig","alg":"RS256","kid":"k1","n":"AQAB","e":"AQAB"}]}"#;
+        let (addr, hits) = spawn_counting_jwks_server(JWKS_BODY);
+        let cache = JwksCache::new(reqwest::Client::new(), format!("http://{addr}/jwks"), 3600);
+        cache
+            ._prime_raw(JWKS_BODY.to_string())
+            .expect("prime parses");
+
+        // Unknown kid with no cooldown armed: fetch happens, kid still absent,
+        // so it lands in the negative cache.
+        assert!(cache.find("ghost").await.is_none());
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+
+        // Cooldown disarmed: only the negative cache can prevent a fetch now.
+        cache._reset_cooldown();
+        assert!(cache.find("ghost").await.is_none());
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            1,
+            "negative-cached kid must not fetch"
+        );
+
+        // A different unknown kid does fetch (and is not negative-cached yet).
+        assert!(cache.find("ghost2").await.is_none());
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
     }
 }

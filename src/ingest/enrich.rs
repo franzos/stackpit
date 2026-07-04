@@ -133,6 +133,9 @@ mod tests {
             trace_id: None,
             duration_ms: None,
             trace_status: None,
+            embedded_spans: None,
+            span_fields: None,
+            log_entries: None,
         }
     }
 
@@ -248,6 +251,9 @@ mod tests {
             trace_id: None,
             duration_ms: None,
             trace_status: None,
+            embedded_spans: None,
+            span_fields: None,
+            log_entries: None,
         };
         enrich_event(&mut event);
         assert!(event.fingerprint.is_none());

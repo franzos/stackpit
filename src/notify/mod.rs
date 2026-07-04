@@ -5,14 +5,19 @@ use crate::db::DbPool;
 use crate::providers;
 use crate::queries;
 use crate::util::crypto::SecretEncryptor;
-use dashmap::DashMap;
+use lru::LruCache;
+use parking_lot::Mutex;
 use rate_limit::NotifyRateLimiter;
 use std::net::SocketAddr;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 /// Reqwest clients keyed by (host, SSRF-resolved addr); each pins connections
 /// to that addr so repeated deliveries reuse the pool and TLS.
-type ClientCache = Arc<DashMap<(String, SocketAddr), reqwest::Client>>;
+/// LRU-bounded so rotating-DNS targets can't mint clients without limit.
+type ClientCache = Arc<Mutex<LruCache<(String, SocketAddr), reqwest::Client>>>;
+
+const CLIENT_CACHE_CAP: usize = 64;
 
 #[derive(Debug, Clone)]
 pub struct NotificationEvent {
@@ -112,7 +117,7 @@ fn pinned_client(
     resolved: &crate::util::ssrf::ResolvedWebhook,
 ) -> Result<reqwest::Client, reqwest::Error> {
     let key = (resolved.hostname.clone(), resolved.addr);
-    if let Some(client) = cache.get(&key) {
+    if let Some(client) = cache.lock().get(&key) {
         return Ok(client.clone());
     }
     let client = reqwest::Client::builder()
@@ -120,7 +125,7 @@ fn pinned_client(
         .redirect(reqwest::redirect::Policy::none())
         .resolve(&resolved.hostname, resolved.addr)
         .build()?;
-    cache.insert(key, client.clone());
+    cache.lock().put(key, client.clone());
     Ok(client)
 }
 
@@ -170,7 +175,8 @@ pub async fn run_dispatcher(
     tracing::info!("notification dispatcher started");
 
     let dispatch_limit = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_DISPATCH));
-    let client_cache: ClientCache = Arc::new(DashMap::new());
+    let cap = NonZeroUsize::new(CLIENT_CACHE_CAP).expect("CLIENT_CACHE_CAP is non-zero");
+    let client_cache: ClientCache = Arc::new(Mutex::new(LruCache::new(cap)));
 
     while let Some(event) = rx.recv().await {
         // Digests bypass rate limiting; they're already interval-controlled.

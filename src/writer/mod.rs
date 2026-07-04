@@ -26,6 +26,19 @@ use msg::WriteMsg::*;
 /// Total queued-message capacity, split evenly across writer tasks.
 const TOTAL_QUEUE_CAPACITY: usize = 50_000;
 
+/// Run CPU-bound work via `block_in_place` only on a multi-thread runtime;
+/// it panics on a current-thread runtime, so run inline there instead.
+pub(crate) fn block_in_place_if_multi_thread<R>(f: impl FnOnce() -> R) -> R {
+    let multi_thread = tokio::runtime::Handle::try_current()
+        .map(|h| h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
+        .unwrap_or(false);
+    if multi_thread {
+        tokio::task::block_in_place(f)
+    } else {
+        f()
+    }
+}
+
 pub async fn spawn(
     pool: DbPool,
     notify_tx: Option<tokio::sync::mpsc::Sender<crate::notify::NotificationEvent>>,
@@ -1462,6 +1475,42 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(root.0, 0);
+    }
+
+    /// A log batch parsed from an envelope must land as one row per entry,
+    /// each individually zstd-compressed, via the pre-extracted entries
+    /// (no payload re-parse at flush).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn log_batch_flushes_per_entry_compressed_rows() {
+        let pool = test_pool().await;
+        let mut acc = Accumulators::new();
+
+        let body = b"{}\n{\"type\":\"log\"}\n{\"items\":[{\"body\":\"first\",\"level\":\"warn\",\"trace_id\":\"t1\"},{\"body\":\"second\",\"level\":\"error\"}]}\n";
+        let auth = crate::ingest::auth::SentryAuth {
+            sentry_key: "k".to_string(),
+        };
+        let parsed = crate::ingest::envelope::parse(body, 1, &auth).unwrap();
+        assert_eq!(parsed.events.len(), 1);
+        assert!(parsed.events[0].log_entries.is_some());
+
+        let mut batch: Vec<WriteMsg> = parsed.events.into_iter().map(WriteMsg::Event).collect();
+        assert!(flush_batch(&pool, &mut batch, &mut acc, None).await);
+
+        let rows: Vec<(Vec<u8>, Option<String>, Option<String>, Option<String>)> =
+            sqlx::query_as("SELECT payload, level, body, trace_id FROM logs ORDER BY body")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(rows.len(), 2, "one row per log entry");
+        assert_eq!(rows[0].1.as_deref(), Some("warning"));
+        assert_eq!(rows[0].2.as_deref(), Some("first"));
+        assert_eq!(rows[0].3.as_deref(), Some("t1"));
+        assert_eq!(rows[1].1.as_deref(), Some("error"));
+
+        // Stored payload stays an individually zstd-compressed entry.
+        let entry: serde_json::Value =
+            serde_json::from_slice(&zstd::decode_all(rows[0].0.as_slice()).unwrap()).unwrap();
+        assert_eq!(entry.get("body").and_then(|v| v.as_str()), Some("first"));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -11,10 +11,10 @@ use super::msg::WriteMsg;
 
 /// Compress event payloads with zstd. A fallback: the accept path already
 /// compresses on send, so this is a no-op for events that came through the
-/// `WriterHandle`. Uses `block_in_place` to move any remaining CPU-bound
-/// compression off the async runtime's cooperative budget.
+/// `WriterHandle`. Moves any remaining CPU-bound compression off the async
+/// runtime's cooperative budget where the runtime allows it.
 fn compress_batch(batch: &mut [WriteMsg]) {
-    tokio::task::block_in_place(|| {
+    super::block_in_place_if_multi_thread(|| {
         for msg in batch.iter_mut() {
             if let WriteMsg::Event(event) | WriteMsg::EventWithAttachments(event, _) = msg {
                 event.compress_payload();
@@ -370,5 +370,22 @@ mod tests {
             decoded, json,
             "double-compressed payload must decode to original"
         );
+    }
+
+    // Regression: block_in_place panics on a current-thread runtime; the shared
+    // guard must fall back to running inline.
+    #[tokio::test]
+    async fn compress_batch_works_on_current_thread_runtime() {
+        let json = serde_json::json!({"event_id": "ct1", "message": "current thread"});
+        let raw = serde_json::to_vec(&json).unwrap();
+        let event = StorableEvent::new("ct1".to_string(), ItemType::Event, raw, 1, "k".to_string());
+        let mut batch = vec![WriteMsg::Event(event)];
+
+        compress_batch(&mut batch);
+
+        let WriteMsg::Event(e) = &batch[0] else {
+            panic!("expected event");
+        };
+        assert!(e.compressed);
     }
 }

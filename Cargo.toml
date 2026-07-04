@@ -84,11 +84,10 @@ openidconnect = { version = "4", default-features = false, features = ["reqwest"
 jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
 url = "2"
 # i18n: Fluent loader (embeds locales/*.ftl at compile time), language
-# identifiers, negotiation, and .ftl parsing for the parity test.
+# identifiers, and negotiation.
 fluent-templates = "0.14"
 unic-langid = { version = "0.9", features = ["macros"] }
 fluent-langneg = "0.13"
-fluent-syntax = "0.12"
 
 [dev-dependencies]
 # loopback http only — no TLS feature needed.
@@ -100,6 +99,8 @@ stackpit-auth = { path = "stackpit-auth" }
 serde_urlencoded = "0.7"
 # HTML render snapshots (pre-i18n-retrofit baseline).
 insta = "1"
+# .ftl parsing for the i18n parity test.
+fluent-syntax = "0.12"
 
 [package.metadata.generate-rpm]
 assets = [

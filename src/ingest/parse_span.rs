@@ -2,7 +2,8 @@
 
 use serde_json::Value;
 
-pub(crate) struct SpanFields {
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpanFields {
     pub span_id: Option<String>,
     pub trace_id: Option<String>,
     pub parent_span_id: Option<String>,
@@ -12,6 +13,50 @@ pub(crate) struct SpanFields {
     pub duration_ms: Option<i64>,
     /// Absolute epoch milliseconds of the span start. Required for waterfalls.
     pub start_ms: Option<i64>,
+}
+
+/// A child span pre-extracted from a transaction payload at envelope-parse
+/// time, so the writer flush doesn't decompress and re-parse the payload.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EmbeddedSpan {
+    pub fields: SpanFields,
+    /// Serialized child span JSON; stored as the span row payload.
+    pub payload: Vec<u8>,
+    /// The child's own timestamp; falls back to the parent event's at flush.
+    pub timestamp: Option<i64>,
+}
+
+/// Cap on embedded child spans extracted from a single transaction payload.
+pub(crate) const MAX_EMBEDDED_SPANS: usize = 1000;
+
+/// Pull child spans out of an already-parsed transaction payload (capped).
+/// Spans without a `span_id` are skipped: they can't be deduplicated.
+pub(crate) fn extract_embedded_spans_from_value(json: &Value) -> Vec<EmbeddedSpan> {
+    let Some(spans) = json.get("spans").and_then(|s| s.as_array()) else {
+        return Vec::new();
+    };
+    if spans.len() > MAX_EMBEDDED_SPANS {
+        tracing::warn!(
+            span_count = spans.len(),
+            "transaction has more than {MAX_EMBEDDED_SPANS} child spans; capping"
+        );
+    }
+    spans
+        .iter()
+        .take(MAX_EMBEDDED_SPANS)
+        .filter_map(|child| {
+            let fields = extract_span_fields_from_value(child);
+            fields.span_id.as_ref()?;
+            Some(EmbeddedSpan {
+                payload: serde_json::to_vec(child).unwrap_or_default(),
+                timestamp: child
+                    .get("timestamp")
+                    .and_then(Value::as_f64)
+                    .map(|f| f.round() as i64),
+                fields,
+            })
+        })
+        .collect()
 }
 
 /// Map OTEL SpanStatusCode to string. The spec defines only three values:

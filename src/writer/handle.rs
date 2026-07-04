@@ -85,12 +85,8 @@ impl WriterHandle {
         if event.compressed {
             return;
         }
-        let large = event.payload.len() > INLINE_COMPRESS_MAX;
-        let multi_thread = tokio::runtime::Handle::try_current()
-            .map(|h| h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
-            .unwrap_or(false);
-        if large && multi_thread {
-            tokio::task::block_in_place(|| event.compress_payload());
+        if event.payload.len() > INLINE_COMPRESS_MAX {
+            super::block_in_place_if_multi_thread(|| event.compress_payload());
         } else {
             event.compress_payload();
         }
@@ -216,9 +212,10 @@ impl WriterHandle {
         if n == 0 {
             return true;
         }
+        // Must mirror msg_bytes so the drain-side decrement balances this reserve.
         let total: usize = events
             .iter()
-            .map(|(e, atts)| e.payload.len() + atts.iter().map(|a| a.data.len()).sum::<usize>())
+            .map(|(e, atts)| e.queued_bytes() + atts.iter().map(|a| a.data.len()).sum::<usize>())
             .sum();
         if !self.try_reserve_bytes(total) {
             self.ingest_stats

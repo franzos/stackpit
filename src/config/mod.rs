@@ -72,6 +72,12 @@ pub struct ServerConfig {
     /// so first-run never needs this.
     #[serde(default)]
     pub no_auth_loopback_acknowledged: bool,
+    /// Reverse-proxy peers (IPs or CIDR blocks) trusted to set
+    /// X-Forwarded-For / X-Real-IP. Loopback is always trusted; add the
+    /// proxy's address here when it reaches Stackpit over a non-loopback
+    /// network (Docker bridge, k8s, separate LB host).
+    #[serde(default)]
+    pub trusted_proxies: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -321,6 +327,7 @@ impl Default for ServerConfig {
             max_compressed_body_size: None,
             force_secure_cookies: false,
             no_auth_loopback_acknowledged: false,
+            trusted_proxies: Vec::new(),
         }
     }
 }
@@ -598,6 +605,31 @@ mod tests {
         cfg.auth.oauth.post_logout_allow_cross_origin = true;
         cfg.validate()
             .expect("same-origin with flag set should still pass");
+    }
+
+    #[test]
+    fn trusted_proxies_malformed_rejected() {
+        let mut cfg = no_auth_config("127.0.0.1:3000", true);
+        cfg.server.trusted_proxies = vec!["not-a-cidr".to_string()];
+        let err = cfg
+            .validate()
+            .expect_err("malformed trusted_proxies must fail");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("trusted_proxies"),
+            "error should mention the key; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn trusted_proxies_valid_entries_pass() {
+        let mut cfg = no_auth_config("127.0.0.1:3000", true);
+        cfg.server.trusted_proxies = vec![
+            "10.0.0.5".to_string(),
+            "172.16.0.0/12".to_string(),
+            "2001:db8::/32".to_string(),
+        ];
+        cfg.validate().expect("valid trusted_proxies should pass");
     }
 
     #[test]

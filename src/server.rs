@@ -53,6 +53,9 @@ pub struct AppState {
     pub project_count_cache: ProjectCountCache,
     /// Per-IP ingest auth-failure limiter (never counts successful ingest).
     pub ingest_failure_limiter: SharedFailureLimiter,
+    /// Peers trusted to set X-Forwarded-For / X-Real-IP (loopback plus
+    /// `server.trusted_proxies`).
+    pub trusted_proxies: Arc<crate::util::network::TrustedProxies>,
     pub encryptor: Option<Arc<SecretEncryptor>>,
     #[allow(dead_code)]
     pub ingest_stats: Arc<IngestStats>,
@@ -239,6 +242,13 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
     let project_count_cache: ProjectCountCache = Arc::new(parking_lot::Mutex::new(None));
     let ingest_failure_limiter = new_failure_limiter();
 
+    // Config::validate already rejected malformed entries; this re-parse is the
+    // single runtime source of truth for header trust.
+    let trusted_proxies = Arc::new(
+        crate::util::network::TrustedProxies::parse(&config.server.trusted_proxies)
+            .map_err(anyhow::Error::msg)?,
+    );
+
     let encryptor = SecretEncryptor::from_config_or_env(config.server.master_key.as_ref())
         .map_err(anyhow::Error::msg)?
         .map(Arc::new);
@@ -342,6 +352,7 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
         negative_auth_cache,
         project_count_cache,
         ingest_failure_limiter,
+        trusted_proxies,
         encryptor,
         ingest_stats,
         oidc: oidc.clone(),
@@ -420,7 +431,7 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
         })
         .await;
     } else {
-        let rate_limiter = middleware::new_rate_limiter_state();
+        let rate_limiter = middleware::new_rate_limiter_state(state.trusted_proxies.clone());
 
         let admin_app = Router::new()
             .route("/health", get(health_handler))
@@ -472,10 +483,15 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
                 axum::serve(ingest_listener, ingest_app).with_graceful_shutdown(async move {
                     let _ = ingest_rx.wait_for(|&v| v).await;
                 });
-            let admin_server =
-                axum::serve(admin_listener, admin_app).with_graceful_shutdown(async move {
-                    let _ = admin_rx.wait_for(|&v| v).await;
-                });
+            // ConnectInfo must be inserted here or the rate limiter loses its
+            // per-IP keys and collapses to one shared bucket.
+            let admin_server = axum::serve(
+                admin_listener,
+                admin_app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move {
+                let _ = admin_rx.wait_for(|&v| v).await;
+            });
             vec![
                 (
                     "ingest",

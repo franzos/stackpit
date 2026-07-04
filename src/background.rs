@@ -181,18 +181,30 @@ async fn run_digest_cycle(
             continue;
         }
 
-        let payload = crate::notify::DigestPayload {
-            period_start,
-            period_end,
-            projects: projects.clone(),
-        };
-
-        // project_id 0 is the sentinel for global digests.
-        let project_id = schedule.project_id.unwrap_or(0);
-
         let mut any_sent = false;
-        if schedule.project_id.is_none() {
-            for project in &projects {
+        if let Some(project_id) = schedule.project_id {
+            let event = crate::notify::NotificationEvent {
+                trigger: crate::notify::NotifyTrigger::Digest,
+                project_id,
+                fingerprint: String::new(),
+                title: Some("Digest summary".to_string()),
+                level: None,
+                environment: None,
+                event_id: String::new(),
+                digest: Some(crate::notify::DigestPayload {
+                    period_start,
+                    period_end,
+                    projects,
+                }),
+            };
+            match notify_tx.try_send(event) {
+                Ok(()) => any_sent = true,
+                Err(e) => tracing::warn!("digest: dropped notification (channel full): {e}"),
+            }
+        } else {
+            // Channels resolve per project (get_active_for_project), so each
+            // event carries only its own project's data, never the whole org's.
+            for project in projects {
                 let event = crate::notify::NotificationEvent {
                     trigger: crate::notify::NotifyTrigger::Digest,
                     project_id: project.project_id,
@@ -205,27 +217,16 @@ async fn run_digest_cycle(
                     level: None,
                     environment: None,
                     event_id: String::new(),
-                    digest: Some(payload.clone()),
+                    digest: Some(crate::notify::DigestPayload {
+                        period_start,
+                        period_end,
+                        projects: vec![project],
+                    }),
                 };
                 match notify_tx.try_send(event) {
                     Ok(()) => any_sent = true,
                     Err(e) => tracing::warn!("digest: dropped notification (channel full): {e}"),
                 }
-            }
-        } else {
-            let event = crate::notify::NotificationEvent {
-                trigger: crate::notify::NotifyTrigger::Digest,
-                project_id,
-                fingerprint: String::new(),
-                title: Some("Digest summary".to_string()),
-                level: None,
-                environment: None,
-                event_id: String::new(),
-                digest: Some(payload),
-            };
-            match notify_tx.try_send(event) {
-                Ok(()) => any_sent = true,
-                Err(e) => tracing::warn!("digest: dropped notification (channel full): {e}"),
             }
         }
 
@@ -235,6 +236,95 @@ async fn run_digest_cycle(
             {
                 tracing::warn!("digest: failed to update last_sent: {e}");
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::run_digest_cycle;
+    use crate::queries::test_helpers::{insert_test_event, insert_test_issue, open_test_db};
+
+    #[tokio::test]
+    async fn global_digest_events_are_scoped_per_project() {
+        let pool = open_test_db().await;
+        let now = chrono::Utc::now().timestamp();
+
+        sqlx::query(
+            "INSERT INTO projects (project_id, name, status)
+             VALUES (1, 'Project A', 'active'), (2, 'Project B', 'active')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        insert_test_event(
+            &pool,
+            "e1",
+            1,
+            now - 100,
+            Some("fp-a"),
+            Some("error"),
+            Some("Error A"),
+        )
+        .await;
+        insert_test_issue(
+            &pool,
+            "fp-a",
+            1,
+            Some("Error A"),
+            Some("error"),
+            now - 100,
+            now - 100,
+            1,
+            "unresolved",
+        )
+        .await;
+        insert_test_event(
+            &pool,
+            "e2",
+            2,
+            now - 100,
+            Some("fp-b"),
+            Some("error"),
+            Some("Error B"),
+        )
+        .await;
+        insert_test_issue(
+            &pool,
+            "fp-b",
+            2,
+            Some("Error B"),
+            Some("error"),
+            now - 100,
+            now - 100,
+            1,
+            "unresolved",
+        )
+        .await;
+
+        // Org-wide schedule (project_id = NULL), due immediately.
+        crate::queries::alerts::create_digest_schedule(&pool, 1, None, 3600)
+            .await
+            .unwrap();
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        run_digest_cycle(&pool, &tx).await;
+        drop(tx);
+
+        let mut events = Vec::new();
+        while let Some(ev) = rx.recv().await {
+            events.push(ev);
+        }
+        assert_eq!(events.len(), 2, "one event per project with activity");
+        for ev in &events {
+            let digest = ev.digest.as_ref().expect("digest payload present");
+            assert_eq!(
+                digest.projects.len(),
+                1,
+                "payload must contain only the event's own project"
+            );
+            assert_eq!(digest.projects[0].project_id, ev.project_id);
         }
     }
 }

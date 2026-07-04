@@ -18,7 +18,9 @@ pub struct Membership {
     pub ext_org_id: Option<String>,
 }
 
-async fn personal_org_id(pool: &DbPool, user_id: i64) -> Result<Option<i64>> {
+/// Read-only lookup; the request hot path uses this instead of the
+/// `ensure_personal_org` upsert so it never writes on the auth pool.
+pub async fn personal_org_id(pool: &DbPool, user_id: i64) -> Result<Option<i64>> {
     let row = sqlx::query(sql!(
         "SELECT org_id FROM organizations WHERE created_by = ?1 AND is_personal = ?2"
     ))

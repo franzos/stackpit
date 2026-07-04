@@ -55,16 +55,14 @@ pub(crate) use sql;
 /// `translate_sql`. Only called on the PostgreSQL build.
 #[cfg(not(feature = "sqlite"))]
 pub(crate) fn rewrite_placeholders(s: &str) -> String {
-    let bytes = s.as_bytes();
     let mut result = String::with_capacity(s.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'?' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_digit() {
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '?' && chars.peek().is_some_and(char::is_ascii_digit) {
             result.push('$');
         } else {
-            result.push(bytes[i] as char);
+            result.push(c);
         }
-        i += 1;
     }
     result
 }
@@ -215,6 +213,40 @@ pub async fn open_test_pool() -> DbPool {
     }
 
     pool
+}
+
+#[cfg(all(test, not(feature = "sqlite")))]
+mod rewrite_tests {
+    use super::rewrite_placeholders;
+
+    #[test]
+    fn rewrites_numbered_placeholders() {
+        assert_eq!(
+            rewrite_placeholders("SELECT ?1, ?2 FROM t WHERE a = ?10"),
+            "SELECT $1, $2 FROM t WHERE a = $10"
+        );
+    }
+
+    #[test]
+    fn leaves_bare_question_marks_alone() {
+        assert_eq!(
+            rewrite_placeholders("SELECT '?' FROM t WHERE a LIKE '?x'"),
+            "SELECT '?' FROM t WHERE a LIKE '?x'"
+        );
+    }
+
+    #[test]
+    fn non_ascii_passes_through_unchanged() {
+        assert_eq!(
+            rewrite_placeholders("SELECT ?1 FROM t WHERE title = 'überraschung 日本語 ✓'"),
+            "SELECT $1 FROM t WHERE title = 'überraschung 日本語 ✓'"
+        );
+    }
+
+    #[test]
+    fn non_ascii_directly_before_placeholder() {
+        assert_eq!(rewrite_placeholders("'é'?1"), "'é'$1");
+    }
 }
 
 #[cfg(test)]

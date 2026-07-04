@@ -21,15 +21,23 @@ struct RateLimiterInner {
     last_cleanup: u64,
 }
 
-pub struct RateLimiterState(Mutex<RateLimiterInner>);
+pub struct RateLimiterState {
+    inner: Mutex<RateLimiterInner>,
+    trusted_proxies: Arc<crate::util::network::TrustedProxies>,
+}
 
 pub type SharedRateLimiter = Arc<RateLimiterState>;
 
-pub fn new_rate_limiter_state() -> SharedRateLimiter {
-    Arc::new(RateLimiterState(Mutex::new(RateLimiterInner {
-        buckets: HashMap::new(),
-        last_cleanup: 0,
-    })))
+pub fn new_rate_limiter_state(
+    trusted_proxies: Arc<crate::util::network::TrustedProxies>,
+) -> SharedRateLimiter {
+    Arc::new(RateLimiterState {
+        inner: Mutex::new(RateLimiterInner {
+            buckets: HashMap::new(),
+            last_cleanup: 0,
+        }),
+        trusted_proxies,
+    })
 }
 
 fn check_rate_limit(
@@ -51,11 +59,12 @@ fn check_rate_limit(
         .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
         .map(|ci| ci.0);
 
-    let ip = crate::util::network::extract_client_ip(req.headers(), peer_addr)
-        .unwrap_or_else(|| "unknown".to_string());
+    let ip =
+        crate::util::network::extract_client_ip(req.headers(), peer_addr, &limiter.trusted_proxies)
+            .unwrap_or_else(|| "unknown".to_string());
 
     // `parking_lot::Mutex` doesn't poison: a panic inside can't fail-closed the admin surface.
-    let mut inner = limiter.0.lock();
+    let mut inner = limiter.inner.lock();
 
     // Evict stale buckets once per window.
     if now.saturating_sub(inner.last_cleanup) >= ADMIN_RATE_WINDOW_SECS {
@@ -105,5 +114,75 @@ pub async fn rate_limit_middleware(
             "rate limit exceeded",
         )
             .into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn limiter() -> SharedRateLimiter {
+        new_rate_limiter_state(Arc::new(crate::util::network::TrustedProxies::default()))
+    }
+
+    fn login_request(peer: &str) -> axum::http::Request<axum::body::Body> {
+        let mut req = axum::http::Request::builder()
+            .method(axum::http::Method::POST)
+            .uri("/web/login")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let addr: std::net::SocketAddr = peer.parse().unwrap();
+        req.extensions_mut()
+            .insert(axum::extract::ConnectInfo(addr));
+        req
+    }
+
+    #[test]
+    fn login_limit_is_per_ip_not_global() {
+        let limiter = limiter();
+        for _ in 0..LOGIN_RATE_LIMIT {
+            assert!(check_rate_limit(
+                &limiter,
+                &login_request("203.0.113.1:1000")
+            ));
+        }
+        // First IP exhausted its bucket.
+        assert!(!check_rate_limit(
+            &limiter,
+            &login_request("203.0.113.1:1000")
+        ));
+        // A different IP must still be allowed (no global lockout).
+        assert!(check_rate_limit(
+            &limiter,
+            &login_request("203.0.113.2:1000")
+        ));
+    }
+
+    #[test]
+    fn missing_connect_info_shares_the_unknown_bucket() {
+        let limiter = limiter();
+        let req = axum::http::Request::builder()
+            .method(axum::http::Method::POST)
+            .uri("/web/login")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        for _ in 0..LOGIN_RATE_LIMIT {
+            assert!(check_rate_limit(&limiter, &req));
+        }
+        assert!(!check_rate_limit(&limiter, &req));
+    }
+
+    #[test]
+    fn xff_from_loopback_peer_buckets_by_forwarded_ip() {
+        let limiter = limiter();
+        let mut req = login_request("127.0.0.1:1000");
+        req.headers_mut()
+            .insert("x-forwarded-for", "203.0.113.9".parse().unwrap());
+        for _ in 0..LOGIN_RATE_LIMIT {
+            assert!(check_rate_limit(&limiter, &req));
+        }
+        assert!(!check_rate_limit(&limiter, &req));
+        // Loopback itself (no XFF) is a separate bucket.
+        assert!(check_rate_limit(&limiter, &login_request("127.0.0.1:1000")));
     }
 }

@@ -16,6 +16,8 @@
 //!   re-checked by `Validation::set_issuer`.
 //! - Positive cache (SHA-256 keyed) covers both arms; revocation re-checked
 //!   on hit. See [`cache`].
+//! - Short-TTL negative cache on the opaque arm: definitive introspection
+//!   rejections are remembered so forged tokens can't drive one POST each.
 //!
 //! Cache invariants:
 //! - Cache hits do NOT re-run the provisioner. The trust anchor on hits is
@@ -31,7 +33,7 @@ mod opaque;
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use http::HeaderMap;
@@ -44,7 +46,10 @@ use uuid::Uuid;
 use crate::context::{AuthContext, PrincipalId};
 use crate::jwks::JwksCache;
 
-use cache::{CacheEntry, RevocationCacheEntry, CACHE_CAPACITY, REVOCATION_CACHE_CAPACITY};
+use cache::{
+    CacheEntry, RevocationCacheEntry, CACHE_CAPACITY, NEGATIVE_CACHE_CAPACITY,
+    REVOCATION_CACHE_CAPACITY,
+};
 use jwt::looks_like_jwt;
 
 /// Authorization header size cap. Real JWTs are ~1 KB; opaque smaller still.
@@ -112,6 +117,9 @@ struct Inner {
     cache_max_ttl: Duration,
     cache: Mutex<LruCache<[u8; 32], CacheEntry>>,
     revocation_cache: Mutex<LruCache<[u8; 32], RevocationCacheEntry>>,
+    /// Short-TTL negative cache of definitively rejected opaque tokens
+    /// (SHA-256 keyed); expiry per entry. See [`cache`].
+    negative_cache: Mutex<LruCache<[u8; 32], Instant>>,
     /// Advertised in 401 WWW-Authenticate. Empty for non-MCP callers.
     resource_metadata_url: String,
     realm: String,
@@ -221,6 +229,10 @@ impl BearerGate {
                 revocation_cache: Mutex::new(LruCache::new(
                     NonZeroUsize::new(REVOCATION_CACHE_CAPACITY)
                         .expect("REVOCATION_CACHE_CAPACITY > 0"),
+                )),
+                negative_cache: Mutex::new(LruCache::new(
+                    NonZeroUsize::new(NEGATIVE_CACHE_CAPACITY)
+                        .expect("NEGATIVE_CACHE_CAPACITY > 0"),
                 )),
                 resource_metadata_url: cfg.resource_metadata_url,
                 realm: cfg.realm,
@@ -721,6 +733,105 @@ mod tests {
             *self.calls.lock() += 1;
             Ok(false)
         }
+    }
+
+    fn spawn_introspection_server(
+        body: String,
+    ) -> (std::net::SocketAddr, Arc<std::sync::atomic::AtomicUsize>) {
+        use std::sync::atomic::AtomicUsize;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_srv = hits.clone();
+        let body: Arc<str> = body.into();
+
+        tokio::spawn(async move {
+            let listener = TcpListener::from_std(listener).unwrap();
+            loop {
+                let (mut sock, _) = match listener.accept().await {
+                    Ok(s) => s,
+                    Err(_) => return,
+                };
+                let hits = hits_srv.clone();
+                let body = body.clone();
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 2048];
+                    let _ = sock.read(&mut buf).await;
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                    let _ = sock.shutdown().await;
+                });
+            }
+        });
+        (addr, hits)
+    }
+
+    // inactive introspection result is negative-cached: repeat within TTL
+    // skips the POST; force-expired entry re-introspects
+    #[tokio::test]
+    async fn opaque_inactive_introspection_negative_cached() {
+        let (addr, hits) = spawn_introspection_server(r#"{"active":false}"#.to_string());
+        let gate = base_gate(|c| c.introspection_url = Some(format!("http://{addr}/introspect")));
+        let token = "opaque-forged-token";
+
+        for _ in 0..3 {
+            let outcome = gate.authorize(Some(token), "").await;
+            assert!(matches!(outcome, BearerAuthOutcome::InvalidToken));
+        }
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            1,
+            "repeat rejections within TTL must hit the negative cache"
+        );
+
+        // Force-expire the entry; the next call must introspect again.
+        let key = cache::hash_token(token);
+        gate.inner.negative_cache.lock().put(key, Instant::now());
+        let outcome = gate.authorize(Some(token), "").await;
+        assert!(matches!(outcome, BearerAuthOutcome::InvalidToken));
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            2,
+            "expired negative entry must re-introspect"
+        );
+    }
+
+    // valid opaque tokens are untouched by the negative cache
+    #[tokio::test]
+    async fn opaque_valid_token_not_negative_cached() {
+        let body = format!(
+            r#"{{"active":true,"sub":"alice","aud":["https://mcp.example.com"],"iss":"https://hydra.example.com","scope":"stackpit:events:read","exp":{}}}"#,
+            now() + 300
+        );
+        let (addr, hits) = spawn_introspection_server(body);
+        let gate = base_gate(|c| c.introspection_url = Some(format!("http://{addr}/introspect")));
+        let token = "opaque-valid-token";
+
+        for _ in 0..2 {
+            match gate.authorize(Some(token), "stackpit:events:read").await {
+                BearerAuthOutcome::Ok(AuthContext::User { sub, .. }) => assert_eq!(sub, "alice"),
+                _ => panic!("expected user"),
+            }
+        }
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            2,
+            "cache_ttl=0 gate must introspect both times (negative cache must not block)"
+        );
+        assert_eq!(
+            gate.inner.negative_cache.lock().len(),
+            0,
+            "valid token must never land in the negative cache"
+        );
     }
 
     #[tokio::test]

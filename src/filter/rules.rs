@@ -240,6 +240,9 @@ mod tests {
             trace_id: None,
             duration_ms: None,
             trace_status: None,
+            embedded_spans: None,
+            span_fields: None,
+            log_entries: None,
         };
 
         assert_eq!(FilterField::Level.extract(&event), Some("error"));

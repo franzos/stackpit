@@ -30,6 +30,9 @@ impl Config {
             )
         })?;
 
+        crate::util::network::TrustedProxies::parse(&self.server.trusted_proxies)
+            .map_err(anyhow::Error::msg)?;
+
         validate_absolute_http_url("server.external_url", self.server.external_url.as_deref())?;
         validate_absolute_http_url(
             "server.external_ingest_url",

@@ -8,10 +8,9 @@
 
 use chrono::{DateTime, Utc};
 
-/// Gated feature names recognised by Stackpit. Empty for now — the commercial
-/// machinery is in place so a future feature is just a new variant here plus
-/// its wire string. The license blob carries feature strings; unrecognised
-/// ones are ignored at parse time.
+/// Gated feature names recognised by Stackpit. The license blob carries
+/// feature strings, and each variant here maps to one of them via
+/// [`Feature::wire_name`]; unrecognised strings are ignored at parse time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Feature {
     Observability,
@@ -61,7 +60,6 @@ pub struct License {
 }
 
 impl License {
-    #[allow(dead_code)]
     pub fn has_feature(&self, feature: Feature) -> bool {
         self.features.contains(&feature)
     }
@@ -119,7 +117,6 @@ pub enum FeatureStatus {
 }
 
 /// Pure function so it can be unit-tested without an `ArcSwap`.
-#[allow(dead_code)]
 pub(crate) fn evaluate_feature(status: &LicenseStatus, feature: Feature) -> FeatureStatus {
     let license = match status {
         LicenseStatus::Unlicensed | LicenseStatus::Expired(_) => return FeatureStatus::Locked,

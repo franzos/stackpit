@@ -68,10 +68,11 @@ pub struct AppState {
     pub nav_cache: crate::queries::projects::NavCountsCache,
     /// Queues notifications to the dispatcher; used by the digest-test preview.
     pub notify_tx: tokio::sync::mpsc::Sender<crate::notify::NotificationEvent>,
-    /// Commercial license status (lock-free `ArcSwap`); no features gated yet.
+    /// Commercial license status (lock-free `ArcSwap`); gates commercial
+    /// features such as Prometheus metrics scraping.
     pub license: crate::commercial::LicenseHandle,
     pub metrics_handle: metrics_exporter_prometheus::PrometheusHandle,
-    pub metrics_scrape_token: Option<String>,
+    pub metrics_scrape_token: Option<secrecy::SecretString>,
 }
 
 impl AppState {
@@ -351,8 +352,10 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
     crate::commercial::spawn_reclassify(license.clone(), bg_cancel.child_token());
 
     let metrics_handle = crate::metrics::install_metrics_recorder();
-    let metrics_scrape_token =
-        std::env::var("STACKPIT_METRICS_TOKEN").ok().filter(|t| !t.is_empty());
+    let metrics_scrape_token = std::env::var("STACKPIT_METRICS_TOKEN")
+        .ok()
+        .filter(|t| !t.is_empty())
+        .map(secrecy::SecretString::from);
 
     let state = AppState {
         config: config.clone(),

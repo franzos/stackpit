@@ -86,8 +86,7 @@ impl LicenseHandle {
     /// Feature gate. Returns [`FeatureStatus::Allowed`] when the license
     /// covers `feature` and isn't past its hard-gate date,
     /// [`FeatureStatus::GraceReadOnly`] inside the grace window,
-    /// [`FeatureStatus::Locked`] otherwise. Uninhabited today (no features).
-    #[allow(dead_code)]
+    /// [`FeatureStatus::Locked`] otherwise.
     pub fn feature(&self, feature: Feature) -> FeatureStatus {
         let status = self.status();
         license::evaluate_feature(&status, feature)

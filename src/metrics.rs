@@ -1,4 +1,5 @@
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
+use secrecy::ExposeSecret;
 use subtle::ConstantTimeEq;
 
 use crate::commercial::license::{Feature, FeatureStatus};
@@ -85,7 +86,7 @@ pub async fn metrics_handler(State(state): State<AppState>, headers: HeaderMap) 
     if !scrape_allowed(state.license.feature(Feature::Observability)) {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let Some(expected) = state.metrics_scrape_token.as_deref() else {
+    let Some(expected) = state.metrics_scrape_token.as_ref().map(|t| t.expose_secret()) else {
         return StatusCode::NOT_FOUND.into_response();
     };
     if !bearer_matches(&headers, expected) {

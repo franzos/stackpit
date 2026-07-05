@@ -1,6 +1,6 @@
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 
-use crate::commercial::license::FeatureStatus;
+use crate::commercial::license::{Feature, FeatureStatus};
 
 const LATENCY_BUCKETS: &[f64] = &[
     0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
@@ -28,11 +28,15 @@ pub fn record_bridged_metrics(accepted: u64, rejected: u64, dropped: u64) {
     metrics::counter!("stackpit_events_dropped_total").absolute(dropped);
 }
 
-use axum::extract::{MatchedPath, Request};
-use axum::http::Method;
-use axum::middleware::Next;
-use axum::response::Response;
+use std::sync::atomic::Ordering;
 use std::time::Instant;
+
+use axum::extract::{MatchedPath, Request, State};
+use axum::http::{header, HeaderMap, Method, StatusCode};
+use axum::middleware::Next;
+use axum::response::{IntoResponse, Response};
+
+use crate::server::AppState;
 
 pub async fn track_http_metrics(req: Request, next: Next) -> Response {
     let start = Instant::now();
@@ -64,6 +68,51 @@ pub async fn track_http_metrics(req: Request, next: Next) -> Response {
     metrics::histogram!("http_request_duration_seconds", &labels)
         .record(start.elapsed().as_secs_f64());
     response
+}
+
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+pub fn bearer_matches(headers: &HeaderMap, expected: &str) -> bool {
+    let Some(value) = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) else {
+        return false;
+    };
+    let Some(token) = value.strip_prefix("Bearer ") else {
+        return false;
+    };
+    ct_eq(token.as_bytes(), expected.as_bytes())
+}
+
+pub async fn metrics_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !scrape_allowed(state.license.feature(Feature::Observability)) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(expected) = state.metrics_scrape_token.as_deref() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if !bearer_matches(&headers, expected) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let s = &state.ingest_stats;
+    record_bridged_metrics(
+        s.events_accepted.load(Ordering::Relaxed),
+        s.events_rejected.load(Ordering::Relaxed),
+        s.events_dropped.load(Ordering::Relaxed),
+    );
+    let body = state.metrics_handle.render();
+    (
+        [(header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+        body,
+    )
+        .into_response()
 }
 
 #[cfg(test)]
@@ -116,5 +165,18 @@ mod tests {
         let out = handle.render();
         assert!(out.contains("http_requests_total"), "got:\n{out}");
         assert!(out.contains("path=\"/ping\""), "got:\n{out}");
+    }
+
+    #[test]
+    fn bearer_matches_matrix() {
+        use axum::http::{header, HeaderMap, HeaderValue};
+        let mut h = HeaderMap::new();
+        h.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer secret"));
+        assert!(super::bearer_matches(&h, "secret"));
+        assert!(!super::bearer_matches(&h, "wrong"));
+        assert!(!super::bearer_matches(&HeaderMap::new(), "secret"));
+        let mut basic = HeaderMap::new();
+        basic.insert(header::AUTHORIZATION, HeaderValue::from_static("Basic secret"));
+        assert!(!super::bearer_matches(&basic, "secret"));
     }
 }

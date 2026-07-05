@@ -30,6 +30,7 @@ const REFRESH_MARGIN_SECS: i64 = 60;
 fn is_public_path(path: &str) -> bool {
     path == "/web/login"
         || path == "/health"
+        || path == "/metrics"
         || path.starts_with("/web/_assets/")
         || path.starts_with("/web/lang/")
         || path.starts_with("/api/0/")
@@ -405,6 +406,7 @@ mod tests {
         for p in [
             "/web/login",
             "/health",
+            "/metrics",
             "/web/_assets/style.css",
             "/web/auth/login",
             "/web/auth/callback",

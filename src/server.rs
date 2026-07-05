@@ -57,7 +57,6 @@ pub struct AppState {
     /// `server.trusted_proxies`).
     pub trusted_proxies: Arc<crate::util::network::TrustedProxies>,
     pub encryptor: Option<Arc<SecretEncryptor>>,
-    #[allow(dead_code)]
     pub ingest_stats: Arc<IngestStats>,
     /// `Some` iff `[auth.oauth]` is configured and discovery succeeded.
     pub oidc: Option<Arc<OidcClient>>,
@@ -71,6 +70,8 @@ pub struct AppState {
     pub notify_tx: tokio::sync::mpsc::Sender<crate::notify::NotificationEvent>,
     /// Commercial license status (lock-free `ArcSwap`); no features gated yet.
     pub license: crate::commercial::LicenseHandle,
+    pub metrics_handle: metrics_exporter_prometheus::PrometheusHandle,
+    pub metrics_scrape_token: Option<String>,
 }
 
 impl AppState {
@@ -349,6 +350,10 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
     let license = crate::commercial::LicenseHandle::new(initial_license, grace_days);
     crate::commercial::spawn_reclassify(license.clone(), bg_cancel.child_token());
 
+    let metrics_handle = crate::metrics::install_metrics_recorder();
+    let metrics_scrape_token =
+        std::env::var("STACKPIT_METRICS_TOKEN").ok().filter(|t| !t.is_empty());
+
     let state = AppState {
         config: config.clone(),
         writer: writer_tx.clone(),
@@ -371,6 +376,8 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
         nav_cache: Arc::new(dashmap::DashMap::new()),
         notify_tx: web_notify_tx,
         license,
+        metrics_handle,
+        metrics_scrape_token,
     };
 
     // Rate limiting: handled by filter engine at handler level.
@@ -415,7 +422,8 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
         .layer(TimeoutLayer::with_status_code(
             axum::http::StatusCode::REQUEST_TIMEOUT,
             std::time::Duration::from_secs(30),
-        ));
+        ))
+        .layer(axum::middleware::from_fn(crate::metrics::track_http_metrics));
 
     // Outermost: rewrites the path before routing so Sentry's trailing-slash
     // requests match the canonical (slash-less) routes. Must wrap the whole
@@ -447,6 +455,7 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
 
         let admin_app = Router::new()
             .route("/health", get(health_handler))
+            .route("/metrics", get(crate::metrics::metrics_handler))
             .merge(api::routes())
             .merge(html::routes())
             .layer(RequestBodyLimitLayer::new(config.server.max_body_size))
@@ -470,6 +479,9 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
 
         let admin_app = admin_app
             .merge(mcp_app)
+            .layer(axum::middleware::from_fn(
+                crate::metrics::track_http_metrics,
+            ))
             .layer(axum::middleware::from_fn_with_state(
                 rate_limiter,
                 middleware::rate_limit_middleware,

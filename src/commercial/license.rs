@@ -13,20 +13,28 @@ use chrono::{DateTime, Utc};
 /// its wire string. The license blob carries feature strings; unrecognised
 /// ones are ignored at parse time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Feature {}
+pub enum Feature {
+    Observability,
+}
 
 impl Feature {
     pub fn wire_name(self) -> &'static str {
-        match self {}
+        match self {
+            Feature::Observability => "observability",
+        }
     }
-    /// Reverse of [`Feature::wire_name`]. Returns `None` for every string
-    /// today (no features defined yet).
-    pub fn from_wire(_s: &str) -> Option<Self> {
-        None
+    /// Reverse of [`Feature::wire_name`].
+    pub fn from_wire(s: &str) -> Option<Self> {
+        match s {
+            "observability" => Some(Feature::Observability),
+            _ => None,
+        }
     }
     #[allow(dead_code)]
     pub fn label(self) -> &'static str {
-        match self {}
+        match self {
+            Feature::Observability => "Observability",
+        }
     }
 }
 
@@ -164,6 +172,7 @@ pub(crate) fn status_variant(status: &LicenseStatus) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Duration;
 
     fn license_with(expires: Option<DateTime<Utc>>) -> License {
         License {
@@ -206,5 +215,39 @@ mod tests {
             classify(past_grace, GRACE_DAYS, Utc::now()),
             LicenseStatus::Expired(_)
         ));
+    }
+
+    fn licensed(features: Vec<Feature>) -> LicenseStatus {
+        LicenseStatus::Active(License {
+            license_id: "test".into(),
+            customer: "T".into(),
+            email: "t@e.test".into(),
+            issued_at: Utc::now(),
+            expires_at: Some(Utc::now() + Duration::days(30)),
+            features,
+            max_orgs: None,
+        })
+    }
+
+    #[test]
+    fn observability_active_is_allowed() {
+        assert!(matches!(
+            evaluate_feature(&licensed(vec![Feature::Observability]), Feature::Observability),
+            FeatureStatus::Allowed
+        ));
+    }
+
+    #[test]
+    fn observability_absent_is_locked() {
+        assert!(matches!(
+            evaluate_feature(&licensed(vec![]), Feature::Observability),
+            FeatureStatus::Locked
+        ));
+    }
+
+    #[test]
+    fn observability_wire_roundtrips() {
+        assert_eq!(Feature::Observability.wire_name(), "observability");
+        assert_eq!(Feature::from_wire("observability"), Some(Feature::Observability));
     }
 }

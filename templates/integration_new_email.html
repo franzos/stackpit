@@ -55,9 +55,14 @@
                     {% if default_provider == "postmark" %}selected{% endif %}>Postmark</option>
             <option value="sendgrid"
                     {% if default_provider == "sendgrid" %}selected{% endif %}>SendGrid</option>
+            {% if smtp_configured %}
+              <option value="smtp"
+                      {% if default_provider == "smtp" %}selected{% endif %}>SMTP</option>
+            {% endif %}
           </select>
         </div>
-        <div>
+        <p class="field-hint" id="int_smtp_hint" hidden>{{ chrome.t("integrations-email-smtp-hint") }}</p>
+        <div id="int_token_field">
           <label class="field-label" for="int_secret">
             {{ chrome.t("integrations-email-token-label") }}
             {% if !has_default_token %}
@@ -101,6 +106,10 @@
                  name="from_name"
                  placeholder="{{ from_name_placeholder }}">
         </div>
+        {# SMTP is driven by the global [email.smtp] block, so email-provider.js
+           hides the token field (and drops its `required`) when SMTP is picked.
+           External asset because the CSP forbids inline scripts. #}
+        <script src="/web/_assets/email-provider.js" defer></script>
       {% endif %}
 
       <div>

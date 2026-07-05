@@ -195,6 +195,7 @@ async fn run_digest_cycle(
                     period_start,
                     period_end,
                     projects,
+                    sample: false,
                 }),
             };
             match notify_tx.try_send(event) {
@@ -221,6 +222,7 @@ async fn run_digest_cycle(
                         period_start,
                         period_end,
                         projects: vec![project],
+                        sample: false,
                     }),
                 };
                 match notify_tx.try_send(event) {

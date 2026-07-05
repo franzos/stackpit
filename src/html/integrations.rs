@@ -98,18 +98,30 @@ pub async fn create(
                     .await
                 }
             };
-            // Reject up front when neither form nor server config supplies the values
-            // needed to send mail; otherwise the failure only surfaces at dispatch time.
-            let has_form_secret = form
-                .secret
-                .as_deref()
-                .map(str::trim)
-                .is_some_and(|s| !s.is_empty());
-            if !has_form_secret && email_cfg.token.is_none() {
+            // Reject up front when the credential needed to send mail is missing;
+            // otherwise the failure only surfaces at dispatch time. API providers
+            // need a token (form or global); SMTP needs the global [email.smtp]
+            // relay to be configured and carries no per-integration token.
+            if provider.is_token_based() {
+                let has_form_secret = form
+                    .secret
+                    .as_deref()
+                    .map(str::trim)
+                    .is_some_and(|s| !s.is_empty());
+                if !has_form_secret && email_cfg.token.is_none() {
+                    return render_list(
+                        &state,
+                        org_filter,
+                        Some(chrome.t("flash-api-token-required")),
+                        &chrome,
+                    )
+                    .await;
+                }
+            } else if email_cfg.smtp.host.is_none() {
                 return render_list(
                     &state,
                     org_filter,
-                    Some(chrome.t("flash-api-token-required")),
+                    Some(chrome.t("flash-smtp-not-configured")),
                     &chrome,
                 )
                 .await;
@@ -145,7 +157,8 @@ pub async fn create(
             {
                 cfg["from_name"] = serde_json::json!(name);
             }
-            (None, Some(cfg.to_string()), false)
+            // SMTP has no per-integration token, so never store a submitted secret.
+            (None, Some(cfg.to_string()), !provider.is_token_based())
         }
     } else {
         let url = form.url.trim().to_string();
@@ -284,7 +297,8 @@ pub async fn test_integration(
     let event = crate::notify::NotificationEvent {
         trigger: crate::notify::NotifyTrigger::NewIssue,
         project_id: 0,
-        fingerprint: "test-fingerprint".to_string(),
+        // Empty: a test notification has no real issue, so no (dead) link is added.
+        fingerprint: String::new(),
         title: Some("Test notification from Stackpit".to_string()),
         level: Some("info".to_string()),
         environment: Some("test".to_string()),
@@ -296,6 +310,7 @@ pub async fn test_integration(
         // Endpoint isn't user-controlled -- no SSRF check or pinned client.
         crate::providers::email::send(
             &state.config.email,
+            &state.config.server.web_base(),
             secret.as_deref(),
             integration.config.as_deref(),
             None,
@@ -392,6 +407,8 @@ struct NewEmailTemplate {
     has_default_token: bool,
     /// Whether `[email] from_address` is set; if so the From form field is optional.
     has_default_from: bool,
+    /// Whether `[email.smtp] host` is set; gates the SMTP provider option.
+    smtp_configured: bool,
 }
 
 pub async fn new_email(
@@ -413,6 +430,7 @@ pub async fn new_email(
             .unwrap_or_else(|| "Stackpit Alerts".to_string()),
         has_default_token: email.token.is_some(),
         has_default_from: email.from_address.is_some(),
+        smtp_configured: email.smtp.host.is_some(),
     })
 }
 
@@ -454,6 +472,7 @@ mod tests {
                     from_name_placeholder: "Stackpit Alerts".into(),
                     has_default_token: false,
                     has_default_from: false,
+                    smtp_configured: true,
                 }
                 .render()
                 .expect("email form renders"),
@@ -465,6 +484,7 @@ mod tests {
                     from_name_placeholder: "Stackpit Alerts".into(),
                     has_default_token: true,
                     has_default_from: true,
+                    smtp_configured: true,
                 }
                 .render()
                 .expect("locked email form renders"),

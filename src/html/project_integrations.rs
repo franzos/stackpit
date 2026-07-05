@@ -14,6 +14,23 @@ use crate::server::AppState;
 #[allow(unused_imports)]
 use crate::html::filters;
 
+/// Build the per-project recipient config JSON, validating a non-empty value is
+/// a real email address. Returns `Err(flash_key)` on an invalid address so the
+/// caller can surface it rather than store junk that only fails at send time.
+fn recipient_config(to_address: Option<String>) -> Result<Option<String>, &'static str> {
+    match to_address
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(addr) if !email_address::EmailAddress::is_valid(addr) => {
+            Err("flash-invalid-to-address")
+        }
+        Some(addr) => Ok(Some(serde_json::json!({ "to": addr }).to_string())),
+        None => Ok(None),
+    }
+}
+
 #[derive(Template)]
 #[template(path = "project_integrations.html")]
 struct ProjectIntegrationsTemplate {
@@ -92,10 +109,19 @@ pub async fn activate(
             .await;
         }
     }
-    let config = form
-        .to_address
-        .filter(|s| !s.trim().is_empty())
-        .map(|s| serde_json::json!({ "to": s.trim() }).to_string());
+    let config = match recipient_config(form.to_address) {
+        Ok(c) => c,
+        Err(key) => {
+            return render_page(
+                &state,
+                project_id,
+                Some(chrome.t(key)),
+                &chrome,
+                active.org_id,
+            )
+            .await
+        }
+    };
 
     let s = state.clone();
     let org_id = active.org_id;
@@ -148,10 +174,19 @@ pub async fn update(
     if let Err(r) = require_owner(&active) {
         return r;
     }
-    let config = form
-        .to_address
-        .filter(|s| !s.trim().is_empty())
-        .map(|s| serde_json::json!({ "to": s.trim() }).to_string());
+    let config = match recipient_config(form.to_address) {
+        Ok(c) => c,
+        Err(key) => {
+            return render_page(
+                &state,
+                project_id,
+                Some(chrome.t(key)),
+                &chrome,
+                active.org_id,
+            )
+            .await
+        }
+    };
 
     let msg = match queries::integrations::update_project_integration(
         &state.writer_pool,
@@ -206,6 +241,137 @@ pub async fn deactivate(
         ),
         Ok(_) => chrome.t("flash-integration-deactivated"),
         Err(e) => chrome.err(e),
+    };
+    render_page(&state, project_id, Some(msg), &chrome, active.org_id).await
+}
+
+/// Send a real test notification through one activated project integration.
+/// Unlike the global-list test, this has the per-project recipient, so email
+/// integrations actually deliver.
+pub async fn test(
+    State(state): State<AppState>,
+    active: ActiveOrg,
+    Chrome(chrome): Chrome,
+    Path((project_id, id)): Path<(u64, i64)>,
+) -> axum::response::Response {
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
+
+    let pis = match queries::integrations::list_project_integrations(&state.pool, project_id).await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            return render_page(
+                &state,
+                project_id,
+                Some(chrome.err(e)),
+                &chrome,
+                active.org_id,
+            )
+            .await
+        }
+    };
+    let Some(pi) = pis.into_iter().find(|p| p.id == id) else {
+        return render_page(
+            &state,
+            project_id,
+            Some(chrome.t("flash-integration-not-found")),
+            &chrome,
+            active.org_id,
+        )
+        .await;
+    };
+
+    let secret = match (
+        &pi.integration_secret,
+        pi.integration_encrypted,
+        &state.encryptor,
+    ) {
+        (Some(s), true, Some(enc)) => enc.decrypt(s),
+        (Some(s), false, _) => Some(s.clone()),
+        _ => None,
+    };
+
+    let event = crate::notify::NotificationEvent {
+        trigger: crate::notify::NotifyTrigger::NewIssue,
+        project_id,
+        // Empty: a test notification has no real issue, so no (dead) link is added.
+        fingerprint: String::new(),
+        title: Some("Test notification from Stackpit".to_string()),
+        level: Some("info".to_string()),
+        environment: Some("test".to_string()),
+        event_id: "test-event-id".to_string(),
+        digest: None,
+    };
+
+    let result = if let crate::domain::IntegrationKind::Email = pi.integration_kind {
+        // pi.config carries the per-project recipient ({"to": ...}).
+        crate::providers::email::send(
+            &state.config.email,
+            &state.config.server.web_base(),
+            secret.as_deref(),
+            pi.integration_config.as_deref(),
+            pi.config.as_deref(),
+            &event,
+        )
+        .await
+    } else {
+        let url = match pi.integration_url.as_deref() {
+            Some(u) if !u.is_empty() => u,
+            _ => {
+                return render_page(
+                    &state,
+                    project_id,
+                    Some(chrome.t("flash-integration-no-url")),
+                    &chrome,
+                    active.org_id,
+                )
+                .await
+            }
+        };
+        // Pin resolved DNS so reqwest can't re-resolve to an internal address.
+        let resolved = match crate::util::ssrf::check_ssrf(url).await {
+            Ok(r) => r,
+            Err(msg) => {
+                return render_page(&state, project_id, Some(msg), &chrome, active.org_id).await
+            }
+        };
+        let client = match reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .redirect(reqwest::redirect::Policy::none())
+            .resolve(&resolved.hostname, resolved.addr)
+            .build()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!("failed to build pinned reqwest client: {e}");
+                return render_page(
+                    &state,
+                    project_id,
+                    Some(chrome.tv1("flash-test-failed", "error", "internal error")),
+                    &chrome,
+                    active.org_id,
+                )
+                .await;
+            }
+        };
+        crate::providers::dispatch(
+            &client,
+            &pi.integration_kind,
+            url,
+            secret.as_deref(),
+            &event,
+        )
+        .await
+    };
+
+    let msg = match result {
+        Ok(()) => chrome.t("flash-test-notification-sent"),
+        Err(e) => chrome.tv1("flash-test-failed", "error", &e.to_string()),
     };
     render_page(&state, project_id, Some(msg), &chrome, active.org_id).await
 }

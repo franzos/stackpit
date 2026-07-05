@@ -67,6 +67,8 @@ pub struct AppState {
     pub mcp: Option<Arc<McpRuntime>>,
     /// Short-TTL cache of per-project nav badge counts (display convenience).
     pub nav_cache: crate::queries::projects::NavCountsCache,
+    /// Queues notifications to the dispatcher; used by the digest-test preview.
+    pub notify_tx: tokio::sync::mpsc::Sender<crate::notify::NotificationEvent>,
 }
 
 impl AppState {
@@ -161,6 +163,7 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
 
     let (notify_tx, notify_rx) = tokio::sync::mpsc::channel(1000);
     let digest_notify_tx = notify_tx.clone();
+    let web_notify_tx = notify_tx.clone();
 
     // Writer-side pools. SQLite: one single-connection pool per subsystem so a
     // slow background task can't head-of-line-block the writer on the lone write
@@ -359,6 +362,7 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
         web_bearer_gate: web_bearer_gate.clone(),
         mcp: mcp.clone(),
         nav_cache: Arc::new(dashmap::DashMap::new()),
+        notify_tx: web_notify_tx,
     };
 
     // Rate limiting: handled by filter engine at handler level.

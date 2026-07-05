@@ -69,12 +69,16 @@
                   title="{{ i.created_at|format_ts }}">{{ chrome.rel_time(i.created_at) }}</time>
           </td>
           <td class="nowrap">
-            <form method="post"
-                  action="/web/settings/integrations/{{ i.id }}/test"
-                  class="inline">
-              <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
-              <button type="submit" class="btn btn-secondary">{{ chrome.t("integrations-test") }}</button>
-            </form>
+            {# Email tests need a recipient, which lives per project, so the
+               working email Test button is on the project integrations page. #}
+            {% if i.kind != "email" %}
+              <form method="post"
+                    action="/web/settings/integrations/{{ i.id }}/test"
+                    class="inline">
+                <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+                <button type="submit" class="btn btn-secondary">{{ chrome.t("integrations-test") }}</button>
+              </form>
+            {% endif %}
             <form method="post"
                   action="/web/settings/integrations/{{ i.id }}/delete"
                   class="inline ms-1">

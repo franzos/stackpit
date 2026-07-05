@@ -71,6 +71,9 @@ pub struct DigestPayload {
     pub period_start: i64,
     pub period_end: i64,
     pub projects: Vec<DigestProject>,
+    /// True when this is a preview built from example data (digest test with no
+    /// real activity in the window); rendered with a "sample" banner.
+    pub sample: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -255,12 +258,14 @@ pub async fn run_dispatcher(
                 };
 
                 let kind_label = kind.as_str();
+                let web_base = config.server.web_base();
 
                 // Email has no client/url/SSRF surface; polymail owns the endpoint.
                 if let crate::domain::IntegrationKind::Email = kind {
                     send_with_one_retry(&name, kind_label, || {
                         providers::email::send(
                             &config.email,
+                            &web_base,
                             secret.as_deref(),
                             int_config.as_deref(),
                             pi_config.as_deref(),

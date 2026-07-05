@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.10] - 2026-07-05
+
+### Added
+- SMTP email provider via a new `[email.smtp]` block
+- Test button on per-project integrations sends a real notification
+- Test button on digest schedules sends a real or sample digest
+- Notification emails link back to the issue and project pages
+
+### Changed
+- polymail updated to 0.1.3 (SMTP backend)
+
+### Fixed
+- Per-project "To address" field no longer shows the raw config JSON
+- Recipient is validated as an email address on submit
+- Missing `[filter]` config no longer rejects all ingest
+
 ## [0.3.9] - 2026-07-04
 
 ### Security

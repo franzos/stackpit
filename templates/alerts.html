@@ -212,8 +212,14 @@
               </td>
               <td class="text-end nowrap">
                 <form method="post"
-                      action="/web/settings/alerts/digests/{{ s.id }}/delete"
+                      action="/web/settings/alerts/digests/{{ s.id }}/test"
                       class="inline">
+                  <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+                  <button type="submit" class="btn btn-secondary">{{ chrome.t("integrations-test") }}</button>
+                </form>
+                <form method="post"
+                      action="/web/settings/alerts/digests/{{ s.id }}/delete"
+                      class="inline ms-1">
                   <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
                   <button type="submit"
                           class="btn btn-ghost"

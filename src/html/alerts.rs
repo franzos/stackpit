@@ -216,6 +216,155 @@ pub async fn delete_digest_schedule(
     render_page(&state, active_org.org_id, Some(msg), &chrome).await
 }
 
+/// Send a preview of a digest schedule now. Uses real activity in the window if
+/// there is any; otherwise falls back to a clearly-labeled sample. Routes
+/// through the normal dispatcher (via `notify_tx`), so only integrations with
+/// digests enabled receive it.
+pub async fn test_digest_schedule(
+    State(state): State<AppState>,
+    Chrome(chrome): Chrome,
+    active_org: ActiveOrg,
+    Path(id): Path<i64>,
+) -> axum::response::Response {
+    if let Err(r) = require_owner(&active_org) {
+        return r;
+    }
+    let org_id = active_org.org_id;
+
+    let schedule = match queries::alerts::get_digest_schedule(&state.pool, id).await {
+        Ok(Some(s)) if s.org_id == org_id => s,
+        Ok(_) => {
+            return render_page(
+                &state,
+                org_id,
+                Some(chrome.tv1("flash-not-found-digest-schedule", "id", &id.to_string())),
+                &chrome,
+            )
+            .await
+        }
+        Err(e) => return render_page(&state, org_id, Some(chrome.err(e)), &chrome).await,
+    };
+
+    // Representative window: since the last send, or one interval back if it has
+    // never sent. `now` is passed in so the preview matches a real cycle.
+    let now = chrono::Utc::now().timestamp();
+    let period_start = if schedule.last_sent > 0 {
+        schedule.last_sent
+    } else {
+        now - schedule.interval_secs
+    };
+
+    let projects = queries::alerts::build_digest_data(
+        &state.pool,
+        period_start,
+        now,
+        org_id,
+        schedule.project_id,
+    )
+    .await
+    .unwrap_or_default();
+
+    let msg = if !projects.is_empty() {
+        let queued = queue_digest_previews(&state, period_start, now, projects, false).await;
+        if queued > 0 {
+            chrome.tv1("flash-test-digest-sent", "count", &queued.to_string())
+        } else {
+            chrome.t("flash-test-digest-no-target")
+        }
+    } else if let Some(pid) = schedule.project_id {
+        // No activity, but a concrete project: send a labeled sample.
+        let sample = vec![sample_digest_project(pid)];
+        let queued = queue_digest_previews(&state, period_start, now, sample, true).await;
+        if queued > 0 {
+            chrome.t("flash-test-digest-sample")
+        } else {
+            chrome.t("flash-test-digest-no-target")
+        }
+    } else {
+        // Global schedule with no activity: no concrete recipient to sample.
+        chrome.t("flash-test-digest-no-target")
+    };
+
+    render_page(&state, org_id, Some(msg), &chrome).await
+}
+
+/// Queue one digest event per project that has a digest-enabled integration.
+/// Returns how many projects were queued (the dispatcher fans each out to that
+/// project's digest-enabled integrations).
+async fn queue_digest_previews(
+    state: &AppState,
+    period_start: i64,
+    period_end: i64,
+    projects: Vec<crate::notify::DigestProject>,
+    sample: bool,
+) -> usize {
+    let title = if sample {
+        "Sample digest"
+    } else {
+        "Digest summary"
+    };
+    let mut queued = 0usize;
+    for project in projects {
+        let has_digest =
+            queries::integrations::get_active_for_project(&state.pool, project.project_id)
+                .await
+                .unwrap_or_default()
+                .iter()
+                .any(|pi| pi.notify_digests);
+        if !has_digest {
+            continue;
+        }
+        let event = crate::notify::NotificationEvent {
+            trigger: crate::notify::NotifyTrigger::Digest,
+            project_id: project.project_id,
+            fingerprint: String::new(),
+            title: Some(title.to_string()),
+            level: None,
+            environment: None,
+            event_id: String::new(),
+            digest: Some(crate::notify::DigestPayload {
+                period_start,
+                period_end,
+                projects: vec![project],
+                sample,
+            }),
+        };
+        if state.notify_tx.try_send(event).is_ok() {
+            queued += 1;
+        }
+    }
+    queued
+}
+
+/// Example digest data for the sample preview when a window has no real activity.
+fn sample_digest_project(project_id: u64) -> crate::notify::DigestProject {
+    use crate::notify::{DigestIssue, DigestProject};
+    DigestProject {
+        project_id,
+        name: Some("Example project".to_string()),
+        new_issues: vec![
+            // Empty fingerprint: these are illustrative, so the email renders them
+            // without a (dead) issue link.
+            DigestIssue {
+                fingerprint: String::new(),
+                title: Some("TypeError: cannot read property 'id' of undefined".to_string()),
+                level: Some("error".to_string()),
+                event_count: 12,
+                first_seen: 0,
+            },
+            DigestIssue {
+                fingerprint: String::new(),
+                title: Some("Timeout calling payment API".to_string()),
+                level: Some("warning".to_string()),
+                event_count: 4,
+                first_seen: 0,
+            },
+        ],
+        active_issues_count: 7,
+        total_events: 128,
+    }
+}
+
 // -- Render ------------------------------------------------------------------
 
 async fn render_page(

@@ -338,6 +338,18 @@ pub struct ProjectIntegration {
     pub notify_digests: bool,
 }
 
+impl ProjectIntegration {
+    /// Recipient address for email integrations, extracted from the `config`
+    /// JSON blob (`{"to": "..."}`). None for other kinds or when unset. Keeps the
+    /// raw JSON out of the "To address" form field.
+    pub fn to_address(&self) -> Option<String> {
+        self.config
+            .as_deref()
+            .and_then(|c| serde_json::from_str::<serde_json::Value>(c).ok())
+            .and_then(|v| v.get("to").and_then(|t| t.as_str()).map(String::from))
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct ReleaseFilter {
     pub project_id: Option<u64>,

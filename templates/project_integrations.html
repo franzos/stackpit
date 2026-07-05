@@ -56,13 +56,20 @@
             <h3 class="font-semibold text-[15px]"><bdi>{{ pi.integration_name }}</bdi></h3>
             <span class="badge badge-neutral mt-1">{{ pi.integration_kind }}</span>
           </div>
-          <form method="post"
-                action="/web/projects/{{ project_id }}/settings/integrations/{{ pi.id }}/delete">
-            <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
-            <button type="submit"
-                    class="btn btn-danger"
-                    data-confirm="{{ chrome.t("projects-integrations-deactivate-confirm") }}">{{ chrome.t("projects-integrations-deactivate") }}</button>
-          </form>
+          <div class="flex gap-2">
+            <form method="post"
+                  action="/web/projects/{{ project_id }}/settings/integrations/{{ pi.id }}/test">
+              <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+              <button type="submit" class="btn btn-secondary">{{ chrome.t("integrations-test") }}</button>
+            </form>
+            <form method="post"
+                  action="/web/projects/{{ project_id }}/settings/integrations/{{ pi.id }}/delete">
+              <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+              <button type="submit"
+                      class="btn btn-danger"
+                      data-confirm="{{ chrome.t("projects-integrations-deactivate-confirm") }}">{{ chrome.t("projects-integrations-deactivate") }}</button>
+            </form>
+          </div>
         </div>
         <form class="settings-form"
               method="post"
@@ -153,7 +160,7 @@
            id="to_{{ pi.id }}"
            name="to_address"
            placeholder="alerts@example.com"
-           value="{% match pi.config %}{% when Some with (c) %}{{ c }}{% when None %}{% endmatch %}">
+           value="{% match pi.to_address() %}{% when Some with (a) %}{{ a }}{% when None %}{% endmatch %}">
 </div>
 {% endif %}
 <div>

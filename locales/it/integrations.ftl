@@ -52,3 +52,4 @@ integrations-email-token-placeholder-default = Lascia vuoto per usare il valore 
 integrations-email-token-placeholder = Token API del provider
 integrations-email-from-label = Indirizzo mittente
 integrations-email-fromname-label = Nome mittente
+integrations-email-smtp-hint = SMTP usa la connessione [email.smtp] del server; non serve un token per integrazione.

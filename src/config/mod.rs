@@ -107,7 +107,7 @@ pub enum RegistrationMode {
     Closed,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct FilterConfig {
     #[serde(default)]
     pub mode: RegistrationMode,
@@ -121,6 +121,23 @@ pub struct FilterConfig {
     pub max_projects: usize,
     #[serde(default = "default_max_native_orgs")]
     pub max_native_orgs_per_user: u32,
+}
+
+// Manual (not derived) so an absent `[filter]` table and a missing config file
+// get the real defaults. `#[derive(Default)]` would zero `max_projects` and
+// `max_native_orgs_per_user`, ignoring the `#[serde(default = "...")]` field
+// attributes -- and `max_projects = 0` rejects *all* ingest.
+impl Default for FilterConfig {
+    fn default() -> Self {
+        Self {
+            mode: RegistrationMode::default(),
+            rate_limit: 0,
+            excluded_environments: Vec::new(),
+            blocked_user_agents: Vec::new(),
+            max_projects: default_max_projects(),
+            max_native_orgs_per_user: default_max_native_orgs(),
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -151,6 +168,32 @@ pub struct EmailConfig {
     /// Lock sender + provider to this config: integrations only pick recipients.
     #[serde(default)]
     pub lock: bool,
+    /// SMTP relay connection. Used only when `provider = "smtp"`; the API
+    /// providers ignore it. SMTP's credential is this whole block rather than a
+    /// single token, so it lives here instead of per integration.
+    #[serde(default)]
+    pub smtp: SmtpConfig,
+}
+
+/// Instance-wide SMTP relay settings. Only consulted when the email provider is
+/// `smtp`.
+#[derive(Debug, Default, Deserialize)]
+pub struct SmtpConfig {
+    /// Relay hostname. Required to use the SMTP provider.
+    #[serde(default, deserialize_with = "empty_string_as_none")]
+    pub host: Option<String>,
+    /// Relay port. Defaults per TLS mode when unset (465 implicit, 587
+    /// starttls, 25 none).
+    pub port: Option<u16>,
+    /// Transport security. Defaults to `implicit` (TLS from the first byte).
+    #[serde(default)]
+    pub tls: crate::providers::email::SmtpTlsMode,
+    /// SMTP-AUTH username. Omit for anonymous relays / local sinks.
+    #[serde(default, deserialize_with = "empty_string_as_none")]
+    pub username: Option<String>,
+    /// SMTP-AUTH password. Refused over a plaintext (`tls = "none"`) connection.
+    #[serde(default)]
+    pub password: Option<SecretString>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -349,6 +392,16 @@ impl ServerConfig {
         match &self.external_url {
             Some(url) => url.trim_end_matches('/').to_string(),
             None => format!("http://{}", self.ingest_bind),
+        }
+    }
+
+    /// Base URL for links into the admin/web UI (notification emails, etc.).
+    /// Prefers the public `external_url`; falls back to the raw admin `bind` so
+    /// links are still clickable on a local/dev instance.
+    pub fn web_base(&self) -> String {
+        match &self.external_url {
+            Some(url) => url.trim_end_matches('/').to_string(),
+            None => format!("http://{}", self.bind),
         }
     }
 
@@ -630,6 +683,59 @@ mod tests {
             "2001:db8::/32".to_string(),
         ];
         cfg.validate().expect("valid trusted_proxies should pass");
+    }
+
+    #[test]
+    fn filter_defaults_hold_when_section_absent() {
+        // Regression: an absent [filter] table (and a missing config file) must
+        // yield the documented defaults, not 0 -- max_projects = 0 rejects all
+        // ingest. Guards against re-deriving Default on FilterConfig.
+        let from_empty: Config = toml::from_str("").unwrap();
+        assert_eq!(from_empty.filter.max_projects, DEFAULT_MAX_PROJECTS);
+        assert_eq!(from_empty.filter.max_native_orgs_per_user, 10);
+        assert_eq!(FilterConfig::default().max_projects, DEFAULT_MAX_PROJECTS);
+        assert_eq!(Config::default().filter.max_projects, DEFAULT_MAX_PROJECTS);
+    }
+
+    #[test]
+    fn smtp_lock_without_host_rejected() {
+        let mut cfg = no_auth_config("127.0.0.1:3000", true);
+        cfg.email.lock = true;
+        cfg.email.provider = crate::providers::email::EmailProvider::Smtp;
+        cfg.email.from_address = Some("alerts@example.com".to_string());
+        let err = cfg
+            .validate()
+            .expect_err("locked smtp without host must fail");
+        assert!(
+            format!("{err:#}").contains("email.smtp"),
+            "error should point at [email.smtp]; got: {err:#}"
+        );
+    }
+
+    #[test]
+    fn smtp_lock_with_host_validates() {
+        let mut cfg = no_auth_config("127.0.0.1:3000", true);
+        cfg.email.lock = true;
+        cfg.email.provider = crate::providers::email::EmailProvider::Smtp;
+        cfg.email.from_address = Some("alerts@example.com".to_string());
+        cfg.email.smtp.host = Some("localhost".to_string());
+        cfg.validate()
+            .expect("locked smtp with host + sender should pass");
+    }
+
+    #[test]
+    fn smtp_username_over_plaintext_rejected() {
+        let mut cfg = no_auth_config("127.0.0.1:3000", true);
+        cfg.email.smtp.host = Some("localhost".to_string());
+        cfg.email.smtp.username = Some("user".to_string());
+        cfg.email.smtp.tls = crate::providers::email::SmtpTlsMode::None;
+        let err = cfg
+            .validate()
+            .expect_err("credentials over plaintext smtp must fail");
+        assert!(
+            format!("{err:#}").contains("plaintext"),
+            "error should mention plaintext; got: {err:#}"
+        );
     }
 
     #[test]

@@ -316,6 +316,10 @@ pub fn routes() -> Router<AppState> {
             "/web/settings/alerts/digests/{id}/delete",
             post(alerts::delete_digest_schedule),
         )
+        .route(
+            "/web/settings/alerts/digests/{id}/test",
+            post(alerts::test_digest_schedule),
+        )
         // -- per-project integrations --
         .route(
             "/web/projects/{project_id}/settings/integrations/",
@@ -332,6 +336,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/web/projects/{project_id}/settings/integrations/{id}/delete",
             post(project_integrations::deactivate),
+        )
+        .route(
+            "/web/projects/{project_id}/settings/integrations/{id}/test",
+            post(project_integrations::test),
         )
         // -- global views --
         .route("/web/events/", get(event_list::handler))
@@ -456,6 +464,12 @@ static ASSET_TABLE: &[Asset] = &[
         path: "/web/_assets/stop-propagation.js",
         content_type: JS_CONTENT_TYPE,
         body: include_bytes!("../../static/stop-propagation.js"),
+        cache_control: CACHE_DAY,
+    },
+    Asset {
+        path: "/web/_assets/email-provider.js",
+        content_type: JS_CONTENT_TYPE,
+        body: include_bytes!("../../static/email-provider.js"),
         cache_control: CACHE_DAY,
     },
     Asset {

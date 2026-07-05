@@ -1,6 +1,6 @@
 [package]
 name = "stackpit"
-version = "0.3.9"
+version = "0.3.10"
 edition = "2021"
 description = "Lightweight, self-hosted error tracking and event monitoring"
 authors = ["Franz Geffke <mail@gofranz.com>"]
@@ -57,9 +57,10 @@ arc-swap = "1"
 simple_hll = "0.0.4"
 charts-rs = "0.7"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
-polymail = { version = "0.1", features = ["lettermint", "postmark", "sendgrid"] }
+polymail = { version = "0.1.3", features = ["lettermint", "postmark", "sendgrid", "smtp"] }
 aes-gcm = "0.10"
 base64 = "0.22"
+email_address = "0.2"
 # OS-backed entropy for handles / nonces / CSRF tokens: every secret comes
 # straight from the OS RNG, never a userspace PRNG.
 getrandom = "0.3"

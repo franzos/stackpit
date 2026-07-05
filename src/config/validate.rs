@@ -156,7 +156,9 @@ impl Config {
             );
         }
 
-        // A locked mailer with no sender or no token can never send.
+        // A locked mailer with no sender can never send; its credential (a
+        // token for API providers, the [email.smtp] host for SMTP) is likewise
+        // required up front.
         if self.email.lock {
             if self.email.from_address.is_none() {
                 anyhow::bail!(
@@ -164,12 +166,36 @@ impl Config {
                      a sender; set email.from_address or unset email.lock."
                 );
             }
-            if self.email.token.is_none() {
-                anyhow::bail!(
-                    "email.lock = true but email.token is unset. A locked mailer needs \
-                     a provider token; set email.token or unset email.lock."
-                );
+            match self.email.provider {
+                crate::providers::email::EmailProvider::Smtp => {
+                    if self.email.smtp.host.is_none() {
+                        anyhow::bail!(
+                            "email.lock = true with email.provider = \"smtp\" but [email.smtp] \
+                             host is unset. Set email.smtp.host or unset email.lock."
+                        );
+                    }
+                }
+                _ => {
+                    if self.email.token.is_none() {
+                        anyhow::bail!(
+                            "email.lock = true but email.token is unset. A locked mailer needs \
+                             a provider token; set email.token or unset email.lock."
+                        );
+                    }
+                }
             }
+        }
+
+        // polymail refuses to send SMTP-AUTH credentials over a plaintext
+        // connection at send time; surface that misconfiguration at startup.
+        if self.email.smtp.username.is_some()
+            && self.email.smtp.tls == crate::providers::email::SmtpTlsMode::None
+        {
+            anyhow::bail!(
+                "email.smtp.username is set but email.smtp.tls = \"none\"; refusing to send \
+                 credentials over a plaintext SMTP connection. Use tls = \"starttls\" or \
+                 \"implicit\", or drop the username for an anonymous relay."
+            );
         }
 
         // Zero retention means data piles up forever -- probably not intended

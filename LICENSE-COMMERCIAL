@@ -1,0 +1,165 @@
+Stackpit Commercial License
+Version 1.0, 2026
+
+Copyright (c) 2025-2026 Franz Geffke. All rights reserved.
+
+This license governs the source files contained in the `src/commercial/`
+directory of the Stackpit repository (the "Commercial Components"). All
+other files in the repository are licensed separately under the MIT
+License; see the `LICENSE` file in the repository root for that license.
+Where the two licenses differ, this license controls the Commercial
+Components and the MIT License controls everything else.
+
+SPDX-License-Identifier: LicenseRef-Stackpit-Commercial-1.0
+
+
+1. Definitions
+
+   "Licensor" means Franz Geffke, the copyright holder of the Commercial
+   Components.
+
+   "You" (or "Your") means an individual or legal entity exercising the
+   rights granted by this license.
+
+   "Commercial Components" means the source files located under
+   `src/commercial/` in the Stackpit repository, together with any
+   compiled artifacts derived from them.
+
+   "Stackpit" means the combined work formed by the Commercial Components
+   and the surrounding MIT-licensed code in the same repository.
+
+   "Production Use" means any operation of Stackpit that is not
+   exclusively development, evaluation, internal testing, personal
+   experimentation, or non-commercial hobbyist use. Operation of Stackpit
+   on behalf of, or to the benefit of, a commercial undertaking is
+   Production Use regardless of whether revenue is collected directly
+   from end users.
+
+   "Commercial License Key" means a valid, unexpired, cryptographically
+   signed license blob issued by the Licensor and accepted at runtime by
+   the verification path in `src/commercial/verify.rs`.
+
+   "Hosted Service" means any offering in which You make Stackpit, or any
+   substantially similar derivative, available to third parties as a
+   network-accessible service in exchange for any form of consideration
+   (monetary or otherwise). Self-hosting Stackpit for Your own
+   organisation's internal users is not a Hosted Service; making Stackpit
+   available to users outside Your organisation, whether on a subscription,
+   per-seat, advertising-supported, or freemium basis, is.
+
+
+2. Grant of Rights
+
+   Subject to Your compliance with this license, the Licensor grants You
+   a non-exclusive, non-transferable, worldwide, royalty-free license to:
+
+   (a) read, study, audit, and modify the source code of the Commercial
+       Components for any purpose;
+
+   (b) compile, link, and run the Commercial Components together with
+       the MIT-licensed remainder of Stackpit for development,
+       evaluation, internal testing, personal experimentation, and
+       non-commercial hobbyist use, without a Commercial License Key;
+       and
+
+   (c) compile, link, and run the Commercial Components together with
+       the MIT-licensed remainder of Stackpit for Production Use,
+       provided that a valid Commercial License Key is loaded and
+       accepted by Stackpit at runtime for the duration of such use.
+
+
+3. Conditions
+
+   The license granted in Section 2 is conditional on each of the
+   following:
+
+   (a) You do not remove, disable, bypass, or otherwise circumvent the
+       runtime license verification in `src/commercial/verify.rs`, the
+       feature gate exposed by `LicenseHandle::feature`, or any other
+       enforcement mechanism in the Commercial Components, except to
+       develop or test contributions intended to be submitted to the
+       Licensor.
+
+   (b) You do not operate Stackpit, or any derivative of Stackpit that
+       incorporates the Commercial Components, as a Hosted Service
+       without a separate written agreement with the Licensor.
+
+   (c) You do not redistribute the Commercial Components, in source or
+       compiled form, separately from the unmodified Stackpit repository.
+
+   (d) You preserve this license file, all copyright notices, and the
+       runtime indication that the Commercial Components are loaded
+       under this license.
+
+
+4. Commercial License Keys
+
+   Commercial License Keys are issued by the Licensor under a separate
+   commercial agreement that defines their scope, term, and renewal
+   terms. A Commercial License Key does not modify or extend the rights
+   granted by this license except as expressly provided in Section 2(c).
+   Expiration, revocation, or non-renewal of a Commercial License Key
+   terminates Your right to engage in Production Use under Section 2(c),
+   subject only to any grace window implemented by the Commercial
+   Components themselves.
+
+
+5. Contributions
+
+   The Licensor does not accept external contributions to the Commercial
+   Components under the Developer Certificate of Origin alone, because
+   the DCO does not grant the Licensor the right to relicense
+   contributions under this license. Contributions to the MIT-licensed
+   remainder of Stackpit are welcome.
+
+
+6. No Trademark License
+
+   This license does not grant You any right to use the name "Stackpit",
+   the Licensor's name, or any associated logos, except as required for
+   reasonable and customary use in describing the origin of the
+   Commercial Components.
+
+
+7. Termination
+
+   Any breach of Section 3 terminates this license automatically and
+   immediately. Upon termination You must cease all use of the
+   Commercial Components and destroy any copies in Your possession,
+   except that You may retain copies solely for archival purposes.
+
+   The MIT License that governs the remainder of Stackpit is not
+   affected by termination of this license; You may continue to use,
+   modify, and distribute the MIT-licensed portions on the terms of
+   the MIT License.
+
+
+8. Disclaimer of Warranty
+
+   THE COMMERCIAL COMPONENTS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF
+   ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
+   WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND
+   NONINFRINGEMENT.
+
+
+9. Limitation of Liability
+
+   IN NO EVENT SHALL THE LICENSOR BE LIABLE FOR ANY CLAIM, DAMAGES, OR
+   OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR
+   OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE COMMERCIAL
+   COMPONENTS OR THE USE OR OTHER DEALINGS IN THE COMMERCIAL COMPONENTS.
+
+
+10. Governing Law
+
+    This license is governed by the laws of the jurisdiction in which
+    the Licensor resides at the time a dispute arises, without regard to
+    its conflict-of-laws provisions. Any dispute shall be resolved in
+    the courts of that jurisdiction.
+
+
+11. Contact
+
+    To obtain a Commercial License Key, to negotiate a Hosted Service
+    arrangement, or to ask questions about this license, contact the
+    Licensor at: mail@gofranz.com

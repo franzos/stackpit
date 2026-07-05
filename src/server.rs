@@ -69,6 +69,8 @@ pub struct AppState {
     pub nav_cache: crate::queries::projects::NavCountsCache,
     /// Queues notifications to the dispatcher; used by the digest-test preview.
     pub notify_tx: tokio::sync::mpsc::Sender<crate::notify::NotificationEvent>,
+    /// Commercial license status (lock-free `ArcSwap`); no features gated yet.
+    pub license: crate::commercial::LicenseHandle,
 }
 
 impl AppState {
@@ -342,6 +344,11 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
         );
     }
 
+    let grace_days = crate::commercial::GRACE_DAYS;
+    let initial_license = crate::commercial::store::load(&pool, grace_days).await;
+    let license = crate::commercial::LicenseHandle::new(initial_license, grace_days);
+    crate::commercial::spawn_reclassify(license.clone(), bg_cancel.child_token());
+
     let state = AppState {
         config: config.clone(),
         writer: writer_tx.clone(),
@@ -363,6 +370,7 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
         mcp: mcp.clone(),
         nav_cache: Arc::new(dashmap::DashMap::new()),
         notify_tx: web_notify_tx,
+        license,
     };
 
     // Rate limiting: handled by filter engine at handler level.

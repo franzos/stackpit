@@ -1,0 +1,205 @@
+---
+source: src/commercial/settings_page.rs
+assertion_line: 206
+expression: tpl.render().unwrap()
+---
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>License — Stackpit</title>
+    <link rel="preload"
+          href="/web/_assets/fonts/Inter-Regular.woff2"
+          as="font"
+          type="font/woff2"
+          crossorigin>
+    <link rel="preload"
+          href="/web/_assets/fonts/Inter-SemiBold.woff2"
+          as="font"
+          type="font/woff2"
+          crossorigin>
+    <link rel="stylesheet" href="/web/_assets/style.css">
+    <link rel="icon" type="image/svg+xml" href="/web/_assets/icon.svg">
+    <script src="/web/_assets/bulk.js" defer></script>
+    <script src="/web/_assets/confirm.js" defer></script>
+    <script src="/web/_assets/stop-propagation.js" defer></script>
+  </head>
+  <body class="min-h-screen">
+    
+      <div class="flex min-h-screen">
+        <aside class="w-[var(--spacing-sidebar)] shrink-0 border-e border-outline-variant flex flex-col"
+               style="background: var(--color-surface-container-low)">
+          <a href="/web/projects/"
+             class="flex items-center gap-2 px-4 h-14 border-b border-outline-variant">
+            <img src="/web/_assets/icon.svg" alt="" width="22" height="22">
+            <span class="font-semibold">Stackpit</span>
+          </a>
+          <nav class="flex-1 py-3 overflow-y-auto"
+               aria-label="Primary">
+            
+  
+  <div class="px-2 space-y-0.5">
+    <a href="/web/projects/"
+       class="sidebar-link">
+      <span>Projects</span>
+    </a>
+  </div>
+
+
+          </nav>
+          <div class="border-t border-outline-variant py-2 px-2 space-y-0.5">
+            <a href="/web/organizations" class="sidebar-link"><span>Organizations</span></a>
+            <a href="/web/settings/integrations/" class="sidebar-link"><span>Settings</span></a>
+            <a href="/web/settings/defaults/" class="sidebar-link"><span>Defaults</span></a>
+            <details>
+              <summary class="sidebar-link cursor-pointer select-none"><span>English</span></summary>
+              <div class="mt-1 space-y-0.5">
+                
+                  <a href="/web/lang/en?next=/web/admin/license"
+                     class="sidebar-link sidebar-link-active"><span>English</span></a>
+                
+                  <a href="/web/lang/de?next=/web/admin/license"
+                     class="sidebar-link"><span>Deutsch</span></a>
+                
+                  <a href="/web/lang/fr?next=/web/admin/license"
+                     class="sidebar-link"><span>Français</span></a>
+                
+                  <a href="/web/lang/es?next=/web/admin/license"
+                     class="sidebar-link"><span>Español</span></a>
+                
+                  <a href="/web/lang/it?next=/web/admin/license"
+                     class="sidebar-link"><span>Italiano</span></a>
+                
+                  <a href="/web/lang/pt?next=/web/admin/license"
+                     class="sidebar-link"><span>Português</span></a>
+                
+                  <a href="/web/lang/ru?next=/web/admin/license"
+                     class="sidebar-link"><span>Русский</span></a>
+                
+                  <a href="/web/lang/th?next=/web/admin/license"
+                     class="sidebar-link"><span>ไทย</span></a>
+                
+                  <a href="/web/lang/ar?next=/web/admin/license"
+                     class="sidebar-link"><span>العربية</span></a>
+                
+              </div>
+            </details>
+            <form method="post" action="/web/logout" class="contents">
+              <input type="hidden" name="csrf_token" value="test-csrf-token">
+              <button type="submit" class="sidebar-link">
+                <span>Logout</span>
+              </button>
+            </form>
+          </div>
+        </aside>
+        <div class="flex-1 min-w-0 flex flex-col">
+          <header class="h-14 border-b border-outline-variant px-6 flex items-center"
+                  style="background: var(--color-surface)">
+            <nav class="text-[13px] flex items-center gap-1.5"
+                 aria-label="Breadcrumb">
+              <a href="/web/projects/" class="breadcrumb-link">Projects</a>
+              
+  <span class="breadcrumb-sep">›</span>
+  <span>Admin</span>
+  <span class="breadcrumb-sep">›</span>
+  <span class="breadcrumb-current">License</span>
+
+            </nav>
+          </header>
+          <main class="flex-1 px-6 py-6 min-w-0">
+            
+  <div class="page-header">
+    <div>
+      <h1>License</h1>
+      <p class="text-muted text-[13px] mt-1">Commercial-tier license for this installation. Verified locally and offline, no data leaves the server.</p>
+    </div>
+  </div>
+
+  
+
+  <div class="space-y-6 max-w-3xl">
+    <div class="card">
+      <div class="card-header flex items-center justify-between">
+        <span>Status</span>
+        
+          <span class="badge badge-resolved">Active</span>
+        
+      </div>
+      
+        <div class="table-wrap">
+          <table class="table">
+            <tbody>
+              <tr>
+                <th>Customer</th>
+                <td><bdi>Stackpit Test</bdi></td>
+              </tr>
+              <tr>
+                <th>Contact</th>
+                <td><bdi>test@stackpit.test</bdi></td>
+              </tr>
+              <tr>
+                <th>Issued</th>
+                <td class="text-mono">2023-11-14</td>
+              </tr>
+              <tr>
+                <th>Expires</th>
+                <td class="text-mono">2030-03-17</td>
+              </tr>
+              <tr>
+                <th>Max organizations</th>
+                <td>50</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="p-4 border-t border-outline-variant">
+          <form method="post" action="/web/admin/license/deactivate">
+            <input type="hidden" name="csrf_token" value="test-csrf-token">
+            <button type="submit"
+                    class="btn btn-danger"
+                    data-confirm="Deactivate">Deactivate</button>
+          </form>
+        </div>
+      
+    </div>
+
+    <div class="card card-pad">
+      <h2 class="page-h2 mb-2">
+        Replace license
+      </h2>
+      <p class="text-muted text-[13px] mb-4">Paste the license blob you received from sales. Activation runs locally, the signature is verified against this binary&#39;s baked-in public key. Nothing is sent over the network.</p>
+      <form class="settings-form"
+            method="post"
+            action="/web/admin/license/activate">
+        <input type="hidden" name="csrf_token" value="test-csrf-token">
+        <div>
+          <label class="field-label" for="blob">License key</label>
+          <textarea class="input text-mono"
+                    id="blob"
+                    name="blob"
+                    rows="6"
+                    required
+                    spellcheck="false"
+                    autocomplete="off"
+                    placeholder="Paste your base64 license key here..."></textarea>
+        </div>
+        <div>
+          <button type="submit" class="btn btn-primary">Activate</button>
+        </div>
+      </form>
+    </div>
+
+    <div>
+      <a href="/web/admin/unassigned" class="breadcrumb-link text-[13px]">Back to admin</a>
+    </div>
+  </div>
+
+          </main>
+        </div>
+      </div>
+    
+    
+  </body>
+</html>

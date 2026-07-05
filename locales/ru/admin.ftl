@@ -12,3 +12,25 @@ admin-col-assign = Назначить организации
 admin-id-prefix = id:
 admin-no-orgs = Нет доступных организаций
 admin-assign = Назначить
+
+# Страница коммерческой лицензии (templates/admin_license.html).
+license-page-title = Лицензия
+license-intro = Лицензия коммерческого уровня для этой установки. Проверяется локально и офлайн, данные не покидают сервер.
+license-status = Статус
+license-customer = Клиент
+license-contact = Контакт
+license-issued = Выдана
+license-expires = Истекает
+license-lifetime = Бессрочная
+license-max-orgs = Максимум организаций
+license-unlocked-features = Открытые возможности
+license-none = Нет
+license-no-license = Активная коммерческая лицензия отсутствует. Эта сборка работает на уровне с открытым исходным кодом.
+license-activate-heading = Активация лицензии
+license-activate-intro = Вставьте фрагмент лицензии, полученный от отдела продаж. Активация выполняется локально, подпись проверяется по встроенному в этот бинарный файл открытому ключу. По сети ничего не передаётся.
+license-key-label = Ключ лицензии
+license-key-placeholder = Вставьте сюда ваш ключ лицензии в base64...
+license-activate = Активировать
+license-replace = Заменить лицензию
+license-deactivate = Деактивировать
+license-back = Назад к администрированию

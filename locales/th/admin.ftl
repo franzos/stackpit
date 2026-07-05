@@ -12,3 +12,25 @@ admin-col-assign = กำหนดให้องค์กร
 admin-id-prefix = id:
 admin-no-orgs = ไม่มีองค์กรให้เลือก
 admin-assign = กำหนด
+
+# หน้าใบอนุญาตเชิงพาณิชย์ (templates/admin_license.html)
+license-page-title = ใบอนุญาต
+license-intro = ใบอนุญาตระดับเชิงพาณิชย์สำหรับการติดตั้งนี้ ตรวจสอบภายในเครื่องแบบออฟไลน์ ไม่มีข้อมูลออกจากเซิร์ฟเวอร์
+license-status = สถานะ
+license-customer = ลูกค้า
+license-contact = ผู้ติดต่อ
+license-issued = ออกเมื่อ
+license-expires = หมดอายุ
+license-lifetime = ตลอดชีพ
+license-max-orgs = จำนวนองค์กรสูงสุด
+license-unlocked-features = ฟีเจอร์ที่ปลดล็อกแล้ว
+license-none = ไม่มี
+license-no-license = ยังไม่มีใบอนุญาตเชิงพาณิชย์ที่เปิดใช้งาน บิลด์นี้ทำงานในระดับโอเพนซอร์ส
+license-activate-heading = เปิดใช้งานใบอนุญาต
+license-activate-intro = วางข้อมูลใบอนุญาตที่คุณได้รับจากฝ่ายขาย การเปิดใช้งานทำงานในเครื่อง ลายเซ็นจะถูกตรวจสอบกับกุญแจสาธารณะที่ฝังอยู่ในไบนารีนี้ ไม่มีการส่งข้อมูลใด ๆ ผ่านเครือข่าย
+license-key-label = คีย์ใบอนุญาต
+license-key-placeholder = วางคีย์ใบอนุญาตแบบ base64 ของคุณที่นี่...
+license-activate = เปิดใช้งาน
+license-replace = เปลี่ยนใบอนุญาต
+license-deactivate = ปิดใช้งาน
+license-back = กลับไปยังผู้ดูแลระบบ

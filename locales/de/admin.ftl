@@ -12,3 +12,25 @@ admin-col-assign = Organisation zuordnen
 admin-id-prefix = id:
 admin-no-orgs = Keine Organisationen verfügbar
 admin-assign = Zuordnen
+
+# Kommerzielle Lizenzseite (templates/admin_license.html).
+license-page-title = Lizenz
+license-intro = Lizenz der kommerziellen Stufe für diese Installation. Lokal und offline geprüft, es verlassen keine Daten den Server.
+license-status = Status
+license-customer = Kunde
+license-contact = Kontakt
+license-issued = Ausgestellt
+license-expires = Läuft ab
+license-lifetime = Unbegrenzt
+license-max-orgs = Maximale Organisationen
+license-unlocked-features = Freigeschaltete Funktionen
+license-none = Keine
+license-no-license = Es ist keine kommerzielle Lizenz aktiv. Dieser Build läuft in der Open-Source-Stufe.
+license-activate-heading = Lizenz aktivieren
+license-activate-intro = Fügen Sie das Lizenz-Blob ein, das Sie vom Vertrieb erhalten haben. Die Aktivierung erfolgt lokal, die Signatur wird gegen den in diese Binärdatei eingebetteten öffentlichen Schlüssel geprüft. Es wird nichts über das Netzwerk gesendet.
+license-key-label = Lizenzschlüssel
+license-key-placeholder = Fügen Sie hier Ihren Base64-Lizenzschlüssel ein...
+license-activate = Aktivieren
+license-replace = Lizenz ersetzen
+license-deactivate = Deaktivieren
+license-back = Zurück zur Verwaltung

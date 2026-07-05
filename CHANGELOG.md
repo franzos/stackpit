@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- Commercial license infrastructure (offline Ed25519 verification, admin activation page); no gated features yet
+
 ## [0.3.10] - 2026-07-05
 
 ### Added

@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+
+{% block title %}{{ chrome.t("license-page-title") }} — Stackpit{% endblock %}
+
+{% block sidebar_nav %}
+  {% call m::top_sidebar(chrome, "") %}
+  {% endcall %}
+{% endblock %}
+
+{% block breadcrumbs %}
+  <span class="breadcrumb-sep">›</span>
+  <span>{{ chrome.t("admin-breadcrumb-admin") }}</span>
+  <span class="breadcrumb-sep">›</span>
+  <span class="breadcrumb-current">{{ chrome.t("license-page-title") }}</span>
+{% endblock %}
+
+{% block content %}
+  <div class="page-header">
+    <div>
+      <h1>{{ chrome.t("license-page-title") }}</h1>
+      <p class="text-muted text-[13px] mt-1">{{ chrome.t("license-intro") }}</p>
+    </div>
+  </div>
+
+  {% if banner_kind == "warning" %}
+    <div class="card card-pad mb-4 border-warning/40"
+         style="border-color: var(--color-tertiary)">
+      <p class="text-[13px]">{{ banner_message }}</p>
+    </div>
+  {% else if banner_kind == "danger" %}
+    <div class="card card-pad mb-4 border-error/40"
+         style="border-color: var(--color-error)">
+      <p class="text-[13px]">{{ banner_message }}</p>
+    </div>
+  {% endif %}
+
+  <div class="space-y-6 max-w-3xl">
+    <div class="card">
+      <div class="card-header flex items-center justify-between">
+        <span>{{ chrome.t("license-status") }}</span>
+        {% if state_label == "Active" %}
+          <span class="badge badge-resolved">{{ state_label }}</span>
+        {% else if state_label == "Grace" %}
+          <span class="badge badge-ignored">{{ state_label }}</span>
+        {% else if state_label == "Expired" %}
+          <span class="badge badge-unresolved">{{ state_label }}</span>
+        {% else %}
+          <span class="badge badge-neutral">{{ state_label }}</span>
+        {% endif %}
+      </div>
+      {% if has_license %}
+        <div class="table-wrap">
+          <table class="table">
+            <tbody>
+              <tr>
+                <th>{{ chrome.t("license-customer") }}</th>
+                <td><bdi>{{ customer }}</bdi></td>
+              </tr>
+              <tr>
+                <th>{{ chrome.t("license-contact") }}</th>
+                <td><bdi>{{ email }}</bdi></td>
+              </tr>
+              <tr>
+                <th>{{ chrome.t("license-issued") }}</th>
+                <td class="text-mono">{{ issued_at }}</td>
+              </tr>
+              <tr>
+                <th>{{ chrome.t("license-expires") }}</th>
+                <td class="text-mono">{% if is_lifetime %}{{ chrome.t("license-lifetime") }}{% else %}{{ expires_at }}{% endif %}</td>
+              </tr>
+              <tr>
+                <th>{{ chrome.t("license-max-orgs") }}</th>
+                <td>{{ max_orgs_label }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="p-4 border-t border-outline-variant">
+          <form method="post" action="/web/admin/license/deactivate">
+            <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+            <button type="submit"
+                    class="btn btn-danger"
+                    data-confirm="{{ chrome.t("license-deactivate") }}">{{ chrome.t("license-deactivate") }}</button>
+          </form>
+        </div>
+      {% else %}
+        <div class="p-4">
+          <p class="empty">{{ chrome.t("license-no-license") }}</p>
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="card card-pad">
+      <h2 class="page-h2 mb-2">
+        {% if has_license %}{{ chrome.t("license-replace") }}{% else %}{{ chrome.t("license-activate-heading") }}{% endif %}
+      </h2>
+      <p class="text-muted text-[13px] mb-4">{{ chrome.t("license-activate-intro") }}</p>
+      <form class="settings-form"
+            method="post"
+            action="/web/admin/license/activate">
+        <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+        <div>
+          <label class="field-label" for="blob">{{ chrome.t("license-key-label") }}</label>
+          <textarea class="input text-mono"
+                    id="blob"
+                    name="blob"
+                    rows="6"
+                    required
+                    spellcheck="false"
+                    autocomplete="off"
+                    placeholder="{{ chrome.t("license-key-placeholder") }}"></textarea>
+        </div>
+        <div>
+          <button type="submit" class="btn btn-primary">{{ chrome.t("license-activate") }}</button>
+        </div>
+      </form>
+    </div>
+
+    <div>
+      <a href="/web/admin/unassigned" class="breadcrumb-link text-[13px]">{{ chrome.t("license-back") }}</a>
+    </div>
+  </div>
+{% endblock %}

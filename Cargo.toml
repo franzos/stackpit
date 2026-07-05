@@ -4,6 +4,7 @@ version = "0.3.10"
 edition = "2021"
 description = "Lightweight, self-hosted error tracking and event monitoring"
 authors = ["Franz Geffke <mail@gofranz.com>"]
+# src/commercial/ is governed by LICENSE-COMMERCIAL (LicenseRef-Stackpit-Commercial-1.0)
 license = "MIT"
 repository = "https://github.com/franzos/stackpit"
 homepage = "https://github.com/franzos/stackpit"
@@ -54,6 +55,11 @@ ipnet = "2"
 lru = "0.16"
 parking_lot = "0.12"
 arc-swap = "1"
+# Commercial license verification (src/commercial/): offline Ed25519 signature
+# check over a CBOR claims blob. Verify-only; the private key never ships.
+ed25519-dalek = "2"
+ciborium = "0.2"
+serde_bytes = "0.11"
 simple_hll = "0.0.4"
 charts-rs = "0.7"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }

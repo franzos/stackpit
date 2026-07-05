@@ -12,3 +12,25 @@ admin-col-assign = Assign to org
 admin-id-prefix = id:
 admin-no-orgs = No orgs available
 admin-assign = Assign
+
+# Commercial license page (templates/admin_license.html).
+license-page-title = License
+license-intro = Commercial-tier license for this installation. Verified locally and offline, no data leaves the server.
+license-status = Status
+license-customer = Customer
+license-contact = Contact
+license-issued = Issued
+license-expires = Expires
+license-lifetime = Lifetime
+license-max-orgs = Max organizations
+license-unlocked-features = Unlocked features
+license-none = None
+license-no-license = No commercial license is active. This build runs the open-source tier.
+license-activate-heading = Activate license
+license-activate-intro = Paste the license blob you received from sales. Activation runs locally, the signature is verified against this binary's baked-in public key. Nothing is sent over the network.
+license-key-label = License key
+license-key-placeholder = Paste your base64 license key here...
+license-activate = Activate
+license-replace = Replace license
+license-deactivate = Deactivate
+license-back = Back to admin

@@ -404,6 +404,8 @@ pub fn routes() -> Router<AppState> {
             "/web/admin/projects/{id}/assign",
             post(admin::assign_project),
         )
+        // -- commercial license (route table lives in src/commercial/) --
+        .merge(crate::commercial::settings_page::router())
         // -- legacy redirects --
         .route(
             "/web/",

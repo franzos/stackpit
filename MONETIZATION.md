@@ -44,22 +44,27 @@ gate is load-bearing.
 
 ## Honesty caveat: what activation does today
 
-Nothing functional. Activating a license currently changes a status label on
-the (unlinked) `/web/admin/license` page and writes the signed watermark to the
-boot log. No behaviour is gated. This is the infrastructure (offline verifier,
-singleton persistence, runtime handle, admin page) put in place so that a future
-feature is just a new `Feature` variant in `src/commercial/license.rs` plus one
-gate call at the site. Until such a feature exists, the OSS build and a licensed
-build are functionally identical.
+One thing is functional now: activating a license with the `observability`
+feature unlocks the Prometheus `/metrics` endpoint (see
+[`docs/commercial/observability.md`](docs/commercial/observability.md)).
+Beyond that, activation still changes a status label on the `/web/admin/license`
+page and writes the signed watermark to the boot log, same as before. This is
+the infrastructure (offline verifier, singleton persistence, runtime handle,
+admin page) that made Observability a small addition rather than a rebuild: a
+new `Feature` variant in `src/commercial/license.rs` plus one gate call at the
+site. An unlicensed build and a licensed-but-`observability`-less build are
+otherwise functionally identical.
 
 ## Gated-feature matrix
 
-TBD. The infrastructure is in place; no features are gated yet. The `Feature`
-enum in `src/commercial/license.rs` is intentionally empty, and there is a
-`max_orgs` quantitative cap dimension (`org_cap_allows`) wired but unused. When
-a feature is chosen it slots in as: one enum variant (wire name + label), one
-`state.license.feature(Feature::X)` check at the call site, and the issuer signs
-the feature string into the blob.
+One feature shipped so far: **Observability**, gating the Prometheus `/metrics`
+endpoint (license wire name `observability`, `Feature::Observability` in
+`src/commercial/license.rs`). The `Feature` enum is no longer empty, but it's
+still short: this is the only gate that exists today. There is also a
+`max_orgs` quantitative cap dimension (`org_cap_allows`) wired but unused by any
+feature yet. Adding the next feature slots in the same way Observability did:
+one enum variant (wire name + label), one `state.license.feature(Feature::X)`
+check at the call site, and the issuer signs the feature string into the blob.
 
 ## Where a first paid capability might come from
 

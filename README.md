@@ -34,6 +34,23 @@ I got tired of paying for Sentry on smaller projects and self-hosting the offici
 - **Auth your way** — a shared admin token for solo use, or OAuth/OIDC SSO for teams.
 - **Organizations & roles.** Every user gets a personal org and can create more, invite others as owners or members, and manage membership and org slugs from the UI; data is scoped per org, mutations are owner-gated, and if your IdP emits org claims (Forseti-style), those orgs and roles map straight in.
 - **Migrate in** — pull historical events, issues, and releases from an existing Sentry instance.
+- **Observability (commercial)** — a token-gated Prometheus `/metrics` endpoint on the admin listener: HTTP request rates and latency, plus ingestion accept/reject/drop counters. Requires a license; see [OSS vs Commercial](#oss-vs-commercial) below.
+
+## OSS vs Commercial
+
+Stackpit's entire core is free and MIT-licensed: ingestion, grouping, the web UI and JSON API, organizations, auth/OIDC, notifications, retention, everything you need to run it in production. Exactly one feature is gated behind a commercial license today.
+
+| Capability | OSS (unlicensed) | Commercial |
+|------------|-------------------|------------|
+| Ingestion, grouping, source maps, monitors | Yes | Yes |
+| Web UI + JSON API | Yes | Yes |
+| Organizations, roles, IdP claim mapping | Yes | Yes |
+| Auth: admin token, OAuth/OIDC SSO | Yes | Yes |
+| Notifications & alerts (email, Slack, webhooks) | Yes | Yes |
+| Retention & syncing from Sentry | Yes | Yes |
+| Prometheus `/metrics` (Observability) | Unavailable (404) | Token-gated, on the admin listener |
+
+Licensing is offline (no phone-home, no host binding, no seat counting) and verified against a public key baked into the binary; see [`docs/commercial/index.md`](docs/commercial/index.md) for how it works and [`MONETIZATION.md`](MONETIZATION.md) for the honest reasoning behind the MIT-core / commercial-gate split.
 
 ## Stackpit vs Sentry
 

@@ -10,6 +10,7 @@ Everything beyond getting the binary and starting it: the full configuration ref
 - [Authentication](#authentication)
 - [Organizations & Roles](#organizations--roles)
 - [Secret encryption](#secret-encryption)
+- [Metrics / Observability](#metrics--observability)
 - [Connecting SDKs](#connecting-sdks)
 - [Notifications & Alerts](#notifications--alerts)
 - [Source Maps](#source-maps)
@@ -225,6 +226,12 @@ master_key = "..."   # 64-char hex string (32 bytes) from `openssl rand -hex 32`
 ```
 
 The env var wins when both are set — so you can keep a key out of the config file entirely (systemd `EnvironmentFile`, a secrets manager) and still override a placeholder in `stackpit.toml`. That separation matters more than it looks: this key decrypts the secrets sitting in your database, so storing it next to the DB — same directory, same backup — defeats the point. Keep them apart if you can. A malformed key (bad hex, wrong length) fails startup fast from either source, naming whichever one it came from.
+
+## Metrics / Observability
+
+A Prometheus `/metrics` endpoint is available on the admin listener as a **commercial feature**: it needs a license with the `observability` capability, activated at `/web/admin/license`, plus the environment variable `STACKPIT_METRICS_TOKEN` set to the bearer token your scraper will send. Either piece missing and the endpoint 404s; both present and it serves HTTP RED metrics (request counts, latency) plus bridged ingestion counters in standard Prometheus text format.
+
+See [Observability](commercial/observability.md) for the full setup, the metric list, and the scrape config example.
 
 ## Connecting SDKs
 

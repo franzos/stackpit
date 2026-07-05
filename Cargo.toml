@@ -110,6 +110,8 @@ serde_urlencoded = "0.7"
 insta = "1"
 # .ftl parsing for the i18n parity test.
 fluent-syntax = "0.12"
+tower = { version = "0.5", features = ["util"] }
+futures = "0.3"
 
 [package.metadata.generate-rpm]
 assets = [

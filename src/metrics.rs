@@ -28,6 +28,44 @@ pub fn record_bridged_metrics(accepted: u64, rejected: u64, dropped: u64) {
     metrics::counter!("stackpit_events_dropped_total").absolute(dropped);
 }
 
+use axum::extract::{MatchedPath, Request};
+use axum::http::Method;
+use axum::middleware::Next;
+use axum::response::Response;
+use std::time::Instant;
+
+pub async fn track_http_metrics(req: Request, next: Next) -> Response {
+    let start = Instant::now();
+    // Bounded allowlist: a raw method string is attacker-controllable and unbounded (ingest listener is public).
+    let method = match *req.method() {
+        Method::GET => "GET",
+        Method::POST => "POST",
+        Method::PUT => "PUT",
+        Method::DELETE => "DELETE",
+        Method::PATCH => "PATCH",
+        Method::HEAD => "HEAD",
+        Method::OPTIONS => "OPTIONS",
+        Method::TRACE => "TRACE",
+        Method::CONNECT => "CONNECT",
+        _ => "OTHER",
+    }
+    .to_owned();
+    let path = req
+        .extensions()
+        .get::<MatchedPath>()
+        .map(|p| p.as_str().to_owned())
+        .unwrap_or_else(|| "unmatched".to_owned());
+
+    let response = next.run(req).await;
+
+    let status = response.status().as_u16().to_string();
+    let labels = [("method", method), ("path", path), ("status", status)];
+    metrics::counter!("http_requests_total", &labels).increment(1);
+    metrics::histogram!("http_request_duration_seconds", &labels)
+        .record(start.elapsed().as_secs_f64());
+    response
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -52,5 +90,31 @@ mod tests {
         assert!(out.contains("stackpit_events_accepted_total 10"), "got:\n{out}");
         assert!(out.contains("stackpit_events_rejected_total 2"), "got:\n{out}");
         assert!(out.contains("stackpit_events_dropped_total 1"), "got:\n{out}");
+    }
+
+    #[tokio::test]
+    async fn http_metrics_recorded() {
+        use axum::{routing::get, Router};
+        use tower::ServiceExt;
+
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        let app = Router::new()
+            .route("/ping", get(|| async { "ok" }))
+            .layer(axum::middleware::from_fn(super::track_http_metrics));
+
+        metrics::with_local_recorder(&recorder, || {
+            futures::executor::block_on(async {
+                let _ = app
+                    .clone()
+                    .oneshot(axum::http::Request::builder().uri("/ping").body(axum::body::Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+            });
+        });
+
+        let out = handle.render();
+        assert!(out.contains("http_requests_total"), "got:\n{out}");
+        assert!(out.contains("path=\"/ping\""), "got:\n{out}");
     }
 }

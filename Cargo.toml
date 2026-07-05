@@ -95,6 +95,8 @@ url = "2"
 fluent-templates = "0.14"
 unic-langid = { version = "0.9", features = ["macros"] }
 fluent-langneg = "0.13"
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.16", default-features = false }
 
 [dev-dependencies]
 # loopback http only — no TLS feature needed.

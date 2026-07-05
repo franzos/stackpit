@@ -3,6 +3,7 @@ pub(crate) mod background;
 pub mod cli;
 pub mod commercial;
 pub mod config;
+pub mod metrics;
 pub mod db;
 pub(crate) mod domain;
 pub(crate) mod endpoints;

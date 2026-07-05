@@ -1,4 +1,5 @@
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
+use subtle::ConstantTimeEq;
 
 use crate::commercial::license::{Feature, FeatureStatus};
 
@@ -70,17 +71,6 @@ pub async fn track_http_metrics(req: Request, next: Next) -> Response {
     response
 }
 
-fn ct_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
-}
-
 pub fn bearer_matches(headers: &HeaderMap, expected: &str) -> bool {
     let Some(value) = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) else {
         return false;
@@ -88,7 +78,7 @@ pub fn bearer_matches(headers: &HeaderMap, expected: &str) -> bool {
     let Some(token) = value.strip_prefix("Bearer ") else {
         return false;
     };
-    ct_eq(token.as_bytes(), expected.as_bytes())
+    token.as_bytes().ct_eq(expected.as_bytes()).into()
 }
 
 pub async fn metrics_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {

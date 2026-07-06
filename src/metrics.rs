@@ -21,7 +21,10 @@ pub fn install_metrics_recorder() -> PrometheusHandle {
 }
 
 pub fn scrape_allowed(status: FeatureStatus) -> bool {
-    matches!(status, FeatureStatus::Allowed | FeatureStatus::GraceReadOnly)
+    matches!(
+        status,
+        FeatureStatus::Allowed | FeatureStatus::GraceReadOnly
+    )
 }
 
 pub fn record_bridged_metrics(accepted: u64, rejected: u64, dropped: u64) {
@@ -73,7 +76,10 @@ pub async fn track_http_metrics(req: Request, next: Next) -> Response {
 }
 
 pub fn bearer_matches(headers: &HeaderMap, expected: &str) -> bool {
-    let Some(value) = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) else {
+    let Some(value) = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+    else {
         return false;
     };
     let Some(token) = value.strip_prefix("Bearer ") else {
@@ -86,7 +92,11 @@ pub async fn metrics_handler(State(state): State<AppState>, headers: HeaderMap) 
     if !scrape_allowed(state.license.feature(Feature::Observability)) {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let Some(expected) = state.metrics_scrape_token.as_ref().map(|t| t.expose_secret()) else {
+    let Some(expected) = state
+        .metrics_scrape_token
+        .as_ref()
+        .map(|t| t.expose_secret())
+    else {
         return StatusCode::NOT_FOUND.into_response();
     };
     if !bearer_matches(&headers, expected) {
@@ -100,7 +110,10 @@ pub async fn metrics_handler(State(state): State<AppState>, headers: HeaderMap) 
     );
     let body = state.metrics_handle.render();
     (
-        [(header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+        [(
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
         body,
     )
         .into_response()
@@ -127,9 +140,18 @@ mod tests {
             record_bridged_metrics(10, 2, 1);
         });
         let out = handle.render();
-        assert!(out.contains("stackpit_events_accepted_total 10"), "got:\n{out}");
-        assert!(out.contains("stackpit_events_rejected_total 2"), "got:\n{out}");
-        assert!(out.contains("stackpit_events_dropped_total 1"), "got:\n{out}");
+        assert!(
+            out.contains("stackpit_events_accepted_total 10"),
+            "got:\n{out}"
+        );
+        assert!(
+            out.contains("stackpit_events_rejected_total 2"),
+            "got:\n{out}"
+        );
+        assert!(
+            out.contains("stackpit_events_dropped_total 1"),
+            "got:\n{out}"
+        );
     }
 
     #[tokio::test]
@@ -147,7 +169,12 @@ mod tests {
             futures::executor::block_on(async {
                 let _ = app
                     .clone()
-                    .oneshot(axum::http::Request::builder().uri("/ping").body(axum::body::Body::empty()).unwrap())
+                    .oneshot(
+                        axum::http::Request::builder()
+                            .uri("/ping")
+                            .body(axum::body::Body::empty())
+                            .unwrap(),
+                    )
                     .await
                     .unwrap();
             });
@@ -162,12 +189,18 @@ mod tests {
     fn bearer_matches_matrix() {
         use axum::http::{header, HeaderMap, HeaderValue};
         let mut h = HeaderMap::new();
-        h.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer secret"));
+        h.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer secret"),
+        );
         assert!(super::bearer_matches(&h, "secret"));
         assert!(!super::bearer_matches(&h, "wrong"));
         assert!(!super::bearer_matches(&HeaderMap::new(), "secret"));
         let mut basic = HeaderMap::new();
-        basic.insert(header::AUTHORIZATION, HeaderValue::from_static("Basic secret"));
+        basic.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Basic secret"),
+        );
         assert!(!super::bearer_matches(&basic, "secret"));
     }
 }

@@ -426,7 +426,9 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
             axum::http::StatusCode::REQUEST_TIMEOUT,
             std::time::Duration::from_secs(30),
         ))
-        .layer(axum::middleware::from_fn(crate::metrics::track_http_metrics));
+        .layer(axum::middleware::from_fn(
+            crate::metrics::track_http_metrics,
+        ));
 
     // Outermost: rewrites the path before routing so Sentry's trailing-slash
     // requests match the canonical (slash-less) routes. Must wrap the whole

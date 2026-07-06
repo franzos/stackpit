@@ -229,7 +229,10 @@ mod tests {
     #[test]
     fn observability_active_is_allowed() {
         assert!(matches!(
-            evaluate_feature(&licensed(vec![Feature::Observability]), Feature::Observability),
+            evaluate_feature(
+                &licensed(vec![Feature::Observability]),
+                Feature::Observability
+            ),
             FeatureStatus::Allowed
         ));
     }
@@ -245,6 +248,9 @@ mod tests {
     #[test]
     fn observability_wire_roundtrips() {
         assert_eq!(Feature::Observability.wire_name(), "observability");
-        assert_eq!(Feature::from_wire("observability"), Some(Feature::Observability));
+        assert_eq!(
+            Feature::from_wire("observability"),
+            Some(Feature::Observability)
+        );
     }
 }

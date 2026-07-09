@@ -1,67 +1,19 @@
 //! Decode + verify a base64-encoded license blob against the baked-in
-//! Ed25519 public key. Mirrors the encoder in `license-issuer`; the two MUST
-//! stay in sync. Only the verification path lives here — Stackpit never signs
-//! licenses.
+//! Ed25519 public key. The OPLB/CBOR/Ed25519 wire-format decode and signature
+//! check are delegated to the MIT `signetlib` crate; everything here is
+//! Stackpit's entitlement policy (product check, timestamp coercion, and the
+//! typed [`License`] mapping). Stackpit never signs licenses.
 
-use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use chrono::{DateTime, TimeZone, Utc};
-use ed25519_dalek::{Signature, Verifier, VerifyingKey, SIGNATURE_LENGTH};
-use serde::Deserialize;
+use ed25519_dalek::VerifyingKey;
+use signetlib::codec::DecodeError;
 
 use crate::commercial::license::{Feature, License};
 use crate::commercial::PUBLIC_KEY_BYTES;
 
-/// Must match `license-issuer::claims::BLOB_MAGIC`.
-const BLOB_MAGIC: &[u8; 4] = b"OPLB";
-/// Must match `license-issuer::claims::BLOB_VERSION`.
-const BLOB_VERSION: u8 = 1;
 /// The `product` claim this binary accepts. Per-product signing keys are the
 /// real gate; this is defense-in-depth for clearer "wrong product" errors.
 const EXPECTED_PRODUCT: &str = "stackpit";
-
-/// On-the-wire envelope (mirror of the issuer's `SignedBlob`).
-// Wire-format freeze: any new envelope field requires a coordinated BLOB_VERSION bump.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SignedBlob {
-    #[serde(rename = "c", with = "serde_bytes")]
-    claims_cbor: Vec<u8>,
-    #[serde(rename = "s", with = "serde_bytes")]
-    signature: Vec<u8>,
-}
-
-/// Mirror of the issuer's `Claims`. Stringly-typed for forward compat —
-/// translated into typed enums by [`into_license`].
-// Additive forward-compat: unknown claim fields are ignored so a newer issuer
-// can add benign claims without older binaries rejecting the blob. Security-
-// relevant forward-compat is gated by BLOB_VERSION (the blob byte prefix), and
-// structural strictness lives on the `SignedBlob` envelope above.
-#[derive(Debug, Deserialize)]
-struct Claims {
-    #[allow(dead_code)] // wire-format claim; version gate is the blob byte prefix
-    v: u8,
-    license_id: String,
-    customer: String,
-    email: String,
-    #[allow(dead_code)] // wire-format claim; single tier today, not branched on at runtime
-    tier: String,
-    /// Product the license was issued for. Defense-in-depth on top of the
-    /// per-product signing key; empty on legacy blobs (treated as a match).
-    #[serde(default)]
-    product: String,
-    issued_at: i64,
-    expires_at: Option<i64>,
-    #[serde(default)]
-    features: Vec<String>,
-    #[serde(default)]
-    max_orgs: Option<u32>,
-    #[allow(dead_code)] // Stackpit ignores seats; the wire may still carry the flag
-    #[serde(default)]
-    max_seats: Option<u32>,
-    #[allow(dead_code)] // free-text issuer note; deserialized but unused at runtime
-    #[serde(default)]
-    note: String,
-}
 
 #[derive(Debug)]
 pub enum VerifyError {
@@ -123,48 +75,14 @@ pub fn decode_and_verify(b64: &str) -> Result<License, VerifyError> {
     if trimmed.is_empty() {
         return Err(VerifyError::Empty);
     }
-    let bytes = B64
-        .decode(trimmed)
-        .map_err(|e| VerifyError::Malformed(format!("base64: {e}")))?;
 
-    if bytes.len() < BLOB_MAGIC.len() + 1 {
-        return Err(VerifyError::Malformed("blob too short".into()));
-    }
-    if &bytes[..BLOB_MAGIC.len()] != BLOB_MAGIC {
-        return Err(VerifyError::Malformed("magic mismatch".into()));
-    }
-    let version = bytes[BLOB_MAGIC.len()];
-    if version != BLOB_VERSION {
-        return Err(VerifyError::Malformed(format!(
-            "unsupported version {version}, expected {BLOB_VERSION}"
-        )));
-    }
-
-    let cbor_start = BLOB_MAGIC.len() + 1;
-    let blob: SignedBlob = ciborium::from_reader(&bytes[cbor_start..])
-        .map_err(|e| VerifyError::Malformed(format!("envelope cbor: {e}")))?;
-
-    if blob.signature.len() != SIGNATURE_LENGTH {
-        return Err(VerifyError::Malformed(format!(
-            "signature length {}, expected {SIGNATURE_LENGTH}",
-            blob.signature.len()
-        )));
-    }
-    let sig_bytes: [u8; SIGNATURE_LENGTH] = blob
-        .signature
-        .as_slice()
-        .try_into()
-        .map_err(|_| VerifyError::Malformed("signature length".into()))?;
-    let signature = Signature::from_bytes(&sig_bytes);
-
-    let verifying = VerifyingKey::from_bytes(PUBLIC_KEY_BYTES)
+    let vk = VerifyingKey::from_bytes(PUBLIC_KEY_BYTES)
         .map_err(|e| VerifyError::Malformed(format!("baked-in pubkey: {e}")))?;
-    verifying
-        .verify(&blob.claims_cbor, &signature)
-        .map_err(|_| VerifyError::BadSignature)?;
 
-    let claims: Claims = ciborium::from_reader(blob.claims_cbor.as_slice())
-        .map_err(|e| VerifyError::Malformed(format!("claims cbor: {e}")))?;
+    let claims = signetlib::codec::decode_and_verify(trimmed, &vk).map_err(|e| match e {
+        DecodeError::Malformed(s) => VerifyError::Malformed(s),
+        DecodeError::BadSignature => VerifyError::BadSignature,
+    })?;
 
     if !claims.product.is_empty() && claims.product != EXPECTED_PRODUCT {
         return Err(VerifyError::WrongProduct);
@@ -173,7 +91,7 @@ pub fn decode_and_verify(b64: &str) -> Result<License, VerifyError> {
     into_license(claims)
 }
 
-fn into_license(claims: Claims) -> Result<License, VerifyError> {
+fn into_license(claims: signetlib::claims::Claims) -> Result<License, VerifyError> {
     let issued_at = unix_to_utc(claims.issued_at)?;
     let expires_at = match claims.expires_at {
         Some(ts) => Some(unix_to_utc(ts)?),

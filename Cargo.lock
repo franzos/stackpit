@@ -3564,6 +3564,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "signetlib"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0efff5007bcca35c13770400e5053b28637e572bde1c4959bbaae05f6f6f7a07"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "ciborium",
+ "ed25519-dalek",
+ "hex",
+ "rand 0.8.6",
+ "serde",
+ "serde_bytes",
+]
+
+[[package]]
 name = "simd-adler32"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3900,7 +3916,6 @@ dependencies = [
  "base64 0.22.1",
  "charts-rs",
  "chrono",
- "ciborium",
  "clap",
  "dashmap",
  "ed25519-dalek",
@@ -3926,11 +3941,11 @@ dependencies = [
  "reqwest 0.12.28",
  "secrecy",
  "serde",
- "serde_bytes",
  "serde_json",
  "serde_urlencoded",
  "sha1",
  "sha2 0.10.9",
+ "signetlib",
  "simple_hll",
  "sourcemap",
  "sqlx",

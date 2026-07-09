@@ -12,6 +12,7 @@ admin-no-orgs = لا توجد مؤسسات متاحة
 admin-assign = تعيين
 
 # صفحة الترخيص التجاري (templates/admin_license.html).
+license-watermark = مرخّص لـ
 license-page-title = الترخيص
 license-intro = ترخيص من الفئة التجارية لهذا التثبيت. يُتحقَّق منه محليًا دون اتصال، ولا تغادر أي بيانات الخادم.
 license-status = الحالة

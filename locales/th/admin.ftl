@@ -14,6 +14,7 @@ admin-no-orgs = ไม่มีองค์กรให้เลือก
 admin-assign = กำหนด
 
 # หน้าใบอนุญาตเชิงพาณิชย์ (templates/admin_license.html)
+license-watermark = ได้รับอนุญาตให้ใช้งานโดย
 license-page-title = ใบอนุญาต
 license-intro = ใบอนุญาตระดับเชิงพาณิชย์สำหรับการติดตั้งนี้ ตรวจสอบภายในเครื่องแบบออฟไลน์ ไม่มีข้อมูลออกจากเซิร์ฟเวอร์
 license-status = สถานะ

@@ -14,6 +14,7 @@ admin-no-orgs = No orgs available
 admin-assign = Assign
 
 # Commercial license page (templates/admin_license.html).
+license-watermark = Licensed to
 license-page-title = License
 license-intro = Commercial-tier license for this installation. Verified locally and offline, no data leaves the server.
 license-status = Status

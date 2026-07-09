@@ -14,6 +14,7 @@ admin-no-orgs = Нет доступных организаций
 admin-assign = Назначить
 
 # Страница коммерческой лицензии (templates/admin_license.html).
+license-watermark = Лицензировано для
 license-page-title = Лицензия
 license-intro = Лицензия коммерческого уровня для этой установки. Проверяется локально и офлайн, данные не покидают сервер.
 license-status = Статус

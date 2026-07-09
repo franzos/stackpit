@@ -14,6 +14,9 @@ pub(crate) struct PageChrome {
     pub(crate) locale: LanguageIdentifier,
     // Current request path+query, so the in-app switcher can build `next` server-side.
     pub(crate) path: String,
+    // "customer · email" when a commercial license is active AND the request is on an
+    // admin surface; None everywhere else. Feeds the sidebar watermark.
+    pub(crate) license_watermark: Option<String>,
 }
 
 /// One entry in the language switcher: BCP-47 code, endonym (shown untranslated),
@@ -43,13 +46,35 @@ fn locale_endonym(active: &LanguageIdentifier) -> &'static str {
         .unwrap_or("English")
 }
 
+/// Paths where the commercial licensee watermark is surfaced.
+fn is_admin_surface(path: &str) -> bool {
+    path.starts_with("/web/admin")
+        || path.starts_with("/web/settings")
+        || path.starts_with("/web/organizations")
+}
+
 impl PageChrome {
     pub(crate) fn new(csrf_token: String, locale: LanguageIdentifier, path: String) -> Self {
         Self {
             csrf_token,
             locale,
             path,
+            license_watermark: None,
         }
+    }
+
+    /// Sets the sidebar watermark to "customer · email" when a license is
+    /// present and the request path is an admin surface; a no-op otherwise.
+    pub(crate) fn with_license_watermark(
+        mut self,
+        status: &crate::commercial::LicenseStatus,
+    ) -> Self {
+        if let Some(l) = status.license() {
+            if is_admin_surface(&self.path) {
+                self.license_watermark = Some(format!("{} · {}", l.customer, l.email));
+            }
+        }
+        self
     }
 
     pub(crate) fn t(&self, id: &str) -> String {
@@ -240,5 +265,41 @@ mod tests {
     fn resolve_locale_defaults_to_en() {
         let parts = parts_from("/web/projects/", &[]);
         assert_eq!(resolve_locale(&parts, None), langid!("en"));
+    }
+
+    fn active_status() -> crate::commercial::LicenseStatus {
+        use crate::commercial::license::License;
+        crate::commercial::LicenseStatus::Active(License {
+            license_id: "test".into(),
+            customer: "Cust".into(),
+            email: "e@x".into(),
+            issued_at: chrono::Utc::now(),
+            expires_at: Some(chrono::Utc::now() + chrono::Duration::days(30)),
+            features: Vec::new(),
+            max_orgs: None,
+        })
+    }
+
+    fn chrome_at(path: &str) -> PageChrome {
+        PageChrome::new("csrf".to_string(), langid!("en"), path.to_string())
+    }
+
+    #[test]
+    fn watermark_on_admin_surface_with_license() {
+        let c = chrome_at("/web/admin/license").with_license_watermark(&active_status());
+        assert_eq!(c.license_watermark.as_deref(), Some("Cust · e@x"));
+    }
+
+    #[test]
+    fn watermark_absent_off_admin_surface() {
+        let c = chrome_at("/web/projects/").with_license_watermark(&active_status());
+        assert_eq!(c.license_watermark, None);
+    }
+
+    #[test]
+    fn watermark_absent_when_unlicensed() {
+        let c = chrome_at("/web/admin/license")
+            .with_license_watermark(&crate::commercial::LicenseStatus::Unlicensed);
+        assert_eq!(c.license_watermark, None);
     }
 }

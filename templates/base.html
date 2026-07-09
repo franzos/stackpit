@@ -58,6 +58,9 @@
                 <span>{{ chrome.t("nav-logout") }}</span>
               </button>
             </form>
+            {%- match chrome.license_watermark %}{%- when Some with (w) %}
+              <p class="px-2 py-1 text-xs text-on-surface-variant">{{ chrome.t("license-watermark") }} <bdi>{{ w }}</bdi></p>
+            {%- when None %}{%- endmatch %}
           </div>
         </aside>
         <div class="flex-1 min-w-0 flex flex-col">

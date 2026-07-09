@@ -1,8 +1,11 @@
 use std::collections::HashMap;
 
 use askama::Template;
+use axum::extract::FromRef;
 use axum::http::StatusCode;
 use serde::Deserialize;
+
+use crate::server::AppState;
 
 use crate::db::DbPool;
 use crate::html::chrome::PageChrome;
@@ -26,13 +29,14 @@ pub struct Chrome(pub PageChrome);
 
 impl<S> axum::extract::FromRequestParts<S> for Chrome
 where
+    AppState: FromRef<S>,
     S: Send + Sync,
 {
     type Rejection = std::convert::Infallible;
 
     async fn from_request_parts(
         parts: &mut axum::http::request::Parts,
-        _state: &S,
+        state: &S,
     ) -> Result<Self, Self::Rejection> {
         let csrf = parts
             .extensions
@@ -50,7 +54,11 @@ where
             .map(|p| p.as_str())
             .unwrap_or("/web/projects/")
             .to_string();
-        Ok(Chrome(PageChrome::new(csrf, locale, path)))
+        let state = AppState::from_ref(state);
+        let status = state.license.status();
+        Ok(Chrome(
+            PageChrome::new(csrf, locale, path).with_license_watermark(&status),
+        ))
     }
 }
 

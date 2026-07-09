@@ -26,8 +26,9 @@
 //!    read-only for a fixed 30-day window ([`GRACE_DAYS`]) so a forgotten
 //!    renewal doesn't blow up production.
 //!
-//! No features are gated yet: the machinery is in place so a future feature is
-//! just a new [`license::Feature`] variant plus its call-site gate.
+//! Observability (the Prometheus `/metrics` endpoint) is the first gated
+//! feature. Adding another is just a new [`license::Feature`] variant plus its
+//! call-site gate.
 
 pub mod license;
 pub mod settings_page;

@@ -41,5 +41,3 @@ Stackpit is dual-licensed:
 
 - The **core** (everything outside `src/commercial/`) is **MIT**: freely usable, including commercially, with no strings attached.
 - The files under `src/commercial/` are source-available under the **Stackpit Commercial License 1.0** (`LICENSE-COMMERCIAL`).
-
-Be honest about what that split actually buys you: unlike sister project Forseti, whose OSS core is AGPL, Stackpit's core carries no copyleft backstop. A licensee who forks Stackpit and deletes the one `state.license.feature(...)` gate call sitting in ordinary MIT code owes nothing back, since the Commercial License only binds someone who actually invokes the code under `src/commercial/`. For Stackpit, the signed watermark plus the contract are the whole deterrent; there's no legal copyleft leverage sitting behind them. That's a deliberate trade for a permissive core, and it's worth stating plainly rather than pretending the gate is load-bearing. See [`MONETIZATION.md`](../../MONETIZATION.md) for the full reasoning.

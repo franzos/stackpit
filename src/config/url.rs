@@ -5,10 +5,8 @@ pub(super) fn url_origin(value: &str) -> Option<String> {
     let trimmed = value.trim();
     let (scheme, rest) = if let Some(r) = trimmed.strip_prefix("https://") {
         ("https", r)
-    } else if let Some(r) = trimmed.strip_prefix("http://") {
-        ("http", r)
     } else {
-        return None;
+        ("http", trimmed.strip_prefix("http://")?)
     };
     let host = rest.split(['/', '?', '#']).next()?;
     if host.is_empty() {

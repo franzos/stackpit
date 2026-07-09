@@ -26,6 +26,11 @@ use msg::WriteMsg::*;
 /// Total queued-message capacity, split evenly across writer tasks.
 const TOTAL_QUEUE_CAPACITY: usize = 50_000;
 
+/// Backoff ladder for re-flushing a failed batch (doubles per failure); the
+/// batch is dropped only once a retry at the cap also fails (~12.5s outage).
+const RETRY_BACKOFF_INITIAL: std::time::Duration = std::time::Duration::from_millis(500);
+const RETRY_BACKOFF_CAP: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Run CPU-bound work via `block_in_place` only on a multi-thread runtime;
 /// it panics on a current-thread runtime, so run inline there instead.
 pub(crate) fn block_in_place_if_multi_thread<R>(f: impl FnOnce() -> R) -> R {
@@ -178,6 +183,7 @@ async fn writer_loop(
     let mut retry_pending: Vec<WriteMsg> = Vec::new();
     // Reserved byte weight of retry_pending, captured before compression so the decrement matches what send reserved (compression shrinks payloads in place).
     let mut retry_pending_bytes: usize = 0;
+    let mut retry_backoff = RETRY_BACKOFF_INITIAL;
 
     let flush_interval = std::time::Duration::from_millis(AGGREGATION_FLUSH_INTERVAL_MS as u64);
     let mut tick = tokio::time::interval(flush_interval);
@@ -186,13 +192,20 @@ async fn writer_loop(
     tick.tick().await;
 
     loop {
-        // Retry a previously failed batch before accepting new work.
+        // Retry a previously failed batch before accepting new work, backing off
+        // so a brief DB outage degrades to latency instead of loss.
         if !retry_pending.is_empty() {
+            let shutting_down = tokio::select! {
+                biased;
+                _ = shutdown.cancelled() => true,
+                _ = tokio::time::sleep(retry_backoff) => false,
+            };
             if flush_batch(pool, &mut retry_pending, &mut accumulators, notify_tx).await {
                 queued_bytes.fetch_sub(retry_pending_bytes, Ordering::Relaxed);
                 retry_pending.clear();
                 retry_pending_bytes = 0;
-            } else {
+                retry_backoff = RETRY_BACKOFF_INITIAL;
+            } else if shutting_down || retry_backoff >= RETRY_BACKOFF_CAP {
                 let dropped = count_events_in(&retry_pending);
                 tracing::error!("dropping {dropped} events after repeated flush failures");
                 ingest_stats
@@ -201,6 +214,10 @@ async fn writer_loop(
                 queued_bytes.fetch_sub(retry_pending_bytes, Ordering::Relaxed);
                 retry_pending.clear();
                 retry_pending_bytes = 0;
+                retry_backoff = RETRY_BACKOFF_INITIAL;
+            } else {
+                retry_backoff = (retry_backoff * 2).min(RETRY_BACKOFF_CAP);
+                continue;
             }
         }
 
@@ -335,18 +352,26 @@ async fn insert_worker_loop(
 
     let mut retry_pending: Vec<WriteMsg> = Vec::new();
     let mut retry_pending_bytes: usize = 0;
+    let mut retry_backoff = RETRY_BACKOFF_INITIAL;
 
     loop {
-        // Retry a previously failed batch before accepting new work.
+        // Retry a previously failed batch before accepting new work, backing off
+        // so a brief DB outage degrades to latency instead of loss.
         if !retry_pending.is_empty() {
+            let shutting_down = tokio::select! {
+                biased;
+                _ = shutdown.cancelled() => true,
+                _ = tokio::time::sleep(retry_backoff) => false,
+            };
             match flush_batch_insert_only(pool, &mut retry_pending).await {
                 Some(scratch) => {
                     queued_bytes.fetch_sub(retry_pending_bytes, Ordering::Relaxed);
                     retry_pending.clear();
                     retry_pending_bytes = 0;
+                    retry_backoff = RETRY_BACKOFF_INITIAL;
                     forward_scratch(&agg_tx, scratch).await;
                 }
-                None => {
+                None if shutting_down || retry_backoff >= RETRY_BACKOFF_CAP => {
                     let dropped = count_events_in(&retry_pending);
                     tracing::error!("dropping {dropped} events after repeated flush failures");
                     ingest_stats
@@ -355,6 +380,11 @@ async fn insert_worker_loop(
                     queued_bytes.fetch_sub(retry_pending_bytes, Ordering::Relaxed);
                     retry_pending.clear();
                     retry_pending_bytes = 0;
+                    retry_backoff = RETRY_BACKOFF_INITIAL;
+                }
+                None => {
+                    retry_backoff = (retry_backoff * 2).min(RETRY_BACKOFF_CAP);
+                    continue;
                 }
             }
         }
@@ -835,6 +865,76 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(row.0, 1, "batch-2 fingerprint must have an issue row");
+    }
+
+    /// A transient flush failure must not drop the batch: the writer holds it
+    /// across the backoff ladder and lands it once the DB recovers. Failure is
+    /// injected via `query_only` on the single-connection SQLite writer pool.
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn transient_flush_failure_recovers_without_loss() {
+        let pool = test_pool().await;
+        let stats = test_stats();
+        let (handle, _join) = spawn(pool.clone(), None, stats.clone(), 1, BATCH_SIZE)
+            .await
+            .unwrap();
+
+        sqlx::query("PRAGMA query_only = ON")
+            .execute(&pool)
+            .await
+            .unwrap();
+        handle.send_event(make_event("recover1")).unwrap();
+
+        // Initial flush and the first backed-off retry both fail read-only.
+        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+        assert!(db::get_event(&pool, "recover1").await.unwrap().is_none());
+        assert_eq!(
+            stats.events_dropped.load(Ordering::Relaxed),
+            0,
+            "failed batch must be held, not dropped"
+        );
+
+        sqlx::query("PRAGMA query_only = OFF")
+            .execute(&pool)
+            .await
+            .unwrap();
+        // Next rung of the backoff ladder (<=1s away) must land the batch.
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+
+        assert!(db::get_event(&pool, "recover1").await.unwrap().is_some());
+        assert_eq!(stats.events_dropped.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            handle.queued_bytes(),
+            0,
+            "recovered batch must release its reserved bytes"
+        );
+
+        let _ = handle.shutdown();
+    }
+
+    /// The retry backoff sleep must stay responsive to shutdown: cancellation
+    /// interrupts the sleep and the writer exits promptly.
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn retry_backoff_stays_responsive_to_shutdown() {
+        let pool = test_pool().await;
+        let (handle, join) = spawn(pool.clone(), None, test_stats(), 1, BATCH_SIZE)
+            .await
+            .unwrap();
+
+        sqlx::query("PRAGMA query_only = ON")
+            .execute(&pool)
+            .await
+            .unwrap();
+        handle.send_event(make_event("stall1")).unwrap();
+
+        // Land inside a backoff sleep (500ms rung done, 1s rung in progress).
+        tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+        let _ = handle.shutdown();
+        tokio::time::timeout(std::time::Duration::from_secs(2), join)
+            .await
+            .expect("writer must exit promptly while backing off")
+            .unwrap();
     }
 
     /// A flush that fails on both the attempt and its retry must not fold the batch into the accumulators (merge-on-commit); injected via a closed pool.

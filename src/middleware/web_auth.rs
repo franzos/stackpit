@@ -7,7 +7,7 @@
 //!    `BearerGate` (which also checks revocations), inject `AuthContext`.
 //! 3. Otherwise -- redirect to `/web/login` (or 401 JSON for API clients).
 //!
-//! Public paths (assets, OAuth callback, ingest API) skip the gate entirely.
+//! Public paths (assets, OAuth callback) skip the gate entirely.
 
 use axum::body::Body;
 use axum::http::{HeaderValue, Request};
@@ -33,7 +33,6 @@ fn is_public_path(path: &str) -> bool {
         || path == "/metrics"
         || path.starts_with("/web/_assets/")
         || path.starts_with("/web/lang/")
-        || path.starts_with("/api/0/")
         || path == "/web/auth/login"
         || path == "/web/auth/callback"
         || path == "/web/auth/backchannel-logout"
@@ -417,11 +416,15 @@ mod tests {
         }
         // Gated: logout still runs the gate to resolve + tear down the caller's
         // own session. A blanket `/web/auth/` match here once broke OIDC logout.
+        // /api/0/ lives on the ingest listener only; exempting it here would be
+        // a silent bypass if such a route were ever mounted on the admin app.
         for p in [
             "/web/logout",
             "/web/auth/logout",
             "/web/projects/",
             "/web/settings/integrations/",
+            "/api/0/organizations/o/releases",
+            "/api/0/projects/o/p",
         ] {
             assert!(!is_public_path(p), "{p} must be gated");
         }

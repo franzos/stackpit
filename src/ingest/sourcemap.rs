@@ -9,7 +9,26 @@ use std::io::Read;
 
 const MAX_BUNDLE_ENTRIES: usize = 10_000;
 const MAX_BUNDLE_ENTRY_BYTES: usize = 64 * 1024 * 1024; // 64 MiB per entry
-const MAX_BUNDLE_TOTAL_BYTES: usize = 512 * 1024 * 1024; // 512 MiB total, zip-bomb guard
+pub const MAX_BUNDLE_TOTAL_BYTES: usize = 512 * 1024 * 1024; // 512 MiB total, zip-bomb guard
+
+/// Assembling persisted chunks exceeded the bundle size cap.
+#[derive(Debug)]
+pub struct BundleTooLarge {
+    pub size: usize,
+    pub limit: usize,
+}
+
+impl std::fmt::Display for BundleTooLarge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "assembled bundle exceeds size limit ({} > {} bytes)",
+            self.size, self.limit
+        )
+    }
+}
+
+impl std::error::Error for BundleTooLarge {}
 
 // Types
 
@@ -347,11 +366,23 @@ pub async fn find_missing_chunks(
         .collect())
 }
 
-/// Read chunks in order and concatenate them into a single buffer.
+/// Read chunks in order and concatenate them into a single buffer,
+/// capped at [`MAX_BUNDLE_TOTAL_BYTES`].
 pub async fn assemble_chunks(
     pool: &DbPool,
     checksums: &[String],
     project_id: u64,
+) -> Result<Vec<u8>> {
+    assemble_chunks_capped(pool, checksums, project_id, MAX_BUNDLE_TOTAL_BYTES).await
+}
+
+// Per-request upload caps don't bound the total of persisted chunks, so the
+// cumulative size must be checked here before the buffer grows.
+async fn assemble_chunks_capped(
+    pool: &DbPool,
+    checksums: &[String],
+    project_id: u64,
+    max_bytes: usize,
 ) -> Result<Vec<u8>> {
     let mut result = Vec::new();
     for checksum in checksums {
@@ -366,6 +397,14 @@ pub async fn assemble_chunks(
         match row {
             Some(row) => {
                 let data: Vec<u8> = row.get("data");
+                let size = result.len().saturating_add(data.len());
+                if size > max_bytes {
+                    return Err(BundleTooLarge {
+                        size,
+                        limit: max_bytes,
+                    }
+                    .into());
+                }
                 result.extend_from_slice(&data);
             }
             None => anyhow::bail!("missing chunk: {checksum}"),
@@ -455,6 +494,44 @@ mod tests {
             source_url: None,
             data: map_with_source(source),
         }
+    }
+
+    #[tokio::test]
+    async fn assemble_chunks_within_cap_concatenates() {
+        let pool = open_test_pool().await;
+        store_chunk(&pool, "aaaa", b"hello", 1).await.unwrap();
+        store_chunk(&pool, "bbbb", b"world", 1).await.unwrap();
+
+        let checksums = vec!["aaaa".to_string(), "bbbb".to_string()];
+        let data = assemble_chunks_capped(&pool, &checksums, 1, 10)
+            .await
+            .unwrap();
+        assert_eq!(data, b"helloworld");
+    }
+
+    #[tokio::test]
+    async fn assemble_chunks_rejects_total_over_cap() {
+        let pool = open_test_pool().await;
+        store_chunk(&pool, "aaaa", b"hello", 1).await.unwrap();
+        store_chunk(&pool, "bbbb", b"world", 1).await.unwrap();
+
+        let checksums = vec!["aaaa".to_string(), "bbbb".to_string()];
+        let err = assemble_chunks_capped(&pool, &checksums, 1, 9)
+            .await
+            .unwrap_err();
+        assert!(err.downcast_ref::<BundleTooLarge>().is_some());
+    }
+
+    #[tokio::test]
+    async fn assemble_chunks_counts_repeated_checksums() {
+        let pool = open_test_pool().await;
+        store_chunk(&pool, "aaaa", b"hello", 1).await.unwrap();
+
+        let checksums = vec!["aaaa".to_string(); 3];
+        let err = assemble_chunks_capped(&pool, &checksums, 1, 12)
+            .await
+            .unwrap_err();
+        assert!(err.downcast_ref::<BundleTooLarge>().is_some());
     }
 
     #[tokio::test]

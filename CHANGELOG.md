@@ -9,6 +9,12 @@
 ### Changed
 - Email config now uses polymail's provider schema (`config` feature, polymail 0.1.6). **Breaking:** the `[email.smtp]` block collapses into `[email]`, and its fields are renamed: `username`/`password` -> `user`/`pass`, `starttls` -> `start_tls`. Omit the whole `[email]` section to leave mail unconfigured.
 
+### Fixed
+- Graceful shutdown no longer discards events that were already acknowledged: HTTP listeners now drain before the writer stops, and late sends are rejected instead of falsely acked
+- A failed write batch is now retried with backoff (0.5s doubling to 5s) instead of being dropped within milliseconds, so a brief database outage costs latency, not events
+- Sourcemap bundle assembly now enforces a 512 MiB cap on the combined chunk size (previously up to ~4 GiB could be allocated in one request); the advertised `maxFileSize` matches the cap
+- In open mode, a failed project-key auto-registration now returns a retryable 500 instead of accepting events for a key that was never persisted
+
 ## [0.3.10] - 2026-07-05
 
 ### Added

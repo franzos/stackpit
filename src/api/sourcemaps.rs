@@ -23,7 +23,7 @@ pub async fn chunk_upload_config(
         "url": format!("/api/0/organizations/{org}/chunk-upload/"),
         "chunkSize": 8_388_608,
         "chunksPerRequest": 64,
-        "maxFileSize": 2_147_483_648_u64,
+        "maxFileSize": sourcemap::MAX_BUNDLE_TOTAL_BYTES,
         "maxRequestSize": 33_554_432,
         "concurrency": 1,
         "hashAlgorithm": "sha1",
@@ -174,8 +174,12 @@ pub async fn assemble(
     let zip_data = sourcemap::assemble_chunks(pool, &body.chunks, project_id)
         .await
         .map_err(|e| {
-            tracing::error!("assemble chunks: {e}");
-            super::ApiError::internal(e)
+            if e.downcast_ref::<sourcemap::BundleTooLarge>().is_some() {
+                super::ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, e.to_string())
+            } else {
+                tracing::error!("assemble chunks: {e}");
+                super::ApiError::internal(e)
+            }
         })?;
 
     if let Some(ref expected) = body.checksum {

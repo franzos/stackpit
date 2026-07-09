@@ -546,6 +546,11 @@ type ServerFuture =
 ///
 /// `build_servers` receives the sender so each server can subscribe its own
 /// graceful-shutdown receiver before the signal task is spawned.
+///
+/// Shutdown order matters: the HTTP listeners finish their graceful drain
+/// first, and only then is the writer cancelled and drained, so every event
+/// acknowledged with a 200 is still flushed instead of being discarded behind
+/// the writer's shutdown sentinel.
 async fn serve_with_shutdown<F>(
     writer_tx: WriterHandle,
     writer_join: tokio::task::JoinHandle<()>,
@@ -558,9 +563,11 @@ async fn serve_with_shutdown<F>(
     let servers = build_servers(&shutdown_tx);
     let mut timeout_rx = shutdown_tx.subscribe();
 
+    let signal_tx = shutdown_tx.clone();
     tokio::spawn(async move {
-        shutdown_signal(writer_tx, writer_join, bg_cancel).await;
-        let _ = shutdown_tx.send(true);
+        shutdown_signal().await;
+        tracing::info!("shutdown signal received, draining HTTP connections...");
+        let _ = signal_tx.send(true);
     });
 
     let mut server_set = tokio::task::JoinSet::new();
@@ -572,15 +579,31 @@ async fn serve_with_shutdown<F>(
         });
     }
 
-    // First server to finish (graceful or error) ends the run, mirroring the
-    // prior `select!` over the individual server futures.
+    // Wait for every listener to drain; the first to finish (graceful or a
+    // spontaneous error) signals the rest so the 5s ceiling always arms.
+    let drain_servers = async {
+        while server_set.join_next().await.is_some() {
+            let _ = shutdown_tx.send(true);
+        }
+    };
     tokio::select! {
-        _ = server_set.join_next() => {}
+        _ = drain_servers => {}
         _ = async {
             let _ = timeout_rx.wait_for(|&v| v).await;
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             tracing::warn!("graceful shutdown timed out after 5s, forcing exit");
         } => {}
+    }
+
+    // Listeners are gone (or the force ceiling hit): no new acks can be issued,
+    // so it is now safe to stop background tasks and drain the writer.
+    tracing::info!("HTTP listeners stopped, draining writer...");
+    bg_cancel.cancel();
+    let _ = writer_tx.shutdown();
+    match tokio::time::timeout(std::time::Duration::from_secs(4), writer_join).await {
+        Ok(Ok(())) => tracing::info!("writer drained successfully"),
+        Ok(Err(e)) => tracing::error!("writer task panicked: {e}"),
+        Err(_) => tracing::warn!("writer drain timed out after 4s"),
     }
 }
 
@@ -765,11 +788,7 @@ fn build_web_bearer_gate(
     ))
 }
 
-async fn shutdown_signal(
-    writer: WriterHandle,
-    writer_join: tokio::task::JoinHandle<()>,
-    bg_cancel: CancellationToken,
-) {
+async fn shutdown_signal() {
     let ctrl_c = async {
         if let Err(e) = tokio::signal::ctrl_c().await {
             tracing::error!("failed to install Ctrl+C handler: {e}");
@@ -795,16 +814,5 @@ async fn shutdown_signal(
     tokio::select! {
         _ = ctrl_c => {},
         _ = terminate => {},
-    }
-
-    tracing::info!("shutdown signal received, draining writer...");
-    bg_cancel.cancel();
-    let _ = writer.shutdown();
-
-    // Wait for writer drain (4s timeout leaves headroom before force-exit).
-    match tokio::time::timeout(std::time::Duration::from_secs(4), writer_join).await {
-        Ok(Ok(())) => tracing::info!("writer drained successfully"),
-        Ok(Err(e)) => tracing::error!("writer task panicked: {e}"),
-        Err(_) => tracing::warn!("writer drain timed out after 4s"),
     }
 }

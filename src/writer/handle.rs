@@ -116,6 +116,13 @@ impl WriterHandle {
     // -- Event ingestion (fire-and-forget) -----------------------------------
 
     pub fn send_event(&self, mut event: StorableEvent) -> Result<(), SendError> {
+        // Once shutdown starts, reject instead of falsely acking into a queue nobody drains.
+        if self.shutdown.is_cancelled() {
+            self.ingest_stats
+                .events_rejected
+                .fetch_add(1, Ordering::Relaxed);
+            return Err(Box::new(TrySendError::Closed(WriteMsg::Event(event))));
+        }
         Self::compress_event(&mut event);
         let tx = self.shard();
         self.warn_if_backpressure(tx);
@@ -169,6 +176,17 @@ impl WriterHandle {
         mut event: StorableEvent,
         attachments: Vec<StorableAttachment>,
     ) -> Result<(), SendError> {
+        if self.shutdown.is_cancelled() {
+            self.ingest_stats
+                .events_rejected
+                .fetch_add(1, Ordering::Relaxed);
+            let msg = if attachments.is_empty() {
+                WriteMsg::Event(event)
+            } else {
+                WriteMsg::EventWithAttachments(event, attachments)
+            };
+            return Err(Box::new(TrySendError::Closed(msg)));
+        }
         Self::compress_event(&mut event);
         let tx = self.shard();
         self.warn_if_backpressure(tx);
@@ -203,6 +221,12 @@ impl WriterHandle {
 
     /// All-or-nothing envelope send: reserve the byte budget then one channel permit per event before sending any, so a full or closed channel rejects the whole envelope up front (503) without queuing a prefix, which stops a retrying SDK from re-sending already-accepted events; any rejection returns `false` and leaves the counter unchanged.
     pub fn send_envelope(&self, mut events: Vec<(StorableEvent, Vec<StorableAttachment>)>) -> bool {
+        if self.shutdown.is_cancelled() {
+            self.ingest_stats
+                .events_rejected
+                .fetch_add(events.len() as u64, Ordering::Relaxed);
+            return false;
+        }
         for (event, _) in events.iter_mut() {
             Self::compress_event(event);
         }
@@ -377,6 +401,27 @@ mod tests {
         // Same-size send now fits again.
         assert!(handle.send_event(ev_bytes("c", 80)).is_ok());
         assert_eq!(handle.queued_bytes(), 80);
+    }
+
+    // After shutdown() cancels the token, every send path must reject instead of
+    // acking into a queue the writer will never drain.
+    #[tokio::test]
+    async fn sends_rejected_after_shutdown_cancel() {
+        let (handle, rx) = handle_with_capacity(10);
+        let _ = handle.shutdown();
+        assert!(handle.send_event(ev("a")).is_err());
+        assert!(handle.send_event_with_attachments(ev("b"), vec![]).is_err());
+        assert!(!handle.send_envelope(vec![(ev("c"), vec![])]));
+        assert_eq!(rx.len(), 1, "only the shutdown sentinel may be queued");
+        assert_eq!(
+            handle.queued_bytes(),
+            0,
+            "rejected sends must not reserve bytes"
+        );
+        assert_eq!(
+            handle.ingest_stats.events_rejected.load(Ordering::Relaxed),
+            3
+        );
     }
 
     // Reserving then freeing the same message returns the counter to its start,

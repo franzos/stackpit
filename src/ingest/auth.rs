@@ -304,7 +304,13 @@ pub async fn validate_project_key(
                         negative_cache_insert(state, sentry_key, project_id, Denial::MaxProjects);
                         return Err(AuthError::MaxProjects);
                     }
-                    auto_register_key(state, sentry_key, project_id).await;
+                    auto_register_key(
+                        &state.writer_pool,
+                        &state.auth_cache,
+                        sentry_key,
+                        project_id,
+                    )
+                    .await?;
                 }
                 Err(e) => {
                     tracing::warn!("open-mode auth: DB lookup failed: {e}");
@@ -318,11 +324,18 @@ pub async fn validate_project_key(
 }
 
 /// Commits the project/key row on the writer pool so it serialises with the
-/// actor before any events referencing it can be flushed.
-async fn auto_register_key(state: &AppState, sentry_key: &str, project_id: u64) {
-    match queries::projects::ensure_project_key(&state.writer_pool, project_id, sentry_key).await {
+/// actor before any events referencing it can be flushed. A failed insert must
+/// surface as an error so the SDK gets a retryable 5xx instead of a 200 for a
+/// key that was never committed.
+async fn auto_register_key(
+    writer_pool: &crate::db::DbPool,
+    auth_cache: &AuthCache,
+    sentry_key: &str,
+    project_id: u64,
+) -> Result<(), AuthError> {
+    match queries::projects::ensure_project_key(writer_pool, project_id, sentry_key).await {
         Ok(()) => {
-            state.auth_cache.insert(
+            auth_cache.insert(
                 sentry_key.to_owned(),
                 CacheEntry {
                     project_id,
@@ -330,8 +343,12 @@ async fn auto_register_key(state: &AppState, sentry_key: &str, project_id: u64) 
                     inserted_at: std::time::Instant::now(),
                 },
             );
+            Ok(())
         }
-        Err(e) => tracing::warn!("auto-register key failed: {e}"),
+        Err(e) => {
+            tracing::warn!("auto-register key failed: {e}");
+            Err(AuthError::InternalError)
+        }
     }
 }
 
@@ -559,6 +576,31 @@ mod tests {
         invalidate_project(&positive, &negative, 1);
         assert!(negative.get(&("k".to_owned(), 1)).is_none());
         assert!(negative.get(&("k".to_owned(), 2)).is_some());
+    }
+
+    #[tokio::test]
+    async fn auto_register_key_success_caches_key() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        let cache: AuthCache = Arc::new(dashmap::DashMap::new());
+        let result = auto_register_key(&pool, &cache, "newkey", 7).await;
+        assert!(result.is_ok(), "insert into a live DB must succeed");
+        let entry = cache.get("newkey").expect("key must be cached");
+        assert_eq!(entry.project_id, 7);
+    }
+
+    // Regression: a failed auto-register insert must surface as InternalError
+    // (retryable 5xx), not silently fall through to an accepted event.
+    #[tokio::test]
+    async fn auto_register_key_failure_returns_internal_error() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        pool.close().await;
+        let cache: AuthCache = Arc::new(dashmap::DashMap::new());
+        let result = auto_register_key(&pool, &cache, "newkey", 7).await;
+        assert!(matches!(result, Err(AuthError::InternalError)));
+        assert!(
+            cache.get("newkey").is_none(),
+            "failed insert must not cache"
+        );
     }
 
     // Mirrors the archive -> denied-ingest -> unarchive flow: an Archived denial cached while the project was archived must be gone once it's unarchived, so a valid key passes without waiting out NEGATIVE_AUTH_CACHE_TTL.

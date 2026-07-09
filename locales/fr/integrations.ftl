@@ -52,4 +52,4 @@ integrations-email-token-placeholder-default = Laisser vide pour utiliser la val
 integrations-email-token-placeholder = Jeton d'API du fournisseur
 integrations-email-from-label = Adresse d'expéditeur
 integrations-email-fromname-label = Nom d'expéditeur
-integrations-email-smtp-hint = SMTP utilise la connexion [email.smtp] du serveur ; aucun jeton par intégration n'est nécessaire.
+integrations-email-smtp-hint = SMTP utilise la connexion [email] du serveur ; aucun jeton par intégration n'est nécessaire.

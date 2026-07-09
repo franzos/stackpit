@@ -310,8 +310,10 @@ impl Integration {
         Some(match provider.as_deref() {
             Some("lettermint") => "Lettermint",
             Some("sendgrid") => "SendGrid",
+            Some("smtp") => "SMTP",
+            Some("postmark") => "Postmark",
             // Legacy rows predate provider selection -- those are Postmark.
-            _ => "Postmark",
+            None | Some(_) => "Postmark",
         })
     }
 }
@@ -667,6 +669,44 @@ pub struct ReplayDetail {
     pub release: Option<String>,
     pub environment: Option<String>,
     pub payload: serde_json::Value,
+}
+
+#[cfg(test)]
+mod integration_tests {
+    use super::*;
+
+    fn email_row(config: Option<&str>) -> Integration {
+        Integration {
+            id: 1,
+            name: "n".into(),
+            kind: IntegrationKind::Email,
+            url: None,
+            secret: None,
+            encrypted: false,
+            config: config.map(String::from),
+            created_at: 0,
+        }
+    }
+
+    #[test]
+    fn provider_label_covers_all_providers() {
+        let label = |p: &str| email_row(Some(&format!(r#"{{"provider":"{p}"}}"#))).provider_label();
+        assert_eq!(label("lettermint"), Some("Lettermint"));
+        assert_eq!(label("postmark"), Some("Postmark"));
+        assert_eq!(label("sendgrid"), Some("SendGrid"));
+        // Regression: smtp must not fall through to the legacy-Postmark arm.
+        assert_eq!(label("smtp"), Some("SMTP"));
+        // Legacy rows (no provider key) and unknown tags stay Postmark.
+        assert_eq!(email_row(None).provider_label(), Some("Postmark"));
+        assert_eq!(label("mailgun"), Some("Postmark"));
+    }
+
+    #[test]
+    fn provider_label_none_for_non_email() {
+        let mut row = email_row(None);
+        row.kind = IntegrationKind::Webhook;
+        assert_eq!(row.provider_label(), None);
+    }
 }
 
 #[cfg(test)]

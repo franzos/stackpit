@@ -1,128 +1,101 @@
+use crate::config::EmailConfig;
 use crate::notify::NotificationEvent;
 use crate::util::encoding::escape_html;
 use anyhow::Result;
-use polymail::provider::smtp::{SmtpMailer, SmtpTls};
-use polymail::{Address, Body, Email, Mailer};
-use secrecy::ExposeSecret;
-use serde::{Deserialize, Serialize};
+use polymail::{Address, Body, Email, ProviderConfig};
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum EmailProvider {
-    #[default]
-    Lettermint,
-    Postmark,
-    Sendgrid,
-    /// Instance-wide SMTP relay. Unlike the API providers, its credential is a
-    /// connection block (`[email.smtp]`) rather than a single per-integration
-    /// token, so it's always driven by the global config.
-    Smtp,
-}
-
-impl EmailProvider {
-    pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "lettermint" => Some(Self::Lettermint),
-            "postmark" => Some(Self::Postmark),
-            "sendgrid" => Some(Self::Sendgrid),
-            "smtp" => Some(Self::Smtp),
-            _ => None,
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Lettermint => "lettermint",
-            Self::Postmark => "postmark",
-            Self::Sendgrid => "sendgrid",
-            Self::Smtp => "smtp",
-        }
-    }
-
-    /// True for the API providers, whose credential is a single token supplied
-    /// per integration or globally. SMTP is the exception: it's configured once
-    /// via `[email.smtp]`, so it carries no per-integration token.
-    pub fn is_token_based(self) -> bool {
-        !matches!(self, Self::Smtp)
+/// The provider tag as it appears in stored integration JSON and the UI form.
+pub fn provider_label(cfg: &ProviderConfig) -> &'static str {
+    match cfg {
+        ProviderConfig::Lettermint { .. } => "lettermint",
+        ProviderConfig::Postmark { .. } => "postmark",
+        ProviderConfig::Sendgrid { .. } => "sendgrid",
+        ProviderConfig::Smtp { .. } => "smtp",
     }
 }
 
-/// Transport security for an SMTP relay, mirroring polymail's `SmtpTls`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum SmtpTlsMode {
-    /// Plaintext, no encryption (local sinks like mailcrab/MailSlurper on 1025).
-    None,
-    /// Connect plaintext then upgrade via STARTTLS (usually port 587).
-    Starttls,
-    /// TLS from the first byte (usually port 465). Secure default.
-    #[default]
-    Implicit,
+/// True for the provider tags accepted from the integration form.
+pub fn provider_is_known(name: &str) -> bool {
+    matches!(name, "lettermint" | "postmark" | "sendgrid" | "smtp")
 }
 
-impl SmtpTlsMode {
-    fn to_polymail(self) -> SmtpTls {
-        match self {
-            Self::None => SmtpTls::None,
-            Self::Starttls => SmtpTls::StartTls,
-            Self::Implicit => SmtpTls::Implicit,
+/// The API token/api_key held by an API-provider config (`None` for SMTP, whose
+/// credential is the whole connection block rather than a single token). Empty
+/// values read as absent so a blank placeholder in TOML never counts as a token.
+pub fn api_credential(cfg: &ProviderConfig) -> Option<&str> {
+    match cfg {
+        ProviderConfig::Lettermint { token } | ProviderConfig::Postmark { token } => {
+            Some(token.as_str())
         }
+        ProviderConfig::Sendgrid { api_key } => Some(api_key.as_str()),
+        ProviderConfig::Smtp { .. } => None,
     }
 }
 
-/// Builds the polymail mailer for `provider`. API providers need a token; SMTP
-/// is built from the global `[email.smtp]` connection block instead.
-fn build_mailer(
-    provider: EmailProvider,
-    token: Option<&str>,
-    smtp: &crate::config::SmtpConfig,
-) -> Result<Box<dyn Mailer>> {
-    let token = || token.ok_or_else(|| anyhow::anyhow!("email provider token not configured"));
-    Ok(match provider {
-        EmailProvider::Lettermint => Box::new(
-            polymail::provider::lettermint::LettermintMailer::new(token()?),
-        ),
-        EmailProvider::Postmark => {
-            Box::new(polymail::provider::postmark::PostmarkMailer::new(token()?))
-        }
-        EmailProvider::Sendgrid => {
-            Box::new(polymail::provider::sendgrid::SendgridMailer::new(token()?))
-        }
-        EmailProvider::Smtp => Box::new(build_smtp_mailer(smtp)?),
-    })
+/// The instance-wide API token usable as a fallback for `provider`: only the
+/// configured provider's own token applies (a Postmark token can't send via
+/// SendGrid). Blank reads as absent.
+pub fn global_api_token<'a>(global: &'a ProviderConfig, provider: &str) -> Option<&'a str> {
+    (provider_label(global) == provider)
+        .then(|| api_credential(global))
+        .flatten()
+        .filter(|t| !t.trim().is_empty())
 }
 
-fn build_smtp_mailer(cfg: &crate::config::SmtpConfig) -> Result<SmtpMailer> {
-    let host = cfg
-        .host
-        .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("SMTP host not configured; set [email.smtp] host"))?;
-    let mut builder = SmtpMailer::builder(host).tls(cfg.tls.to_polymail());
-    // 0 means "unset": fall back to lettre's per-TLS default port (465/587/25).
-    if let Some(port) = cfg.port.filter(|p| *p != 0) {
-        builder = builder.port(port);
+fn api_provider_config(provider: &str, token: String) -> ProviderConfig {
+    match provider {
+        "lettermint" => ProviderConfig::Lettermint { token },
+        "postmark" => ProviderConfig::Postmark { token },
+        "sendgrid" => ProviderConfig::Sendgrid { api_key: token },
+        _ => unreachable!("caller guarantees an API provider"),
     }
-    if let Some(user) = cfg.username.as_deref().filter(|u| !u.is_empty()) {
-        let pass = cfg
-            .password
-            .as_ref()
-            .map(|p| p.expose_secret().to_string())
-            .unwrap_or_default();
-        builder = builder.credentials(user, pass);
+}
+
+/// Resolves the `ProviderConfig` to send with, honoring `lock` and the
+/// per-integration override. Locked installs use the instance provider verbatim;
+/// otherwise the integration picks the provider tag and supplies its own token
+/// (falling back to the matching instance token). SMTP carries no per-integration
+/// credential, so it's only reachable when the instance provider is itself SMTP.
+fn resolve_provider(
+    email_cfg: &EmailConfig,
+    int_provider: Option<&str>,
+    secret: Option<&str>,
+) -> Result<ProviderConfig> {
+    if email_cfg.lock {
+        return Ok(email_cfg.provider.clone());
     }
-    builder
-        .build()
-        .map_err(|e| anyhow::anyhow!("invalid [email.smtp] config: {e}"))
+    // Absent provider means a row predating provider selection -- those are Postmark.
+    let provider = int_provider.unwrap_or("postmark");
+    match provider {
+        "smtp" => match &email_cfg.provider {
+            cfg @ ProviderConfig::Smtp { .. } => Ok(cfg.clone()),
+            _ => anyhow::bail!(
+                "email integration selects smtp but the instance [email] provider is not smtp"
+            ),
+        },
+        "lettermint" | "postmark" | "sendgrid" => {
+            let token = secret
+                .map(str::to_string)
+                .or_else(|| global_api_token(&email_cfg.provider, provider).map(str::to_string))
+                .ok_or_else(|| anyhow::anyhow!("email provider token not configured"))?;
+            Ok(api_provider_config(provider, token))
+        }
+        other => anyhow::bail!("unknown email provider '{other}'"),
+    }
 }
 
 pub async fn send(
-    email_cfg: &crate::config::EmailConfig,
+    email_cfg: &EmailConfig,
     base_url: &str,
     secret: Option<&str>,
     integration_config: Option<&str>,
     project_config: Option<&str>,
     event: &NotificationEvent,
 ) -> Result<()> {
+    if !email_cfg.enabled {
+        anyhow::bail!("email sending is disabled (email.enabled = false)");
+    }
+
     let int_cfg =
         integration_config.and_then(|c| serde_json::from_str::<serde_json::Value>(c).ok());
     let int_str = |key: &str| {
@@ -131,31 +104,15 @@ pub async fn send(
             .and_then(|v| v.get(key).and_then(|f| f.as_str()).map(String::from))
     };
 
-    let (provider, token, from, name) = if email_cfg.lock {
-        (
-            email_cfg.provider,
-            email_cfg
-                .token
-                .as_ref()
-                .map(|t| t.expose_secret().to_string()),
-            email_cfg.from_address.clone(),
-            email_cfg.from_name.clone(),
-        )
+    let (from, name) = if email_cfg.lock {
+        (email_cfg.from_address.clone(), email_cfg.from_name.clone())
     } else {
-        // Absent `provider` means a row predating provider selection -- those are Postmark.
-        let provider = int_str("provider")
-            .and_then(|p| EmailProvider::parse(&p))
-            .unwrap_or(EmailProvider::Postmark);
-        let token = secret.map(String::from).or_else(|| {
-            email_cfg
-                .token
-                .as_ref()
-                .map(|t| t.expose_secret().to_string())
-        });
-        let from = int_str("from").or_else(|| email_cfg.from_address.clone());
-        let name = int_str("from_name").or_else(|| email_cfg.from_name.clone());
-        (provider, token, from, name)
+        (
+            int_str("from").or_else(|| email_cfg.from_address.clone()),
+            int_str("from_name").or_else(|| email_cfg.from_name.clone()),
+        )
     };
+    let provider_cfg = resolve_provider(email_cfg, int_str("provider").as_deref(), secret)?;
 
     let from = from.ok_or_else(|| anyhow::anyhow!("from address not configured"))?;
 
@@ -312,56 +269,125 @@ pub async fn send(
     .build()
     .map_err(|e| anyhow::anyhow!("failed to build email: {e}"))?;
 
-    build_mailer(provider, token.as_deref(), &email_cfg.smtp)?
+    let label = provider_label(&provider_cfg);
+    provider_cfg
+        .build()
+        .map_err(|e| anyhow::anyhow!("{label} mailer build failed: {e}"))?
         .send(&email)
         .await
-        .map_err(|e| anyhow::anyhow!("{} send failed: {e}", provider.as_str()))?;
+        .map_err(|e| anyhow::anyhow!("{label} send failed: {e}"))?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::SmtpConfig;
+    use polymail::provider::smtp::SmtpTls;
 
-    #[test]
-    fn parse_and_token_classification() {
-        assert_eq!(EmailProvider::parse("smtp"), Some(EmailProvider::Smtp));
-        assert_eq!(EmailProvider::Smtp.as_str(), "smtp");
-        assert!(!EmailProvider::Smtp.is_token_based());
-        assert!(EmailProvider::Postmark.is_token_based());
+    fn smtp_provider(tls: SmtpTls, user: Option<&str>) -> ProviderConfig {
+        ProviderConfig::Smtp {
+            host: "localhost".into(),
+            port: Some(1025),
+            tls,
+            user: user.map(String::from),
+            pass: user.map(|_| "pass".into()),
+        }
     }
 
     #[test]
-    fn smtp_mailer_requires_host() {
-        assert!(build_smtp_mailer(&SmtpConfig::default()).is_err());
+    fn provider_label_matches_tag() {
+        assert_eq!(
+            provider_label(&ProviderConfig::Postmark { token: "t".into() }),
+            "postmark"
+        );
+        assert_eq!(provider_label(&smtp_provider(SmtpTls::None, None)), "smtp");
+        assert!(provider_is_known("sendgrid"));
+        assert!(!provider_is_known("mailgun"));
     }
 
-    // Building the transport constructs a lettre connection pool, which needs a
-    // Tokio runtime in scope (as it does on the real dispatch path).
+    #[test]
+    fn global_token_only_matches_same_provider() {
+        let global = ProviderConfig::Postmark {
+            token: "pm-token".into(),
+        };
+        assert_eq!(global_api_token(&global, "postmark"), Some("pm-token"));
+        // A Postmark token is not a fallback for a SendGrid integration.
+        assert_eq!(global_api_token(&global, "sendgrid"), None);
+        // Blank reads as absent.
+        let blank = ProviderConfig::Postmark { token: "".into() };
+        assert_eq!(global_api_token(&blank, "postmark"), None);
+    }
+
+    #[test]
+    fn locked_ignores_integration_provider() {
+        let cfg = EmailConfig {
+            enabled: true,
+            from_address: Some("a@b.c".into()),
+            from_name: None,
+            lock: true,
+            provider: ProviderConfig::Sendgrid {
+                api_key: "sg".into(),
+            },
+        };
+        // Even a stored "postmark" is ignored when locked.
+        let resolved = resolve_provider(&cfg, Some("postmark"), None).unwrap();
+        assert_eq!(provider_label(&resolved), "sendgrid");
+    }
+
+    #[test]
+    fn unlocked_prefers_integration_secret_over_global() {
+        let cfg = EmailConfig {
+            enabled: true,
+            from_address: None,
+            from_name: None,
+            lock: false,
+            provider: ProviderConfig::Postmark {
+                token: "global".into(),
+            },
+        };
+        let resolved = resolve_provider(&cfg, Some("postmark"), Some("per-int")).unwrap();
+        match resolved {
+            ProviderConfig::Postmark { token } => assert_eq!(token, "per-int"),
+            other => panic!("expected postmark, got {}", provider_label(&other)),
+        }
+    }
+
+    #[test]
+    fn unlocked_smtp_requires_instance_smtp() {
+        let api = EmailConfig {
+            enabled: true,
+            from_address: None,
+            from_name: None,
+            lock: false,
+            provider: ProviderConfig::Postmark { token: "t".into() },
+        };
+        assert!(resolve_provider(&api, Some("smtp"), None).is_err());
+
+        let smtp = EmailConfig {
+            enabled: true,
+            from_address: None,
+            from_name: None,
+            lock: false,
+            provider: smtp_provider(SmtpTls::None, None),
+        };
+        assert_eq!(
+            provider_label(&resolve_provider(&smtp, Some("smtp"), None).unwrap()),
+            "smtp"
+        );
+    }
+
+    // Building the SMTP transport constructs a lettre connection pool, which
+    // needs a Tokio runtime in scope (as it does on the real dispatch path).
     #[tokio::test]
     async fn smtp_plaintext_sink_builds() {
-        let cfg = SmtpConfig {
-            host: Some("localhost".into()),
-            port: Some(1025),
-            tls: SmtpTlsMode::None,
-            username: None,
-            password: None,
-        };
-        assert!(build_smtp_mailer(&cfg).is_ok());
+        assert!(smtp_provider(SmtpTls::None, None).build().is_ok());
     }
 
     #[test]
     fn smtp_credentials_over_plaintext_rejected_by_polymail() {
-        use secrecy::SecretString;
-        let cfg = SmtpConfig {
-            host: Some("localhost".into()),
-            port: Some(1025),
-            tls: SmtpTlsMode::None,
-            username: Some("user".into()),
-            password: Some(SecretString::from("pass")),
-        };
-        assert!(build_smtp_mailer(&cfg).is_err());
+        // No runtime needed: polymail rejects creds-over-plaintext before it
+        // touches the async transport.
+        assert!(smtp_provider(SmtpTls::None, Some("user")).build().is_err());
     }
 
     // Real delivery against a local plaintext sink (mailcrab/MailHog on 1025),
@@ -370,19 +396,12 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires an SMTP sink on localhost:1025"]
     async fn smtp_send_delivers_to_local_sink() {
-        let email_cfg = crate::config::EmailConfig {
-            provider: EmailProvider::Smtp,
+        let email_cfg = EmailConfig {
+            enabled: true,
             from_address: Some("alerts@stackpit.test".into()),
             from_name: Some("Stackpit".into()),
-            token: None,
             lock: true,
-            smtp: SmtpConfig {
-                host: Some("localhost".into()),
-                port: Some(1025),
-                tls: SmtpTlsMode::None,
-                username: None,
-                password: None,
-            },
+            provider: smtp_provider(SmtpTls::None, None),
         };
         let event = NotificationEvent {
             trigger: crate::notify::NotifyTrigger::NewIssue,

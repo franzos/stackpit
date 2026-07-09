@@ -2117,15 +2117,15 @@ dependencies = [
 
 [[package]]
 name = "lettermint"
-version = "0.3.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "49bbcd8530e774acddf1190ad69f591116c4ff4730ed7aa291ccf31cf4bc7e7c"
+checksum = "c55474a24f7acd470566b5871bff613c5c6b591538d17f5cde8801b7c99d604d"
 dependencies = [
  "bytes",
  "hex",
  "hmac 0.13.0",
  "http",
- "reqwest 0.13.4",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -2627,9 +2627,9 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "polymail"
-version = "0.1.3"
+version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "864f5110a6aaab1163d2984be7e974f1c5cb917d6cb9c2fd90a7dc0ffdfa3307"
+checksum = "e6575ce3a49b88cb0674979f148ccbe22619867ebc1fff9d406afd7a11e7509d"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2637,6 +2637,7 @@ dependencies = [
  "lettre",
  "postmark",
  "sendgrid",
+ "serde",
  "thiserror 2.0.18",
 ]
 

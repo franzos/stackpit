@@ -51,4 +51,4 @@ integrations-email-token-placeholder-default = เว้นว่างเพื
 integrations-email-token-placeholder = โทเคน API ของผู้ให้บริการ
 integrations-email-from-label = ที่อยู่ผู้ส่ง
 integrations-email-fromname-label = ชื่อผู้ส่ง
-integrations-email-smtp-hint = SMTP ใช้การเชื่อมต่อ [email.smtp] ของเซิร์ฟเวอร์ ไม่จำเป็นต้องมีโทเคนต่ออินทิเกรชัน
+integrations-email-smtp-hint = SMTP ใช้การเชื่อมต่อ [email] ของเซิร์ฟเวอร์ ไม่จำเป็นต้องมีโทเคนต่ออินทิเกรชัน

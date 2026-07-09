@@ -156,46 +156,45 @@ impl Config {
             );
         }
 
-        // A locked mailer with no sender can never send; its credential (a
-        // token for API providers, the [email.smtp] host for SMTP) is likewise
-        // required up front.
-        if self.email.lock {
-            if self.email.from_address.is_none() {
-                anyhow::bail!(
-                    "email.lock = true but email.from_address is unset. A locked mailer needs \
-                     a sender; set email.from_address or unset email.lock."
-                );
-            }
-            match self.email.provider {
-                crate::providers::email::EmailProvider::Smtp => {
-                    if self.email.smtp.host.is_none() {
-                        anyhow::bail!(
-                            "email.lock = true with email.provider = \"smtp\" but [email.smtp] \
-                             host is unset. Set email.smtp.host or unset email.lock."
-                        );
-                    }
-                }
-                _ => {
-                    if self.email.token.is_none() {
-                        anyhow::bail!(
-                            "email.lock = true but email.token is unset. A locked mailer needs \
-                             a provider token; set email.token or unset email.lock."
-                        );
-                    }
-                }
-            }
-        }
+        if let Some(email) = &self.email {
+            use polymail::provider::smtp::SmtpTls;
+            use polymail::ProviderConfig;
 
-        // polymail refuses to send SMTP-AUTH credentials over a plaintext
-        // connection at send time; surface that misconfiguration at startup.
-        if self.email.smtp.username.is_some()
-            && self.email.smtp.tls == crate::providers::email::SmtpTlsMode::None
-        {
-            anyhow::bail!(
-                "email.smtp.username is set but email.smtp.tls = \"none\"; refusing to send \
-                 credentials over a plaintext SMTP connection. Use tls = \"starttls\" or \
-                 \"implicit\", or drop the username for an anonymous relay."
-            );
+            // A locked mailer with no sender can never send; a locked API
+            // provider likewise needs a non-empty token up front (SMTP's
+            // credential is the connection block, validated below).
+            if email.lock {
+                if email.from_address.is_none() {
+                    anyhow::bail!(
+                        "email.lock = true but email.from_address is unset. A locked mailer \
+                         needs a sender; set email.from_address or unset email.lock."
+                    );
+                }
+                if let Some(token) = crate::providers::email::api_credential(&email.provider) {
+                    if token.trim().is_empty() {
+                        anyhow::bail!(
+                            "email.lock = true but the provider token/api_key is empty. A locked \
+                             API-provider mailer needs a credential; set it under [email] or \
+                             unset email.lock."
+                        );
+                    }
+                }
+            }
+
+            // polymail refuses SMTP-AUTH credentials over a plaintext connection
+            // (ProviderConfig::build). We can't call build() here -- main() is
+            // sync and runs before any Tokio runtime, and building the SMTP
+            // transport needs one -- so surface that one misconfiguration
+            // explicitly at startup instead.
+            if let ProviderConfig::Smtp { tls, user, .. } = &email.provider {
+                if user.is_some() && *tls == SmtpTls::None {
+                    anyhow::bail!(
+                        "email.tls = \"none\" but email.user is set; refusing to send \
+                         credentials over a plaintext SMTP connection. Use tls = \"start_tls\" \
+                         or \"implicit\", or drop the user for an anonymous relay."
+                    );
+                }
+            }
         }
 
         // Zero retention means data piles up forever -- probably not intended

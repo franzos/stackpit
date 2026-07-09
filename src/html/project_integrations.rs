@@ -310,15 +310,22 @@ pub async fn test(
 
     let result = if let crate::domain::IntegrationKind::Email = pi.integration_kind {
         // pi.config carries the per-project recipient ({"to": ...}).
-        crate::providers::email::send(
-            &state.config.email,
-            &state.config.server.web_base(),
-            secret.as_deref(),
-            pi.integration_config.as_deref(),
-            pi.config.as_deref(),
-            &event,
-        )
-        .await
+        match state.config.email.as_ref() {
+            Some(email_cfg) => {
+                crate::providers::email::send(
+                    email_cfg,
+                    &state.config.server.web_base(),
+                    secret.as_deref(),
+                    pi.integration_config.as_deref(),
+                    pi.config.as_deref(),
+                    &event,
+                )
+                .await
+            }
+            None => Err(anyhow::anyhow!(
+                "email is not configured ([email] section absent)"
+            )),
+        }
     } else {
         let url = match pi.integration_url.as_deref() {
             Some(u) if !u.is_empty() => u,

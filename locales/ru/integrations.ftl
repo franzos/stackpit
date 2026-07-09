@@ -52,4 +52,4 @@ integrations-email-token-placeholder-default = Оставьте пустым, ч
 integrations-email-token-placeholder = API-токен провайдера
 integrations-email-from-label = Адрес отправителя
 integrations-email-fromname-label = Имя отправителя
-integrations-email-smtp-hint = SMTP использует подключение [email.smtp] сервера; отдельный токен для интеграции не нужен.
+integrations-email-smtp-hint = SMTP использует подключение [email] сервера; отдельный токен для интеграции не нужен.

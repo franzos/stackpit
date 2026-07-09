@@ -51,4 +51,4 @@ integrations-email-token-placeholder-default = اتركه فارغًا لاست�
 integrations-email-token-placeholder = رمز API للمزوّد
 integrations-email-from-label = عنوان المرسِل
 integrations-email-fromname-label = اسم المرسِل
-integrations-email-smtp-hint = يستخدم SMTP اتصال [email.smtp] الخاص بالخادم؛ لا حاجة إلى رمز لكل تكامل.
+integrations-email-smtp-hint = يستخدم SMTP اتصال [email] الخاص بالخادم؛ لا حاجة إلى رمز لكل تكامل.

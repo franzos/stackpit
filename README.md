@@ -28,7 +28,7 @@ I got tired of paying for Sentry on smaller projects and self-hosting the offici
 - **Server-rendered web UI** — browse issues, events, transactions, logs, traces, replays, monitors, and more.
 - **Performance & tracing** — transaction percentiles, throughput, and failure rates, span waterfalls across traces, Web Vitals, and release-health crash-free rates.
 - **JSON API** — query everything the UI shows.
-- **Notifications & alerts** — email (Lettermint, Postmark, or SendGrid), Slack, and webhooks, with digests and threshold rules.
+- **Notifications & alerts** — email (Lettermint, Postmark, SendGrid, or SMTP), Slack, and webhooks, with digests and threshold rules.
 - **Source maps** — upload via `sentry-cli` so minified traces resolve to original source.
 - **Monitors** — cron check-in tracking via Sentry's protocol.
 - **Auth your way** — a shared admin token for solo use, or OAuth/OIDC SSO for teams.

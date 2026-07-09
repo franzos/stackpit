@@ -1,4 +1,5 @@
 use anyhow::Result;
+use polymail::ProviderConfig;
 use secrecy::SecretString;
 use serde::Deserialize;
 use std::path::Path;
@@ -17,7 +18,10 @@ where
     Ok(Option::<String>::deserialize(de)?.filter(|s| !s.trim().is_empty()))
 }
 
-#[derive(Debug, Default, Deserialize)]
+// No `derive(Debug)`: `EmailConfig` flattens polymail's `ProviderConfig`, whose
+// `Debug` prints the provider token/password verbatim. Keeping `Config`
+// non-Debug stops an accidental `{config:?}` from leaking the mail credential.
+#[derive(Default, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub server: ServerConfig,
@@ -27,8 +31,10 @@ pub struct Config {
     pub filter: FilterConfig,
     #[serde(default)]
     pub notifications: NotificationsConfig,
+    /// Absent `[email]` section = no mail. When present, it must name a
+    /// `provider` (polymail's `ProviderConfig` has no default credential).
     #[serde(default)]
-    pub email: EmailConfig,
+    pub email: Option<EmailConfig>,
     #[serde(default)]
     pub auth: AuthConfig,
 }
@@ -150,50 +156,32 @@ pub struct NotificationsConfig {
     pub rate_limit_global: u32,
 }
 
-#[derive(Debug, Default, Deserialize)]
+/// Instance mail settings. The transport + credential come from polymail's
+/// flattened [`ProviderConfig`] (provider fields sit directly under `[email]`);
+/// this wrapper adds the sender identity, an on/off switch, and the shared-mailer
+/// lock.
+///
+/// No `derive(Debug)`: `ProviderConfig` prints the token/password verbatim, so
+/// this struct (and the surrounding `Config`) stay non-Debug to keep the
+/// credential out of any accidental log line.
+#[derive(Deserialize)]
 pub struct EmailConfig {
-    /// Pre-selects the provider for new integrations; when `lock` is set this
-    /// is the only provider used (the token comes from `STACKPIT_EMAIL_TOKEN`).
-    #[serde(default)]
-    pub provider: crate::providers::email::EmailProvider,
+    /// Log-and-skip switch. Present-but-disabled sends nothing; omit the whole
+    /// `[email]` section to leave mail unconfigured.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
     #[serde(default, deserialize_with = "empty_string_as_none")]
     pub from_address: Option<String>,
     #[serde(default, deserialize_with = "empty_string_as_none")]
     pub from_name: Option<String>,
-    /// Global provider API token. Same posture as `[server] admin_token` and
-    /// `[auth.oauth] client_secret`: kept in config rather than DB-encrypted
-    /// because it's a single instance-wide secret.
-    #[serde(default)]
-    pub token: Option<SecretString>,
     /// Lock sender + provider to this config: integrations only pick recipients.
     #[serde(default)]
     pub lock: bool,
-    /// SMTP relay connection. Used only when `provider = "smtp"`; the API
-    /// providers ignore it. SMTP's credential is this whole block rather than a
-    /// single token, so it lives here instead of per integration.
-    #[serde(default)]
-    pub smtp: SmtpConfig,
-}
-
-/// Instance-wide SMTP relay settings. Only consulted when the email provider is
-/// `smtp`.
-#[derive(Debug, Default, Deserialize)]
-pub struct SmtpConfig {
-    /// Relay hostname. Required to use the SMTP provider.
-    #[serde(default, deserialize_with = "empty_string_as_none")]
-    pub host: Option<String>,
-    /// Relay port. Defaults per TLS mode when unset (465 implicit, 587
-    /// starttls, 25 none).
-    pub port: Option<u16>,
-    /// Transport security. Defaults to `implicit` (TLS from the first byte).
-    #[serde(default)]
-    pub tls: crate::providers::email::SmtpTlsMode,
-    /// SMTP-AUTH username. Omit for anonymous relays / local sinks.
-    #[serde(default, deserialize_with = "empty_string_as_none")]
-    pub username: Option<String>,
-    /// SMTP-AUTH password. Refused over a plaintext (`tls = "none"`) connection.
-    #[serde(default)]
-    pub password: Option<SecretString>,
+    /// Provider + credential (internally tagged on `provider`). Its fields
+    /// (`token`/`api_key`, or `host`/`port`/`tls`/`user`/`pass` for smtp) sit
+    /// directly under `[email]`.
+    #[serde(flatten)]
+    pub provider: ProviderConfig,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -320,6 +308,9 @@ const DEFAULT_RETENTION_DAYS: u32 = 90;
 const DEFAULT_MAX_PROJECTS: usize = 1000;
 const DEFAULT_MAX_BODY_SIZE: usize = 10 * 1024 * 1024; // 10MB
 
+fn default_true() -> bool {
+    true
+}
 fn default_bind() -> String {
     DEFAULT_BIND.to_string()
 }
@@ -508,7 +499,7 @@ mod tests {
             storage: StorageConfig::default(),
             filter: FilterConfig::default(),
             notifications: NotificationsConfig::default(),
-            email: EmailConfig::default(),
+            email: None,
             auth: AuthConfig {
                 oauth: OAuthConfig {
                     issuer_url: Some("https://idp.example.com".to_string()),
@@ -565,7 +556,7 @@ mod tests {
             storage: StorageConfig::default(),
             filter: FilterConfig::default(),
             notifications: NotificationsConfig::default(),
-            email: EmailConfig::default(),
+            email: None,
             auth: AuthConfig::default(),
         }
     }
@@ -697,28 +688,130 @@ mod tests {
         assert_eq!(Config::default().filter.max_projects, DEFAULT_MAX_PROJECTS);
     }
 
+    use polymail::provider::smtp::SmtpTls;
+
+    fn smtp_email(tls: SmtpTls, user: Option<&str>) -> EmailConfig {
+        EmailConfig {
+            enabled: true,
+            from_address: Some("alerts@example.com".to_string()),
+            from_name: None,
+            lock: false,
+            provider: ProviderConfig::Smtp {
+                host: "localhost".into(),
+                port: None,
+                tls,
+                user: user.map(String::from),
+                pass: user.map(|_| "pass".into()),
+            },
+        }
+    }
+
     #[test]
-    fn smtp_lock_without_host_rejected() {
+    fn email_absent_section_is_none() {
+        let cfg: Config = toml::from_str("").unwrap();
+        assert!(cfg.email.is_none());
+    }
+
+    #[test]
+    fn email_api_provider_flattens_under_section() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [email]
+            from_address = "no-reply@example.com"
+            from_name = "Example"
+            provider = "lettermint"
+            token = "lm-token"
+            "#,
+        )
+        .unwrap();
+        let email = cfg.email.expect("[email] present");
+        assert!(email.enabled, "enabled defaults to true");
+        assert_eq!(email.from_address.as_deref(), Some("no-reply@example.com"));
+        match email.provider {
+            ProviderConfig::Lettermint { token } => assert_eq!(token, "lm-token"),
+            other => panic!("expected lettermint, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn email_smtp_provider_flattens_with_renamed_fields() {
+        // The renamed flat schema: [email.smtp] collapsed into [email],
+        // user/pass (not username/password), start_tls (not starttls).
+        let cfg: Config = toml::from_str(
+            r#"
+            [email]
+            from_address = "alerts@example.test"
+            provider = "smtp"
+            host = "127.0.0.1"
+            port = 587
+            tls = "start_tls"
+            user = "relay"
+            pass = "secret"
+            "#,
+        )
+        .unwrap();
+        match cfg.email.expect("[email] present").provider {
+            ProviderConfig::Smtp {
+                host,
+                port,
+                tls,
+                user,
+                pass,
+            } => {
+                assert_eq!(host, "127.0.0.1");
+                assert_eq!(port, Some(587));
+                assert_eq!(tls, SmtpTls::StartTls);
+                assert_eq!(user.as_deref(), Some("relay"));
+                assert_eq!(pass.as_deref(), Some("secret"));
+            }
+            other => panic!("expected smtp, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn locked_api_provider_without_token_rejected() {
         let mut cfg = no_auth_config("127.0.0.1:3000", true);
-        cfg.email.lock = true;
-        cfg.email.provider = crate::providers::email::EmailProvider::Smtp;
-        cfg.email.from_address = Some("alerts@example.com".to_string());
+        cfg.email = Some(EmailConfig {
+            enabled: true,
+            from_address: Some("alerts@example.com".to_string()),
+            from_name: None,
+            lock: true,
+            provider: ProviderConfig::Postmark { token: "".into() },
+        });
         let err = cfg
             .validate()
-            .expect_err("locked smtp without host must fail");
+            .expect_err("locked API provider with a blank token must fail");
         assert!(
-            format!("{err:#}").contains("email.smtp"),
-            "error should point at [email.smtp]; got: {err:#}"
+            format!("{err:#}").contains("token"),
+            "error should mention the missing token; got: {err:#}"
         );
     }
 
     #[test]
-    fn smtp_lock_with_host_validates() {
+    fn locked_without_from_rejected() {
         let mut cfg = no_auth_config("127.0.0.1:3000", true);
-        cfg.email.lock = true;
-        cfg.email.provider = crate::providers::email::EmailProvider::Smtp;
-        cfg.email.from_address = Some("alerts@example.com".to_string());
-        cfg.email.smtp.host = Some("localhost".to_string());
+        cfg.email = Some(EmailConfig {
+            enabled: true,
+            from_address: None,
+            from_name: None,
+            lock: true,
+            provider: ProviderConfig::Postmark { token: "pm".into() },
+        });
+        let err = cfg
+            .validate()
+            .expect_err("locked mailer without a sender must fail");
+        assert!(
+            format!("{err:#}").contains("from_address"),
+            "error should mention from_address; got: {err:#}"
+        );
+    }
+
+    #[test]
+    fn smtp_lock_with_sender_validates() {
+        let mut cfg = no_auth_config("127.0.0.1:3000", true);
+        let mut email = smtp_email(SmtpTls::Implicit, None);
+        email.lock = true;
+        cfg.email = Some(email);
         cfg.validate()
             .expect("locked smtp with host + sender should pass");
     }
@@ -726,9 +819,7 @@ mod tests {
     #[test]
     fn smtp_username_over_plaintext_rejected() {
         let mut cfg = no_auth_config("127.0.0.1:3000", true);
-        cfg.email.smtp.host = Some("localhost".to_string());
-        cfg.email.smtp.username = Some("user".to_string());
-        cfg.email.smtp.tls = crate::providers::email::SmtpTlsMode::None;
+        cfg.email = Some(smtp_email(SmtpTls::None, Some("user")));
         let err = cfg
             .validate()
             .expect_err("credentials over plaintext smtp must fail");

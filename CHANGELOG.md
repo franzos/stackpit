@@ -4,6 +4,10 @@
 
 ### Added
 - Commercial license infrastructure (offline Ed25519 verification, admin activation page); no gated features yet
+- `[email] enabled` switch to configure a mailer but skip sending
+
+### Changed
+- Email config now uses polymail's provider schema (`config` feature, polymail 0.1.6). **Breaking:** the `[email.smtp]` block collapses into `[email]`, and its fields are renamed: `username`/`password` -> `user`/`pass`, `starttls` -> `start_tls`. Omit the whole `[email]` section to leave mail unconfigured.
 
 ## [0.3.10] - 2026-07-05
 

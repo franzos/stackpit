@@ -106,7 +106,7 @@
                  name="from_name"
                  placeholder="{{ from_name_placeholder }}">
         </div>
-        {# SMTP is driven by the global [email.smtp] block, so email-provider.js
+        {# SMTP is driven by the instance [email] provider, so email-provider.js
            hides the token field (and drops its `required`) when SMTP is picked.
            External asset because the CSP forbids inline scripts. #}
         <script src="/web/_assets/email-provider.js" defer></script>

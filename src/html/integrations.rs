@@ -78,37 +78,59 @@ pub async fn create(
     }
     // Email has no user-controlled endpoint, so `url` stays NULL and there's no
     // SSRF surface. A locked mailer ignores any submitted token.
-    let email_cfg = &state.config.email;
+    use crate::providers::email as email_provider;
     let (url, config, ignore_secret) = if kind == "email" {
+        let Some(email_cfg) = state.config.email.as_ref() else {
+            return render_list(
+                &state,
+                org_filter,
+                Some(chrome.t("flash-email-not-configured")),
+                &chrome,
+            )
+            .await;
+        };
         if email_cfg.lock {
-            let provider = email_cfg.provider;
-            let config = serde_json::json!({ "provider": provider.as_str() }).to_string();
+            let config = serde_json::json!({
+                "provider": email_provider::provider_label(&email_cfg.provider),
+            })
+            .to_string();
             (None, Some(config), true)
         } else {
             let provider_str = form.provider.as_deref().map(str::trim).unwrap_or("");
-            let provider = match crate::providers::email::EmailProvider::parse(provider_str) {
-                Some(p) => p,
-                None => {
+            if !email_provider::provider_is_known(provider_str) {
+                return render_list(
+                    &state,
+                    org_filter,
+                    Some(chrome.t("flash-invalid-email-provider")),
+                    &chrome,
+                )
+                .await;
+            }
+            // Reject up front when the credential needed to send mail is missing;
+            // otherwise the failure only surfaces at dispatch time. API providers
+            // need a token (form or the matching instance token); SMTP has no
+            // per-integration token and is only offered when the instance
+            // provider is itself SMTP.
+            let is_smtp = provider_str == "smtp";
+            if is_smtp {
+                if email_provider::provider_label(&email_cfg.provider) != "smtp" {
                     return render_list(
                         &state,
                         org_filter,
-                        Some(chrome.t("flash-invalid-email-provider")),
+                        Some(chrome.t("flash-smtp-not-configured")),
                         &chrome,
                     )
-                    .await
+                    .await;
                 }
-            };
-            // Reject up front when the credential needed to send mail is missing;
-            // otherwise the failure only surfaces at dispatch time. API providers
-            // need a token (form or global); SMTP needs the global [email.smtp]
-            // relay to be configured and carries no per-integration token.
-            if provider.is_token_based() {
+            } else {
                 let has_form_secret = form
                     .secret
                     .as_deref()
                     .map(str::trim)
                     .is_some_and(|s| !s.is_empty());
-                if !has_form_secret && email_cfg.token.is_none() {
+                let has_global_token =
+                    email_provider::global_api_token(&email_cfg.provider, provider_str).is_some();
+                if !has_form_secret && !has_global_token {
                     return render_list(
                         &state,
                         org_filter,
@@ -117,14 +139,6 @@ pub async fn create(
                     )
                     .await;
                 }
-            } else if email_cfg.smtp.host.is_none() {
-                return render_list(
-                    &state,
-                    org_filter,
-                    Some(chrome.t("flash-smtp-not-configured")),
-                    &chrome,
-                )
-                .await;
             }
             let has_form_from = form
                 .from_address
@@ -140,7 +154,7 @@ pub async fn create(
                 )
                 .await;
             }
-            let mut cfg = serde_json::json!({ "provider": provider.as_str() });
+            let mut cfg = serde_json::json!({ "provider": provider_str });
             if let Some(from) = form
                 .from_address
                 .as_deref()
@@ -158,7 +172,7 @@ pub async fn create(
                 cfg["from_name"] = serde_json::json!(name);
             }
             // SMTP has no per-integration token, so never store a submitted secret.
-            (None, Some(cfg.to_string()), !provider.is_token_based())
+            (None, Some(cfg.to_string()), is_smtp)
         }
     } else {
         let url = form.url.trim().to_string();
@@ -308,15 +322,22 @@ pub async fn test_integration(
 
     let result = if integration.kind == "email" {
         // Endpoint isn't user-controlled -- no SSRF check or pinned client.
-        crate::providers::email::send(
-            &state.config.email,
-            &state.config.server.web_base(),
-            secret.as_deref(),
-            integration.config.as_deref(),
-            None,
-            &event,
-        )
-        .await
+        match state.config.email.as_ref() {
+            Some(email_cfg) => {
+                crate::providers::email::send(
+                    email_cfg,
+                    &state.config.server.web_base(),
+                    secret.as_deref(),
+                    integration.config.as_deref(),
+                    None,
+                    &event,
+                )
+                .await
+            }
+            None => Err(anyhow::anyhow!(
+                "email is not configured ([email] section absent)"
+            )),
+        }
     } else {
         let url = match integration.url.as_deref() {
             Some(u) if !u.is_empty() => u,
@@ -407,7 +428,7 @@ struct NewEmailTemplate {
     has_default_token: bool,
     /// Whether `[email] from_address` is set; if so the From form field is optional.
     has_default_from: bool,
-    /// Whether `[email.smtp] host` is set; gates the SMTP provider option.
+    /// Whether the instance provider is itself SMTP; gates the SMTP option.
     smtp_configured: bool,
 }
 
@@ -415,11 +436,22 @@ pub async fn new_email(
     State(state): State<AppState>,
     Chrome(chrome): Chrome,
 ) -> axum::response::Response {
-    let email = &state.config.email;
+    use crate::providers::email as email_provider;
+    // No `[email]` section: mail is unconfigured, so there's nothing to add.
+    let Some(email) = state.config.email.as_ref() else {
+        return render_list(
+            &state,
+            None,
+            Some(chrome.t("flash-email-not-configured")),
+            &chrome,
+        )
+        .await;
+    };
+    let provider_label = email_provider::provider_label(&email.provider);
     render_template(&NewEmailTemplate {
         chrome,
         lock: email.lock,
-        default_provider: email.provider.as_str(),
+        default_provider: provider_label,
         from_placeholder: email
             .from_address
             .clone()
@@ -428,9 +460,11 @@ pub async fn new_email(
             .from_name
             .clone()
             .unwrap_or_else(|| "Stackpit Alerts".to_string()),
-        has_default_token: email.token.is_some(),
+        // A global API token is only a fallback for its own provider.
+        has_default_token: email_provider::global_api_token(&email.provider, provider_label)
+            .is_some(),
         has_default_from: email.from_address.is_some(),
-        smtp_configured: email.smtp.host.is_some(),
+        smtp_configured: provider_label == "smtp",
     })
 }
 

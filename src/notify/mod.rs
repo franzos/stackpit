@@ -262,9 +262,15 @@ pub async fn run_dispatcher(
 
                 // Email has no client/url/SSRF surface; polymail owns the endpoint.
                 if let crate::domain::IntegrationKind::Email = kind {
+                    let Some(email_cfg) = config.email.as_ref() else {
+                        tracing::warn!(
+                            "notify: {name} (email) skipped; no [email] section configured"
+                        );
+                        return;
+                    };
                     send_with_one_retry(&name, kind_label, || {
                         providers::email::send(
-                            &config.email,
+                            email_cfg,
                             &web_base,
                             secret.as_deref(),
                             int_config.as_deref(),

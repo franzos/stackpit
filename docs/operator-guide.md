@@ -58,21 +58,26 @@ blocked_user_agents = []          # user-agent glob patterns to block globally
 rate_limit_per_project = 0        # max notifications per project per 60s (0 = unlimited)
 rate_limit_global = 0             # max total notifications per 60s (0 = unlimited)
 
+# Omit the whole [email] section to leave mail unconfigured. When present it
+# must name a provider. Transport + credential come from polymail's provider
+# schema, flattened in: pick ONE provider and set its credential fields.
 [email]
-provider = "lettermint"           # "lettermint", "postmark", "sendgrid", or "smtp" — default for new integrations, and the only provider used when lock = true
-token = ""                        # global provider API token (API providers only); integrations inherit it when they leave Token blank (required when lock = true for an API provider)
+enabled = true                    # false = configured but log-and-skip (nothing is sent)
 from_address = ""                 # default sender; integrations inherit it when they leave From blank (required when lock = true)
 from_name = ""                    # optional default display name
 lock = false                      # true = sender + provider come from this config; integrations only pick the recipient
 
-# SMTP relay — only read when provider = "smtp". Unlike the API providers, SMTP
-# has no per-integration token: the whole connection lives here, instance-wide.
-[email.smtp]
-host = ""                         # relay hostname (required to use provider = "smtp")
-port = 0                          # 0 = pick per TLS mode (465 implicit, 587 starttls, 25 none)
-tls = "implicit"                  # "implicit" (TLS from the first byte, 465), "starttls" (upgrade on 587), or "none" (plaintext, local sinks only)
-username = ""                     # SMTP-AUTH user; leave blank for an anonymous relay
-password = ""                     # SMTP-AUTH password; refused when tls = "none"
+provider = "lettermint"           # "lettermint", "postmark", "sendgrid", or "smtp"
+token = ""                        # lettermint / postmark API token (required when lock = true for those providers)
+# api_key = ""                    # sendgrid only (its credential field is api_key, not token)
+
+# SMTP relay (provider = "smtp"). Its credential is the whole connection block,
+# so it's instance-wide and carries no per-integration token:
+# host = ""                       # relay hostname (required for provider = "smtp")
+# port = 0                        # omit to pick per TLS mode (465 implicit, 587 start_tls)
+# tls  = "implicit"               # "implicit" (TLS from the first byte, 465), "start_tls" (upgrade on 587), or "none" (plaintext, local sinks only)
+# user = ""                       # SMTP-AUTH user; omit for an anonymous relay
+# pass = ""                       # SMTP-AUTH password; refused when tls = "none"
 ```
 
 All fields have sane defaults. An empty config file works fine — though for any non-loopback deployment you'll want `external_url` set and `force_secure_cookies = true` so session cookies get the `Secure` flag.
@@ -259,10 +264,10 @@ stackpit can notify you when things go wrong. Integrations (email, Slack, webhoo
 
 Email goes through [polymail](https://github.com/franzos/polymail-rs) and supports two shapes of provider: three HTTP API providers (**Lettermint**, **Postmark**, **SendGrid**) and a generic **SMTP** relay. They differ in where their credential lives:
 
-- **API providers** authenticate with a single API token. You pick the provider per integration when you add it, then drop in that provider's token and a from address; `[email] provider`/`token`/`from_address`/`from_name` set the defaults, and an integration that leaves a field blank inherits them. Per-integration tokens are stored encrypted (see [Secret encryption](#secret-encryption)).
-- **SMTP** has no single token: its credential is a connection block (host, port, TLS mode, username, password). That's inherently instance-wide, so it lives once in `[email.smtp]` rather than on each integration. An SMTP integration therefore carries no per-integration token; it just needs a from address (global or per-integration) and, per project, a recipient. The provider dropdown only offers SMTP once `[email.smtp] host` is set.
+- **API providers** authenticate with a single API token (`token` for Lettermint/Postmark, `api_key` for SendGrid). You pick the provider per integration when you add it, then drop in that provider's token and a from address; `[email]` sets the instance defaults (`provider`/credential/`from_address`/`from_name`), and an integration that reuses the instance provider inherits its token. Per-integration tokens are stored encrypted (see [Secret encryption](#secret-encryption)).
+- **SMTP** has no single token: its credential is a connection block (`host`, `port`, `tls`, `user`, `pass`). That's inherently instance-wide, so it lives once under `[email]` (with `provider = "smtp"`) rather than on each integration. An SMTP integration therefore carries no per-integration token; it just needs a from address (global or per-integration) and, per project, a recipient. The provider dropdown only offers SMTP once the instance `provider` is itself `smtp`.
 
-For a single shared mailer, set `[email] lock = true`: the provider and sender come from `[email]`, and integrations then only choose the recipient. A locked mailer with no `from_address` refuses to start; so does a locked API provider with no `token`, or a locked `provider = "smtp"` with no `[email.smtp] host`.
+For a single shared mailer, set `[email] lock = true`: the provider and sender come from `[email]`, and integrations then only choose the recipient. A locked mailer with no `from_address` refuses to start; so does a locked API provider with an empty `token`/`api_key`. (`provider = "smtp"` always carries its `host`, since it's a required field of the provider block.)
 
 **SMTP against a local sink.** For local testing (mailcrab, MailHog, MailSlurper), point SMTP at the sink's plaintext port with TLS off:
 
@@ -271,14 +276,12 @@ For a single shared mailer, set `[email] lock = true`: the provider and sender c
 provider = "smtp"
 from_address = "alerts@example.com"
 lock = true
-
-[email.smtp]
 host = "localhost"
 port = 1025
 tls = "none"
 ```
 
-`tls = "none"` is plaintext and only appropriate for a loopback sink; startup refuses a `username` over a `none` connection so credentials never cross the wire in the clear. For a real relay use `tls = "starttls"` (587) or `tls = "implicit"` (465) with a username and password.
+`tls = "none"` is plaintext and only appropriate for a loopback sink; startup refuses a `user` over a `none` connection so credentials never cross the wire in the clear. For a real relay use `tls = "start_tls"` (587) or `tls = "implicit"` (465) with a `user` and `pass`.
 
 **Immediate notifications** fire during event ingestion:
 

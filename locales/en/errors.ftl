@@ -65,7 +65,8 @@ flash-invalid-integration-kind = Invalid integration kind
 flash-invalid-email-provider = Invalid email provider
 flash-api-token-required = API token is required.
 flash-from-address-required = From address is required.
-flash-smtp-not-configured = SMTP is not configured. Set [email.smtp] host in the server config.
+flash-email-not-configured = Email is not configured. Add an [email] section with a provider to the server config.
+flash-smtp-not-configured = SMTP is not configured. Set [email] provider = "smtp" (with host) in the server config.
 flash-invalid-to-address = Recipient must be a valid email address.
 flash-test-digest-sent = Test digest queued for { $count } project(s) to their digest-enabled integrations.
 flash-test-digest-sample = No recent activity, so a labeled sample digest was queued.

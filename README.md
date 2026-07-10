@@ -50,7 +50,7 @@ Stackpit's entire core is free and MIT-licensed: ingestion, grouping, the web UI
 | Retention & syncing from Sentry | Yes | Yes |
 | Prometheus `/metrics` (Observability) | Unavailable (404) | Token-gated, on the admin listener |
 
-Licensing is offline (no phone-home, no host binding, no seat counting) and verified against a public key baked into the binary; see [`docs/commercial/index.md`](docs/commercial/index.md) for how it works and [`MONETIZATION.md`](MONETIZATION.md) for the honest reasoning behind the MIT-core / commercial-gate split.
+Licensing is offline (no phone-home, no host binding, no seat counting) and verified against a public key baked into the binary; see [`docs/commercial/index.md`](docs/commercial/index.md) for how it works and the reasoning behind the MIT-core / commercial-gate split.
 
 ## Stackpit vs Sentry
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.3.12] - 2026-07-10
+
+### Security
+- crossbeam-epoch bumped for RUSTSEC-2026-0204
+
+### Fixed
+- Environment filter on an integration no longer drops all its notifications
+- Global email "Test" button no longer a no-op with SMTP
+- Org deletion no longer undercounts alert rules and digest schedules
+
 ## [0.3.11] - 2026-07-09
 
 ### Added

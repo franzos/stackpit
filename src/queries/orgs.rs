@@ -630,6 +630,21 @@ pub async fn delete_org_guarded(pool: &DbPool, org_id: i64) -> Result<DeleteOrgO
 
     let mut tx = pool.begin().await?;
 
+    // Capture true totals before the project cascade: alert_rules and
+    // digest_schedules are project-scoped, so `delete_project_in_tx` removes the
+    // project-scoped rows and the org-wide DELETEs below would undercount them.
+    let alert_rules: u64 =
+        sqlx::query_scalar::<_, i64>(sql!("SELECT COUNT(*) FROM alert_rules WHERE org_id = ?1"))
+            .bind(org_id)
+            .fetch_one(&mut *tx)
+            .await? as u64;
+    let digest_schedules: u64 = sqlx::query_scalar::<_, i64>(sql!(
+        "SELECT COUNT(*) FROM digest_schedules WHERE org_id = ?1"
+    ))
+    .bind(org_id)
+    .fetch_one(&mut *tx)
+    .await? as u64;
+
     // Per-project cascade (reuses the single source of truth for project-scoped tables).
     let project_rows = sqlx::query(sql!("SELECT project_id FROM projects WHERE org_id = ?1"))
         .bind(org_id)
@@ -649,16 +664,15 @@ pub async fn delete_org_guarded(pool: &DbPool, org_id: i64) -> Result<DeleteOrgO
     .execute(&mut *tx)
     .await?;
 
-    let alert_rules = sqlx::query(sql!("DELETE FROM alert_rules WHERE org_id = ?1"))
+    // Org-wide leftovers (null-project rules/schedules); counts already captured pre-cascade.
+    sqlx::query(sql!("DELETE FROM alert_rules WHERE org_id = ?1"))
         .bind(org_id)
         .execute(&mut *tx)
-        .await?
-        .rows_affected();
-    let digest_schedules = sqlx::query(sql!("DELETE FROM digest_schedules WHERE org_id = ?1"))
+        .await?;
+    sqlx::query(sql!("DELETE FROM digest_schedules WHERE org_id = ?1"))
         .bind(org_id)
         .execute(&mut *tx)
-        .await?
-        .rows_affected();
+        .await?;
     let integrations = sqlx::query(sql!("DELETE FROM integrations WHERE org_id = ?1"))
         .bind(org_id)
         .execute(&mut *tx)
@@ -1976,6 +1990,54 @@ mod tests {
                 .unwrap()
                 .get("c");
         assert_eq!(proj_rows, 0, "projects gone");
+    }
+
+    // Project-scoped alert rules (removed by the project cascade) must still be
+    // reflected in the audited count, alongside org-wide rules.
+    #[tokio::test]
+    async fn delete_org_guarded_counts_project_scoped_alert_rules() {
+        use sqlx::Row;
+        let pool = crate::db::open_test_pool().await;
+        let u = crate::queries::users::upsert_from_oidc(&pool, "iss", "del-count", None, None)
+            .await
+            .unwrap();
+        let org = create_native_org(&pool, u.user_id, "count-org", "Count")
+            .await
+            .unwrap();
+
+        sqlx::query(sql!("INSERT INTO projects (project_id, status, source, org_id) VALUES (7300, 'active', 'manual', ?1)"))
+            .bind(org).execute(&pool).await.unwrap();
+        // One project-scoped rule (dies in the project cascade) + one org-wide rule.
+        sqlx::query(sql!(
+            "INSERT INTO alert_rules (org_id, project_id, trigger_kind) VALUES (?1, 7300, 'rate')"
+        ))
+        .bind(org)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO alert_rules (org_id, project_id, trigger_kind) VALUES (?1, NULL, 'rate')"
+        ))
+        .bind(org)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let outcome = delete_org_guarded(&pool, org).await.unwrap();
+        let DeleteOrgOutcome::Deleted(counts) = outcome else {
+            panic!("org should be deletable");
+        };
+        assert_eq!(counts.alert_rules, 2, "both rules counted");
+
+        let remaining: i64 = sqlx::query(sql!(
+            "SELECT COUNT(*) AS c FROM alert_rules WHERE org_id = ?1"
+        ))
+        .bind(org)
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+        .get("c");
+        assert_eq!(remaining, 0, "all alert rules gone");
     }
 
     #[tokio::test]

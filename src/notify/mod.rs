@@ -26,7 +26,10 @@ pub struct NotificationEvent {
     pub fingerprint: String,
     pub title: Option<String>,
     pub level: Option<String>,
+    /// Representative environment for display (providers render this).
     pub environment: Option<String>,
+    /// All environments this event spans; matched against `environment_filter`.
+    pub environments: Vec<String>,
     pub event_id: String,
     pub digest: Option<DigestPayload>,
 }
@@ -154,6 +157,26 @@ fn passes_env_filter(event_env: Option<&str>, filter: Option<&str>) -> bool {
     }
 }
 
+/// Env gate for aggregated events: a filter matches if it equals ANY environment
+/// in the event's set. Falls back to the single-env check when the set is empty
+/// (events that don't carry one, preserving prior behavior).
+fn passes_env_set_filter(
+    environments: &[String],
+    event_env: Option<&str>,
+    filter: Option<&str>,
+) -> bool {
+    match filter {
+        None | Some("") => true,
+        Some(f) => {
+            if environments.is_empty() {
+                passes_env_filter(event_env, Some(f))
+            } else {
+                environments.iter().any(|e| e == f)
+            }
+        }
+    }
+}
+
 /// Spawn dispatcher with panic supervision (logs panics; restart needed for recovery).
 pub fn spawn_dispatcher(
     rx: tokio::sync::mpsc::Receiver<NotificationEvent>,
@@ -226,7 +249,8 @@ pub async fn run_dispatcher(
                 continue;
             }
 
-            if !passes_env_filter(
+            if !passes_env_set_filter(
+                &event.environments,
                 event.environment.as_deref(),
                 pi.environment_filter.as_deref(),
             ) {
@@ -316,4 +340,61 @@ pub async fn run_dispatcher(
     }
 
     tracing::info!("notification dispatcher exiting");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn env_set_filter_matches_any_environment() {
+        // Single-env event: filter must match that env.
+        assert!(passes_env_set_filter(
+            &["production".into()],
+            Some("production"),
+            Some("production")
+        ));
+        assert!(!passes_env_set_filter(
+            &["production".into()],
+            Some("production"),
+            Some("staging")
+        ));
+
+        // Multi-env delta: any-match against the filter.
+        let envs = vec!["staging".to_string(), "production".to_string()];
+        assert!(passes_env_set_filter(
+            &envs,
+            Some("staging"),
+            Some("production")
+        ));
+        assert!(!passes_env_set_filter(&envs, Some("staging"), Some("qa")));
+    }
+
+    #[test]
+    fn env_set_filter_no_filter_always_passes() {
+        assert!(passes_env_set_filter(&["production".into()], None, None));
+        assert!(passes_env_set_filter(
+            &["production".into()],
+            None,
+            Some("")
+        ));
+        assert!(!passes_env_set_filter(&[], None, Some("production")));
+    }
+
+    #[test]
+    fn env_set_filter_empty_set_falls_back_to_single_env() {
+        // No set: behaves like passes_env_filter on the single env.
+        assert!(passes_env_set_filter(
+            &[],
+            Some("production"),
+            Some("production")
+        ));
+        assert!(!passes_env_set_filter(
+            &[],
+            Some("staging"),
+            Some("production")
+        ));
+        // No env and no set, but a filter present: suppressed (prior behavior).
+        assert!(!passes_env_set_filter(&[], None, Some("production")));
+    }
 }

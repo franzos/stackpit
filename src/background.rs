@@ -190,6 +190,7 @@ async fn run_digest_cycle(
                 title: Some("Digest summary".to_string()),
                 level: None,
                 environment: None,
+                environments: Vec::new(),
                 event_id: String::new(),
                 digest: Some(crate::notify::DigestPayload {
                     period_start,
@@ -217,6 +218,7 @@ async fn run_digest_cycle(
                     )),
                     level: None,
                     environment: None,
+                    environments: Vec::new(),
                     event_id: String::new(),
                     digest: Some(crate::notify::DigestPayload {
                         period_start,

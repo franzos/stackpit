@@ -82,7 +82,8 @@ pub(super) async fn flush_aggregation_inner(
                     fingerprint: fingerprint.clone(),
                     title: delta.title.clone(),
                     level: delta.level.map(|l| l.to_string()),
-                    environment: None,
+                    environment: delta.environments.iter().next().cloned(),
+                    environments: delta.environments.iter().cloned().collect(),
                     event_id: String::new(),
                     digest: None,
                 });
@@ -94,7 +95,8 @@ pub(super) async fn flush_aggregation_inner(
                     fingerprint: fingerprint.clone(),
                     title: delta.title.clone(),
                     level: delta.level.map(|l| l.to_string()),
-                    environment: None,
+                    environment: delta.environments.iter().next().cloned(),
+                    environments: delta.environments.iter().cloned().collect(),
                     event_id: String::new(),
                     digest: None,
                 });
@@ -106,6 +108,7 @@ pub(super) async fn flush_aggregation_inner(
                     project_id: delta.project_id,
                     title: delta.title.clone(),
                     level: delta.level.map(|l| l.to_string()),
+                    environments: delta.environments.iter().cloned().collect(),
                 });
             }
         }

@@ -304,6 +304,7 @@ pub async fn test(
         title: Some("Test notification from Stackpit".to_string()),
         level: Some("info".to_string()),
         environment: Some("test".to_string()),
+        environments: vec!["test".to_string()],
         event_id: "test-event-id".to_string(),
         digest: None,
     };

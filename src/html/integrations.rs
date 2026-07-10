@@ -277,6 +277,18 @@ pub async fn delete(
     render_list(&state, org_filter, Some(msg), &chrome).await
 }
 
+/// Pick a recipient for the global email "Test" button: the acting user's email
+/// when known, else the instance sender (send-to-self). `None` means neither is
+/// available and the caller should surface an actionable flash.
+fn resolve_email_test_recipient(
+    email_cfg: &crate::config::EmailConfig,
+    user_email: Option<&str>,
+) -> Option<String> {
+    user_email
+        .map(str::to_string)
+        .or_else(|| email_cfg.from_address.clone())
+}
+
 pub async fn test_integration(
     State(state): State<AppState>,
     Chrome(chrome): Chrome,
@@ -316,6 +328,7 @@ pub async fn test_integration(
         title: Some("Test notification from Stackpit".to_string()),
         level: Some("info".to_string()),
         environment: Some("test".to_string()),
+        environments: vec!["test".to_string()],
         event_id: "test-event-id".to_string(),
         digest: None,
     };
@@ -324,15 +337,25 @@ pub async fn test_integration(
         // Endpoint isn't user-controlled -- no SSRF check or pinned client.
         match state.config.email.as_ref() {
             Some(email_cfg) => {
-                crate::providers::email::send(
-                    email_cfg,
-                    &state.config.server.web_base(),
-                    secret.as_deref(),
-                    integration.config.as_deref(),
-                    None,
-                    &event,
-                )
-                .await
+                // Recipients are per-project; the global test has none, so fall
+                // back to the instance sender (send-to-self smoke test).
+                match resolve_email_test_recipient(email_cfg, None) {
+                    Some(to) => {
+                        let project_cfg = serde_json::json!({ "to": to }).to_string();
+                        crate::providers::email::send(
+                            email_cfg,
+                            &state.config.server.web_base(),
+                            secret.as_deref(),
+                            integration.config.as_deref(),
+                            Some(project_cfg.as_str()),
+                            &event,
+                        )
+                        .await
+                    }
+                    None => Err(anyhow::anyhow!(
+                        "email integrations are tested with a recipient; configure [email] from_address or test from a project"
+                    )),
+                }
             }
             None => Err(anyhow::anyhow!(
                 "email is not configured ([email] section absent)"
@@ -530,6 +553,30 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn email_cfg(from: Option<&str>) -> crate::config::EmailConfig {
+        crate::config::EmailConfig {
+            enabled: true,
+            from_address: from.map(String::from),
+            from_name: None,
+            lock: false,
+            provider: polymail::ProviderConfig::Postmark { token: "t".into() },
+        }
+    }
+
+    #[test]
+    fn email_test_recipient_prefers_user_then_from_address() {
+        let cfg = email_cfg(Some("alerts@stackpit.test"));
+        assert_eq!(
+            resolve_email_test_recipient(&cfg, Some("me@stackpit.test")).as_deref(),
+            Some("me@stackpit.test"),
+        );
+        assert_eq!(
+            resolve_email_test_recipient(&cfg, None).as_deref(),
+            Some("alerts@stackpit.test"),
+        );
+        assert_eq!(resolve_email_test_recipient(&email_cfg(None), None), None);
     }
 }
 

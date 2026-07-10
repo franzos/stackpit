@@ -410,6 +410,7 @@ mod tests {
             title: Some("SMTP live delivery check".into()),
             level: Some("error".into()),
             environment: Some("test".into()),
+            environments: vec!["test".into()],
             event_id: "smtp-live-event".into(),
             digest: None,
         };

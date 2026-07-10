@@ -321,6 +321,7 @@ async fn queue_digest_previews(
             title: Some(title.to_string()),
             level: None,
             environment: None,
+            environments: Vec::new(),
             event_id: String::new(),
             digest: Some(crate::notify::DigestPayload {
                 period_start,

@@ -12,6 +12,7 @@ pub(super) struct ThresholdCandidate {
     pub(super) project_id: u64,
     pub(super) title: Option<String>,
     pub(super) level: Option<String>,
+    pub(super) environments: Vec<String>,
 }
 
 /// Check threshold alert rules for existing issues -- batched.
@@ -299,7 +300,8 @@ pub(super) async fn check_threshold_alerts(
                 fingerprint: c.fingerprint.clone(),
                 title: c.title.clone(),
                 level: c.level.clone(),
-                environment: None,
+                environment: c.environments.first().cloned(),
+                environments: c.environments.clone(),
                 event_id: String::new(),
                 digest: None,
             });
@@ -397,6 +399,7 @@ mod tests {
             project_id: 9502,
             title: None,
             level: None,
+            environments: Vec::new(),
         }];
 
         let mut pending = Vec::new();
@@ -458,6 +461,7 @@ mod tests {
             project_id: 9601,
             title: None,
             level: None,
+            environments: Vec::new(),
         }];
 
         let mut pending = Vec::new();

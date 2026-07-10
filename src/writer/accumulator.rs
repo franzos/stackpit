@@ -1,6 +1,6 @@
 use crate::ingest::models::{ItemType, Level, StorableEvent, MAX_TAGS_PER_EVENT};
 use simple_hll::HyperLogLog;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::time::Instant;
 
 /// Test default; production batch size comes from `storage.ingest_batch_size`.
@@ -12,6 +12,10 @@ pub(super) const AGGREGATION_FLUSH_TAG_THRESHOLD: usize = 10_000;
 
 /// Number of log2 duration histogram buckets per transaction rollup row.
 pub(super) const TXN_DURATION_BUCKETS: usize = 24;
+
+/// Cap on distinct environments tracked per fingerprint delta; guards against a
+/// flood of unique env strings bloating memory. Once full, new envs are ignored.
+const MAX_DELTA_ENVIRONMENTS: usize = 16;
 
 /// Map a duration in milliseconds to its log2 histogram bucket, clamped to
 /// `0..=23`. Bucket b covers `[2^b, 2^(b+1))` ms.
@@ -46,6 +50,9 @@ pub(super) struct IssueDelta {
     pub item_type: String,
     pub hll: HyperLogLog<12>,
     pub has_hll_data: bool,
+    /// Distinct environments this fingerprint occurred in this flush; matched
+    /// against integration `environment_filter` (capped at `MAX_DELTA_ENVIRONMENTS`).
+    pub environments: BTreeSet<String>,
 }
 
 /// Tracks accumulated session rollup for a (project, release, environment).
@@ -154,7 +161,14 @@ impl Accumulators {
             item_type: event.item_type.as_str().to_string(),
             hll: HyperLogLog::new(),
             has_hll_data: false,
+            environments: BTreeSet::new(),
         });
+
+        if let Some(env) = event.environment.as_deref() {
+            if !env.is_empty() && delta.environments.len() < MAX_DELTA_ENVIRONMENTS {
+                delta.environments.insert(env.to_string());
+            }
+        }
 
         delta.event_count += 1;
         // Skip bogus timestamps -- negative or more than a year in the future
@@ -283,6 +297,12 @@ impl Accumulators {
                     }
                     dst.hll.merge(&src.hll);
                     dst.has_hll_data |= src.has_hll_data;
+                    for env in &src.environments {
+                        if dst.environments.len() >= MAX_DELTA_ENVIRONMENTS {
+                            break;
+                        }
+                        dst.environments.insert(env.clone());
+                    }
                 }
                 None => {
                     self.issues.insert(fp.clone(), src.clone());

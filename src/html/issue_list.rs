@@ -1,10 +1,10 @@
 use askama::Template;
-use axum::extract::{Path, Query, RawQuery, State};
+use axum::extract::{Query, RawQuery, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 
 use crate::db::DbPool;
-use crate::extractors::{BrowserDefaults, ReadPool};
+use crate::extractors::{BrowserDefaults, ProjectPath, ReadPool};
 use crate::html::chrome::PageChrome;
 use crate::html::render_template;
 use crate::html::utils::{
@@ -53,7 +53,7 @@ pub async fn handler(
     RawQuery(raw_qs): RawQuery,
     ReadPool(pool): ReadPool,
     Chrome(chrome): Chrome,
-    Path(project_id): Path<u64>,
+    ProjectPath(project_id): ProjectPath,
     Query(params): Query<ListParams>,
 ) -> Result<axum::response::Response, HtmlError> {
     if let Some(url) = defaults_redirect_url(

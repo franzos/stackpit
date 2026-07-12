@@ -6,6 +6,16 @@ alerts-page-title = Alerts &amp; digests — Stackpit
 alerts-notify-help-pre = Notifications fire through the integrations on the
 alerts-notify-help-post = page.
 
+# --- Notification types (per-integration new-issue / regression toggles) ---
+alerts-notify-types-heading = Notification types
+alerts-notify-types-desc = New-issue and regression alerts fire on every newly-seen or regressed issue, gated per integration below. Threshold rules fire on event volume in a window; digests are periodic summaries.
+alerts-notify-types-empty = No active project integrations yet. Link one from a project's integrations page.
+alerts-col-integration = Integration
+alerts-col-new-issues = New issues
+alerts-col-regressions = Regressions
+alerts-col-digests = Digests
+alerts-notify-save = Save
+
 # --- Threshold rules ---
 alerts-threshold-heading = Threshold rules
 alerts-threshold-desc = Fire when an issue receives more than N events in a time window.

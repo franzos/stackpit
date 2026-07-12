@@ -75,6 +75,45 @@
   </div>
 {% endif %}
 
+{% if !aggregates.groups.is_empty() %}
+  <h2 class="page-h2 mb-3">{{ chrome.t("spans-agg-heading") }}</h2>
+  <div class="card overflow-hidden mb-6">
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>{{ chrome.t("spans-col-op") }}</th>
+            <th>{{ chrome.t("spans-col-description") }}</th>
+            <th class="text-end">{{ chrome.t("spans-col-count") }}</th>
+            <th class="text-end">{{ chrome.t("spans-col-p50") }}</th>
+            <th class="text-end">{{ chrome.t("spans-col-p95") }}</th>
+            <th class="text-end">{{ chrome.t("spans-col-avg") }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for g in aggregates.groups %}
+            <tr>
+              <td class="text-mono">
+                {% match g.op %}{% when Some with (op) %}{{ op }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
+            </td>
+            <td class="truncate-cell text-mono">
+              {% match g.description %}{% when Some with (d) %}{{ d }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
+          </td>
+          <td class="text-tabular text-end">{{ g.count }}</td>
+          <td class="text-tabular text-end">{{ g.p50_ms }}ms</td>
+          <td class="text-tabular text-end">{{ g.p95_ms }}ms</td>
+          <td class="text-tabular text-end">{{ g.avg_ms }}ms</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if aggregates.truncated %}
+  <p class="text-muted text-[13px] mt-2">{{ chrome.tv_count("spans-agg-truncated", agg_cap as i64) }}</p>
+{% endif %}
+</div>
+{% endif %}
+
 {% if !result.items.is_empty() %}
   <h2 class="page-h2 mb-3">{{ chrome.t("spans-all-heading") }}</h2>
   <div class="card overflow-hidden">

@@ -229,11 +229,12 @@ pub fn extract_exceptions(
 }
 
 pub fn extract_breadcrumbs(payload: &serde_json::Value) -> Vec<Breadcrumb> {
-    let values = match payload
-        .get("breadcrumbs")
-        .and_then(|b| b.get("values"))
-        .and_then(|v| v.as_array())
-    {
+    // SDKs send breadcrumbs as a top-level array; the Sentry store API nests
+    // them under `breadcrumbs.values`. Accept both.
+    let values = match payload.get("breadcrumbs").and_then(|b| {
+        b.as_array()
+            .or_else(|| b.get("values").and_then(|v| v.as_array()))
+    }) {
         Some(arr) => arr,
         None => return Vec::new(),
     };
@@ -471,6 +472,36 @@ pub fn extract_user(payload: &serde_json::Value) -> UserInfo {
     }
 }
 
+/// Pull the top-level `extra` object into flat key/value pairs. Non-string
+/// values are rendered as compact JSON.
+pub fn extract_extra(payload: &serde_json::Value) -> Vec<(String, String)> {
+    let obj = match payload.get("extra").and_then(|e| e.as_object()) {
+        Some(o) => o,
+        None => return Vec::new(),
+    };
+
+    obj.iter()
+        .map(|(key, val)| {
+            let v = match val {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            (key.clone(), v)
+        })
+        .collect()
+}
+
+/// The distributed-trace id from `contexts.trace.trace_id`, if present.
+pub fn extract_trace_id(payload: &serde_json::Value) -> Option<String> {
+    payload
+        .get("contexts")
+        .and_then(|c| c.get("trace"))
+        .and_then(|t| t.get("trace_id"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
 /// Format a metric number: integer when whole, else up to 3 decimals with
 /// trailing zeros trimmed.
 fn fmt_num(n: f64) -> String {
@@ -656,6 +687,73 @@ mod tests {
         assert_eq!(m.len(), 1);
         assert_eq!(m[0].label, "FRAMES_TOTAL");
         assert_eq!(m[0].value, "42 frame");
+    }
+
+    #[test]
+    fn extracts_react_sdk_toplevel_shape() {
+        // Real sentry.javascript.react v10 payload: breadcrumbs/user/extra at
+        // the top level, trace under contexts.trace.
+        let payload = json!({
+            "breadcrumbs": [{
+                "category": "xhr",
+                "type": "http",
+                "level": "warning",
+                "timestamp": 1783716945.421_f64,
+                "message": "PATCH /a/messages",
+                "data": {"method": "PATCH", "status_code": 400, "url": "/a/messages/1"}
+            }],
+            "user": {"id": "6abc1d7a", "username": "18b72e6c0c7003e7"},
+            "extra": {
+                "data": "Json deserialize error: missing field is_spam",
+                "method": "patch",
+                "status": 400,
+                "url": "/a/messages/1"
+            },
+            "contexts": {"trace": {"span_id": "be5c5c824c2e3afb", "trace_id": "89a619addb7a415ab0c69e6a9d84ca6e"}}
+        });
+
+        let crumbs = extract_breadcrumbs(&payload);
+        assert_eq!(crumbs.len(), 1);
+        assert_eq!(crumbs[0].category, "xhr");
+        assert_eq!(crumbs[0].level, "warning");
+        assert_eq!(crumbs[0].message, "PATCH /a/messages");
+        assert!(crumbs[0].data.contains("status_code"));
+        assert!(!crumbs[0].timestamp.is_empty());
+
+        let user = extract_user(&payload);
+        assert_eq!(user.id.as_deref(), Some("6abc1d7a"));
+        assert_eq!(user.username.as_deref(), Some("18b72e6c0c7003e7"));
+
+        let extra = extract_extra(&payload);
+        let by_key: std::collections::HashMap<_, _> = extra
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        assert_eq!(by_key["method"], "patch");
+        assert_eq!(by_key["status"], "400");
+        assert_eq!(
+            by_key["data"],
+            "Json deserialize error: missing field is_spam"
+        );
+
+        assert_eq!(
+            extract_trace_id(&payload).as_deref(),
+            Some("89a619addb7a415ab0c69e6a9d84ca6e")
+        );
+    }
+
+    #[test]
+    fn breadcrumbs_store_api_nested_shape() {
+        let payload = json!({"breadcrumbs": {"values": [{"category": "nav", "message": "go"}]}});
+        let crumbs = extract_breadcrumbs(&payload);
+        assert_eq!(crumbs.len(), 1);
+        assert_eq!(crumbs[0].category, "nav");
+    }
+
+    #[test]
+    fn extract_extra_and_trace_absent() {
+        assert!(extract_extra(&json!({})).is_empty());
+        assert!(extract_trace_id(&json!({"contexts": {}})).is_none());
     }
 
     #[test]

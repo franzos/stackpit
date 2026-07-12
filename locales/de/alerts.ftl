@@ -7,6 +7,16 @@ alerts-page-title = Warnungen &amp; Zusammenfassungen — Stackpit
 alerts-notify-help-pre = Benachrichtigungen werden über die Integrationen auf der Seite
 alerts-notify-help-post = ausgelöst.
 
+# --- Benachrichtigungstypen ---
+alerts-notify-types-heading = Benachrichtigungstypen
+alerts-notify-types-desc = Neue-Fehler- und Regressions-Benachrichtigungen werden für jeden neu gesehenen oder erneut auftretenden Fehler ausgelöst, unten pro Integration steuerbar. Schwellenwert-Regeln greifen bei Event-Volumen in einem Zeitfenster; Zusammenfassungen sind periodische Übersichten.
+alerts-notify-types-empty = Noch keine aktiven Projekt-Integrationen. Verknüpfe eine über die Integrationsseite eines Projekts.
+alerts-col-integration = Integration
+alerts-col-new-issues = Neue Fehler
+alerts-col-regressions = Regressionen
+alerts-col-digests = Zusammenfassungen
+alerts-notify-save = Speichern
+
 # --- Schwellenwert-Regeln ---
 alerts-threshold-heading = Schwellenwert-Regeln
 alerts-threshold-desc = Löst aus, wenn ein Fehler mehr als N Events in einem Zeitfenster erhält.

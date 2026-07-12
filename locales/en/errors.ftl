@@ -5,6 +5,7 @@
 # literal in the templates, matching base.html/login.html.
 error-page-title = Error - Stackpit
 error-heading = Error
+error-not-found = The page you requested does not exist.
 error-back-projects = Back to projects
 
 # Invite-created confirmation page (English-only, no request context).

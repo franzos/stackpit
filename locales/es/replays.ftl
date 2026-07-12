@@ -17,6 +17,9 @@ replays-col-timestamp = Marca de tiempo
 replays-detail-heading = Replay
 replays-detail-note = La reproducción de la grabación aún no está disponible. Los datos sin procesar del replay se muestran abajo.
 replays-detail-raw-payload = Payload sin procesar
+replays-related-errors = Errores en este replay
+replays-col-level = Nivel
+replays-col-title = Título
 
 # --- Paginación ---
 replays-pagination-label = Paginación

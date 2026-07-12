@@ -76,7 +76,7 @@
               <tr>
                 <td class="col-title min-w-0" title="{{ t.name }}">
                   <a class="font-semibold truncate"
-                     href="/web/projects/{{ project_id }}/transactions/detail?name={{ t.name|urlencode }}"><bdi>{{ t.name }}</bdi></a>
+                     href="/web/projects/{{ project_id }}/transactions/detail?name={{ t.name|urlencode }}&amp;period={{ period }}"><bdi>{{ t.name }}</bdi></a>
                 </td>
                 <td class="text-tabular">{{ t.throughput }}</td>
                 <td class="text-tabular">{{ t.p50_ms }}ms</td>

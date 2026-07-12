@@ -44,10 +44,12 @@ release-health-col-ok = OK
 release-health-col-crashed = Plantées
 release-health-col-errored = En erreur
 release-health-col-crash-free-sessions = Sessions sans plantage
+release-health-col-error-free-sessions = Sessions sans erreur
 release-health-col-crash-free-users = Utilisateurs sans plantage
 release-health-subtitle = Les résultats de session sont des signaux de santé rapportés par le SDK, pas des événements d'erreur. Cliquez sur une release pour voir ses problèmes.
 release-health-crashed-title = Voir les problèmes de cette release
 release-health-errored-title = Voir les problèmes de cette release
+release-health-errored-hint = Le compte « en erreur » correspond à des signaux de santé de session rapportés par le SDK (une session ayant enregistré une erreur gérée sans planter), pas à des événements d'erreur individuels, et ne peut pas être listé par session. Les problèmes liés sont les groupes d'erreurs vus dans cette release.
 
 # --- Détail d'une release (par version) ---
 release-detail-sessions-heading = Santé des sessions

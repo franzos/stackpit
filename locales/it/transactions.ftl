@@ -28,6 +28,7 @@ transactions-detail-col-duration = Durata
 transactions-detail-col-status = Stato
 transactions-detail-col-trace = Trace
 transactions-detail-col-when = Quando
+transactions-detail-distribution = Distribuzione delle durate
 
 # --- Impaginazione (dettaglio transazione) ---
 transactions-pagination-label = Impaginazione

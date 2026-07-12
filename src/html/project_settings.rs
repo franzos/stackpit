@@ -3,6 +3,7 @@ use axum::extract::{Form, Path, State};
 use axum::response::IntoResponse;
 use serde::Deserialize;
 
+use crate::extractors::ProjectPath;
 use crate::forge;
 use crate::html::chrome::PageChrome;
 use crate::html::render_template;
@@ -36,7 +37,7 @@ pub async fn handler(
     State(state): State<AppState>,
     active: ActiveOrg,
     Chrome(chrome): Chrome,
-    Path(project_id): Path<u64>,
+    ProjectPath(project_id): ProjectPath,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
         return r;
@@ -55,7 +56,7 @@ pub async fn set_name(
     State(state): State<AppState>,
     active: ActiveOrg,
     Chrome(chrome): Chrome,
-    Path(project_id): Path<u64>,
+    ProjectPath(project_id): ProjectPath,
     Form(form): Form<SetNameForm>,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
@@ -102,7 +103,7 @@ pub async fn add_repo(
     State(state): State<AppState>,
     active: ActiveOrg,
     Chrome(chrome): Chrome,
-    Path(project_id): Path<u64>,
+    ProjectPath(project_id): ProjectPath,
     Form(form): Form<AddRepoForm>,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
@@ -188,7 +189,7 @@ pub async fn archive_project(
     State(state): State<AppState>,
     active: ActiveOrg,
     Chrome(chrome): Chrome,
-    Path(project_id): Path<u64>,
+    ProjectPath(project_id): ProjectPath,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
         return r;
@@ -234,7 +235,7 @@ pub async fn unarchive_project(
     State(state): State<AppState>,
     active: ActiveOrg,
     Chrome(chrome): Chrome,
-    Path(project_id): Path<u64>,
+    ProjectPath(project_id): ProjectPath,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
         return r;
@@ -267,7 +268,7 @@ pub async fn delete_project(
     State(state): State<AppState>,
     active: ActiveOrg,
     Chrome(chrome): Chrome,
-    Path(project_id): Path<u64>,
+    ProjectPath(project_id): ProjectPath,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
         return r;
@@ -342,7 +343,7 @@ pub async fn keys_handler(
     State(state): State<AppState>,
     active: ActiveOrg,
     Chrome(chrome): Chrome,
-    Path(project_id): Path<u64>,
+    ProjectPath(project_id): ProjectPath,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
         return r;
@@ -359,7 +360,7 @@ pub async fn create_key(
     State(state): State<AppState>,
     active: ActiveOrg,
     Chrome(chrome): Chrome,
-    Path(project_id): Path<u64>,
+    ProjectPath(project_id): ProjectPath,
     Form(form): Form<CreateKeyForm>,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
@@ -484,7 +485,7 @@ pub async fn sourcemaps_handler(
     State(state): State<AppState>,
     active: ActiveOrg,
     Chrome(chrome): Chrome,
-    Path(project_id): Path<u64>,
+    ProjectPath(project_id): ProjectPath,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
         return r;
@@ -496,7 +497,7 @@ pub async fn generate_sourcemap_key(
     State(state): State<AppState>,
     active: ActiveOrg,
     Chrome(chrome): Chrome,
-    Path(project_id): Path<u64>,
+    ProjectPath(project_id): ProjectPath,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
         return r;

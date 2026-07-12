@@ -18,6 +18,14 @@ spans-col-duration = Длительность
 spans-col-first-seen = Первое появление
 spans-col-last-seen = Последнее появление
 
+# --- Таблица агрегированных спанов (по операции/описанию) ---
+spans-agg-heading = Операции спанов
+spans-col-count = Количество
+spans-col-p50 = p50
+spans-col-p95 = p95
+spans-col-avg = Сред.
+spans-agg-truncated = Показаны первые { $count } операций спанов.
+
 # --- Таблица всех спанов ---
 spans-col-span-id = ID спана
 spans-col-op = Операция

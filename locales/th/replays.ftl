@@ -16,6 +16,9 @@ replays-col-timestamp = ประทับเวลา
 replays-detail-heading = รีเพลย์
 replays-detail-note = ยังไม่สามารถเล่นการบันทึกได้ ข้อมูลรีเพลย์ดิบแสดงอยู่ด้านล่าง
 replays-detail-raw-payload = ข้อมูลดิบ
+replays-related-errors = ข้อผิดพลาดในรีเพลย์นี้
+replays-col-level = ระดับ
+replays-col-title = หัวข้อ
 
 # --- การแบ่งหน้า ---
 replays-pagination-label = การแบ่งหน้า

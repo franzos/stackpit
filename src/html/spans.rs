@@ -8,7 +8,7 @@ use crate::html::utils::{Chrome, ListParams};
 use crate::orgs::extractor::ActiveOrg;
 use crate::queries;
 use crate::queries::types::{
-    Page, PagedResult, SpanSummary, TraceError, TraceRoot, TraceSummary, Waterfall,
+    Page, PagedResult, SpanAggregation, SpanSummary, TraceError, TraceRoot, TraceSummary, Waterfall,
 };
 use crate::queries::ProjectNavCounts;
 use crate::server::AppState;
@@ -24,6 +24,8 @@ struct SpanListTemplate {
     project_id: u64,
     result: PagedResult<SpanSummary>,
     traces: PagedResult<TraceSummary>,
+    aggregates: SpanAggregation,
+    agg_cap: usize,
     nav: ProjectNavCounts,
     chrome: PageChrome,
 }
@@ -47,18 +49,22 @@ pub async fn list_handler(
     let page = params.page.page();
     let trace_page = Page::new(Some(0), Some(25));
 
-    let (span_result, trace_result) = tokio::join!(
+    let (span_result, trace_result, agg_result) = tokio::join!(
         queries::spans::list_spans(&ctx.pool, ctx.project_id, &page),
         queries::spans::list_traces(&ctx.pool, ctx.project_id, &trace_page),
+        queries::spans::aggregate_spans(&ctx.pool, ctx.project_id),
     );
 
     let result = span_result?;
     let traces = trace_result?;
+    let aggregates = agg_result?;
 
     let tmpl = SpanListTemplate {
         project_id: ctx.project_id,
         result,
         traces,
+        aggregates,
+        agg_cap: queries::spans::MAX_SPAN_GROUPS,
         nav: ctx.nav,
         chrome: ctx.chrome,
     };

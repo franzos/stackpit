@@ -17,6 +17,9 @@ replays-col-timestamp = Data/hora
 replays-detail-heading = Replay
 replays-detail-note = A reprodução da gravação ainda não está disponível. Os dados de replay em bruto são mostrados abaixo.
 replays-detail-raw-payload = Dados em bruto
+replays-related-errors = Erros neste replay
+replays-col-level = Nível
+replays-col-title = Título
 
 # --- Paginação ---
 replays-pagination-label = Paginação

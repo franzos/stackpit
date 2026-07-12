@@ -2,6 +2,7 @@
 # (src/html/orgs.rs). تبقى كلمة العلامة التجارية "Stackpit" حرفية في القوالب.
 error-page-title = خطأ - Stackpit
 error-heading = خطأ
+error-not-found = الصفحة المطلوبة غير موجودة.
 error-back-projects = العودة إلى المشاريع
 
 # صفحة تأكيد إنشاء الدعوة (بالإنجليزية فقط، دون سياق طلب).

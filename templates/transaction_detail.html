@@ -20,11 +20,47 @@
 
 {% block content %}
   <div class="page-header">
-    <h1 class="truncate" title="{{ name }}">{{ name }}</h1>
-    {% match op %}{% when Some with (o) %}
-    <p class="text-muted text-[13px]">{{ chrome.t("transactions-detail-op") }} {{ o }}</p>
+    <div>
+      <h1 class="truncate" title="{{ name }}">{{ name }}</h1>
+      {% match op %}{% when Some with (o) %}
+      <p class="text-muted text-[13px]">{{ chrome.t("transactions-detail-op") }} {{ o }}</p>
+      {% when None %}{% endmatch %}
+    {% match distribution %}{% when Some with (dist) %}
+    <p class="text-muted text-[13px] mt-1">
+      {{ chrome.t("transactions-col-throughput") }} {{ dist.summary.throughput }} ·
+      {{- " " }}p50 {{ dist.summary.p50_ms }}ms · p75 {{ dist.summary.p75_ms }}ms · p95 {{ dist.summary.p95_ms }}ms ·
+      {{- " " }}{{ chrome.t("transactions-col-failure") }} {{ dist.summary.failure_rate }}% ·
+      {{- " " }}{{ chrome.t("transactions-col-count") }} {{ dist.summary.count }} ·
+      {{- " " }}{{ chrome.t("transactions-col-users") }} {{ dist.summary.users }}
+    </p>
     {% when None %}{% endmatch %}
 </div>
+</div>
+
+{% match distribution %}{% when Some with (dist) %}
+{% if !dist.buckets.is_empty() %}
+  <div class="card card-pad mb-4">
+    <h2 class="text-[13px] font-semibold uppercase tracking-wide text-muted mb-3">{{ chrome.t("transactions-detail-distribution") }}</h2>
+    <div class="text-[12px]">
+      {% for b in dist.buckets %}
+        <div class="flex items-center gap-3 py-1">
+          <div class="shrink-0 text-tabular text-muted text-end"
+               style="width: 130px">{{ b.label }}</div>
+          <div class="grow"
+               style="height: 14px;
+                      background-color: var(--color-surface-container-low)">
+            <div class="rounded-sm"
+                 style="width: {{ b.pct }}%;
+                        height: 14px;
+                        background-color: var(--color-primary)"></div>
+          </div>
+          <div class="shrink-0 text-tabular text-end" style="width: 60px">{{ b.count }}</div>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+{% endif %}
+{% when None %}{% endmatch %}
 
 {% if result.items.is_empty() %}
   <div class="card">
@@ -85,11 +121,11 @@
   <span class="flex gap-2">
     {% if result.has_prev() %}
       <a class="btn btn-ghost"
-         href="/web/projects/{{ project_id }}/transactions/detail?name={{ name|urlencode }}&amp;offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}">{{ chrome.t("transactions-pagination-prev") }}</a>
+         href="/web/projects/{{ project_id }}/transactions/detail?name={{ name|urlencode }}&amp;period={{ period }}&amp;offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}">{{ chrome.t("transactions-pagination-prev") }}</a>
     {% endif %}
     {% if result.has_next() %}
       <a class="btn btn-ghost"
-         href="/web/projects/{{ project_id }}/transactions/detail?name={{ name|urlencode }}&amp;offset={{ result.next_offset() }}&amp;limit={{ result.limit }}">{{ chrome.t("transactions-pagination-next") }}</a>
+         href="/web/projects/{{ project_id }}/transactions/detail?name={{ name|urlencode }}&amp;period={{ period }}&amp;offset={{ result.next_offset() }}&amp;limit={{ result.limit }}">{{ chrome.t("transactions-pagination-next") }}</a>
     {% endif %}
   </span>
 </nav>

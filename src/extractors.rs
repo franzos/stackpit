@@ -42,6 +42,24 @@ impl FromRequestParts<AppState> for ReadPool {
     }
 }
 
+/// `{project_id}` path extractor for HTML routes. Renders the styled 404 page on
+/// a malformed (non-numeric) id instead of leaking axum's raw path rejection.
+pub struct ProjectPath(pub u64);
+
+impl FromRequestParts<AppState> for ProjectPath {
+    type Rejection = Response;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        match Path::<u64>::from_request_parts(parts, state).await {
+            Ok(Path(id)) => Ok(ProjectPath(id)),
+            Err(_) => Err(crate::html::html_not_found()),
+        }
+    }
+}
+
 /// Shared preamble for per-project list/detail HTML pages: resolves the
 /// `{project_id}` path param, clones the read pool, pulls the CSRF token, and
 /// loads the nav badge counts. Migrate handlers whose preamble matches this
@@ -72,7 +90,7 @@ impl FromRequestParts<AppState> for ProjectPageCtx {
     ) -> Result<Self, Self::Rejection> {
         let Path(project_id) = Path::<u64>::from_request_parts(parts, state)
             .await
-            .map_err(IntoResponse::into_response)?;
+            .map_err(|_| crate::html::html_not_found())?;
         // Chrome extraction is infallible (CSRF falls back to empty, locale to en).
         let chrome = Chrome::from_request_parts(parts, state)
             .await

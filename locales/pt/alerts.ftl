@@ -6,6 +6,16 @@ alerts-page-title = Alertas &amp; resumos — Stackpit
 alerts-notify-help-pre = As notificações são enviadas através das
 alerts-notify-help-post = configuradas.
 
+# --- Tipos de notificação ---
+alerts-notify-types-heading = Tipos de notificação
+alerts-notify-types-desc = Os alertas de novo problema e regressão disparam a cada problema recém-visto ou reincidente, controlados por integração abaixo. As regras de limiar disparam pelo volume de eventos numa janela; os resumos são sínteses periódicas.
+alerts-notify-types-empty = Ainda não há integrações de projeto ativas. Vincule uma na página de integrações de um projeto.
+alerts-col-integration = Integração
+alerts-col-new-issues = Novos problemas
+alerts-col-regressions = Regressões
+alerts-col-digests = Resumos
+alerts-notify-save = Guardar
+
 # --- Regras de limiar ---
 alerts-threshold-heading = Regras de limiar
 alerts-threshold-desc = Dispara quando um problema recebe mais de N eventos numa janela temporal.

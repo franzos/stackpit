@@ -53,6 +53,9 @@ struct IssueDetailTemplate {
     contexts: Vec<ContextGroup>,
     request: Option<RequestInfo>,
     user: UserInfo,
+    extra: Vec<(String, String)>,
+    replay_id: Option<String>,
+    trace_id: Option<String>,
     event_nav: EventNav,
     attachments: Vec<AttachmentInfo>,
     user_reports: Vec<queries::UserReportData>,
@@ -130,6 +133,9 @@ pub async fn handler(
             contexts: Vec::new(),
             request: None,
             user: UserInfo::default(),
+            extra: Vec::new(),
+            replay_id: None,
+            trace_id: None,
             event_nav: EventNav::default(),
             attachments: Vec::new(),
             user_reports: Vec::new(),
@@ -204,6 +210,18 @@ pub async fn handler(
         )
     };
 
+    let (extra, replay_id, trace_id) = if let Some(ref ev) = latest {
+        (
+            crate::ingest::event_data::extract_extra(&ev.payload),
+            tags.iter()
+                .find(|t| t.key == "replayId")
+                .map(|t| t.value.clone()),
+            crate::ingest::event_data::extract_trace_id(&ev.payload),
+        )
+    } else {
+        (Vec::new(), None, None)
+    };
+
     let empty_events = PagedResult {
         items: Vec::new(),
         total: 0,
@@ -224,6 +242,9 @@ pub async fn handler(
         contexts,
         request,
         user,
+        extra,
+        replay_id,
+        trace_id,
         event_nav,
         attachments,
         user_reports,

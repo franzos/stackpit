@@ -16,6 +16,9 @@ replays-col-timestamp = Timestamp
 replays-detail-heading = Replay
 replays-detail-note = La riproduzione della registrazione non è ancora disponibile. I dati grezzi del replay sono mostrati qui sotto.
 replays-detail-raw-payload = Payload grezzo
+replays-related-errors = Errori in questo replay
+replays-col-level = Livello
+replays-col-title = Titolo
 
 # --- Impaginazione ---
 replays-pagination-label = Impaginazione

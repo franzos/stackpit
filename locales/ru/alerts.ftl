@@ -6,6 +6,16 @@ alerts-page-title = Оповещения &amp; сводки — Stackpit
 alerts-notify-help-pre = Уведомления срабатывают через интеграции на
 alerts-notify-help-post = странице.
 
+# --- Типы уведомлений ---
+alerts-notify-types-heading = Типы уведомлений
+alerts-notify-types-desc = Уведомления о новых и повторно возникших проблемах срабатывают для каждой впервые замеченной или регрессировавшей проблемы, настраиваются по интеграциям ниже. Пороговые правила срабатывают по объёму событий в окне; сводки — это периодические обзоры.
+alerts-notify-types-empty = Пока нет активных интеграций проекта. Подключите одну на странице интеграций проекта.
+alerts-col-integration = Интеграция
+alerts-col-new-issues = Новые проблемы
+alerts-col-regressions = Регрессии
+alerts-col-digests = Сводки
+alerts-notify-save = Сохранить
+
 # --- Пороговые правила ---
 alerts-threshold-heading = Пороговые правила
 alerts-threshold-desc = Срабатывает, когда проблема получает более N событий за интервал времени.

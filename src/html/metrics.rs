@@ -2,7 +2,7 @@ use askama::Template;
 use axum::extract::{Path, Query, State};
 use serde::Deserialize;
 
-use crate::extractors::ReadPool;
+use crate::extractors::{ProjectPath, ReadPool};
 use crate::html::chrome::PageChrome;
 use crate::html::render_template;
 use crate::html::utils::{render_project_list, Chrome, ListParams};
@@ -31,7 +31,7 @@ pub async fn list_handler(
     State(state): State<AppState>,
     ReadPool(pool): ReadPool,
     Chrome(chrome): Chrome,
-    Path(project_id): Path<u64>,
+    ProjectPath(project_id): ProjectPath,
     Query(params): Query<ListParams>,
 ) -> Result<axum::response::Response, HtmlError> {
     crate::orgs::extractor::require_project_scope(&active, &pool, project_id as i64)

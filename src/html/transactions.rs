@@ -7,7 +7,9 @@ use crate::html::chrome::PageChrome;
 use crate::html::render_template;
 use crate::html::utils::{period_to_timestamp, ListParams};
 use crate::queries;
-use crate::queries::types::{PagedResult, Pagination, TransactionInstance, TransactionSummary};
+use crate::queries::types::{
+    PagedResult, Pagination, TransactionDistribution, TransactionInstance, TransactionSummary,
+};
 use crate::queries::ProjectNavCounts;
 
 use super::HtmlError;
@@ -32,6 +34,8 @@ struct TransactionDetailTemplate {
     project_id: u64,
     name: String,
     op: Option<String>,
+    period: String,
+    distribution: Option<TransactionDistribution>,
     result: PagedResult<TransactionInstance>,
     nav: ProjectNavCounts,
     chrome: PageChrome,
@@ -40,6 +44,7 @@ struct TransactionDetailTemplate {
 #[derive(Deserialize)]
 pub struct DetailParams {
     pub name: Option<String>,
+    pub period: Option<String>,
     #[serde(flatten)]
     pub page: Pagination,
 }
@@ -70,10 +75,15 @@ pub async fn detail_handler(
     Query(params): Query<DetailParams>,
 ) -> Result<axum::response::Response, HtmlError> {
     let name = params.name.unwrap_or_default();
+    let period = params.period.clone().unwrap_or_else(|| "7d".to_string());
+    let since = period_to_timestamp(&period).unwrap_or(0);
     let page = params.page.page();
 
     let result =
         queries::transactions::list_transaction_instances(&ctx.pool, ctx.project_id, &name, &page)
+            .await?;
+    let distribution =
+        queries::transactions::transaction_distribution(&ctx.pool, ctx.project_id, &name, since)
             .await?;
     let op = result.items.first().and_then(|i| i.op.clone());
 
@@ -81,6 +91,8 @@ pub async fn detail_handler(
         project_id: ctx.project_id,
         name,
         op,
+        period,
+        distribution,
         result,
         nav: ctx.nav,
         chrome: ctx.chrome,

@@ -17,6 +17,11 @@ replays-detail-heading = Replay
 replays-detail-note = Recording playback not yet available. Raw replay data is shown below.
 replays-detail-raw-payload = Raw payload
 
+# --- Errors captured during the replay (from the payload's error_ids) ---
+replays-related-errors = Errors in this replay
+replays-col-level = Level
+replays-col-title = Title
+
 # --- Pagination ---
 replays-pagination-label = Pagination
 replays-pagination-prev = « Previous

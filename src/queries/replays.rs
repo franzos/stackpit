@@ -4,7 +4,10 @@ use sqlx::Row;
 use crate::db::sql;
 use crate::db::DbRowExt;
 
-use super::types::{Page, PagedResult, ReplayDetail, ReplaySummary};
+use super::types::{Page, PagedResult, ReplayDetail, ReplayError, ReplaySummary};
+
+/// Cap on `error_ids` resolved per replay, bounding the IN-list.
+const MAX_REPLAY_ERROR_IDS: usize = 50;
 
 pub async fn list_replays(
     pool: &crate::db::DbPool,
@@ -90,5 +93,165 @@ pub async fn get_replay(
             }))
         }
         None => Ok(None),
+    }
+}
+
+/// Top-level `error_ids` from a decompressed replay payload. Defensive: empty
+/// when the key is absent, not an array, or holds no non-empty strings.
+/// Capped at [`MAX_REPLAY_ERROR_IDS`].
+fn extract_error_ids(payload: &serde_json::Value) -> Vec<String> {
+    payload
+        .get("error_ids")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .take(MAX_REPLAY_ERROR_IDS)
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Resolve a replay's referenced `error_ids` to stored error events in the same
+/// project. Ids that don't resolve (event dropped or never stored) are omitted.
+pub async fn get_replay_errors(
+    pool: &crate::db::DbPool,
+    project_id: u64,
+    payload: &serde_json::Value,
+) -> Result<Vec<ReplayError>> {
+    let ids = extract_error_ids(payload);
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut qb: sqlx::QueryBuilder<'_, crate::db::Db> = sqlx::QueryBuilder::new(
+        "SELECT event_id, fingerprint, title, level, timestamp FROM events WHERE project_id = ",
+    );
+    qb.push_bind(project_id as i64);
+    qb.push(" AND item_type = 'event' AND event_id IN (");
+    let mut sep = qb.separated(", ");
+    for id in &ids {
+        sep.push_bind(id.as_str());
+    }
+    qb.push(") ORDER BY timestamp DESC");
+
+    let rows = qb.build().fetch_all(pool).await?;
+    Ok(rows
+        .iter()
+        .map(|row| ReplayError {
+            event_id: row.get("event_id"),
+            fingerprint: row.get("fingerprint"),
+            title: row.get("title"),
+            level: row.get("level"),
+            timestamp: row.get("timestamp"),
+        })
+        .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::queries::test_helpers::{insert_test_event, open_test_db};
+
+    fn payload(ids: &[&str]) -> serde_json::Value {
+        serde_json::json!({ "error_ids": ids })
+    }
+
+    #[tokio::test]
+    async fn resolves_error_ids_scoped_to_project() {
+        let pool = open_test_db().await;
+        insert_test_event(
+            &pool,
+            "e1",
+            1,
+            100,
+            Some("fp1"),
+            Some("error"),
+            Some("Boom"),
+        )
+        .await;
+        insert_test_event(
+            &pool,
+            "e2",
+            1,
+            200,
+            Some("fp2"),
+            Some("warning"),
+            Some("Uh oh"),
+        )
+        .await;
+        // same id-space value on another project must not leak in
+        insert_test_event(
+            &pool,
+            "other",
+            2,
+            300,
+            Some("fpX"),
+            Some("error"),
+            Some("Nope"),
+        )
+        .await;
+
+        let errors = get_replay_errors(&pool, 1, &payload(&["e1", "e2", "other", "missing"]))
+            .await
+            .unwrap();
+
+        let resolved: std::collections::BTreeMap<String, Option<String>> = errors
+            .iter()
+            .map(|e| (e.event_id.clone(), e.fingerprint.clone()))
+            .collect();
+        assert_eq!(resolved.len(), 2);
+        assert_eq!(resolved.get("e1"), Some(&Some("fp1".to_string())));
+        assert_eq!(resolved.get("e2"), Some(&Some("fp2".to_string())));
+        // project-2 row and the unstored id are both excluded
+        assert!(!resolved.contains_key("other"));
+        assert!(!resolved.contains_key("missing"));
+    }
+
+    #[tokio::test]
+    async fn absent_or_malformed_error_ids_resolve_to_nothing() {
+        let pool = open_test_db().await;
+        insert_test_event(
+            &pool,
+            "e1",
+            1,
+            100,
+            Some("fp1"),
+            Some("error"),
+            Some("Boom"),
+        )
+        .await;
+        for p in [
+            serde_json::json!({}),
+            serde_json::json!({ "error_ids": [] }),
+            serde_json::json!({ "error_ids": "e1" }),
+        ] {
+            assert!(get_replay_errors(&pool, 1, &p).await.unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn error_id_lookup_is_capped() {
+        let pool = open_test_db().await;
+        let ids: Vec<String> = (0..MAX_REPLAY_ERROR_IDS + 5)
+            .map(|i| format!("evt{i}"))
+            .collect();
+        for (i, id) in ids.iter().enumerate() {
+            insert_test_event(
+                &pool,
+                id,
+                1,
+                100 + i as i64,
+                Some("fp"),
+                Some("error"),
+                Some("t"),
+            )
+            .await;
+        }
+        let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+        let errors = get_replay_errors(&pool, 1, &payload(&refs)).await.unwrap();
+        assert_eq!(errors.len(), MAX_REPLAY_ERROR_IDS);
     }
 }

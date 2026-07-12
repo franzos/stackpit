@@ -4,6 +4,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect};
 
 use crate::domain::IssueStatus;
+use crate::extractors::ProjectPath;
 use crate::html::html_error;
 use crate::html::utils::period_to_timestamp;
 use crate::orgs::extractor::{require_owner, require_project_scope, ActiveOrg};
@@ -143,7 +144,7 @@ pub async fn events_bulk(
 pub async fn issues_bulk(
     State(state): State<AppState>,
     active: ActiveOrg,
-    Path(project_id): Path<u64>,
+    ProjectPath(project_id): ProjectPath,
     body: Bytes,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
@@ -230,7 +231,7 @@ async fn handle_issue_bulk(
 pub async fn user_reports_bulk(
     State(state): State<AppState>,
     active: ActiveOrg,
-    Path(project_id): Path<u64>,
+    ProjectPath(project_id): ProjectPath,
     body: Bytes,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
@@ -257,7 +258,7 @@ pub async fn user_reports_bulk(
 pub async fn client_reports_bulk(
     State(state): State<AppState>,
     active: ActiveOrg,
-    Path(project_id): Path<u64>,
+    ProjectPath(project_id): ProjectPath,
     body: Bytes,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {

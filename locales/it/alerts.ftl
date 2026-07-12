@@ -6,6 +6,16 @@ alerts-page-title = Avvisi &amp; riepiloghi — Stackpit
 alerts-notify-help-pre = Le notifiche vengono inviate tramite le integrazioni nella pagina
 alerts-notify-help-post = .
 
+# --- Tipi di notifica ---
+alerts-notify-types-heading = Tipi di notifica
+alerts-notify-types-desc = Gli avvisi di nuovo problema e regressione si attivano per ogni problema appena visto o ricomparso, controllabili per integrazione qui sotto. Le regole di soglia si attivano sul volume di eventi in un intervallo; i riepiloghi sono sintesi periodiche.
+alerts-notify-types-empty = Nessuna integrazione di progetto attiva. Collegane una dalla pagina delle integrazioni di un progetto.
+alerts-col-integration = Integrazione
+alerts-col-new-issues = Nuovi problemi
+alerts-col-regressions = Regressioni
+alerts-col-digests = Riepiloghi
+alerts-notify-save = Salva
+
 # --- Regole di soglia ---
 alerts-threshold-heading = Regole di soglia
 alerts-threshold-desc = Si attiva quando un problema riceve più di N eventi in un intervallo di tempo.

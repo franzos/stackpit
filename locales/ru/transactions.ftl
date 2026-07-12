@@ -29,6 +29,7 @@ transactions-detail-col-duration = Длительность
 transactions-detail-col-status = Статус
 transactions-detail-col-trace = Трейс
 transactions-detail-col-when = Когда
+transactions-detail-distribution = Распределение длительности
 
 # --- Постраничная навигация (деталь транзакции) ---
 transactions-pagination-label = Постраничная навигация

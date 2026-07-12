@@ -16,6 +16,9 @@ replays-col-timestamp = الطابع الزمني
 replays-detail-heading = إعادة التشغيل
 replays-detail-note = تشغيل التسجيل غير متاح بعد. تُعرض بيانات إعادة التشغيل الخام أدناه.
 replays-detail-raw-payload = الحمولة الخام
+replays-related-errors = أخطاء في إعادة التشغيل هذه
+replays-col-level = المستوى
+replays-col-title = العنوان
 
 # --- ترقيم الصفحات ---
 replays-pagination-label = ترقيم الصفحات

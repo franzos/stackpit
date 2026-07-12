@@ -17,6 +17,9 @@ replays-col-timestamp = Метка времени
 replays-detail-heading = Реплей
 replays-detail-note = Воспроизведение записи пока недоступно. Ниже показаны исходные данные реплея.
 replays-detail-raw-payload = Исходные данные
+replays-related-errors = Ошибки в этом реплее
+replays-col-level = Уровень
+replays-col-title = Заголовок
 
 # --- Постраничная навигация ---
 replays-pagination-label = Постраничная навигация

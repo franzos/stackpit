@@ -17,6 +17,9 @@ replays-col-timestamp = Zeitstempel
 replays-detail-heading = Replay
 replays-detail-note = Wiedergabe der Aufzeichnung noch nicht verfügbar. Die Roh-Replay-Daten werden unten angezeigt.
 replays-detail-raw-payload = Rohdaten
+replays-related-errors = Fehler in diesem Replay
+replays-col-level = Level
+replays-col-title = Titel
 
 # --- Seitennavigation ---
 replays-pagination-label = Seitennavigation

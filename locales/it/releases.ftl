@@ -44,10 +44,12 @@ release-health-col-ok = OK
 release-health-col-crashed = In crash
 release-health-col-errored = Con errori
 release-health-col-crash-free-sessions = Sessioni senza crash
+release-health-col-error-free-sessions = Sessioni senza errori
 release-health-col-crash-free-users = Utenti senza crash
 release-health-subtitle = Gli esiti delle sessioni sono segnali di stato riportati dall'SDK, non eventi di errore. Fai clic su una release per vederne i problemi.
 release-health-crashed-title = Vedi i problemi di questa release
 release-health-errored-title = Vedi i problemi di questa release
+release-health-errored-hint = Il conteggio «con errori» sono segnali di stato di sessione riportati dall'SDK (una sessione che ha registrato un errore gestito ma non è andata in crash), non singoli eventi di errore, e non può essere elencato per sessione. I problemi collegati sono i gruppi di errori visti in questa release.
 
 # --- Dettaglio release (per versione) ---
 release-detail-sessions-heading = Stato delle sessioni

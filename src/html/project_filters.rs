@@ -4,6 +4,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use serde::Deserialize;
 
+use crate::extractors::ProjectPath;
 use crate::filter::admin;
 use crate::html::chrome::PageChrome;
 use crate::html::render_template;
@@ -104,7 +105,7 @@ pub async fn handler(
     State(state): State<AppState>,
     active: ActiveOrg,
     Chrome(chrome): Chrome,
-    Path(project_id): Path<u64>,
+    ProjectPath(project_id): ProjectPath,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
         return r;
@@ -233,7 +234,7 @@ pub async fn set_inbound_filters(
     State(state): State<AppState>,
     active: ActiveOrg,
     Chrome(chrome): Chrome,
-    Path(project_id): Path<u64>,
+    ProjectPath(project_id): ProjectPath,
     Form(form): Form<InboundFilterForm>,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
@@ -268,7 +269,7 @@ pub async fn add_message_filter(
     State(state): State<AppState>,
     active: ActiveOrg,
     Chrome(chrome): Chrome,
-    Path(project_id): Path<u64>,
+    ProjectPath(project_id): ProjectPath,
     Form(form): Form<PatternForm>,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
@@ -329,7 +330,7 @@ pub async fn set_rate_limit(
     State(state): State<AppState>,
     active: ActiveOrg,
     Chrome(chrome): Chrome,
-    Path(project_id): Path<u64>,
+    ProjectPath(project_id): ProjectPath,
     Form(form): Form<RateLimitForm>,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
@@ -359,7 +360,7 @@ pub async fn add_environment_filter(
     State(state): State<AppState>,
     active: ActiveOrg,
     Chrome(chrome): Chrome,
-    Path(project_id): Path<u64>,
+    ProjectPath(project_id): ProjectPath,
     Form(form): Form<EnvironmentForm>,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
@@ -421,7 +422,7 @@ pub async fn add_release_filter(
     State(state): State<AppState>,
     active: ActiveOrg,
     Chrome(chrome): Chrome,
-    Path(project_id): Path<u64>,
+    ProjectPath(project_id): ProjectPath,
     Form(form): Form<PatternForm>,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
@@ -482,7 +483,7 @@ pub async fn add_ua_filter(
     State(state): State<AppState>,
     active: ActiveOrg,
     Chrome(chrome): Chrome,
-    Path(project_id): Path<u64>,
+    ProjectPath(project_id): ProjectPath,
     Form(form): Form<PatternForm>,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
@@ -544,7 +545,7 @@ pub async fn add_filter_rule(
     State(state): State<AppState>,
     active: ActiveOrg,
     Chrome(chrome): Chrome,
-    Path(project_id): Path<u64>,
+    ProjectPath(project_id): ProjectPath,
     Form(form): Form<RuleForm>,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
@@ -632,7 +633,7 @@ pub async fn add_ip_block(
     State(state): State<AppState>,
     active: ActiveOrg,
     Chrome(chrome): Chrome,
-    Path(project_id): Path<u64>,
+    ProjectPath(project_id): ProjectPath,
     Form(form): Form<CidrForm>,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {

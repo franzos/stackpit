@@ -44,8 +44,9 @@
               <th>{{ chrome.t("release-health-col-sessions") }}</th>
               <th>{{ chrome.t("release-health-col-ok") }}</th>
               <th>{{ chrome.t("release-health-col-crashed") }}</th>
-              <th>{{ chrome.t("release-health-col-errored") }}</th>
+              <th title="{{ chrome.t("release-health-errored-hint") }}">{{ chrome.t("release-health-col-errored") }}</th>
               <th>{{ chrome.t("release-health-col-crash-free-sessions") }}</th>
+              <th>{{ chrome.t("release-health-col-error-free-sessions") }}</th>
               <th>{{ chrome.t("release-health-col-crash-free-users") }}</th>
             </tr>
           </thead>
@@ -76,6 +77,9 @@
                 </td>
                 <td class="text-tabular font-semibold">
                   {% match r.crash_free_sessions %}{% when Some with (cfs) %}<span class="{% if cfs.clone() >= 99.0 %}health-good{% else if cfs.clone() >= 95.0 %}health-warn{% else %}health-bad{% endif %}">{{ cfs }}%</span>{% when None %}<span class="text-muted">{{ chrome.t("release-health-na") }}</span>{% endmatch %}
+              </td>
+              <td class="text-tabular font-semibold">
+                {% match r.error_free_sessions %}{% when Some with (efs) %}<span class="{% if efs.clone() >= 99.0 %}health-good{% else if efs.clone() >= 95.0 %}health-warn{% else %}health-bad{% endif %}">{{ efs }}%</span>{% when None %}<span class="text-muted">{{ chrome.t("release-health-na") }}</span>{% endmatch %}
               </td>
               <td class="text-tabular font-semibold">
                 {% match r.crash_free_users %}{% when Some with (cfu) %}<span class="{% if cfu.clone() >= 99.0 %}health-good{% else if cfu.clone() >= 95.0 %}health-warn{% else %}health-bad{% endif %}">{{ cfu }}%</span>{% when None %}<span class="text-muted">{{ chrome.t("release-health-na") }}</span>{% endmatch %}

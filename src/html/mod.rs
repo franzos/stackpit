@@ -314,6 +314,10 @@ pub fn routes() -> Router<AppState> {
             post(alerts::delete_alert_rule),
         )
         .route(
+            "/web/settings/alerts/notify/update",
+            post(alerts::update_notify_types),
+        )
+        .route(
             "/web/settings/alerts/digests/create",
             post(alerts::create_digest_schedule),
         )
@@ -425,8 +429,17 @@ pub fn routes() -> Router<AppState> {
     router
 }
 
-async fn redirect_old_project(Path(project_id): Path<u64>) -> impl IntoResponse {
-    axum::response::Redirect::permanent(&format!("/web/projects/{project_id}/"))
+async fn redirect_old_project(
+    project_id: Result<Path<u64>, axum::extract::rejection::PathRejection>,
+) -> axum::response::Response {
+    match project_id {
+        Ok(Path(id)) => {
+            axum::response::Redirect::permanent(&format!("/web/projects/{id}/")).into_response()
+        }
+        // A non-numeric first segment (e.g. /web/alerts/) matches this legacy
+        // route; render the styled 404 rather than leaking the parse error.
+        Err(_) => html_not_found(),
+    }
 }
 
 /// One bundled static asset: route path, content type, body, and the
@@ -541,6 +554,14 @@ impl From<anyhow::Error> for HtmlError {
     fn from(e: anyhow::Error) -> Self {
         HtmlError(axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
     }
+}
+
+/// Styled 404 page for unmatched or malformed `/web/` routes. Resolves at the
+/// default locale: the router fallback and extractor rejections carry no request
+/// context.
+pub fn html_not_found() -> axum::response::Response {
+    let detail = crate::i18n::lookup(&crate::locale::default_locale(), "error-not-found");
+    html_error(axum::http::StatusCode::NOT_FOUND, &detail)
 }
 
 /// Minimal styled error page. Uses the same shell language as base.html but

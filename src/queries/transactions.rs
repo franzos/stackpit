@@ -8,7 +8,10 @@ use sqlx::Row;
 use crate::db::sql;
 use crate::ingest::models::HLL_REGISTER_COUNT;
 
-use super::types::{Page, PagedResult, TransactionInstance, TransactionSummary};
+use super::types::{
+    DurationBucket, Page, PagedResult, TransactionDistribution, TransactionInstance,
+    TransactionSummary,
+};
 
 const NUM_BUCKETS: usize = 24;
 
@@ -91,6 +94,79 @@ impl TxnAgg {
     }
 }
 
+/// Fold one `transaction_metrics` row (count/sum/failed/buckets/users_hll) into
+/// an accumulator. Callers read `transaction_name` separately when grouping.
+fn accumulate_row(agg: &mut TxnAgg, row: &crate::db::DbRow) {
+    agg.count += row.get::<i64, _>("count") as u64;
+    agg.sum_duration_ms += row.get::<i64, _>("sum_duration_ms").max(0) as u64;
+    agg.failed_count += row.get::<i64, _>("failed_count") as u64;
+    for i in 0..NUM_BUCKETS {
+        agg.buckets[i] += row.get::<i64, _>(format!("bucket_{i}").as_str()).max(0) as u64;
+    }
+    let blob: Option<Vec<u8>> = row.get("users_hll");
+    if blob.is_some() {
+        agg.has_user_data = true;
+    }
+    merge_hll(&mut agg.users_hll, &blob);
+}
+
+/// Build a [`TransactionSummary`] (percentiles, throughput, failure rate, users)
+/// from a rolled-up accumulator. `window_minutes` is the period length used for
+/// the throughput rate.
+fn summary_from_agg(name: String, agg: &TxnAgg, window_minutes: f64) -> TransactionSummary {
+    let count = agg.count;
+    // Raw rate kept unrounded so sorting and the adaptive-unit label stay
+    // accurate at low volumes.
+    let tpm = count as f64 / window_minutes;
+    let failure_rate = if count > 0 {
+        (agg.failed_count as f64 / count as f64 * 1000.0).round() / 10.0
+    } else {
+        0.0
+    };
+    TransactionSummary {
+        name,
+        tpm,
+        throughput: format_throughput(tpm),
+        p50_ms: percentile_from_buckets(&agg.buckets, count, 0.50),
+        p75_ms: percentile_from_buckets(&agg.buckets, count, 0.75),
+        p95_ms: percentile_from_buckets(&agg.buckets, count, 0.95),
+        failure_rate,
+        count,
+        users: if agg.has_user_data {
+            agg.users_hll.count() as u64
+        } else {
+            0
+        },
+        avg_ms: agg.sum_duration_ms.checked_div(count).unwrap_or(0) as i64,
+    }
+}
+
+/// Trim the log2 histogram to its populated range and render one bar per bucket,
+/// scaled to the busiest bucket. Empty when no samples landed in any bucket.
+fn distribution_buckets(buckets: &[u64; NUM_BUCKETS]) -> Vec<DurationBucket> {
+    let (Some(first), Some(last)) = (
+        buckets.iter().position(|&c| c > 0),
+        buckets.iter().rposition(|&c| c > 0),
+    ) else {
+        return Vec::new();
+    };
+    let max = buckets[first..=last].iter().copied().max().unwrap_or(0);
+    (first..=last)
+        .map(|b| {
+            let count = buckets[b];
+            DurationBucket {
+                label: format!("{}-{}ms", 1u64 << b, 1u64 << (b + 1)),
+                count,
+                pct: if max > 0 {
+                    count as f64 / max as f64 * 100.0
+                } else {
+                    0.0
+                },
+            }
+        })
+        .collect()
+}
+
 /// Roll up `transaction_metrics` rows by name and compute per-transaction
 /// percentiles, throughput, and failure rate. `sort` is one of
 /// `p95` (default), `throughput`, `failure_rate`, `count`.
@@ -125,17 +201,7 @@ pub async fn list_transactions(
     for row in &rows {
         let name: String = row.get("transaction_name");
         let agg = by_name.entry(name).or_insert_with(TxnAgg::new);
-        agg.count += row.get::<i64, _>("count") as u64;
-        agg.sum_duration_ms += row.get::<i64, _>("sum_duration_ms").max(0) as u64;
-        agg.failed_count += row.get::<i64, _>("failed_count") as u64;
-        for i in 0..NUM_BUCKETS {
-            agg.buckets[i] += row.get::<i64, _>(format!("bucket_{i}").as_str()).max(0) as u64;
-        }
-        let blob: Option<Vec<u8>> = row.get("users_hll");
-        if blob.is_some() {
-            agg.has_user_data = true;
-        }
-        merge_hll(&mut agg.users_hll, &blob);
+        accumulate_row(agg, row);
     }
 
     // Throughput window: from since_ts to now, floored to at least one minute.
@@ -144,34 +210,7 @@ pub async fn list_transactions(
 
     let mut items: Vec<TransactionSummary> = by_name
         .into_iter()
-        .map(|(name, agg)| {
-            let count = agg.count;
-            let total = count;
-            // Raw rate: kept unrounded so sorting and the adaptive-unit
-            // throughput label stay accurate at low volumes.
-            let tpm = count as f64 / window_minutes;
-            let failure_rate = if count > 0 {
-                (agg.failed_count as f64 / count as f64 * 1000.0).round() / 10.0
-            } else {
-                0.0
-            };
-            TransactionSummary {
-                name,
-                tpm,
-                throughput: format_throughput(tpm),
-                p50_ms: percentile_from_buckets(&agg.buckets, total, 0.50),
-                p75_ms: percentile_from_buckets(&agg.buckets, total, 0.75),
-                p95_ms: percentile_from_buckets(&agg.buckets, total, 0.95),
-                failure_rate,
-                count,
-                users: if agg.has_user_data {
-                    agg.users_hll.count() as u64
-                } else {
-                    0
-                },
-                avg_ms: agg.sum_duration_ms.checked_div(count).unwrap_or(0) as i64,
-            }
-        })
+        .map(|(name, agg)| summary_from_agg(name, &agg, window_minutes))
         .collect();
 
     match sort {
@@ -182,6 +221,54 @@ pub async fn list_transactions(
     }
 
     Ok(items)
+}
+
+/// Aggregate one transaction's `transaction_metrics` rows over the period into
+/// header stats plus a duration distribution. `None` when the transaction has
+/// no rollup rows in the window.
+pub async fn transaction_distribution(
+    pool: &crate::db::DbPool,
+    project_id: u64,
+    name: &str,
+    since_ts: i64,
+) -> Result<Option<TransactionDistribution>> {
+    let hour_floor = (since_ts / 3600) * 3600;
+
+    let bucket_cols: String = (0..NUM_BUCKETS)
+        .map(|i| format!("bucket_{i}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let raw = format!(
+        "SELECT count, sum_duration_ms, failed_count, {bucket_cols}, users_hll \
+         FROM transaction_metrics \
+         WHERE project_id = ?1 AND hour_bucket >= ?2 AND transaction_name = ?3"
+    );
+    let query = crate::db::translate_sql(&raw);
+
+    let rows = sqlx::query(&query)
+        .bind(project_id as i64)
+        .bind(hour_floor)
+        .bind(name)
+        .fetch_all(pool)
+        .await?;
+
+    if rows.is_empty() {
+        return Ok(None);
+    }
+
+    let mut agg = TxnAgg::new();
+    for row in &rows {
+        accumulate_row(&mut agg, row);
+    }
+
+    let now = chrono::Utc::now().timestamp();
+    let window_minutes = (((now - since_ts).max(60)) as f64) / 60.0;
+
+    Ok(Some(TransactionDistribution {
+        summary: summary_from_agg(name.to_string(), &agg, window_minutes),
+        buckets: distribution_buckets(&agg.buckets),
+    }))
 }
 
 /// List individual transaction events for a given name, slowest first.
@@ -308,6 +395,32 @@ mod tests {
 
         assert_eq!(result.items[1].status.as_deref(), Some("ok"));
         assert!(!result.items[1].is_failed());
+    }
+
+    #[test]
+    fn distribution_empty_when_no_samples() {
+        let buckets = [0u64; NUM_BUCKETS];
+        assert!(distribution_buckets(&buckets).is_empty());
+    }
+
+    #[test]
+    fn distribution_trims_to_populated_range() {
+        let mut buckets = [0u64; NUM_BUCKETS];
+        buckets[8] = 10; // [256, 512)
+        buckets[10] = 5; // [1024, 2048), a gap at bucket 9 stays visible
+        let dist = distribution_buckets(&buckets);
+        // First..=last populated, including the empty in-between bucket.
+        assert_eq!(dist.len(), 3);
+        assert_eq!(dist[0].label, "256-512ms");
+        assert_eq!(dist[0].count, 10);
+        assert!(
+            (dist[0].pct - 100.0).abs() < f64::EPSILON,
+            "busiest = full bar"
+        );
+        assert_eq!(dist[1].count, 0);
+        assert!(dist[1].pct.abs() < f64::EPSILON);
+        assert_eq!(dist[2].label, "1024-2048ms");
+        assert!((dist[2].pct - 50.0).abs() < f64::EPSILON);
     }
 
     #[test]

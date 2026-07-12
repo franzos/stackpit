@@ -27,6 +27,7 @@ transactions-detail-col-duration = ระยะเวลา
 transactions-detail-col-status = สถานะ
 transactions-detail-col-trace = เทรซ
 transactions-detail-col-when = เมื่อ
+transactions-detail-distribution = การกระจายระยะเวลา
 
 # --- การแบ่งหน้า (รายละเอียดทรานแซกชัน) ---
 transactions-pagination-label = การแบ่งหน้า

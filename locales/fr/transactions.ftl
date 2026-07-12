@@ -28,6 +28,7 @@ transactions-detail-col-duration = Durée
 transactions-detail-col-status = Statut
 transactions-detail-col-trace = Trace
 transactions-detail-col-when = Quand
+transactions-detail-distribution = Distribution des durées
 
 # --- Pagination (détail d'une transaction) ---
 transactions-pagination-label = Pagination

@@ -2,6 +2,7 @@ use askama::Template;
 use axum::extract::{Form, Path, State};
 use serde::Deserialize;
 
+use crate::extractors::ProjectPath;
 use crate::html::chrome::PageChrome;
 use crate::html::render_template;
 use crate::html::utils::{self, Chrome};
@@ -46,7 +47,7 @@ pub async fn handler(
     State(state): State<AppState>,
     active: ActiveOrg,
     Chrome(chrome): Chrome,
-    Path(project_id): Path<u64>,
+    ProjectPath(project_id): ProjectPath,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
         return r;
@@ -70,7 +71,7 @@ pub async fn activate(
     State(state): State<AppState>,
     active: ActiveOrg,
     Chrome(chrome): Chrome,
-    Path(project_id): Path<u64>,
+    ProjectPath(project_id): ProjectPath,
     Form(form): Form<ActivateForm>,
 ) -> axum::response::Response {
     if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {

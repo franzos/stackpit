@@ -17,6 +17,14 @@ spans-col-duration = ระยะเวลา
 spans-col-first-seen = พบครั้งแรก
 spans-col-last-seen = พบล่าสุด
 
+# --- ตารางสแปนแบบรวม (จัดกลุ่มตาม op/คำอธิบาย) ---
+spans-agg-heading = การดำเนินการสแปน
+spans-col-count = จำนวน
+spans-col-p50 = p50
+spans-col-p95 = p95
+spans-col-avg = เฉลี่ย
+spans-agg-truncated = แสดงการดำเนินการสแปนสูงสุด { $count } รายการ
+
 # --- ตารางสแปนทั้งหมด ---
 spans-col-span-id = รหัสสแปน
 spans-col-op = Op

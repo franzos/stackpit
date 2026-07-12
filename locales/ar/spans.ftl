@@ -17,6 +17,14 @@ spans-col-duration = المدّة
 spans-col-first-seen = أول ظهور
 spans-col-last-seen = آخر ظهور
 
+# --- جدول الامتدادات المجمّعة (مجمّعة حسب العملية/الوصف) ---
+spans-agg-heading = عمليات الامتداد
+spans-col-count = العدد
+spans-col-p50 = p50
+spans-col-p95 = p95
+spans-col-avg = المتوسط
+spans-agg-truncated = عرض أعلى { $count } من عمليات الامتداد.
+
 # --- جدول جميع الامتدادات ---
 spans-col-span-id = معرّف الامتداد
 spans-col-op = العملية

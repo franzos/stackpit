@@ -7,6 +7,16 @@ alerts-page-title = Alertes &amp; récapitulatifs — Stackpit
 alerts-notify-help-pre = Les notifications sont envoyées via les intégrations de la page
 alerts-notify-help-post = .
 
+# --- Types de notification ---
+alerts-notify-types-heading = Types de notification
+alerts-notify-types-desc = Les alertes de nouveau problème et de régression se déclenchent pour chaque problème nouvellement vu ou réapparu, contrôlées par intégration ci-dessous. Les règles de seuil se déclenchent selon le volume d'événements sur une fenêtre ; les récapitulatifs sont des synthèses périodiques.
+alerts-notify-types-empty = Aucune intégration de projet active pour le moment. Reliez-en une depuis la page des intégrations d'un projet.
+alerts-col-integration = Intégration
+alerts-col-new-issues = Nouveaux problèmes
+alerts-col-regressions = Régressions
+alerts-col-digests = Récapitulatifs
+alerts-notify-save = Enregistrer
+
 # --- Règles de seuil ---
 alerts-threshold-heading = Règles de seuil
 alerts-threshold-desc = Se déclenche lorsqu'un problème reçoit plus de N événements dans une fenêtre de temps.

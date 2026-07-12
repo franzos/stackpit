@@ -83,6 +83,19 @@
     {% if tab == "details" %}
       {% match event %}{% when Some with (ev) %}
 
+      {% if replay_id.is_some() || trace_id.is_some() %}
+        <div class="flex flex-wrap gap-2">
+          {% match replay_id %}{% when Some with (rid) %}
+          <a class="btn btn-secondary"
+             href="/web/projects/{{ issue.project_id }}/replays/{{ rid }}/">{{ chrome.t("issue-detail-view-replay") }}</a>
+          {% when None %}{% endmatch %}
+          {% match trace_id %}{% when Some with (tid) %}
+          <a class="btn btn-secondary"
+             href="/web/projects/{{ issue.project_id }}/traces/{{ tid }}/">{{ chrome.t("issue-detail-view-trace") }}</a>
+          {% when None %}{% endmatch %}
+        </div>
+      {% endif %}
+
       {% if !exceptions.is_empty() %}
         <details open class="card">
           <summary class="card-header cursor-pointer select-none">{{ chrome.t("issue-detail-exception-stacktrace") |safe }}</summary>
@@ -249,6 +262,22 @@
         </div>
       {% endfor %}
     </div>
+  </details>
+{% endif %}
+
+{% if !extra.is_empty() %}
+  <details class="card">
+    <summary class="card-header cursor-pointer select-none">
+      {{ chrome.t("issue-detail-additional-data") }} <span class="text-muted text-[11px] ms-1">({{ extra.len() }})</span>
+    </summary>
+    <dl class="meta-grid p-4">
+      {% for entry in extra %}
+        <dt>{{ entry.0 }}</dt>
+        <dd>
+          {{ entry.1 }}
+        </dd>
+      {% endfor %}
+    </dl>
   </details>
 {% endif %}
 
@@ -515,6 +544,38 @@
       </div>
     {% endfor %}
   </div>
+{% endif %}
+
+{% if user.has_any() %}
+  <div class="card card-pad">
+    <div class="label-caps mb-2">{{ chrome.t("event-detail-user-heading") }}</div>
+    <dl class="meta-grid">
+      {% match user.id %}{% when Some with (v) %}
+      <dt>{{ chrome.t("event-detail-user-id") }}</dt>
+      <dd class="break-all">
+        {{ v }}
+      </dd>
+      {% when None %}{% endmatch %}
+    {% match user.username %}{% when Some with (v) %}
+    <dt>{{ chrome.t("event-detail-user-username") }}</dt>
+    <dd class="break-all">
+      {{ v }}
+    </dd>
+    {% when None %}{% endmatch %}
+  {% match user.email %}{% when Some with (v) %}
+  <dt>{{ chrome.t("event-detail-user-email") }}</dt>
+  <dd class="break-all">
+    {{ v }}
+  </dd>
+  {% when None %}{% endmatch %}
+{% match user.ip_address %}{% when Some with (v) %}
+<dt>{{ chrome.t("event-detail-user-ip") }}</dt>
+<dd class="break-all">
+  {{ v }}
+</dd>
+{% when None %}{% endmatch %}
+</dl>
+</div>
 {% endif %}
 
 <form method="post"

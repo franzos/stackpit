@@ -42,10 +42,12 @@ release-health-col-ok = OK
 release-health-col-crashed = ล่ม
 release-health-col-errored = มีข้อผิดพลาด
 release-health-col-crash-free-sessions = เซสชันที่ไม่ล่ม
+release-health-col-error-free-sessions = เซสชันที่ไม่มีข้อผิดพลาด
 release-health-col-crash-free-users = ผู้ใช้ที่ไม่พบการล่ม
 release-health-subtitle = ผลลัพธ์ของเซสชันเป็นสัญญาณสุขภาพที่ SDK รายงาน ไม่ใช่เหตุการณ์ข้อผิดพลาด คลิกที่รีลีสเพื่อดูปัญหาของมัน
 release-health-crashed-title = ดูปัญหาของรีลีสนี้
 release-health-errored-title = ดูปัญหาของรีลีสนี้
+release-health-errored-hint = จำนวน "มีข้อผิดพลาด" คือสัญญาณสุขภาพของเซสชันที่ SDK รายงาน (เซสชันที่บันทึกข้อผิดพลาดที่จัดการแล้วแต่ไม่ล่ม) ไม่ใช่เหตุการณ์ข้อผิดพลาดแต่ละรายการ และไม่สามารถแสดงรายการตามเซสชันได้ ปัญหาที่ลิงก์ไว้คือกลุ่มข้อผิดพลาดที่พบในรีลีสนี้
 
 # --- รายละเอียดรีลีส (ต่อเวอร์ชัน) ---
 release-detail-sessions-heading = สุขภาพของเซสชัน

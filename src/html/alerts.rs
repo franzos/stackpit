@@ -18,11 +18,26 @@ use crate::html::filters;
 /// dedicated struct.
 type ProjectOption = (u64, String);
 
+/// One row of the "Notification types" table: an active project integration with
+/// its per-integration notify toggles. `threshold`/`digests` are shown read-only
+/// for context; only new-issue/regression are editable here.
+struct NotifyIntegration {
+    id: i64,
+    project_id: u64,
+    project_label: String,
+    integration_name: String,
+    notify_new_issues: bool,
+    notify_regressions: bool,
+    notify_threshold: bool,
+    notify_digests: bool,
+}
+
 #[derive(Template)]
 #[template(path = "alerts.html")]
 struct AlertsTemplate {
     alert_rules: Vec<AlertRule>,
     digest_schedules: Vec<DigestSchedule>,
+    notify_integrations: Vec<NotifyIntegration>,
     projects: Vec<ProjectOption>,
     message: Option<String>,
     chrome: PageChrome,
@@ -128,6 +143,70 @@ pub async fn delete_alert_rule(
             Ok(_) => chrome.t("flash-alert-rule-deleted"),
             Err(e) => chrome.err(e),
         };
+    render_page(&state, active_org.org_id, Some(msg), &chrome).await
+}
+
+// -- Notification types ------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct NotifyTypesForm {
+    pub id: i64,
+    pub project_id: i64,
+    pub notify_new_issues: Option<String>,
+    pub notify_regressions: Option<String>,
+}
+
+/// Save the new-issue / regression toggles for one project integration from the
+/// alerts hub. Updates only those two columns; the per-project integrations page
+/// owns the rest (level, environment, recipient, threshold, digests).
+pub async fn update_notify_types(
+    State(state): State<AppState>,
+    Chrome(chrome): Chrome,
+    active_org: ActiveOrg,
+    Form(form): Form<NotifyTypesForm>,
+) -> axum::response::Response {
+    if let Err(r) = require_owner(&active_org) {
+        return r;
+    }
+    if active_org.role.is_some()
+        && crate::queries::orgs::assert_project_in_org(
+            &state.pool,
+            form.project_id,
+            active_org.org_id,
+        )
+        .await
+        .is_err()
+    {
+        return render_page(
+            &state,
+            active_org.org_id,
+            Some(chrome.t("flash-project-not-found-or-denied")),
+            &chrome,
+        )
+        .await;
+    }
+
+    let msg = match queries::integrations::update_project_integration_notify_types(
+        &state.writer_pool,
+        form.project_id,
+        form.id,
+        form.notify_new_issues.is_some(),
+        form.notify_regressions.is_some(),
+    )
+    .await
+    {
+        Ok(0) => format!(
+            "{} {}",
+            chrome.t("common-error-prefix"),
+            chrome.tv1(
+                "flash-not-found-project-integration",
+                "id",
+                &form.id.to_string()
+            )
+        ),
+        Ok(_) => chrome.t("flash-integration-updated"),
+        Err(e) => chrome.err(e),
+    };
     render_page(&state, active_org.org_id, Some(msg), &chrome).await
 }
 
@@ -397,9 +476,35 @@ async fn render_page(
             .collect();
     projects.sort_by_key(|a| a.1.to_lowercase());
 
+    // Active project integrations across the org, paired with their project
+    // label from the selector list so each row reads "Project — Integration".
+    let labels: std::collections::HashMap<u64, String> = projects.iter().cloned().collect();
+    let notify_integrations: Vec<NotifyIntegration> =
+        queries::integrations::list_active_for_org(&state.pool, org_id)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|pi| {
+                let project_label = labels.get(&pi.project_id).cloned().unwrap_or_else(|| {
+                    chrome.tv1("alerts-project-fallback", "id", &pi.project_id.to_string())
+                });
+                NotifyIntegration {
+                    id: pi.id,
+                    project_id: pi.project_id,
+                    project_label,
+                    integration_name: pi.integration_name,
+                    notify_new_issues: pi.notify_new_issues,
+                    notify_regressions: pi.notify_regressions,
+                    notify_threshold: pi.notify_threshold,
+                    notify_digests: pi.notify_digests,
+                }
+            })
+            .collect();
+
     let tmpl = AlertsTemplate {
         alert_rules,
         digest_schedules,
+        notify_integrations,
         projects,
         message,
         chrome: chrome.clone(),
@@ -421,6 +526,7 @@ mod tests {
             let tmpl = AlertsTemplate {
                 alert_rules: Vec::new(),
                 digest_schedules: Vec::new(),
+                notify_integrations: Vec::new(),
                 projects: Vec::new(),
                 message: None,
                 chrome: PageChrome::new("csrf".into(), locale.clone(), "/web/projects/".into()),
@@ -429,6 +535,35 @@ mod tests {
             assert!(
                 !html.contains(crate::i18n::MISSING_PREFIX),
                 "alerts ({locale}) leaked a missing localization key: {html}"
+            );
+        }
+    }
+
+    // The populated notification-types row branch must localize cleanly too.
+    #[test]
+    fn alerts_notify_types_row_has_no_missing_keys() {
+        for locale in [langid!("en"), langid!("de")] {
+            let tmpl = AlertsTemplate {
+                alert_rules: Vec::new(),
+                digest_schedules: Vec::new(),
+                notify_integrations: vec![NotifyIntegration {
+                    id: 1,
+                    project_id: 7,
+                    project_label: "Web".into(),
+                    integration_name: "Email".into(),
+                    notify_new_issues: true,
+                    notify_regressions: false,
+                    notify_threshold: true,
+                    notify_digests: false,
+                }],
+                projects: Vec::new(),
+                message: None,
+                chrome: PageChrome::new("csrf".into(), locale.clone(), "/web/projects/".into()),
+            };
+            let html = tmpl.render().expect("alerts renders");
+            assert!(
+                !html.contains(crate::i18n::MISSING_PREFIX),
+                "alerts notify row ({locale}) leaked a missing localization key: {html}"
             );
         }
     }

@@ -87,6 +87,7 @@ mod tests {
             crashed_count: 0,
             errored_count: 5,
             crash_free_sessions: Some(100.0),
+            error_free_sessions: Some(93.15),
             crash_free_users: Some(100.0),
         }
     }

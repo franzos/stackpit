@@ -134,6 +134,20 @@ pub async fn get_active_for_project(
     rows.iter().map(row_to_project_integration).collect()
 }
 
+/// Enabled project integrations across every project in an org, for the alerts
+/// hub's notification-types overview. Joins `projects` to scope by org.
+pub async fn list_active_for_org(pool: &DbPool, org_id: i64) -> Result<Vec<ProjectIntegration>> {
+    let sql = format!(
+        "{PROJECT_INTEGRATION_SELECT}
+         JOIN projects p ON p.project_id = pi.project_id
+         WHERE p.org_id = ?1 AND pi.enabled = TRUE
+         ORDER BY pi.project_id, i.name"
+    );
+    let sql = crate::db::translate_sql(&sql);
+    let rows = sqlx::query(&sql).bind(org_id).fetch_all(pool).await?;
+    rows.iter().map(row_to_project_integration).collect()
+}
+
 /// Integrations not yet linked to a project (candidates for the "add" dropdown).
 /// Scoped to `org_id` so only same-org integrations are offered.
 pub async fn list_available_for_project(
@@ -295,6 +309,31 @@ pub async fn update_project_integration(
     Ok(result.rows_affected())
 }
 
+/// Update only the new-issue / regression toggles on a project integration,
+/// leaving level/environment/recipient and the other notify flags untouched.
+/// Backs the alerts-hub notification-types section, which surfaces just these
+/// two columns.
+pub async fn update_project_integration_notify_types(
+    pool: &DbPool,
+    project_id: i64,
+    id: i64,
+    notify_new_issues: bool,
+    notify_regressions: bool,
+) -> Result<u64> {
+    let result = sqlx::query(sql!(
+        "UPDATE project_integrations SET
+             notify_new_issues = ?1, notify_regressions = ?2
+         WHERE id = ?3 AND project_id = ?4"
+    ))
+    .bind(notify_new_issues)
+    .bind(notify_regressions)
+    .bind(id)
+    .bind(project_id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
 /// Remove a project integration link. Returns 0 if it wasn't found.
 pub async fn deactivate_project_integration(
     pool: &DbPool,
@@ -390,6 +429,51 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(rows, 1);
+    }
+
+    #[tokio::test]
+    async fn update_notify_types_flips_flags_and_preserves_others() {
+        let pool = open_test_db().await;
+        let pi_id = seed_project_integration(&pool, 1).await;
+        // Seed a min_level so we can confirm the narrow update leaves it alone.
+        update_project_integration(
+            &pool,
+            1,
+            pi_id,
+            false,
+            false,
+            Some("error"),
+            None,
+            None,
+            true,
+            true,
+        )
+        .await
+        .unwrap();
+
+        let rows = update_project_integration_notify_types(&pool, 1, pi_id, true, false)
+            .await
+            .unwrap();
+        assert_eq!(rows, 1);
+
+        let pi = list_project_integrations(&pool, 1)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|p| p.id == pi_id)
+            .unwrap();
+        assert!(pi.notify_new_issues, "new-issue toggle persisted");
+        assert!(!pi.notify_regressions, "regression toggle persisted");
+        // Untouched columns keep their prior values.
+        assert_eq!(pi.min_level.as_deref(), Some("error"));
+        assert!(pi.notify_threshold);
+        assert!(pi.notify_digests);
+
+        // Cross-project update must not match.
+        let rows = update_project_integration_notify_types(&pool, 2, pi_id, false, false)
+            .await
+            .unwrap();
+        assert_eq!(rows, 0, "cross-project update must affect 0 rows");
     }
 
     #[tokio::test]

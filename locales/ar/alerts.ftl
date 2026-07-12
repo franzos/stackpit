@@ -5,6 +5,16 @@ alerts-page-title = التنبيهات &amp; الملخّصات — Stackpit
 alerts-notify-help-pre = تُطلَق الإشعارات عبر التكاملات في صفحة
 alerts-notify-help-post = .
 
+# --- أنواع الإشعارات ---
+alerts-notify-types-heading = أنواع الإشعارات
+alerts-notify-types-desc = تنطلق تنبيهات المشكلات الجديدة والانتكاسات مع كل مشكلة تُرى لأول مرة أو تعود من جديد، ويُتحكَّم بها لكل تكامل أدناه. تنطلق قواعد الحدّ بناءً على حجم الأحداث خلال نافذة زمنية؛ أمّا الملخّصات فهي تقارير دورية.
+alerts-notify-types-empty = لا توجد تكاملات مشروع نشطة بعد. اربط واحدًا من صفحة تكاملات المشروع.
+alerts-col-integration = التكامل
+alerts-col-new-issues = مشكلات جديدة
+alerts-col-regressions = الانتكاسات
+alerts-col-digests = الملخّصات
+alerts-notify-save = حفظ
+
 # --- قواعد الحدّ ---
 alerts-threshold-heading = قواعد الحدّ
 alerts-threshold-desc = تُطلَق عندما تتلقّى مشكلة أكثر من N من الأحداث خلال نافذة زمنية.

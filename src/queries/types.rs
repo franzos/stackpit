@@ -500,6 +500,26 @@ pub struct SpanSummary {
     pub duration_ms: Option<i64>,
 }
 
+/// One (op, description) group on the aggregated spans table, with exact
+/// percentiles computed in Rust from the group's raw durations.
+#[derive(Debug)]
+pub struct SpanAggRow {
+    pub op: Option<String>,
+    pub description: Option<String>,
+    pub count: u64,
+    pub p50_ms: i64,
+    pub p95_ms: i64,
+    pub avg_ms: i64,
+}
+
+/// Aggregated spans grouped by (op, description). `truncated` is set when the
+/// group cap dropped some groups from the tail.
+#[derive(Debug, Default)]
+pub struct SpanAggregation {
+    pub groups: Vec<SpanAggRow>,
+    pub truncated: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct TraceSpan {
     pub span_id: String,
@@ -606,6 +626,23 @@ pub struct TransactionSummary {
     pub avg_ms: i64,
 }
 
+/// One log2 duration bucket rendered on the transaction detail distribution.
+/// `pct` is the bar width relative to the busiest bucket in the range.
+#[derive(Debug, Serialize)]
+pub struct DurationBucket {
+    pub label: String,
+    pub count: u64,
+    pub pct: f64,
+}
+
+/// Duration histogram plus aggregate stats for a single transaction over the
+/// selected period, powering the detail page header and distribution chart.
+#[derive(Debug, Serialize)]
+pub struct TransactionDistribution {
+    pub summary: TransactionSummary,
+    pub buckets: Vec<DurationBucket>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct TransactionInstance {
     pub event_id: String,
@@ -683,6 +720,18 @@ pub struct ReplayDetail {
     pub release: Option<String>,
     pub environment: Option<String>,
     pub payload: serde_json::Value,
+}
+
+/// Error event referenced by a replay's `error_ids`, resolved from the events
+/// table. `fingerprint` links to the grouped issue when present; None falls
+/// back to the single-event view.
+#[derive(Debug)]
+pub struct ReplayError {
+    pub event_id: String,
+    pub fingerprint: Option<String>,
+    pub title: Option<String>,
+    pub level: Option<String>,
+    pub timestamp: i64,
 }
 
 #[cfg(test)]

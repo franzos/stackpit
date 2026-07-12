@@ -45,12 +45,16 @@
         <dd class="text-tabular">{% if h.crashed_count > 0 %}<span class="badge badge-error">{{ h.crashed_count }}</span>{% else %}0{% endif %}</dd>
       </div>
       <div>
-        <dt>{{ chrome.t("release-health-col-errored") }}</dt>
+        <dt title="{{ chrome.t("release-health-errored-hint") }}">{{ chrome.t("release-health-col-errored") }}</dt>
         <dd class="text-tabular">{% if h.errored_count > 0 %}<span class="badge badge-warning">{{ h.errored_count }}</span>{% else %}0{% endif %}</dd>
       </div>
       <div>
         <dt>{{ chrome.t("release-health-col-crash-free-sessions") }}</dt>
         <dd class="text-tabular font-semibold">{% match h.crash_free_sessions %}{% when Some with (cfs) %}<span class="{% if cfs.clone() >= 99.0 %}health-good{% else if cfs.clone() >= 95.0 %}health-warn{% else %}health-bad{% endif %}">{{ cfs }}%</span>{% when None %}<span class="text-muted">{{ chrome.t("release-health-na") }}</span>{% endmatch %}</dd>
+      </div>
+      <div>
+        <dt>{{ chrome.t("release-health-col-error-free-sessions") }}</dt>
+        <dd class="text-tabular font-semibold">{% match h.error_free_sessions %}{% when Some with (efs) %}<span class="{% if efs.clone() >= 99.0 %}health-good{% else if efs.clone() >= 95.0 %}health-warn{% else %}health-bad{% endif %}">{{ efs }}%</span>{% when None %}<span class="text-muted">{{ chrome.t("release-health-na") }}</span>{% endmatch %}</dd>
       </div>
       <div>
         <dt>{{ chrome.t("release-health-col-crash-free-users") }}</dt>

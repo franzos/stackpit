@@ -6,6 +6,16 @@ alerts-page-title = Alertas &amp; resúmenes — Stackpit
 alerts-notify-help-pre = Las notificaciones se envían a través de las integraciones en la página
 alerts-notify-help-post = .
 
+# --- Tipos de notificación ---
+alerts-notify-types-heading = Tipos de notificación
+alerts-notify-types-desc = Las alertas de nuevo problema y regresión se disparan con cada problema recién visto o reaparecido, controladas por integración a continuación. Las reglas de umbral se disparan por volumen de eventos en una ventana; los resúmenes son síntesis periódicas.
+alerts-notify-types-empty = Aún no hay integraciones de proyecto activas. Vincula una desde la página de integraciones de un proyecto.
+alerts-col-integration = Integración
+alerts-col-new-issues = Nuevos problemas
+alerts-col-regressions = Regresiones
+alerts-col-digests = Resúmenes
+alerts-notify-save = Guardar
+
 # --- Reglas de umbral ---
 alerts-threshold-heading = Reglas de umbral
 alerts-threshold-desc = Se activa cuando un problema recibe más de N eventos en una ventana de tiempo.

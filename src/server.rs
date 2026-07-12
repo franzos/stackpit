@@ -137,6 +137,18 @@ async fn ingest_health_handler() -> &'static str {
     "ok"
 }
 
+/// Router fallback for unmatched paths: styled HTML 404 for `/web` browse
+/// routes, JSON `{"detail":...}` 404 for everything else (API, MCP, health) so
+/// the API stays machine-readable.
+async fn not_found_fallback(uri: axum::http::Uri) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if uri.path().starts_with("/web") {
+        html::html_not_found()
+    } else {
+        api::ApiError::not_found("not found").into_response()
+    }
+}
+
 pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
     let db_url = config.storage.database_url();
 
@@ -484,6 +496,7 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
 
         let admin_app = admin_app
             .merge(mcp_app)
+            .fallback(not_found_fallback)
             .layer(axum::middleware::from_fn(
                 crate::metrics::track_http_metrics,
             ))
@@ -814,5 +827,49 @@ async fn shutdown_signal() {
     tokio::select! {
         _ = ctrl_c => {},
         _ = terminate => {},
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::not_found_fallback;
+    use axum::body::Body;
+    use axum::http::{header, Request, StatusCode};
+    use axum::Router;
+    use tower::ServiceExt;
+
+    async fn fallback_response(uri: &str) -> axum::response::Response {
+        let app = Router::<()>::new().fallback(not_found_fallback);
+        app.oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn unmatched_web_path_renders_styled_html_404() {
+        let resp = fallback_response("/web/does-not-exist").await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let ct = resp.headers().get(header::CONTENT_TYPE).unwrap();
+        assert!(ct.to_str().unwrap().starts_with("text/html"));
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8_lossy(&body);
+        assert!(
+            html.contains("/web/_assets/style.css"),
+            "expected styled shell, got: {html}"
+        );
+    }
+
+    #[tokio::test]
+    async fn unmatched_api_path_returns_json_404() {
+        let resp = fallback_response("/api/0/nope").await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let ct = resp.headers().get(header::CONTENT_TYPE).unwrap();
+        assert!(ct.to_str().unwrap().starts_with("application/json"));
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("\"detail\""));
     }
 }

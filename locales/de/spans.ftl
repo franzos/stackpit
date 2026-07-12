@@ -18,6 +18,14 @@ spans-col-duration = Dauer
 spans-col-first-seen = Zuerst gesehen
 spans-col-last-seen = Zuletzt gesehen
 
+# --- Aggregierte Spans-Tabelle (nach Op/Beschreibung gruppiert) ---
+spans-agg-heading = Span-Operationen
+spans-col-count = Anzahl
+spans-col-p50 = p50
+spans-col-p95 = p95
+spans-col-avg = Ø
+spans-agg-truncated = Es werden die häufigsten { $count } Span-Operationen angezeigt.
+
 # --- Alle-Spans-Tabelle ---
 spans-col-span-id = Span-ID
 spans-col-op = Op

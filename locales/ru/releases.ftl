@@ -46,10 +46,12 @@ release-health-col-ok = OK
 release-health-col-crashed = Сбои
 release-health-col-errored = С ошибками
 release-health-col-crash-free-sessions = Сессии без сбоев
+release-health-col-error-free-sessions = Сессии без ошибок
 release-health-col-crash-free-users = Пользователи без сбоев
 release-health-subtitle = Итоги сессий — это сигналы состояния от SDK, а не события ошибок. Нажмите на релиз, чтобы увидеть его ошибки.
 release-health-crashed-title = Показать ошибки этого релиза
 release-health-errored-title = Показать ошибки этого релиза
+release-health-errored-hint = «С ошибками» — это сигналы состояния сессий от SDK (сессия, зафиксировавшая обработанную ошибку, но не давшая сбой), а не отдельные события ошибок, и их нельзя перечислить по сессиям. Связанные ошибки — это группы ошибок, замеченные в этом релизе.
 
 # --- Детали релиза (по версии) ---
 release-detail-sessions-heading = Состояние сессий

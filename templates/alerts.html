@@ -30,6 +30,63 @@
   <div class="settings-message mb-4">{{ msg }}</div>
   {% when None %}{% endmatch %}
 
+{# ============ Notification types ============ #}
+<section class="space-y-4 mb-6">
+  <div>
+    <h2 class="page-h2">{{ chrome.t("alerts-notify-types-heading") }}</h2>
+    <p class="text-muted text-[13px] mt-1">{{ chrome.t("alerts-notify-types-desc") }}</p>
+  </div>
+
+  {% if notify_integrations.is_empty() %}
+    <div class="card card-pad text-muted text-[13px]">{{ chrome.t("alerts-notify-types-empty") }}</div>
+  {% else %}
+    <div class="card overflow-hidden">
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>{{ chrome.t("alerts-col-scope") }}</th>
+              <th>{{ chrome.t("alerts-col-integration") }}</th>
+              <th>{{ chrome.t("alerts-col-new-issues") }}</th>
+              <th>{{ chrome.t("alerts-col-regressions") }}</th>
+              <th>{{ chrome.t("alerts-col-threshold") }}</th>
+              <th>{{ chrome.t("alerts-col-digests") }}</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for n in notify_integrations %}
+              {# Inputs live in cells; the <form> sits in the last cell and is
+                 wired to them via the HTML5 form= attribute (a <form> between
+                 <td>s would be hoisted out of the table by the parser). #}
+              <tr>
+                <td><a class="font-semibold" href="/web/projects/{{ n.project_id }}/settings/integrations/">{{ n.project_label }}</a></td>
+                <td>{{ n.integration_name }}</td>
+                <td><input type="checkbox" form="ntf-{{ n.id }}" name="notify_new_issues" value="1" {% if n.notify_new_issues %}checked{% endif %}></td>
+                <td><input type="checkbox" form="ntf-{{ n.id }}" name="notify_regressions" value="1" {% if n.notify_regressions %}checked{% endif %}></td>
+                <td>
+                  {% if n.notify_threshold %}<span class="badge badge-resolved">{{ chrome.t("alerts-yes") }}</span>{% else %}<span class="badge badge-ignored">{{ chrome.t("alerts-no") }}</span>{% endif %}
+                </td>
+                <td>
+                  {% if n.notify_digests %}<span class="badge badge-resolved">{{ chrome.t("alerts-yes") }}</span>{% else %}<span class="badge badge-ignored">{{ chrome.t("alerts-no") }}</span>{% endif %}
+                </td>
+                <td class="text-end nowrap">
+                  <form id="ntf-{{ n.id }}" method="post" action="/web/settings/alerts/notify/update">
+                    <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+                    <input type="hidden" name="id" value="{{ n.id }}">
+                    <input type="hidden" name="project_id" value="{{ n.project_id }}">
+                    <button type="submit" class="btn btn-secondary">{{ chrome.t("alerts-notify-save") }}</button>
+                  </form>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {% endif %}
+</section>
+
 <div class="grid gap-6 grid-cols-1 xl:grid-cols-2">
 
   {# ============ Threshold alert rules ============ #}

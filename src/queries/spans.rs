@@ -5,8 +5,8 @@ use crate::db::sql;
 use crate::db::DbRowExt;
 
 use super::types::{
-    Page, PagedResult, SpanSummary, TraceError, TraceSpan, TraceSummary, Waterfall, WaterfallGap,
-    WaterfallRow,
+    Page, PagedResult, SpanAggRow, SpanAggregation, SpanSummary, TraceError, TraceSpan,
+    TraceSummary, Waterfall, WaterfallGap, WaterfallRow,
 };
 
 pub async fn list_spans(
@@ -45,6 +45,90 @@ pub async fn list_spans(
         .collect();
 
     Ok(PagedResult::from_page(items, total, page))
+}
+
+/// Newest spans to scan when aggregating by (op, description). Bounds the read
+/// so a busy project can't force an unbounded table scan; the spans page has no
+/// period filter, so we cap on recency via the (project_id, timestamp) index.
+const SPAN_AGG_SCAN_LIMIT: i64 = 50_000;
+/// Most (op, description) groups to render; the tail is dropped and flagged.
+pub const MAX_SPAN_GROUPS: usize = 100;
+
+/// Exact nearest-rank percentile over a *sorted-ascending* slice. `p` is a
+/// fraction in 0.0..=1.0. Returns 0 for an empty slice.
+fn percentile_exact(sorted: &[i64], p: f64) -> i64 {
+    if sorted.is_empty() {
+        return 0;
+    }
+    let n = sorted.len();
+    let rank = (p * n as f64).ceil() as usize;
+    sorted[rank.clamp(1, n) - 1]
+}
+
+/// Fold one group's raw durations into count/p50/p95/avg. Consumes and sorts
+/// `durations` in place. Pure, so the percentile logic is unit-testable.
+fn build_span_agg(
+    op: Option<String>,
+    description: Option<String>,
+    mut durations: Vec<i64>,
+) -> SpanAggRow {
+    durations.sort_unstable();
+    let count = durations.len() as u64;
+    // i128 sum so adversarial SDK durations can't overflow before the divide.
+    let sum: i128 = durations.iter().map(|&d| d as i128).sum();
+    let avg_ms = if count > 0 {
+        (sum / count as i128) as i64
+    } else {
+        0
+    };
+    SpanAggRow {
+        op,
+        description,
+        count,
+        p50_ms: percentile_exact(&durations, 0.50),
+        p95_ms: percentile_exact(&durations, 0.95),
+        avg_ms,
+    }
+}
+
+/// Aggregate the project's recent spans by (op, description), computing exact
+/// percentiles in Rust from raw `duration_ms`. Rows with NULL durations are
+/// skipped. Sorted by count desc (p95 desc tiebreak) and capped to
+/// `MAX_SPAN_GROUPS`.
+pub async fn aggregate_spans(pool: &crate::db::DbPool, project_id: u64) -> Result<SpanAggregation> {
+    let rows = sqlx::query(sql!(
+        "SELECT op, description, duration_ms
+         FROM spans
+         WHERE project_id = ?1 AND duration_ms IS NOT NULL
+         ORDER BY timestamp DESC
+         LIMIT ?2"
+    ))
+    .bind(project_id as i64)
+    .bind(SPAN_AGG_SCAN_LIMIT)
+    .fetch_all(pool)
+    .await?;
+
+    let mut by_group: std::collections::HashMap<(Option<String>, Option<String>), Vec<i64>> =
+        std::collections::HashMap::new();
+    for row in &rows {
+        let op: Option<String> = row.get("op");
+        let description: Option<String> = row.get("description");
+        by_group
+            .entry((op, description))
+            .or_default()
+            .push(row.get("duration_ms"));
+    }
+
+    let mut groups: Vec<SpanAggRow> = by_group
+        .into_iter()
+        .map(|((op, description), durations)| build_span_agg(op, description, durations))
+        .collect();
+
+    groups.sort_by(|a, b| b.count.cmp(&a.count).then(b.p95_ms.cmp(&a.p95_ms)));
+    let truncated = groups.len() > MAX_SPAN_GROUPS;
+    groups.truncate(MAX_SPAN_GROUPS);
+
+    Ok(SpanAggregation { groups, truncated })
 }
 
 pub async fn get_trace_spans(pool: &crate::db::DbPool, trace_id: &str) -> Result<Vec<TraceSpan>> {
@@ -977,6 +1061,115 @@ mod tests {
         assert_eq!(t.total_duration_ms, Some(1000));
         assert_eq!(t.root_description.as_deref(), Some("GET /checkout"));
         assert_eq!(t.root_op.as_deref(), Some("http.server"));
+    }
+
+    #[test]
+    fn span_agg_percentiles_and_count() {
+        // p50 nearest-rank of 1..=10 = ceil(0.5*10)=5th -> 5; p95 = ceil(0.95*10)=10th -> 10.
+        let durations = vec![10, 1, 5, 3, 8, 2, 9, 4, 7, 6];
+        let agg = build_span_agg(Some("db.query".into()), Some("SELECT 1".into()), durations);
+        assert_eq!(agg.count, 10);
+        assert_eq!(agg.op.as_deref(), Some("db.query"));
+        assert_eq!(agg.p50_ms, 5);
+        assert_eq!(agg.p95_ms, 10);
+        assert_eq!(agg.avg_ms, 5); // (55 / 10) truncated
+
+        // Single sample: every percentile is that sample.
+        let one = build_span_agg(None, None, vec![42]);
+        assert_eq!(one.count, 1);
+        assert_eq!(one.p50_ms, 42);
+        assert_eq!(one.p95_ms, 42);
+        assert_eq!(one.avg_ms, 42);
+
+        // Empty group degrades to zeros without panicking.
+        let empty = build_span_agg(None, None, vec![]);
+        assert_eq!(empty.count, 0);
+        assert_eq!(empty.p50_ms, 0);
+        assert_eq!(empty.p95_ms, 0);
+        assert_eq!(empty.avg_ms, 0);
+    }
+
+    #[tokio::test]
+    async fn aggregate_spans_groups_by_op_description() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        // Group A: db.query / SELECT 1 -> durations 10, 20, 30.
+        insert_span(
+            &pool,
+            "a1",
+            "t1",
+            None,
+            1,
+            100,
+            0,
+            10,
+            Some("db.query"),
+            Some("SELECT 1"),
+        )
+        .await;
+        insert_span(
+            &pool,
+            "a2",
+            "t1",
+            None,
+            1,
+            101,
+            0,
+            20,
+            Some("db.query"),
+            Some("SELECT 1"),
+        )
+        .await;
+        insert_span(
+            &pool,
+            "a3",
+            "t1",
+            None,
+            1,
+            102,
+            0,
+            30,
+            Some("db.query"),
+            Some("SELECT 1"),
+        )
+        .await;
+        // Group B: http.client / GET -> single duration 5.
+        insert_span(
+            &pool,
+            "b1",
+            "t1",
+            None,
+            1,
+            103,
+            0,
+            5,
+            Some("http.client"),
+            Some("GET"),
+        )
+        .await;
+        // NULL-duration span must be skipped entirely.
+        sqlx::query(sql!(
+            "INSERT INTO spans (span_id, payload, project_id, public_key, timestamp, op, description)
+             VALUES ('c1', ?1, 1, 'testkey', 104, 'noop', 'x')"
+        ))
+        .bind(zstd::encode_all([0u8; 0].as_slice(), 3).unwrap())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let agg = aggregate_spans(&pool, 1).await.unwrap();
+        assert!(!agg.truncated);
+        assert_eq!(agg.groups.len(), 2);
+        // Sorted count desc: the 3-sample db.query group leads.
+        let a = &agg.groups[0];
+        assert_eq!(a.op.as_deref(), Some("db.query"));
+        assert_eq!(a.count, 3);
+        assert_eq!(a.p50_ms, 20);
+        assert_eq!(a.p95_ms, 30);
+        assert_eq!(a.avg_ms, 20);
+        let b = &agg.groups[1];
+        assert_eq!(b.op.as_deref(), Some("http.client"));
+        assert_eq!(b.count, 1);
+        assert_eq!(b.p95_ms, 5);
     }
 
     #[tokio::test]

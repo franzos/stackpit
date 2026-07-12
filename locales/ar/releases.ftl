@@ -47,10 +47,12 @@ release-health-col-ok = سليمة
 release-health-col-crashed = متعطّلة
 release-health-col-errored = فيها أخطاء
 release-health-col-crash-free-sessions = جلسات خالية من الأعطال
+release-health-col-error-free-sessions = جلسات خالية من الأخطاء
 release-health-col-crash-free-users = مستخدمون بلا أعطال
 release-health-subtitle = نتائج الجلسات هي إشارات صحة تُبلّغ عنها SDK، وليست أحداث أخطاء. انقر على إصدار لعرض مشكلاته.
 release-health-crashed-title = عرض مشكلات هذا الإصدار
 release-health-errored-title = عرض مشكلات هذا الإصدار
+release-health-errored-hint = عدد «فيها أخطاء» هو إشارات صحة جلسات تُبلّغ عنها SDK (جلسة سجّلت خطأً معالَجًا لكنها لم تتعطّل)، وليست أحداث أخطاء فردية، ولا يمكن سردها لكل جلسة. المشكلات المرتبطة هي مجموعات الأخطاء المرصودة في هذا الإصدار.
 
 # --- تفاصيل الإصدار (لكل نسخة) ---
 release-detail-sessions-heading = صحة الجلسات

@@ -27,6 +27,7 @@ transactions-detail-col-duration = المدّة
 transactions-detail-col-status = الحالة
 transactions-detail-col-trace = التتبّع
 transactions-detail-col-when = الوقت
+transactions-detail-distribution = توزيع المدة
 
 # --- ترقيم الصفحات (تفاصيل المعاملة) ---
 transactions-pagination-label = ترقيم الصفحات

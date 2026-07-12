@@ -2,6 +2,7 @@
 # bleibt in den Templates woertlich, wie in base.html/login.html.
 error-page-title = Fehler - Stackpit
 error-heading = Fehler
+error-not-found = Die angeforderte Seite existiert nicht.
 error-back-projects = Zurück zu den Projekten
 
 # Bestaetigungsseite fuer erstellte Einladungen (nur Englisch/Standard-Locale).

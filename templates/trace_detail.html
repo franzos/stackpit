@@ -30,7 +30,48 @@
     </div>
   </div>
 
-  {% if waterfall.rows.is_empty() %}
+  {# correlated errors: surfaced above the waterfall so failures in the trace
+     are seen first, each linking to its event #}
+  {% if !errors.is_empty() %}
+    <div class="card overflow-hidden mb-4"
+         style="border-inline-start: 3px solid var(--color-error)">
+      <div class="card-pad pb-0">
+        <h2 class="text-[14px] font-semibold">{{ chrome.t("trace-detail-correlated-errors") }}</h2>
+      </div>
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>{{ chrome.t("trace-detail-col-level") }}</th>
+              <th>{{ chrome.t("trace-detail-col-title") }}</th>
+              <th>{{ chrome.t("trace-detail-col-timestamp") }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for err in errors %}
+              <tr>
+                <td>
+                  {% match err.level %}{% when Some with (lvl) %}<span class="badge badge-{{ lvl }}">{{ lvl }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
+              </td>
+              <td class="truncate-cell">
+                <a class="breadcrumb-link"
+                   href="/web/projects/{{ project_id }}/events/{{ err.event_id }}/">
+                  {% match err.title %}{% when Some with (t) %}{{ t }}{% when None %}<span class="text-mono">{{ err.event_id|truncate_id }}</span>{% endmatch %}
+              </a>
+            </td>
+            <td class="text-muted">
+              <time datetime="{{ err.timestamp|format_ts }}"
+                    title="{{ err.timestamp|format_ts }}">{{ chrome.rel_time(err.timestamp) }}</time>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% if waterfall.rows.is_empty() %}
     <div class="card">
       <p class="empty">{{ chrome.t("trace-detail-empty") }}</p>
     </div>
@@ -158,44 +199,6 @@
 </div>
 </details>
 {% endfor %}
-</div>
-</div>
-{% endif %}
-
-{% if !errors.is_empty() %}
-  <div class="card overflow-hidden mt-4">
-    <div class="card-pad pb-0">
-      <h2 class="text-[14px] font-semibold">{{ chrome.t("trace-detail-correlated-errors") }}</h2>
-    </div>
-    <div class="table-wrap">
-      <table class="table">
-        <thead>
-          <tr>
-            <th>{{ chrome.t("trace-detail-col-level") }}</th>
-            <th>{{ chrome.t("trace-detail-col-title") }}</th>
-            <th>{{ chrome.t("trace-detail-col-timestamp") }}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for err in errors %}
-            <tr>
-              <td>
-                {% match err.level %}{% when Some with (lvl) %}<span class="badge badge-{{ lvl }}">{{ lvl }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
-            </td>
-            <td class="truncate-cell">
-              <a class="breadcrumb-link"
-                 href="/web/projects/{{ project_id }}/events/{{ err.event_id }}/">
-                {% match err.title %}{% when Some with (t) %}{{ t }}{% when None %}<span class="text-mono">{{ err.event_id|truncate_id }}</span>{% endmatch %}
-            </a>
-          </td>
-          <td class="text-muted">
-            <time datetime="{{ err.timestamp|format_ts }}"
-                  title="{{ err.timestamp|format_ts }}">{{ chrome.rel_time(err.timestamp) }}</time>
-          </td>
-        </tr>
-      {% endfor %}
-    </tbody>
-  </table>
 </div>
 </div>
 {% endif %}

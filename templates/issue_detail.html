@@ -164,13 +164,19 @@
         </details>
       {% endfor %}
     </div>
+    {% if exc.looks_minified() %}
+      <p class="mt-2 text-[12px] text-muted">
+        {{ chrome.t("issue-detail-minified-hint") }}
+        <a href="/web/projects/{{ issue.project_id }}/settings/sourcemaps/">{{ chrome.t("issue-detail-minified-hint-link") }}</a>
+      </p>
+    {% endif %}
   {% endfor %}
 </div>
 </details>
 {% endif %}
 
 {% if !breadcrumbs.is_empty() %}
-  <details class="card">
+  <details open class="card">
     <summary class="card-header cursor-pointer select-none">
       {{ chrome.t("issue-detail-breadcrumbs") }} <span class="text-muted text-[11px] ms-1">({{ breadcrumbs.len() }})</span>
     </summary>

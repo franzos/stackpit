@@ -45,4 +45,15 @@ release-health-col-crashed = Abgestürzt
 release-health-col-errored = Fehlerhaft
 release-health-col-crash-free-sessions = Absturzfreie Sitzungen
 release-health-col-crash-free-users = Absturzfreie Nutzer
+release-health-subtitle = Sitzungsergebnisse sind vom SDK gemeldete Zustandssignale, keine Fehlerereignisse. Klicke auf ein Release, um seine Fehler zu sehen.
+release-health-crashed-title = Fehler dieses Releases anzeigen
+release-health-errored-title = Fehler dieses Releases anzeigen
+
+# --- Release-Detail (pro Version) ---
+release-detail-sessions-heading = Sitzungszustand
+release-detail-sessions-note = Vom SDK gemeldete Sitzungsergebnisse (ok / fehlerhaft / abgestürzt). Das sind Zustandssignale, keine einzelnen Fehlerereignisse.
+release-detail-no-health = Keine Sitzungsdaten für dieses Release.
+release-detail-issues-heading = Fehler in diesem Release
+release-detail-issues-note = Eigenständige Fehlergruppen, die zuerst oder zuletzt mit diesem Release gesehen wurden.
+release-detail-no-issues = Keine Fehler für dieses Release erfasst.
 release-health-na = n/a

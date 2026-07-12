@@ -42,19 +42,40 @@
         <div class="shrink-0" style="width: 260px">{{ chrome.t("trace-detail-col-span") }}</div>
         <div class="grow relative" style="height: 14px">
           <span class="absolute bottom-0 text-tabular normal-case" style="left: 0">0ms</span>
-          <span class="absolute bottom-0 text-tabular normal-case"
-                style="left: 25%;
-                       transform: translateX(-50%)">{{ waterfall.total_ms / 4 }}ms</span>
-          <span class="absolute bottom-0 text-tabular normal-case"
-                style="left: 50%;
-                       transform: translateX(-50%)">{{ waterfall.total_ms / 2 }}ms</span>
-          <span class="absolute bottom-0 text-tabular normal-case"
-                style="left: 75%;
-                       transform: translateX(-50%)">{{ waterfall.total_ms * 3 / 4 }}ms</span>
+          {% if !waterfall.compressed %}
+            <span class="absolute bottom-0 text-tabular normal-case"
+                  style="left: 25%;
+                         transform: translateX(-50%)">{{ waterfall.total_ms / 4 }}ms</span>
+            <span class="absolute bottom-0 text-tabular normal-case"
+                  style="left: 50%;
+                         transform: translateX(-50%)">{{ waterfall.total_ms / 2 }}ms</span>
+            <span class="absolute bottom-0 text-tabular normal-case"
+                  style="left: 75%;
+                         transform: translateX(-50%)">{{ waterfall.total_ms * 3 / 4 }}ms</span>
+          {% endif %}
           <span class="absolute bottom-0 text-tabular normal-case" style="right: 0">{{ waterfall.total_ms }}ms</span>
         </div>
         <div class="shrink-0 text-end" style="width: 60px">{{ chrome.t("trace-detail-col-duration") }}</div>
       </div>
+
+      {% if waterfall.compressed %}
+        {# idle gaps collapsed on the axis; mark where and how much was removed #}
+        <div class="flex items-center gap-3 py-1 text-[10px] text-muted"
+             style="border-bottom: 1px solid var(--color-outline-variant)">
+          <div class="shrink-0" style="width: 260px">{{ chrome.t("trace-detail-compressed-note") }}</div>
+          <div class="grow relative" style="height: 14px">
+            {% for gap in waterfall.gaps %}
+              <span class="absolute bottom-0 text-tabular"
+                    title="{{ chrome.t("trace-detail-gap-title") }}"
+                    style="left: {{ gap.at_pct }}%;
+                           transform: translateX(-50%);
+                           padding: 0 3px;
+                           border-inline: 1px dashed var(--color-outline-variant)">{{ gap.real_ms }}ms</span>
+            {% endfor %}
+          </div>
+          <div class="shrink-0" style="width: 60px"></div>
+        </div>
+      {% endif %}
 
       {# root row: the transaction this trace belongs to, spanning the full width #}
       {% match root %}
@@ -76,7 +97,7 @@
              style="position: absolute;
                     top: 2px;
                     left: 0;
-                    width: {% match r.duration_ms %}{% when Some with (ms) %}{{ ms * 100 / waterfall.total_ms }}{% when None %}100{% endmatch %}%;
+                    width: 100%;
                     height: 16px;
                     background-color: var(--color-primary);
                     opacity: 0.85"></div>
@@ -89,39 +110,53 @@
 {% when None %}
 {% endmatch %}
 
-{# one row per span: label · timeline bar · duration #}
+{# one row per span: label · timeline bar · duration, expandable for detail #}
 <div class="text-[12px]">
   {% for row in waterfall.rows %}
-    <div class="flex items-center gap-3 py-1"
-         style="border-bottom: 1px solid var(--color-outline-variant)">
-      <div class="shrink-0"
-           style="width: 260px;
-                  padding-left: {{ row.depth * 16 }}px;
-                  overflow: hidden;
-                  text-overflow: ellipsis;
-                  white-space: nowrap">
-        {% if row.is_error() %}<span title="{{ chrome.t("trace-detail-error-title") }}"
-      style="color: var(--color-error)">●</span>{% endif %}
-        {% match row.op %}{% when Some with (op) %}<span class="font-medium text-mono">{{ op }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
-      {% match row.description %}{% when Some with (d) %} <span class="text-muted">{{ d }}</span>{% when None %}{% endmatch %}
+    <details class="span-row">
+      <summary class="flex items-center gap-3 py-1 cursor-pointer select-none"
+               style="border-bottom: 1px solid var(--color-outline-variant)">
+        <div class="shrink-0"
+             style="width: 260px;
+                    padding-left: {{ row.depth * 16 }}px;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap">
+          {% if row.is_error() %}<span title="{{ chrome.t("trace-detail-error-title") }}"
+        style="color: var(--color-error)">●</span>{% endif %}
+          {% match row.op %}{% when Some with (op) %}<span class="font-medium text-mono">{{ op }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
+        {% match row.description %}{% when Some with (d) %} <span class="text-muted">{{ d }}</span>{% when None %}{% endmatch %}
+    </div>
+    <div class="grow relative"
+         style="height: 20px;
+                background-image: linear-gradient(to right, var(--color-outline-variant) 1px, transparent 1px);
+                background-size: 25% 100%">
+      <div class="rounded-sm"
+           title="{% match row.op %}{% when Some with (op) %}{{ op }}{% when None %}{{ chrome.t("trace-detail-span-fallback") }}{% endmatch %} · {% match row.duration_ms %}{% when Some with (ms) %}{{ ms }}ms{% when None %}?{% endmatch %}"
+           style="position: absolute;
+                  top: 2px;
+                  left: {{ row.offset_pct }}%;
+                  width: {{ row.width_pct }}%;
+                  height: 16px;
+                  background-color: {{ row.bar_color() }}"></div>
   </div>
-  <div class="grow relative"
-       style="height: 20px;
-              background-image: linear-gradient(to right, var(--color-outline-variant) 1px, transparent 1px);
-              background-size: 25% 100%">
-    <div class="rounded-sm"
-         title="{% match row.op %}{% when Some with (op) %}{{ op }}{% when None %}{{ chrome.t("trace-detail-span-fallback") }}{% endmatch %} · {% match row.duration_ms %}{% when Some with (ms) %}{{ ms }}ms{% when None %}?{% endmatch %}"
-         style="position: absolute;
-                top: 2px;
-                left: {{ row.offset_pct }}%;
-                width: {{ row.width_pct }}%;
-                height: 16px;
-                background-color: {{ row.bar_color() }}"></div>
+  <div class="shrink-0 text-end text-tabular text-muted" style="width: 60px">
+    {% match row.duration_ms %}{% when Some with (ms) %}{{ ms }}ms{% when None %}—{% endmatch %}
+  </div>
+</summary>
+<div class="span-detail">
+  <dl class="meta-grid">
+    <dt>{{ chrome.t("trace-detail-lbl-span-id") }}</dt>
+    <dd class="text-mono break-all">{{ row.span_id }}</dd>
+    {% match row.parent_span_id %}{% when Some with (p) %}<dt>{{ chrome.t("trace-detail-lbl-parent") }}</dt><dd class="text-mono break-all">{{ p }}</dd>{% when None %}{% endmatch %}
+    {% match row.op %}{% when Some with (op) %}<dt>{{ chrome.t("spans-col-op") }}</dt><dd class="text-mono">{{ op }}</dd>{% when None %}{% endmatch %}
+    {% match row.description %}{% when Some with (d) %}<dt>{{ chrome.t("spans-col-description") }}</dt><dd class="break-all">{{ d }}</dd>{% when None %}{% endmatch %}
+    {% match row.status %}{% when Some with (st) %}<dt>{{ chrome.t("trace-detail-lbl-status") }}</dt><dd>{{ st }}</dd>{% when None %}{% endmatch %}
+    {% match row.start_offset_ms %}{% when Some with (ms) %}<dt>{{ chrome.t("trace-detail-lbl-start") }}</dt><dd class="text-tabular">+{{ ms }}ms</dd>{% when None %}{% endmatch %}
+    {% match row.duration_ms %}{% when Some with (ms) %}<dt>{{ chrome.t("spans-col-duration") }}</dt><dd class="text-tabular">{{ ms }}ms</dd>{% when None %}{% endmatch %}
+  </dl>
 </div>
-<div class="shrink-0 text-end text-tabular text-muted" style="width: 60px">
-  {% match row.duration_ms %}{% when Some with (ms) %}{{ ms }}ms{% when None %}—{% endmatch %}
-</div>
-</div>
+</details>
 {% endfor %}
 </div>
 </div>

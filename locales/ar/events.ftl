@@ -120,6 +120,7 @@ client-reports-dropped-heading = الأحداث المُسقَطة
 client-reports-dropped-subtitle = ما تجاهلته SDKs قبل الإرسال، حسب الفئة والسبب.
 client-reports-th-category = الفئة
 client-reports-th-reason = السبب
+client-reports-th-reasons = الأسباب
 client-reports-th-dropped = مُسقَط
 client-reports-empty = لم يُعثر على تقارير عميل لهذا المشروع.
 client-reports-reports-heading = التقارير

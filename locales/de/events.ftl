@@ -110,6 +110,7 @@ client-reports-dropped-heading = Verworfene Events
 client-reports-dropped-subtitle = Was die SDKs vor dem Senden verworfen haben, nach Kategorie und Grund.
 client-reports-th-category = Kategorie
 client-reports-th-reason = Grund
+client-reports-th-reasons = Gründe
 client-reports-th-dropped = Verworfen
 client-reports-empty = Keine Client-Berichte für dieses Projekt gefunden.
 client-reports-reports-heading = Berichte

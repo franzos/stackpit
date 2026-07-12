@@ -46,3 +46,14 @@ release-health-col-errored = Errored
 release-health-col-crash-free-sessions = Crash-free sessions
 release-health-col-crash-free-users = Crash-free users
 release-health-na = n/a
+release-health-subtitle = Session outcomes are SDK-reported health pings, not error events. Click a release to see its issues.
+release-health-crashed-title = View issues for this release
+release-health-errored-title = View issues for this release
+
+# --- Release detail (per-version) ---
+release-detail-sessions-heading = Session health
+release-detail-sessions-note = SDK-reported session outcomes (ok / errored / crashed). These are health pings, not individual error events.
+release-detail-no-health = No session data for this release.
+release-detail-issues-heading = Issues in this release
+release-detail-issues-note = Distinct error groups first or last seen with this release.
+release-detail-no-issues = No issues recorded for this release.

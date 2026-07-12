@@ -72,42 +72,44 @@
               <tr>
                 <th class="col-check"></th>
                 <th>{{ chrome.t("client-reports-th-event-id") }}</th>
-                <th>{{ chrome.t("client-reports-th-title") }}</th>
+                <th>{{ chrome.t("client-reports-th-dropped") }}</th>
+                <th>{{ chrome.t("client-reports-th-reasons") }}</th>
                 <th>{{ chrome.t("client-reports-th-timestamp") }}</th>
-                <th>{{ chrome.t("client-reports-th-platform") }}</th>
-                <th>{{ chrome.t("client-reports-th-release") }}</th>
               </tr>
             </thead>
             <tbody>
-              {% for event in result.items %}
+              {% for report in result.items %}
                 <tr>
                   <td class="col-check">
                     <input type="checkbox"
                            name="ids"
-                           value="{{ event.event_id }}"
+                           value="{{ report.event_id }}"
                            aria-label="{{ chrome.t("client-reports-select") }}">
                   </td>
                   <td>
                     <a class="text-mono"
-                       href="/web/projects/{{ project_id }}/events/{{ event.event_id }}/">{{ event.event_id|truncate_id }}</a>
+                       href="/web/projects/{{ project_id }}/events/{{ report.event_id }}/">{{ report.event_id|truncate_id }}</a>
                   </td>
-                  <td class="truncate-cell">
-                    {% match event.title %}{% when Some with (t) %}{{ t }}{% when None %}{{ chrome.t("events-untitled") }}{% endmatch %}
-                </td>
-                <td class="text-muted">
-                  <time datetime="{{ event.timestamp|format_ts }}"
-                        title="{{ event.timestamp|format_ts }}">{{ chrome.rel_time(event.timestamp) }}</time>
-                </td>
-                <td>
-                  {% match event.platform %}{% when Some with (p) %}<span class="badge badge-platform">{{ p }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
-              </td>
-              <td class="text-mono text-[12px]">
-                {% match event.release %}{% when Some with (r) %}{{ r }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
-            </td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+                  <td class="text-tabular font-semibold">{{ report.total_dropped }}</td>
+                  <td>
+                    {% if report.outcomes.is_empty() %}
+                      <span class="text-muted">—</span>
+                    {% else %}
+                      <span class="flex flex-wrap gap-1">
+                        {% for o in report.outcomes %}
+                          <span class="badge badge-platform" title="{{ o.quantity }} {{ o.category }} / {{ o.reason }}">{{ o.category }}: {{ o.reason }} ({{ o.quantity }})</span>
+                        {% endfor %}
+                      </span>
+                    {% endif %}
+                  </td>
+                  <td class="text-muted">
+                    <time datetime="{{ report.timestamp|format_ts }}"
+                          title="{{ report.timestamp|format_ts }}">{{ chrome.rel_time(report.timestamp) }}</time>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
   </div>
 </div>
 </form>

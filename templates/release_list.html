@@ -85,7 +85,9 @@
           <tbody>
             {% for r in result.items %}
               <tr>
-                <td class="truncate-cell text-mono" title="{{ r.version }}">{{ r.version }}</td>
+                <td class="truncate-cell text-mono" title="{{ r.version }}">
+                  <a href="/web/projects/{{ r.project_id }}/releases/{{ r.version|urlencode }}/">{{ r.version|short_release }}</a>
+                </td>
                 <td>
                   <a href="/web/projects/{{ r.project_id }}/">{% match r.project_name %}{% when Some with (n) %}{{ n }}{% when None %}{{ r.project_id }}{% endmatch %}</a>
               </td>

@@ -116,6 +116,7 @@ client-reports-dropped-heading = Отброшенные события
 client-reports-dropped-subtitle = Что SDK отбросили перед отправкой, по категории и причине.
 client-reports-th-category = Категория
 client-reports-th-reason = Причина
+client-reports-th-reasons = Причины
 client-reports-th-dropped = Отброшено
 client-reports-empty = Отчёты клиента для этого проекта не найдены.
 client-reports-reports-heading = Отчёты

@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.13] - 2026-07-12
+
+### Added
+- Per-release detail page: session health plus the release's issues
+- Expandable spans with metadata in the trace waterfall
+- Minified-stacktrace hint linking to source-map settings
+
+### Changed
+- Release Health errored/crashed counts link through to the release
+- Trace waterfall compresses long idle gaps
+- Client reports show per-report dropped counts and reasons
+- Release versions rendered as short hashes
+- Issue breadcrumbs expanded by default
+
+### Fixed
+- Long issue titles no longer overflow the issues table
+
 ## [0.3.12] - 2026-07-10
 
 ### Security

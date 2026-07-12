@@ -117,6 +117,7 @@ client-reports-delete = Delete
 client-reports-delete-selected-confirm = Delete selected reports?
 client-reports-th-event-id = Event ID
 client-reports-th-title = Title
+client-reports-th-reasons = Reasons
 client-reports-th-timestamp = Timestamp
 client-reports-th-platform = Platform
 client-reports-th-release = Release

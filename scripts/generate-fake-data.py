@@ -305,6 +305,8 @@ MODULES_BY_PLATFORM = {
 RELEASES = [
     "1.0.0", "1.0.1", "1.1.0", "1.2.0-beta.1", "2.0.0-rc.1",
     "2.0.0", "2.1.0", "2.1.1", "3.0.0-alpha", "3.0.0",
+    # A VCS-hash-style release so the UI's short-hash rendering is exercised.
+    "4646cc9bb4e8629a3f34c75b152f2abe1da1082a",
 ]
 
 ENVIRONMENTS = ["production", "staging", "development", "canary"]
@@ -2545,19 +2547,35 @@ def make_transaction(project, trace_id=None, parent_span_id=None):
         "task.spawn": ["tokio::spawn process_batch"],
     }
 
-    num_spans = random.randint(1, 5)
+    num_spans = random.randint(2, 6)
+    # ~15% of traces get a large idle gap (a late span long after the rest),
+    # which exercises the waterfall's idle-gap compression.
+    gap_trace = random.random() < 0.15
     span_ids = []
-    for _ in range(num_spans):
+    for i in range(num_spans):
         op = random.choice(span_ops.get(platform, ["db.query"]))
         desc_list = descs.get(op, [op])
         span_id = rand_hex(16)
+        # Build an actual tree: first span under the transaction root, the rest
+        # under a random earlier span (or the root), so the waterfall nests.
+        if i == 0 or random.random() < 0.35:
+            parent = root_span_id
+        else:
+            parent = random.choice(span_ids)
         span_ids.append(span_id)
-        span_start = start + random.uniform(0, duration_ms / 2000)
-        span_dur = random.uniform(0.001, duration_ms / 1000 * 0.8)
+        if gap_trace and i == num_spans - 1:
+            # A late span near the end, leaving an idle gap before it.
+            span_start = start + duration_ms / 1000 * random.uniform(0.85, 0.97)
+            span_dur = random.uniform(0.001, duration_ms / 1000 * 0.03)
+        else:
+            # Cluster the rest early so the gap (when present) is clearly idle.
+            head = 0.05 if gap_trace else 0.5
+            span_start = start + random.uniform(0, duration_ms / 1000 * head)
+            span_dur = random.uniform(0.001, duration_ms / 1000 * 0.4)
         spans.append({
             "span_id": span_id,
             "trace_id": trace_id,
-            "parent_span_id": root_span_id,
+            "parent_span_id": parent,
             "op": op,
             "description": random.choice(desc_list),
             "start_timestamp": span_start,
@@ -3238,7 +3256,8 @@ def setup_projects_post_ingest(ingest_base, admin_base, admin_token, projects):
     # admin requests, so chunk into ~50-project groups and sleep 65s between.
     ADMIN_REQS_PER_PROJECT = 2
     CHUNK = 110 // ADMIN_REQS_PER_PROJECT  # = 55 projects per burst
-    versions = ["1.0.0", "1.1.0", "1.2.0", "2.0.0-rc1", "2.0.0"]
+    versions = ["1.0.0", "1.1.0", "1.2.0", "2.0.0-rc1", "2.0.0",
+                "4646cc9bb4e8629a3f34c75b152f2abe1da1082a"]
 
     print(f"setup: renaming {len(projects)} projects + minting sourcemap keys via {admin_base}")
     spk_by_project = {}

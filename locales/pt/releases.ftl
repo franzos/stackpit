@@ -45,4 +45,15 @@ release-health-col-crashed = Com falha
 release-health-col-errored = Com erros
 release-health-col-crash-free-sessions = Sessões sem falhas
 release-health-col-crash-free-users = Utilizadores sem falhas
+release-health-subtitle = Os resultados de sessão são sinais de saúde reportados pelo SDK, não eventos de erro. Clique numa release para ver os seus problemas.
+release-health-crashed-title = Ver problemas desta release
+release-health-errored-title = Ver problemas desta release
+
+# --- Detalhe da release (por versão) ---
+release-detail-sessions-heading = Estado das sessões
+release-detail-sessions-note = Resultados de sessão reportados pelo SDK (ok / com erros / com falhas). São sinais de saúde, não eventos de erro individuais.
+release-detail-no-health = Sem dados de sessão para esta release.
+release-detail-issues-heading = Problemas nesta release
+release-detail-issues-note = Grupos de erros distintos vistos pela primeira ou última vez com esta release.
+release-detail-no-issues = Nenhum problema registado para esta release.
 release-health-na = n/d

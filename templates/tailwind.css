@@ -388,11 +388,21 @@
    * space, supporting columns are sized to their content. `table-fixed-layout`
    * keeps the column widths stable as users scroll through pages. */
   .table-fixed-layout { table-layout: auto; }
-  .col-title { width: 100%; }
+  /* `max-width: 0` lets the title column absorb slack while its truncating
+   * children (the `.truncate` anchor and `.issue-title-msg`) clip instead of
+   * forcing the table wider than its container. */
+  .col-title { width: 100%; max-width: 0; }
   .col-narrow { width: 1%; white-space: nowrap; }
   .col-time { width: 1%; white-space: nowrap; }
   .col-check { width: 28px; }
   .event-nav { display: flex; gap: 0.5rem; align-items: center; }
+  /* Horizontal row of labelled stat tiles (release detail session health). */
+  .stat-row {
+    display: grid; gap: 1rem 1.5rem;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  }
+  .stat-row dt { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-on-surface-variant); }
+  .stat-row dd { font-size: 20px; margin-top: 0.125rem; }
   .meta-grid {
     display: grid; grid-template-columns: max-content 1fr; gap: 0.375rem 0.75rem;
     font-size: 12px;
@@ -451,6 +461,17 @@
   .tag-facet-row .facet-count { margin-left: auto; color: var(--color-on-surface-variant); font-variant-numeric: tabular-nums; }
   .tag-facet-bar-stack { display: flex; height: 4px; border-radius: 9999px; overflow: hidden; margin-bottom: 0.5rem; }
   .tag-facet-segment { height: 100%; }
+
+  /* expandable waterfall span rows (trace detail) */
+  .span-row > summary { list-style: none; }
+  .span-row > summary::-webkit-details-marker { display: none; }
+  .span-row > summary:hover { background: var(--color-surface-container-low); }
+  .span-detail {
+    padding: 0.5rem 0.75rem; padding-inline-start: 1rem;
+    background: var(--color-surface-container-low);
+    border-bottom: 1px solid var(--color-outline-variant);
+  }
+  .span-detail .meta-grid { font-size: 11px; }
 
   /* type-breakdown sparkline / mini bars used in lists */
   .type-breakdown { display: inline-flex; gap: 2px; height: 14px; align-items: flex-end; }

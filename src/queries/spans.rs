@@ -5,7 +5,8 @@ use crate::db::sql;
 use crate::db::DbRowExt;
 
 use super::types::{
-    Page, PagedResult, SpanSummary, TraceError, TraceSpan, TraceSummary, Waterfall, WaterfallRow,
+    Page, PagedResult, SpanSummary, TraceError, TraceSpan, TraceSummary, Waterfall, WaterfallGap,
+    WaterfallRow,
 };
 
 pub async fn list_spans(
@@ -152,6 +153,155 @@ impl From<&TraceSpan> for SpanRow {
     }
 }
 
+/// Piecewise real-ms -> display-percent map that collapses long idle gaps.
+///
+/// A single span that starts far after the rest (e.g. a click 40s after page
+/// load) would otherwise stretch the axis so every earlier span renders as a
+/// 0.5% sliver. We keep active regions 1:1 and shrink dominant idle gaps to a
+/// thin fixed width, recording each collapsed gap for the renderer to mark.
+struct TimelineMap {
+    // (real_start, real_end, disp_start, disp_len)
+    segments: Vec<(f64, f64, f64, f64)>,
+    display_total: f64,
+    trace_start: f64,
+    bounding_end: f64,
+    gaps: Vec<WaterfallGap>,
+    compressed: bool,
+    // Set when no span carried a start; callers fall back to flat offsets.
+    linear: bool,
+}
+
+impl TimelineMap {
+    fn build(spans: &[SpanRow], trace_start: i64, bounding_end: i64) -> Self {
+        let total_extent = (bounding_end - trace_start).max(1);
+        // A gap is worth collapsing only if it dominates the trace and is not tiny.
+        let is_big = |gap: i64| gap > total_extent / 4 && gap > 250;
+
+        let mut intervals: Vec<(i64, i64)> = spans
+            .iter()
+            .filter_map(|s| {
+                s.start_ms
+                    .map(|st| (st, st.saturating_add(s.duration_ms.unwrap_or(0).max(0))))
+            })
+            .collect();
+        intervals.sort();
+        let mut merged: Vec<(i64, i64)> = Vec::new();
+        for (a, b) in intervals {
+            match merged.last_mut() {
+                Some(last) if a <= last.1 => last.1 = last.1.max(b),
+                _ => merged.push((a, b)),
+            }
+        }
+
+        if merged.is_empty() {
+            return Self {
+                segments: Vec::new(),
+                display_total: total_extent as f64,
+                trace_start: trace_start as f64,
+                bounding_end: bounding_end as f64,
+                gaps: Vec::new(),
+                compressed: false,
+                linear: true,
+            };
+        }
+
+        let active_total: i64 = merged.iter().map(|(a, b)| b - a).sum();
+        let gap_disp = (active_total as f64 * 0.05).max(2.0);
+
+        let mut segments: Vec<(f64, f64, f64, f64)> = Vec::new();
+        let mut pending_gaps: Vec<(f64, i64)> = Vec::new(); // (disp_center, real_ms)
+        let mut disp = 0.0f64;
+        let mut compressed = false;
+        let mut prev_end = trace_start;
+
+        // `compressible` gaps sit between two spans; the trailing tail up to the
+        // transaction end is uninstrumented work, not idle, so it stays linear.
+        let push_gap = |segments: &mut Vec<(f64, f64, f64, f64)>,
+                        pending: &mut Vec<(f64, i64)>,
+                        disp: &mut f64,
+                        compressed: &mut bool,
+                        from: i64,
+                        to: i64,
+                        compressible: bool| {
+            let gap = to - from;
+            if gap <= 0 {
+                return;
+            }
+            let disp_len = if compressible && is_big(gap) {
+                *compressed = true;
+                pending.push((*disp + gap_disp / 2.0, gap));
+                gap_disp
+            } else {
+                gap as f64
+            };
+            segments.push((from as f64, to as f64, *disp, disp_len));
+            *disp += disp_len;
+        };
+
+        for (a, b) in &merged {
+            push_gap(
+                &mut segments,
+                &mut pending_gaps,
+                &mut disp,
+                &mut compressed,
+                prev_end,
+                *a,
+                true,
+            );
+            let alen = (b - a) as f64;
+            segments.push((*a as f64, *b as f64, disp, alen));
+            disp += alen;
+            prev_end = *b;
+        }
+        // Trailing time (transaction longer than its child spans) stays linear.
+        push_gap(
+            &mut segments,
+            &mut pending_gaps,
+            &mut disp,
+            &mut compressed,
+            prev_end,
+            bounding_end,
+            false,
+        );
+
+        let display_total = disp.max(1.0);
+        let gaps = pending_gaps
+            .into_iter()
+            .map(|(center, real_ms)| WaterfallGap {
+                at_pct: (center / display_total * 100.0).clamp(0.0, 100.0),
+                real_ms,
+            })
+            .collect();
+
+        Self {
+            segments,
+            display_total,
+            trace_start: trace_start as f64,
+            bounding_end: bounding_end as f64,
+            gaps,
+            compressed,
+            linear: false,
+        }
+    }
+
+    /// Map a real timestamp to a display percentage in [0, 100].
+    fn pct(&self, ms: i64) -> f64 {
+        if self.linear {
+            let extent = (self.bounding_end - self.trace_start).max(1.0);
+            return ((ms as f64 - self.trace_start) / extent * 100.0).clamp(0.0, 100.0);
+        }
+        let x = (ms as f64).clamp(self.trace_start, self.bounding_end);
+        for &(rs, re, ds, dl) in &self.segments {
+            if x <= re {
+                let span = (re - rs).max(1e-9);
+                return ((ds + (x - rs) / span * dl) / self.display_total * 100.0)
+                    .clamp(0.0, 100.0);
+            }
+        }
+        100.0
+    }
+}
+
 /// Build a CSS waterfall from a flat span set. Pure: no DB, no allocation
 /// beyond the result. Iterative DFS guards against cycles and pathological
 /// depth so attacker/SDK-controlled parent pointers can't wedge the renderer.
@@ -177,6 +327,8 @@ pub fn build_waterfall(spans: &[SpanRow], root_duration_ms: i64) -> Waterfall {
     // the owning transaction's own duration.
     let span_extent_ms = (trace_end - trace_start).max(0);
     let total_ms = span_extent_ms.max(root_duration_ms).max(1);
+    let bounding_end = trace_start.saturating_add(total_ms);
+    let timeline = TimelineMap::build(spans, trace_start, bounding_end);
 
     let present: std::collections::HashSet<&str> =
         spans.iter().map(|s| s.span_id.as_str()).collect();
@@ -225,22 +377,27 @@ pub fn build_waterfall(spans: &[SpanRow], root_duration_ms: i64) -> Waterfall {
         }
         visited.insert(s.span_id.as_str());
 
-        let offset_pct = match s.start_ms {
-            Some(st) => ((st - trace_start) as f64 / total_ms as f64 * 100.0).clamp(0.0, 100.0),
-            None => 0.0,
+        let (offset_pct, mut width_pct) = match s.start_ms {
+            Some(st) => {
+                let end = st.saturating_add(s.duration_ms.unwrap_or(0).max(0));
+                let o = timeline.pct(st);
+                (o, (timeline.pct(end) - o).max(0.5))
+            }
+            None => (0.0, 0.5),
         };
-        let mut width_pct = (s.duration_ms.unwrap_or(0) as f64 / total_ms as f64 * 100.0).max(0.5);
         if offset_pct + width_pct > 100.0 {
             width_pct = 100.0 - offset_pct;
         }
 
         rows.push(WaterfallRow {
             span_id: s.span_id.clone(),
+            parent_span_id: s.parent_span_id.clone(),
             depth: depth.min(MAX_DEPTH),
             op: s.op.clone(),
             description: s.description.clone(),
             status: s.status.clone(),
             duration_ms: s.duration_ms,
+            start_offset_ms: s.start_ms.map(|st| st - trace_start),
             offset_pct,
             width_pct,
         });
@@ -258,6 +415,8 @@ pub fn build_waterfall(spans: &[SpanRow], root_duration_ms: i64) -> Waterfall {
         total_ms,
         span_count,
         truncated,
+        gaps: timeline.gaps,
+        compressed: timeline.compressed,
     }
 }
 
@@ -431,11 +590,13 @@ mod tests {
     fn waterfall_row(status: Option<&str>) -> WaterfallRow {
         WaterfallRow {
             span_id: "s".into(),
+            parent_span_id: None,
             depth: 0,
             op: None,
             description: None,
             status: status.map(String::from),
             duration_ms: Some(1),
+            start_offset_ms: Some(0),
             offset_pct: 0.0,
             width_pct: 1.0,
         }
@@ -481,6 +642,47 @@ mod tests {
         assert_eq!(row(&w, "c1").depth, 0);
         assert_eq!(row(&w, "c2").depth, 0);
         assert_eq!(w.rows.len(), 2);
+    }
+
+    #[test]
+    fn dense_trace_is_not_compressed() {
+        // Two adjacent spans, no dominant idle gap.
+        let spans = vec![
+            span("a", None, Some(0), Some(100)),
+            span("b", None, Some(120), Some(80)),
+        ];
+        let w = build_waterfall(&spans, 0);
+        assert!(!w.compressed);
+        assert!(w.gaps.is_empty());
+        // Header total stays the real extent.
+        assert_eq!(w.total_ms, 200);
+    }
+
+    #[test]
+    fn idle_gap_is_compressed_and_early_span_stays_visible() {
+        // An early 100ms span, then a huge idle gap, then a late 10ms span.
+        let spans = vec![
+            span("early", None, Some(0), Some(100)),
+            span("late", None, Some(40_000), Some(10)),
+        ];
+        let w = build_waterfall(&spans, 0);
+        assert!(w.compressed, "dominant idle gap should compress");
+        assert_eq!(w.gaps.len(), 1);
+        assert_eq!(w.gaps[0].real_ms, 39_900);
+        // Real total is preserved for the header.
+        assert_eq!(w.total_ms, 40_010);
+
+        // Under the old linear scale the early span would be 100/40010 ≈ 0.25%.
+        // Compression must make it clearly visible.
+        let early = row(&w, "early");
+        assert!(
+            early.width_pct > 5.0,
+            "early span crushed: {}%",
+            early.width_pct
+        );
+        // The late span still sits to the right of the early one.
+        let late = row(&w, "late");
+        assert!(late.offset_pct > early.offset_pct);
     }
 
     #[test]

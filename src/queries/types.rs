@@ -515,14 +515,15 @@ pub struct TraceSpan {
 /// percentages so the template only emits inline `margin-left`/`width`.
 #[derive(Debug, Clone)]
 pub struct WaterfallRow {
-    // Carried for test assertions on row ordering; not rendered.
-    #[allow(dead_code)]
     pub span_id: String,
+    pub parent_span_id: Option<String>,
     pub depth: usize,
     pub op: Option<String>,
     pub description: Option<String>,
     pub status: Option<String>,
     pub duration_ms: Option<i64>,
+    /// Start time relative to the trace start, in ms (not an absolute epoch).
+    pub start_offset_ms: Option<i64>,
     pub offset_pct: f64,
     pub width_pct: f64,
 }
@@ -550,12 +551,25 @@ pub struct TraceRoot {
     pub duration_ms: Option<i64>,
 }
 
+/// A compressed idle interval in a waterfall, positioned along the display axis.
+#[derive(Debug, Clone)]
+pub struct WaterfallGap {
+    /// Center position along the (compressed) timeline, as a percentage.
+    pub at_pct: f64,
+    /// Real duration of the collapsed idle interval, in milliseconds.
+    pub real_ms: i64,
+}
+
 #[derive(Debug, Default)]
 pub struct Waterfall {
     pub rows: Vec<WaterfallRow>,
     pub total_ms: i64,
     pub span_count: usize,
     pub truncated: bool,
+    /// Large idle gaps that were collapsed on the display axis.
+    pub gaps: Vec<WaterfallGap>,
+    /// True when at least one idle gap was compressed (axis is non-linear).
+    pub compressed: bool,
 }
 
 /// Error event correlated to a trace via shared `trace_id`.

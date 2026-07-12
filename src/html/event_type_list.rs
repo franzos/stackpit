@@ -27,7 +27,7 @@ struct UserReportListTemplate {
 #[template(path = "client_report_list.html")]
 struct ClientReportListTemplate {
     project_id: u64,
-    result: PagedResult<EventSummary>,
+    result: PagedResult<crate::queries::client_reports::ClientReportRow>,
     outcomes: Vec<crate::queries::client_reports::ClientReportOutcome>,
     nav: ProjectNavCounts,
     chrome: PageChrome,
@@ -60,15 +60,11 @@ pub async fn client_reports_handler(
     ctx: ProjectPageCtx,
     Query(params): Query<ListParams>,
 ) -> Result<axum::response::Response, HtmlError> {
-    let filter = EventFilter {
-        project_id: Some(ctx.project_id),
-        item_type: Some("client_report".to_string()),
-        ..Default::default()
-    };
     let page = params.page.page();
 
     // project_id already pins scope; ProjectPageCtx enforces org membership
-    let result = queries::events::list_all_events(&ctx.pool, &filter, &page, None).await?;
+    let result =
+        queries::client_reports::list_client_reports(&ctx.pool, ctx.project_id, &page).await?;
 
     let since = chrono::Utc::now().timestamp() - 30 * 86400;
     let outcomes =
@@ -123,10 +119,32 @@ mod tests {
 
     #[test]
     fn client_reports_render_without_missing_keys() {
+        use crate::queries::client_reports::{ClientReportOutcome, ClientReportRow};
+        // Populated so the reports table (and its new headers) actually renders.
+        let result = PagedResult {
+            items: vec![ClientReportRow {
+                event_id: "abc123".into(),
+                timestamp: 0,
+                total_dropped: 15,
+                outcomes: vec![ClientReportOutcome {
+                    category: "session".into(),
+                    reason: "network_error".into(),
+                    quantity: 15,
+                }],
+            }],
+            total: 1,
+            offset: 0,
+            limit: 25,
+        };
         for lang in [langid!("en"), langid!("de")] {
             let tmpl = ClientReportListTemplate {
                 project_id: 1,
-                result: empty_result(),
+                result: PagedResult {
+                    items: result.items.clone(),
+                    total: result.total,
+                    offset: result.offset,
+                    limit: result.limit,
+                },
                 outcomes: Vec::new(),
                 nav: ProjectNavCounts::default(),
                 chrome: chrome_for(lang.clone()),

@@ -160,6 +160,22 @@ pub struct ExceptionData {
     pub frames: Vec<StackFrame>,
 }
 
+impl ExceptionData {
+    /// True when the stack looks like an un-symbolicated minified JS bundle:
+    /// frames carry column numbers (a JS/minified tell) but no source context
+    /// resolved, so no source map has been applied. Drives a hint linking to
+    /// the project's source-map settings.
+    pub fn looks_minified(&self) -> bool {
+        !self.frames.is_empty()
+            && self.frames.iter().all(|f| !f.has_detail())
+            && self.frames.iter().any(|f| {
+                f.colno.is_some()
+                    || f.filename.ends_with(".js")
+                    || f.filename.ends_with(".jsbundle")
+            })
+    }
+}
+
 #[derive(Debug)]
 pub struct SourceLink {
     pub label: String,
@@ -262,5 +278,63 @@ impl UserInfo {
             || self.email.is_some()
             || self.username.is_some()
             || self.ip_address.is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame(filename: &str, colno: Option<u64>, context: Option<&str>) -> StackFrame {
+        StackFrame {
+            filename: filename.to_string(),
+            function: "f".to_string(),
+            lineno: Some(1),
+            colno,
+            context_line: context.map(String::from),
+            pre_context: Vec::new(),
+            post_context: Vec::new(),
+            in_app: true,
+            vars: Vec::new(),
+            source_links: Vec::new(),
+        }
+    }
+
+    fn exc(frames: Vec<StackFrame>) -> ExceptionData {
+        ExceptionData {
+            exc_type: "TypeError".into(),
+            exc_value: "boom".into(),
+            mechanism_handled: None,
+            mechanism_type: None,
+            frames,
+        }
+    }
+
+    #[test]
+    fn minified_js_without_source_is_flagged() {
+        let e = exc(vec![
+            frame("app:///main.jsbundle", Some(34), None),
+            frame("app:///main.jsbundle", Some(29), None),
+        ]);
+        assert!(e.looks_minified());
+    }
+
+    #[test]
+    fn symbolicated_frames_are_not_flagged() {
+        // A frame with source context is not "minified", even with a colno.
+        let e = exc(vec![frame("app.js", Some(10), Some("let x = 1;"))]);
+        assert!(!e.looks_minified());
+    }
+
+    #[test]
+    fn non_js_without_colno_is_not_flagged() {
+        // A plain backend frame (no colno, no .js) shouldn't trigger the JS hint.
+        let e = exc(vec![frame("app/models/user.rb", None, None)]);
+        assert!(!e.looks_minified());
+    }
+
+    #[test]
+    fn empty_frames_are_not_flagged() {
+        assert!(!exc(Vec::new()).looks_minified());
     }
 }

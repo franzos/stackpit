@@ -45,4 +45,15 @@ release-health-col-crashed = Plantées
 release-health-col-errored = En erreur
 release-health-col-crash-free-sessions = Sessions sans plantage
 release-health-col-crash-free-users = Utilisateurs sans plantage
+release-health-subtitle = Les résultats de session sont des signaux de santé rapportés par le SDK, pas des événements d'erreur. Cliquez sur une release pour voir ses problèmes.
+release-health-crashed-title = Voir les problèmes de cette release
+release-health-errored-title = Voir les problèmes de cette release
+
+# --- Détail d'une release (par version) ---
+release-detail-sessions-heading = Santé des sessions
+release-detail-sessions-note = Résultats de session rapportés par le SDK (ok / en erreur / plantées). Ce sont des signaux de santé, pas des événements d'erreur individuels.
+release-detail-no-health = Aucune donnée de session pour cette release.
+release-detail-issues-heading = Problèmes de cette release
+release-detail-issues-note = Groupes d'erreurs distincts vus pour la première ou la dernière fois avec cette release.
+release-detail-no-issues = Aucun problème enregistré pour cette release.
 release-health-na = n/a

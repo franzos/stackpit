@@ -35,6 +35,7 @@ pub mod project_integrations;
 pub mod project_list;
 pub mod project_settings;
 pub mod provision;
+pub mod release_detail;
 pub mod release_health;
 pub mod release_list;
 pub mod replays;
@@ -127,6 +128,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/web/projects/{project_id}/health/",
             get(release_health::handler),
+        )
+        .route(
+            "/web/projects/{project_id}/releases/{version}/",
+            get(release_detail::handler),
         )
         .route(
             "/web/projects/{project_id}/monitors/",

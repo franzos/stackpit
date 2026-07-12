@@ -107,6 +107,7 @@ client-reports-dropped-heading = เหตุการณ์ที่ถูก�
 client-reports-dropped-subtitle = สิ่งที่ SDK ทิ้งก่อนส่ง แยกตามหมวดหมู่และเหตุผล
 client-reports-th-category = หมวดหมู่
 client-reports-th-reason = เหตุผล
+client-reports-th-reasons = เหตุผล
 client-reports-th-dropped = ถูกทิ้ง
 client-reports-empty = ไม่พบรายงานจากไคลเอนต์สำหรับโปรเจกต์นี้
 client-reports-reports-heading = รายงาน

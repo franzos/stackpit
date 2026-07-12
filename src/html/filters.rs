@@ -39,6 +39,36 @@ pub fn split_error_message(
         .unwrap_or_default())
 }
 
+/// True for a version segment that looks like a VCS hash: long and all hex.
+/// Semver-ish versions (dots, hyphens, short) are left untouched.
+fn is_hashlike(s: &str) -> bool {
+    s.len() >= 16 && s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Core of the `short_release` filter, factored out so it is unit-testable
+/// (the `#[filter_fn]` macro rewrites the wrapper into a non-callable struct).
+fn short_release_str(s: &str) -> String {
+    if let Some((name, ver)) = s.rsplit_once('@') {
+        if is_hashlike(ver) {
+            return format!("{name}@{}…", &ver[..12]);
+        }
+        return s.to_string();
+    }
+    if is_hashlike(s) {
+        return format!("{}…", &s[..12]);
+    }
+    s.to_string()
+}
+
+/// Shortens hash-like release versions for display while leaving semver-style
+/// versions intact. `name@<40-hex>` becomes `name@<12-hex>…`; a bare long hash
+/// becomes `<12-hex>…`; everything else is returned unchanged. The full value
+/// is expected to be kept in a `title=` attribute at the call site.
+#[askama::filter_fn]
+pub fn short_release(s: &str, _: &dyn askama::Values) -> askama::Result<String, Infallible> {
+    Ok(short_release_str(s))
+}
+
 /// Truncates URLs to 40 chars to keep the layout intact.
 #[askama::filter_fn]
 pub fn truncate_url(url: &str, _: &dyn askama::Values) -> askama::Result<String, Infallible> {
@@ -62,4 +92,32 @@ pub fn filesizeformat(size: &usize, _: &dyn askama::Values) -> askama::Result<St
     } else {
         format!("{:.1} GB", s / (1024.0 * 1024.0 * 1024.0))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn short(s: &str) -> String {
+        short_release_str(s)
+    }
+
+    #[test]
+    fn short_release_shortens_bare_and_suffixed_hashes() {
+        assert_eq!(
+            short("4646cc9bb4e8629a3f34c75b152f2abe1da1082a"),
+            "4646cc9bb4e8…"
+        );
+        assert_eq!(
+            short("web@4646cc9bb4e8629a3f34c75b152f2abe1da1082a"),
+            "web@4646cc9bb4e8…"
+        );
+    }
+
+    #[test]
+    fn short_release_leaves_semver_untouched() {
+        assert_eq!(short("2.0.0-rc.1"), "2.0.0-rc.1");
+        assert_eq!(short("Formshive@2.0.0"), "Formshive@2.0.0");
+        assert_eq!(short("v1.2.3"), "v1.2.3");
+    }
 }

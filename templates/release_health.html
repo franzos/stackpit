@@ -17,7 +17,10 @@
 
 {% block content %}
   <div class="page-header">
-    <h1>{{ chrome.t("release-health-heading") }}</h1>
+    <div>
+      <h1>{{ chrome.t("release-health-heading") }}</h1>
+      <p class="text-muted text-[13px] mt-1">{{ chrome.t("release-health-subtitle") }}</p>
+    </div>
   </div>
 
   {% if !chart.is_empty() %}
@@ -49,19 +52,24 @@
           <tbody>
             {% for r in releases %}
               <tr>
-                <td class="text-mono"><bdi>{{ r.release }}</bdi></td>
+                <td class="text-mono">
+                  <a href="/web/projects/{{ project_id }}/releases/{{ r.release|urlencode }}/"
+                     title="{{ r.release }}"><bdi>{{ r.release|short_release }}</bdi></a>
+                </td>
                 <td class="text-tabular">{{ r.total_sessions }}</td>
                 <td class="text-tabular">{{ r.ok_count }}</td>
                 <td class="text-tabular">
                   {% if r.crashed_count > 0 %}
-                    <span class="badge badge-error">{{ r.crashed_count }}</span>
+                    <a href="/web/projects/{{ project_id }}/releases/{{ r.release|urlencode }}/#issues"
+                       title="{{ chrome.t("release-health-crashed-title") }}"><span class="badge badge-error">{{ r.crashed_count }}</span></a>
                   {% else %}
                     0
                   {% endif %}
                 </td>
                 <td class="text-tabular">
                   {% if r.errored_count > 0 %}
-                    <span class="badge badge-warning">{{ r.errored_count }}</span>
+                    <a href="/web/projects/{{ project_id }}/releases/{{ r.release|urlencode }}/#issues"
+                       title="{{ chrome.t("release-health-errored-title") }}"><span class="badge badge-warning">{{ r.errored_count }}</span></a>
                   {% else %}
                     0
                   {% endif %}

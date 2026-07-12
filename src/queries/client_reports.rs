@@ -5,6 +5,7 @@ use sqlx::Row;
 use std::collections::HashMap;
 
 use crate::db::{sql, DbPool};
+use crate::queries::types::{Page, PagedResult};
 use serde::Serialize;
 
 /// One dropped-event outcome bucket from client reports.
@@ -13,6 +14,109 @@ pub struct ClientReportOutcome {
     pub category: String,
     pub reason: String,
     pub quantity: u64,
+}
+
+/// One stored client report, decoded to a compact per-report summary so the
+/// list conveys what was dropped instead of an untitled event id.
+#[derive(Debug, Clone)]
+pub struct ClientReportRow {
+    pub event_id: String,
+    pub timestamp: i64,
+    pub total_dropped: u64,
+    /// Top outcome buckets for this single report (capped for display).
+    pub outcomes: Vec<ClientReportOutcome>,
+}
+
+/// Decode a single client-report payload into (category, reason) -> quantity,
+/// summing `discarded_events` and `rate_limited_events`.
+fn accumulate_outcomes(bytes: &[u8], totals: &mut HashMap<(String, String), u64>) {
+    let decoded = zstd::decode_all(bytes).ok();
+    let bytes = decoded.as_deref().unwrap_or(bytes);
+    let Ok(json) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        return;
+    };
+    for field in ["discarded_events", "rate_limited_events"] {
+        let Some(arr) = json.get(field).and_then(|v| v.as_array()) else {
+            continue;
+        };
+        for entry in arr {
+            let category = entry
+                .get("category")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let reason = entry
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let quantity = entry.get("quantity").and_then(|v| v.as_u64()).unwrap_or(0);
+            *totals.entry((category, reason)).or_insert(0) += quantity;
+        }
+    }
+}
+
+fn sorted_outcomes(totals: HashMap<(String, String), u64>) -> Vec<ClientReportOutcome> {
+    let mut out: Vec<ClientReportOutcome> = totals
+        .into_iter()
+        .map(|((category, reason), quantity)| ClientReportOutcome {
+            category,
+            reason,
+            quantity,
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        b.quantity
+            .cmp(&a.quantity)
+            .then_with(|| a.category.cmp(&b.category))
+            .then_with(|| a.reason.cmp(&b.reason))
+    });
+    out
+}
+
+/// Page of stored client reports, each decoded to its own dropped-event summary.
+pub async fn list_client_reports(
+    pool: &DbPool,
+    project_id: u64,
+    page: &Page,
+) -> Result<PagedResult<ClientReportRow>> {
+    let total: i64 = sqlx::query_scalar(sql!(
+        "SELECT COUNT(*) FROM events WHERE project_id = ?1 AND item_type = 'client_report'"
+    ))
+    .bind(project_id as i64)
+    .fetch_one(pool)
+    .await?;
+
+    let rows = sqlx::query(sql!(
+        "SELECT event_id, payload, timestamp FROM events
+         WHERE project_id = ?1 AND item_type = 'client_report'
+         ORDER BY timestamp DESC LIMIT ?2 OFFSET ?3"
+    ))
+    .bind(project_id as i64)
+    .bind(page.limit as i64)
+    .bind(page.offset as i64)
+    .fetch_all(pool)
+    .await?;
+
+    let items = rows
+        .iter()
+        .map(|row| {
+            let payload: Vec<u8> = row.get("payload");
+            let mut totals: HashMap<(String, String), u64> = HashMap::new();
+            accumulate_outcomes(&payload, &mut totals);
+            let total_dropped = totals.values().sum();
+            let mut outcomes = sorted_outcomes(totals);
+            outcomes.truncate(3);
+            ClientReportRow {
+                event_id: row.get("event_id"),
+                timestamp: row.get("timestamp"),
+                total_dropped,
+                outcomes,
+            }
+        })
+        .collect();
+
+    Ok(PagedResult::from_page(items, total, page))
 }
 
 /// Decode client-report payloads in the window and sum dropped events by
@@ -33,53 +137,11 @@ pub async fn summarize_client_reports(
     .await?;
 
     let mut totals: HashMap<(String, String), u64> = HashMap::new();
-
     for row in &rows {
         let payload: Vec<u8> = row.get("payload");
-        // Payloads are zstd-compressed at write time; fall back to raw.
-        let bytes = zstd::decode_all(payload.as_slice())
-            .ok()
-            .unwrap_or_else(|| payload.clone());
-        let Ok(json) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
-            continue;
-        };
-
-        for field in ["discarded_events", "rate_limited_events"] {
-            let Some(arr) = json.get(field).and_then(|v| v.as_array()) else {
-                continue;
-            };
-            for entry in arr {
-                let category = entry
-                    .get("category")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown")
-                    .to_string();
-                let reason = entry
-                    .get("reason")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown")
-                    .to_string();
-                let quantity = entry.get("quantity").and_then(|v| v.as_u64()).unwrap_or(0);
-                *totals.entry((category, reason)).or_insert(0) += quantity;
-            }
-        }
+        accumulate_outcomes(&payload, &mut totals);
     }
-
-    let mut out: Vec<ClientReportOutcome> = totals
-        .into_iter()
-        .map(|((category, reason), quantity)| ClientReportOutcome {
-            category,
-            reason,
-            quantity,
-        })
-        .collect();
-    out.sort_by(|a, b| {
-        b.quantity
-            .cmp(&a.quantity)
-            .then_with(|| a.category.cmp(&b.category))
-            .then_with(|| a.reason.cmp(&b.reason))
-    });
-    Ok(out)
+    Ok(sorted_outcomes(totals))
 }
 
 #[cfg(test)]

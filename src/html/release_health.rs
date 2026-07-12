@@ -27,14 +27,15 @@ struct ReleaseHealthTemplate {
 /// Display row with crash-free metrics recomputed defensively so they can never
 /// contradict each other, even on older/edge `session_aggregates` rows that
 /// violate the crashed <= total invariant. `None` renders as "n/a".
-struct ReleaseHealthRow {
-    release: String,
-    total_sessions: u64,
-    ok_count: u64,
-    crashed_count: u64,
-    errored_count: u64,
-    crash_free_sessions: Option<f64>,
-    crash_free_users: Option<f64>,
+/// Shared with the per-release detail page (`release_detail.rs`).
+pub(crate) struct ReleaseHealthRow {
+    pub(crate) release: String,
+    pub(crate) total_sessions: u64,
+    pub(crate) ok_count: u64,
+    pub(crate) crashed_count: u64,
+    pub(crate) errored_count: u64,
+    pub(crate) crash_free_sessions: Option<f64>,
+    pub(crate) crash_free_users: Option<f64>,
 }
 
 impl From<ReleaseHealth> for ReleaseHealthRow {

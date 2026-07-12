@@ -117,13 +117,13 @@
                   {% endif %}
                   {% if p.other_count > 0 %}
                     <span class="seg"
-                          style="height:50%"
+                          style="height:{% if p.event_count > 0 %}{{ p.other_count * 100 / p.event_count }}{% else %}0{% endif %}%"
                           title="{{ chrome.t("projects-breakdown-other") }} {{ p.other_count }}"></span>
                   {% endif %}
                 </div>
               </td>
               <td class="hide-mobile text-mono text-[12px]">
-                {% match p.latest_release %}{% when Some with (r) %}{{ r }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
+                {% match p.latest_release %}{% when Some with (r) %}<a href="/web/projects/{{ p.project_id }}/releases/{{ r|urlencode }}/" title="{{ r }}">{{ r|short_release }}</a>{% when None %}<span class="text-muted">—</span>{% endmatch %}
             </td>
             <td class="hide-mobile text-muted">
               <time datetime="{{ p.first_seen|format_ts }}"

@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+
+{% block title %}{{ version|short_release }} — {{ nav.label }} {{ chrome.t("releases-title-suffix") }}{% endblock %}
+
+{% block sidebar_nav %}
+  {% call m::project_sidebar(chrome, project_id, nav, "health") %}
+  {% endcall %}
+{% endblock %}
+
+{% block breadcrumbs %}
+  <span class="breadcrumb-sep">/</span>
+  <a class="breadcrumb-link" href="/web/projects/{{ project_id }}/"><bdi>{{ nav.label }}</bdi></a>
+  <span class="breadcrumb-sep">/</span>
+  <a class="breadcrumb-link" href="/web/projects/{{ project_id }}/health/">{{ chrome.t("nav-health") }}</a>
+  <span class="breadcrumb-sep">/</span>
+  <span class="breadcrumb-current text-mono">{{ version|short_release }}</span>
+{% endblock %}
+
+{% block content %}
+  <div class="page-header">
+    <div class="min-w-0">
+      <h1 class="text-mono break-all">{{ version|short_release }}</h1>
+      <p class="text-muted text-[12px] mt-1 text-mono break-all">{{ version }}</p>
+    </div>
+  </div>
+
+  {# -- Session health -- #}
+  <h2 class="page-h2 mb-1">{{ chrome.t("release-detail-sessions-heading") }}</h2>
+  <p class="text-muted text-[13px] mb-2">{{ chrome.t("release-detail-sessions-note") }}</p>
+  {% match health %}
+  {% when Some with (h) %}
+  <div class="card card-pad mb-6">
+    <dl class="stat-row">
+      <div>
+        <dt>{{ chrome.t("release-health-col-sessions") }}</dt>
+        <dd class="text-tabular">{{ h.total_sessions }}</dd>
+      </div>
+      <div>
+        <dt>{{ chrome.t("release-health-col-ok") }}</dt>
+        <dd class="text-tabular">{{ h.ok_count }}</dd>
+      </div>
+      <div>
+        <dt>{{ chrome.t("release-health-col-crashed") }}</dt>
+        <dd class="text-tabular">{% if h.crashed_count > 0 %}<span class="badge badge-error">{{ h.crashed_count }}</span>{% else %}0{% endif %}</dd>
+      </div>
+      <div>
+        <dt>{{ chrome.t("release-health-col-errored") }}</dt>
+        <dd class="text-tabular">{% if h.errored_count > 0 %}<span class="badge badge-warning">{{ h.errored_count }}</span>{% else %}0{% endif %}</dd>
+      </div>
+      <div>
+        <dt>{{ chrome.t("release-health-col-crash-free-sessions") }}</dt>
+        <dd class="text-tabular font-semibold">{% match h.crash_free_sessions %}{% when Some with (cfs) %}<span class="{% if cfs.clone() >= 99.0 %}health-good{% else if cfs.clone() >= 95.0 %}health-warn{% else %}health-bad{% endif %}">{{ cfs }}%</span>{% when None %}<span class="text-muted">{{ chrome.t("release-health-na") }}</span>{% endmatch %}</dd>
+      </div>
+      <div>
+        <dt>{{ chrome.t("release-health-col-crash-free-users") }}</dt>
+        <dd class="text-tabular font-semibold">{% match h.crash_free_users %}{% when Some with (cfu) %}<span class="{% if cfu.clone() >= 99.0 %}health-good{% else if cfu.clone() >= 95.0 %}health-warn{% else %}health-bad{% endif %}">{{ cfu }}%</span>{% when None %}<span class="text-muted">{{ chrome.t("release-health-na") }}</span>{% endmatch %}</dd>
+      </div>
+    </dl>
+  </div>
+  {% when None %}
+  <div class="card mb-6">
+    <p class="empty">{{ chrome.t("release-detail-no-health") }}</p>
+  </div>
+  {% endmatch %}
+
+  {# -- Issues in this release -- #}
+  <h2 id="issues" class="page-h2 mb-1">{{ chrome.t("release-detail-issues-heading") }}</h2>
+  <p class="text-muted text-[13px] mb-2">{{ chrome.t("release-detail-issues-note") }}</p>
+  {% if issues.items.is_empty() %}
+    <div class="card">
+      <p class="empty">{{ chrome.t("release-detail-no-issues") }}</p>
+    </div>
+  {% else %}
+    <div class="card overflow-hidden">
+      <div class="table-wrap">
+        <table class="table table-fixed-layout">
+          <thead>
+            <tr>
+              <th class="col-title">{{ chrome.t("issues-label-title") }}</th>
+              <th class="col-narrow">{{ chrome.t("issues-label-level") }}</th>
+              <th class="col-narrow">{{ chrome.t("issues-label-events") }}</th>
+              <th class="col-narrow">{{ chrome.t("issues-label-users") }}</th>
+              <th class="hide-mobile col-time">{{ chrome.t("issues-label-first-seen") }}</th>
+              <th class="col-time">{{ chrome.t("issues-label-last-seen") }}</th>
+              <th class="col-narrow">{{ chrome.t("issues-label-status") }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for issue in issues.items %}
+              <tr {% match issue.level %}{% when Some with (lvl) %}data-level="{{ lvl }}"{% when None %}{% endmatch %}>
+                <td class="col-title min-w-0"
+                    title="{% match issue.title %}{% when Some with (t) %}{{ t }}{% when None %}{{ chrome.t("issues-untitled") }}{% endmatch %}">
+                  <a class="font-semibold truncate"
+                     href="/web/projects/{{ project_id }}/issues/{{ issue.fingerprint }}/">{% match issue.title %}{% when Some with (t) %}{{ t|split_error_type }}{% when None %}{{ chrome.t("issues-untitled") }}{% endmatch %}</a>
+                  {% match issue.title %}{% when Some with (t) %}<div class="issue-title-msg">{{ t|split_error_message }}</div>{% when None %}{% endmatch %}
+                </td>
+                <td>{% match issue.level %}{% when Some with (lvl) %}<span class="badge badge-{{ lvl }}">{{ lvl }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}</td>
+                <td class="text-tabular">{{ issue.event_count }}</td>
+                <td class="text-tabular">{{ issue.user_count }}</td>
+                <td class="hide-mobile text-muted">
+                  <time datetime="{{ issue.first_seen|format_ts }}" title="{{ issue.first_seen|format_ts }}">{{ chrome.rel_time(issue.first_seen) }}</time>
+                </td>
+                <td class="text-muted">
+                  <time datetime="{{ issue.last_seen|format_ts }}" title="{{ issue.last_seen|format_ts }}">{{ chrome.rel_time(issue.last_seen) }}</time>
+                </td>
+                <td><span class="badge badge-{{ issue.status }}">{{ issue.status }}</span></td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <nav class="pagination" aria-label="{{ chrome.t("issues-pagination-label") }}">
+      <span>{{ chrome.tv_count("issue-detail-events-count", issues.total as i64) }}</span>
+      <span class="flex gap-2">
+        {% if issues.has_prev() %}
+          <a class="btn btn-ghost"
+             href="/web/projects/{{ project_id }}/releases/{{ version|urlencode }}/?offset={{ issues.prev_offset() }}&amp;limit={{ issues.limit }}#issues">{{ chrome.t("issues-pagination-prev") }}</a>
+        {% endif %}
+        {% if issues.has_next() %}
+          <a class="btn btn-ghost"
+             href="/web/projects/{{ project_id }}/releases/{{ version|urlencode }}/?offset={{ issues.next_offset() }}&amp;limit={{ issues.limit }}#issues">{{ chrome.t("issues-pagination-next") }}</a>
+        {% endif %}
+      </span>
+    </nav>
+  {% endif %}
+{% endblock %}

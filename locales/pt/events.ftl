@@ -110,6 +110,7 @@ client-reports-dropped-heading = Eventos descartados
 client-reports-dropped-subtitle = O que os SDKs descartaram antes de enviar, por categoria e motivo.
 client-reports-th-category = Categoria
 client-reports-th-reason = Motivo
+client-reports-th-reasons = Motivos
 client-reports-th-dropped = Descartados
 client-reports-empty = Nenhum relatório de cliente encontrado para este projeto.
 client-reports-reports-heading = Relatórios

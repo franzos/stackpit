@@ -43,4 +43,15 @@ release-health-col-crashed = ล่ม
 release-health-col-errored = มีข้อผิดพลาด
 release-health-col-crash-free-sessions = เซสชันที่ไม่ล่ม
 release-health-col-crash-free-users = ผู้ใช้ที่ไม่พบการล่ม
+release-health-subtitle = ผลลัพธ์ของเซสชันเป็นสัญญาณสุขภาพที่ SDK รายงาน ไม่ใช่เหตุการณ์ข้อผิดพลาด คลิกที่รีลีสเพื่อดูปัญหาของมัน
+release-health-crashed-title = ดูปัญหาของรีลีสนี้
+release-health-errored-title = ดูปัญหาของรีลีสนี้
+
+# --- รายละเอียดรีลีส (ต่อเวอร์ชัน) ---
+release-detail-sessions-heading = สุขภาพของเซสชัน
+release-detail-sessions-note = ผลลัพธ์ของเซสชันที่ SDK รายงาน (ok / มีข้อผิดพลาด / ล่ม) เป็นสัญญาณสุขภาพ ไม่ใช่เหตุการณ์ข้อผิดพลาดแต่ละรายการ
+release-detail-no-health = ไม่มีข้อมูลเซสชันสำหรับรีลีสนี้
+release-detail-issues-heading = ปัญหาในรีลีสนี้
+release-detail-issues-note = กลุ่มข้อผิดพลาดที่แตกต่างกันซึ่งพบครั้งแรกหรือครั้งล่าสุดกับรีลีสนี้
+release-detail-no-issues = ไม่มีปัญหาที่บันทึกไว้สำหรับรีลีสนี้
 release-health-na = ไม่มีข้อมูล

@@ -92,6 +92,18 @@ projects-unarchive-submit = Ripristina progetto
 projects-delete-desc = Elimina definitivamente questo progetto e tutti i suoi dati. L'operazione non può essere annullata.
 projects-delete-confirm = Eliminare questo progetto e TUTTI i suoi dati? L'operazione non può essere annullata.
 projects-delete-submit = Elimina progetto
+projects-move-heading = Sposta in un'organizzazione
+projects-move-desc = Sposta questo progetto in un'altra organizzazione di cui sei proprietario. I suoi dati e i DSN restano validi, ma le integrazioni di notifica vengono scollegate e devono essere aggiunte di nuovo nella nuova organizzazione.
+projects-move-target-label = Organizzazione di destinazione
+projects-move-confirm-pre = Digita
+projects-move-confirm-post = per confermare.
+projects-move-confirm-placeholder = Nome del progetto
+projects-move-confirm-dialog = Spostare questo progetto nell'organizzazione selezionata?
+projects-move-submit = Sposta progetto
+projects-move-err-invalid-target = Organizzazione di destinazione non valida.
+projects-move-err-name-mismatch = Il nome del progetto non corrisponde.
+projects-move-err-denied = Non sei proprietario dell'organizzazione di destinazione.
+projects-move-err-conflict = Impossibile spostare il progetto; potrebbe essere cambiato. Riprova.
 
 # --- Impostazioni: configurazione SDK / chiavi ---
 projects-keys-title = Configurazione SDK

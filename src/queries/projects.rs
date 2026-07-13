@@ -632,6 +632,62 @@ pub async fn reassign_project(
     Ok(result.rows_affected())
 }
 
+/// Move a project into `to_org_id`, but only if it is currently in `from_org_id`.
+/// Carries the org-denormalized alert/digest rows along and unlinks notification
+/// integrations. Returns `Ok(false)` when the project wasn't in `from_org_id`
+/// (a concurrent move/delete raced us), leaving all rows untouched.
+pub async fn move_project_to_org(
+    writer_pool: &crate::db::DbPool,
+    project_id: i64,
+    from_org_id: i64,
+    to_org_id: i64,
+) -> Result<bool> {
+    let mut tx = writer_pool.begin().await?;
+
+    let moved = sqlx::query(sql!(
+        "UPDATE projects SET org_id = ?1 WHERE project_id = ?2 AND org_id = ?3"
+    ))
+    .bind(to_org_id)
+    .bind(project_id)
+    .bind(from_org_id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+
+    if moved == 0 {
+        tx.rollback().await?;
+        return Ok(false);
+    }
+
+    sqlx::query(sql!(
+        "UPDATE alert_rules SET org_id = ?1 WHERE project_id = ?2"
+    ))
+    .bind(to_org_id)
+    .bind(project_id)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(sql!(
+        "UPDATE digest_schedules SET org_id = ?1 WHERE project_id = ?2"
+    ))
+    .bind(to_org_id)
+    .bind(project_id)
+    .execute(&mut *tx)
+    .await?;
+
+    // Notification integrations belong to the source org; dropping the links
+    // stops deliveries to it after the move (the new org re-adds its own).
+    sqlx::query(sql!(
+        "DELETE FROM project_integrations WHERE project_id = ?1"
+    ))
+    .bind(project_id)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(true)
+}
+
 /// Upsert an org by slug. Returns its org_id.
 pub async fn upsert_organization(
     pool: &crate::db::DbPool,
@@ -978,6 +1034,97 @@ mod tests {
             .unwrap();
         let stored: i64 = row.get(0);
         assert_eq!(stored, ORG_B);
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn move_project_carries_alerts_and_unlinks_integrations() {
+        use sqlx::Row;
+        let pool = open_test_db().await;
+        set_project_org(&pool, 700, ORG_A).await;
+        sqlx::query("INSERT INTO organizations (org_id, slug, name) VALUES (?1, ?1, ?1)")
+            .bind(ORG_B)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        sqlx::query(
+            "INSERT INTO alert_rules (org_id, project_id, trigger_kind) VALUES (?1, 700, 'threshold')",
+        )
+        .bind(ORG_A)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO digest_schedules (org_id, project_id, interval_secs) VALUES (?1, 700, 3600)",
+        )
+        .bind(ORG_A)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO integrations (id, name, kind, url) VALUES (1, 'i1', 'webhook', 'http://x')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO project_integrations (project_id, integration_id) VALUES (700, 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let moved = move_project_to_org(&pool, 700, ORG_A, ORG_B).await.unwrap();
+        assert!(moved);
+
+        let porg: i64 = sqlx::query("SELECT org_id FROM projects WHERE project_id = 700")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(porg, ORG_B, "project org must follow the move");
+        let arorg: i64 = sqlx::query("SELECT org_id FROM alert_rules WHERE project_id = 700")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(arorg, ORG_B, "alert_rules org must follow the move");
+        let dsorg: i64 = sqlx::query("SELECT org_id FROM digest_schedules WHERE project_id = 700")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(dsorg, ORG_B, "digest_schedules org must follow the move");
+        let pi: i64 =
+            sqlx::query("SELECT COUNT(*) FROM project_integrations WHERE project_id = 700")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+                .get(0);
+        assert_eq!(pi, 0, "notification integrations must be unlinked on move");
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn move_project_conflict_when_from_org_mismatch() {
+        use sqlx::Row;
+        let pool = open_test_db().await;
+        set_project_org(&pool, 701, ORG_A).await;
+        sqlx::query("INSERT INTO organizations (org_id, slug, name) VALUES (?1, ?1, ?1)")
+            .bind(ORG_B)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Claim the project is in ORG_B when it is actually in ORG_A: no-op.
+        let moved = move_project_to_org(&pool, 701, ORG_B, 999).await.unwrap();
+        assert!(!moved, "mismatched from_org must not move");
+
+        let porg: i64 = sqlx::query("SELECT org_id FROM projects WHERE project_id = 701")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(porg, ORG_A, "project must stay put on conflict");
     }
 
     #[cfg(feature = "sqlite")]

@@ -91,6 +91,18 @@ projects-unarchive-submit = إلغاء أرشفة المشروع
 projects-delete-desc = احذف هذا المشروع وجميع بياناته نهائيًا. لا يمكن التراجع عن ذلك.
 projects-delete-confirm = هل تريد حذف هذا المشروع وجميع بياناته؟ لا يمكن التراجع عن ذلك.
 projects-delete-submit = حذف المشروع
+projects-move-heading = النقل إلى مؤسسة أخرى
+projects-move-desc = انقل هذا المشروع إلى مؤسسة أخرى تملكها. تبقى بياناته وعناوين DSN صالحة، لكن يتم فصل تكاملات الإشعارات ويجب إعادة إضافتها في المؤسسة الجديدة.
+projects-move-target-label = المؤسسة الوجهة
+projects-move-confirm-pre = اكتب
+projects-move-confirm-post = للتأكيد.
+projects-move-confirm-placeholder = اسم المشروع
+projects-move-confirm-dialog = نقل هذا المشروع إلى المؤسسة المحددة؟
+projects-move-submit = نقل المشروع
+projects-move-err-invalid-target = المؤسسة الوجهة غير صالحة.
+projects-move-err-name-mismatch = اسم المشروع غير مطابق.
+projects-move-err-denied = لست مالكًا للمؤسسة الوجهة.
+projects-move-err-conflict = تعذّر نقل المشروع؛ ربما تغيّر. حاول مرة أخرى.
 
 # --- الإعدادات: إعداد SDK / المفاتيح ---
 projects-keys-title = إعداد SDK

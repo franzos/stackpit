@@ -92,6 +92,18 @@ projects-unarchive-submit = Projekt aus Archiv holen
 projects-delete-desc = Dieses Projekt und alle seine Daten dauerhaft löschen. Das kann nicht rückgängig gemacht werden.
 projects-delete-confirm = Dieses Projekt und ALLE seine Daten löschen? Das kann nicht rückgängig gemacht werden.
 projects-delete-submit = Projekt löschen
+projects-move-heading = In Organisation verschieben
+projects-move-desc = Dieses Projekt in eine andere Organisation verschieben, die dir gehört. Daten und DSNs bleiben gültig, aber Benachrichtigungs-Integrationen werden getrennt und müssen in der neuen Organisation neu hinzugefügt werden.
+projects-move-target-label = Ziel-Organisation
+projects-move-confirm-pre = Gib
+projects-move-confirm-post = zur Bestätigung ein.
+projects-move-confirm-placeholder = Projektname
+projects-move-confirm-dialog = Dieses Projekt in die ausgewählte Organisation verschieben?
+projects-move-submit = Projekt verschieben
+projects-move-err-invalid-target = Ungültige Ziel-Organisation.
+projects-move-err-name-mismatch = Der Projektname stimmt nicht überein.
+projects-move-err-denied = Du bist kein Eigentümer der Ziel-Organisation.
+projects-move-err-conflict = Das Projekt konnte nicht verschoben werden; es hat sich möglicherweise geändert. Bitte erneut versuchen.
 
 # --- Einstellungen: SDK-Einrichtung / Keys ---
 projects-keys-title = SDK-Einrichtung

@@ -91,6 +91,18 @@ projects-unarchive-submit = ยกเลิกการจัดเก็บโ�
 projects-delete-desc = ลบโปรเจกต์นี้และข้อมูลทั้งหมดอย่างถาวร การกระทำนี้ไม่สามารถย้อนกลับได้
 projects-delete-confirm = ลบโปรเจกต์นี้และข้อมูลทั้งหมดหรือไม่ การกระทำนี้ไม่สามารถย้อนกลับได้
 projects-delete-submit = ลบโปรเจกต์
+projects-move-heading = ย้ายไปยังองค์กรอื่น
+projects-move-desc = ย้ายโปรเจกต์นี้ไปยังองค์กรอื่นที่คุณเป็นเจ้าของ ข้อมูลและ DSN ยังคงใช้งานได้ แต่การเชื่อมต่อการแจ้งเตือนจะถูกยกเลิกและต้องเพิ่มใหม่ในองค์กรใหม่
+projects-move-target-label = องค์กรปลายทาง
+projects-move-confirm-pre = พิมพ์
+projects-move-confirm-post = เพื่อยืนยัน
+projects-move-confirm-placeholder = ชื่อโปรเจกต์
+projects-move-confirm-dialog = ย้ายโปรเจกต์นี้ไปยังองค์กรที่เลือกหรือไม่?
+projects-move-submit = ย้ายโปรเจกต์
+projects-move-err-invalid-target = องค์กรปลายทางไม่ถูกต้อง
+projects-move-err-name-mismatch = ชื่อโปรเจกต์ไม่ตรงกัน
+projects-move-err-denied = คุณไม่ใช่เจ้าของขององค์กรปลายทาง
+projects-move-err-conflict = ไม่สามารถย้ายโปรเจกต์ได้ อาจมีการเปลี่ยนแปลง โปรดลองอีกครั้ง
 
 # --- การตั้งค่า: ตั้งค่า SDK / คีย์ ---
 projects-keys-title = ตั้งค่า SDK

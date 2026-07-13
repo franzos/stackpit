@@ -189,6 +189,10 @@ pub fn routes() -> Router<AppState> {
             "/web/projects/{project_id}/settings/delete",
             post(project_settings::delete_project),
         )
+        .route(
+            "/web/projects/{project_id}/settings/move",
+            post(project_settings::move_project),
+        )
         // -- filter settings --
         .route(
             "/web/projects/{project_id}/settings/filters/",

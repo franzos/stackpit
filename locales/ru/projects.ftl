@@ -92,6 +92,18 @@ projects-unarchive-submit = Разархивировать проект
 projects-delete-desc = Безвозвратно удалить этот проект и все его данные. Это действие необратимо.
 projects-delete-confirm = Удалить этот проект и ВСЕ его данные? Это действие необратимо.
 projects-delete-submit = Удалить проект
+projects-move-heading = Переместить в организацию
+projects-move-desc = Переместите этот проект в другую организацию, владельцем которой вы являетесь. Данные и DSN остаются действительными, но интеграции уведомлений отвязываются и должны быть добавлены заново в новой организации.
+projects-move-target-label = Целевая организация
+projects-move-confirm-pre = Введите
+projects-move-confirm-post = для подтверждения.
+projects-move-confirm-placeholder = Название проекта
+projects-move-confirm-dialog = Переместить этот проект в выбранную организацию?
+projects-move-submit = Переместить проект
+projects-move-err-invalid-target = Недопустимая целевая организация.
+projects-move-err-name-mismatch = Название проекта не совпадает.
+projects-move-err-denied = Вы не являетесь владельцем целевой организации.
+projects-move-err-conflict = Не удалось переместить проект; возможно, он изменился. Повторите попытку.
 
 # --- Настройки: настройка SDK / ключи ---
 projects-keys-title = Настройка SDK

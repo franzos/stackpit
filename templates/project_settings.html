@@ -202,6 +202,37 @@
               class="btn btn-danger"
               data-confirm="{{ chrome.t("projects-delete-confirm") }}">{{ chrome.t("projects-delete-submit") }}</button>
     </form>
+
+    {% if !move_targets.is_empty() %}
+      <form class="settings-form"
+            method="post"
+            action="/web/projects/{{ project_id }}/settings/move">
+        <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+        <h3 class="page-h2 mb-1">{{ chrome.t("projects-move-heading") }}</h3>
+        <p class="text-[13px] mb-2">{{ chrome.t("projects-move-desc") }}</p>
+        <div>
+          <label class="field-label" for="move_org">{{ chrome.t("projects-move-target-label") }}</label>
+          <select id="move_org" name="org_id" class="input">
+            {% for target in move_targets %}<option value="{{ target.org_id }}"><bdi>{{ target.name }}</bdi></option>{% endfor %}
+          </select>
+        </div>
+        <div>
+          <label class="field-label" for="move_confirm">{{ chrome.t("projects-move-confirm-pre") }} <code><bdi>{{ nav.label }}</bdi></code> {{ chrome.t("projects-move-confirm-post") }}</label>
+          <input id="move_confirm"
+                 name="confirm_name"
+                 type="text"
+                 class="input"
+                 autocomplete="off"
+                 placeholder="{{ chrome.t("projects-move-confirm-placeholder") }}"
+                 required>
+        </div>
+        <div>
+          <button type="submit"
+                  class="btn btn-danger"
+                  data-confirm="{{ chrome.t("projects-move-confirm-dialog") }}">{{ chrome.t("projects-move-submit") }}</button>
+        </div>
+      </form>
+    {% endif %}
   </div>
 </div>
 </div>

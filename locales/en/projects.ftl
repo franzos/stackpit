@@ -91,6 +91,18 @@ projects-unarchive-submit = Unarchive project
 projects-delete-desc = Permanently delete this project and all its data. This cannot be undone.
 projects-delete-confirm = Delete this project and ALL its data? This cannot be undone.
 projects-delete-submit = Delete project
+projects-move-heading = Move to organization
+projects-move-desc = Move this project to another organization you own. Its data and DSNs stay valid, but notification integrations are unlinked and must be re-added in the new organization.
+projects-move-target-label = Destination organization
+projects-move-confirm-pre = Type
+projects-move-confirm-post = to confirm.
+projects-move-confirm-placeholder = Project name
+projects-move-confirm-dialog = Move this project to the selected organization?
+projects-move-submit = Move project
+projects-move-err-invalid-target = Invalid destination organization.
+projects-move-err-name-mismatch = The project name does not match.
+projects-move-err-denied = You are not an owner of the destination organization.
+projects-move-err-conflict = The project could not be moved; it may have changed. Please try again.
 
 # --- Settings: SDK setup / keys ---
 projects-keys-title = SDK Setup

@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.15] - 2026-07-13
+
+### Added
+- Move a project to another organization from its settings
+
 ## [0.3.14] - 2026-07-13
 
 ### Added

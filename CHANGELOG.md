@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.14] - 2026-07-13
+
+### Added
+- Issue detail renders breadcrumbs, user, and extra context
+- Span operation aggregation on the spans page
+- Transaction duration distribution
+- Cross-links between replays and traces
+- Error-free sessions in Release Health
+
+### Changed
+- Styled 404 page
+
 ## [0.3.13] - 2026-07-12
 
 ### Added

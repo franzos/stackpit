@@ -588,12 +588,17 @@ async fn fetch_endpoint_urls(
     // `http://host.containers.internal:4444`) is reachable only over http, so
     // when the issuer itself is http we accept http discovery endpoints;
     // https issuers still require https endpoints, blocking downgrade in prod.
-    let allow_http = issuer.trim_start().to_ascii_lowercase().starts_with("http://");
+    let allow_http = issuer
+        .trim_start()
+        .to_ascii_lowercase()
+        .starts_with("http://");
     let jwks_uri = json
         .get("jwks_uri")
         .and_then(|v| v.as_str())
         .and_then(|raw| validate_discovery_url(raw, allow_http))
-        .ok_or_else(|| anyhow::anyhow!("discovery doc missing or has disallowed jwks_uri scheme"))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!("discovery doc missing or has disallowed jwks_uri scheme")
+        })?;
     // Only http(s) URLs survive validation -- a misconfigured discovery doc
     // could otherwise flow `javascript:` into `Redirect::to(...)`.
     let end_session_endpoint = json

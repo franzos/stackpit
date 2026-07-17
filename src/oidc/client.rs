@@ -584,21 +584,27 @@ async fn fetch_endpoint_urls(
     let body = resp.text().await.context("reading discovery doc body")?;
     let json: serde_json::Value =
         serde_json::from_str(&body).context("parsing discovery doc JSON")?;
+    // The issuer is the trust anchor. A dev/loopback IdP (e.g. Hydra on
+    // `http://host.containers.internal:4444`) is reachable only over http, so
+    // when the issuer itself is http we accept http discovery endpoints;
+    // https issuers still require https endpoints, blocking downgrade in prod.
+    let allow_http = issuer.trim_start().to_ascii_lowercase().starts_with("http://");
     let jwks_uri = json
         .get("jwks_uri")
         .and_then(|v| v.as_str())
-        .and_then(validate_discovery_url)
-        .ok_or_else(|| anyhow::anyhow!("discovery doc missing or has non-https jwks_uri"))?;
-    // Drop non-https URLs -- a misconfigured discovery doc could flow `javascript:` into `Redirect::to(...)`.
+        .and_then(|raw| validate_discovery_url(raw, allow_http))
+        .ok_or_else(|| anyhow::anyhow!("discovery doc missing or has disallowed jwks_uri scheme"))?;
+    // Only http(s) URLs survive validation -- a misconfigured discovery doc
+    // could otherwise flow `javascript:` into `Redirect::to(...)`.
     let end_session_endpoint = json
         .get("end_session_endpoint")
         .and_then(|v| v.as_str())
-        .and_then(|raw| match validate_discovery_url(raw) {
+        .and_then(|raw| match validate_discovery_url(raw, allow_http) {
             Some(url) => Some(url),
             None => {
                 tracing::warn!(
                     raw = %raw,
-                    "discovery: end_session_endpoint is not an absolute https URL or contains userinfo -- dropping"
+                    "discovery: end_session_endpoint is not an absolute http(s) URL or contains userinfo -- dropping"
                 );
                 None
             }
@@ -606,7 +612,7 @@ async fn fetch_endpoint_urls(
     let introspection_endpoint = json
         .get("introspection_endpoint")
         .and_then(|v| v.as_str())
-        .and_then(|raw| match validate_discovery_url(raw) {
+        .and_then(|raw| match validate_discovery_url(raw, allow_http) {
             Some(url) => Some(url),
             None => {
                 tracing::warn!(
@@ -623,14 +629,18 @@ async fn fetch_endpoint_urls(
     })
 }
 
-/// Accept only absolute https URLs with a non-empty host and no userinfo.
-fn validate_discovery_url(raw: &str) -> Option<String> {
+/// Accept absolute https URLs (or http, when `allow_http` is set for a http
+/// issuer) with a non-empty host and no userinfo. Every other scheme
+/// (`javascript:`, `data:`, ...) is rejected so a hostile discovery doc can't
+/// flow into `Redirect::to(...)`.
+fn validate_discovery_url(raw: &str, allow_http: bool) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return None;
     }
     let parsed = url::Url::parse(trimmed).ok()?;
-    if parsed.scheme() != "https" {
+    let scheme_ok = parsed.scheme() == "https" || (allow_http && parsed.scheme() == "http");
+    if !scheme_ok {
         return None;
     }
     let host = parsed.host_str()?;
@@ -882,6 +892,31 @@ mod tests {
             check_end_session_precondition(false, false, true),
             EndSessionDecision::Ok
         );
+    }
+
+    #[test]
+    fn validate_discovery_url_https_always_ok() {
+        assert!(validate_discovery_url("https://idp.example.com/logout", false).is_some());
+        assert!(validate_discovery_url("https://idp.example.com/logout", true).is_some());
+    }
+
+    #[test]
+    fn validate_discovery_url_http_only_when_allowed() {
+        // https issuer (allow_http = false): http endpoint rejected (no downgrade).
+        assert!(validate_discovery_url("http://host.containers.internal:4444/x", false).is_none());
+        // http issuer (allow_http = true): http endpoint accepted (dev/loopback).
+        assert!(validate_discovery_url("http://host.containers.internal:4444/x", true).is_some());
+    }
+
+    #[test]
+    fn validate_discovery_url_rejects_non_web_schemes_and_userinfo() {
+        // Non-http(s) schemes stay rejected even with allow_http, so a hostile
+        // discovery doc can't flow javascript:/data: into a redirect.
+        assert!(validate_discovery_url("javascript:alert(1)", true).is_none());
+        assert!(validate_discovery_url("data:text/html,x", true).is_none());
+        // Userinfo is rejected regardless of scheme.
+        assert!(validate_discovery_url("https://user:pw@idp.example.com/x", true).is_none());
+        assert!(validate_discovery_url("", true).is_none());
     }
 
     // AuthType doesn't implement PartialEq in this crate version.

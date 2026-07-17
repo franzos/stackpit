@@ -145,10 +145,12 @@ hydra create oauth2-client \
   --grant-type authorization_code,refresh_token \
   --response-type code \
   --scope "openid email profile offline_access orgs" \
-  --token-endpoint-auth-method client_secret_post \
+  --token-endpoint-auth-method client_secret_basic \
   --audience stackpit-web \
   --redirect-uri https://stackpit.example.com/web/auth/callback
 ```
+
+stackpit authenticates at the token endpoint with `client_secret_basic` by default (it also auto-detects the method from discovery, preferring basic). Register the client with a matching `--token-endpoint-auth-method`, or, if you must use `client_secret_post`, set `token_endpoint_auth_method = "client_secret_post"` under `[auth.oauth]` — otherwise the token exchange fails with `invalid_client`.
 
 The `--audience` allow-list entry matters: stackpit sends `audience=stackpit-web` on the authorization request so Hydra binds it into the access token's `aud`, and the web gate then checks for it. Hydra only honours audiences that appear on the client's allow-list — leave it off and the token comes back without the `aud`, and every web session is rejected with `InvalidAudience`. (Hydra uses a non-standard `audience=` parameter for this; RFC 8707 `resource=` isn't wired in Hydra yet.)
 

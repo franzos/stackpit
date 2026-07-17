@@ -442,7 +442,15 @@ pub async fn delete_project(
     }
 
     match queries::projects::delete_project(&state.writer_pool, project_id).await {
-        Ok(()) => axum::response::Redirect::to("/web/projects/").into_response(),
+        Ok(()) => {
+            // Flush the auth cache or ingestion keeps working until the entry expires.
+            crate::ingest::auth::invalidate_project(
+                &state.auth_cache,
+                &state.negative_auth_cache,
+                project_id,
+            );
+            axum::response::Redirect::to("/web/projects/").into_response()
+        }
         Err(e) => {
             render_general(
                 &state,

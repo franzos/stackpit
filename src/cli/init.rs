@@ -25,6 +25,9 @@ retention_days = 90
 
 [filter]
 mode = "open"
+# Global ingest budget (events/min across all projects). Required (or mode = "closed",
+# or open_ingest_unlimited_acknowledged = true) when ingest_bind is non-loopback.
+rate_limit = 300
 
 # OAuth / SSO via Hydra. Leave [auth.oauth] out to run admin_token-only.
 # Requires STACKPIT_MASTER_KEY (64 hex chars) -- tokens are stored

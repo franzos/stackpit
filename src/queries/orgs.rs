@@ -607,6 +607,8 @@ pub async fn count_projects_in_org(pool: &DbPool, org_id: i64) -> Result<i64> {
 
 pub struct DeleteOrgCounts {
     pub projects: u64,
+    /// Ids of the deleted projects, so callers can invalidate per-project caches.
+    pub project_ids: Vec<i64>,
     pub members: u64,
     pub invites: u64,
     pub integrations: u64,
@@ -626,6 +628,17 @@ pub async fn delete_org_guarded(pool: &DbPool, org_id: i64) -> Result<DeleteOrgO
     };
     if org_id == SYSTEM_ORG_ID || org.is_personal {
         return Ok(DeleteOrgOutcome::NotDeletable);
+    }
+
+    // Chunked pre-pass outside the tx keeps the write-lock hold short; the
+    // unconditional in-tx deletes below sweep any stragglers. Safe because the
+    // refusal guard above already passed.
+    let prepass_rows = sqlx::query(sql!("SELECT project_id FROM projects WHERE org_id = ?1"))
+        .bind(org_id)
+        .fetch_all(pool)
+        .await?;
+    for row in &prepass_rows {
+        crate::queries::projects::prechunk_project_data(pool, row.get("project_id")).await?;
     }
 
     let mut tx = pool.begin().await?;
@@ -652,8 +665,8 @@ pub async fn delete_org_guarded(pool: &DbPool, org_id: i64) -> Result<DeleteOrgO
         .await?;
     let project_ids: Vec<i64> = project_rows.iter().map(|r| r.get("project_id")).collect();
     let projects = project_ids.len() as u64;
-    for pid in project_ids {
-        crate::queries::projects::delete_project_in_tx(&mut tx, pid).await?;
+    for pid in &project_ids {
+        crate::queries::projects::delete_project_in_tx(&mut tx, *pid).await?;
     }
 
     // Org-scoped alert_state children first (null-project_id rules the per-project step missed).
@@ -698,6 +711,7 @@ pub async fn delete_org_guarded(pool: &DbPool, org_id: i64) -> Result<DeleteOrgO
 
     Ok(DeleteOrgOutcome::Deleted(DeleteOrgCounts {
         projects,
+        project_ids,
         members,
         invites,
         integrations,
@@ -2084,6 +2098,89 @@ mod tests {
         .unwrap()
         .get("c");
         assert_eq!(state_rows, 0, "org-scoped alert_state must not orphan");
+    }
+
+    /// The pre-pass + in-tx cascade must leave no project data rows behind.
+    #[tokio::test]
+    async fn delete_org_guarded_removes_project_data_rows() {
+        use crate::queries::test_helpers::insert_test_event;
+        let pool = crate::db::open_test_pool().await;
+        let u = crate::queries::users::upsert_from_oidc(&pool, "iss", "del-data", None, None)
+            .await
+            .unwrap();
+        let org = create_native_org(&pool, u.user_id, "data-org", "Data")
+            .await
+            .unwrap();
+
+        sqlx::query(sql!("INSERT INTO projects (project_id, status, source, org_id) VALUES (7400, 'active', 'manual', ?1)"))
+            .bind(org).execute(&pool).await.unwrap();
+        insert_test_event(&pool, "oev1", 7400, 0, Some("ofp"), Some("error"), None).await;
+        sqlx::query(sql!(
+            "INSERT INTO attachments (event_id, filename, data) VALUES ('oev1', 'a.txt', ?1)"
+        ))
+        .bind(&b"blob"[..])
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO logs (payload, project_id, public_key, timestamp) VALUES (?1, 7400, 'k', 0)"
+        ))
+        .bind(&b"{}"[..])
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO spans (span_id, payload, project_id, public_key, timestamp) VALUES ('os1', ?1, 7400, 'k', 0)"
+        ))
+        .bind(&b"{}"[..])
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO metrics (project_id, timestamp, mri, metric_type) VALUES (7400, 0, 'm', 'c')"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let outcome = delete_org_guarded(&pool, org).await.unwrap();
+        assert!(matches!(outcome, DeleteOrgOutcome::Deleted(_)));
+
+        for table in ["events", "attachments", "logs", "spans", "metrics"] {
+            let n: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(n, 0, "table `{table}` should be empty after org delete");
+        }
+    }
+
+    /// A refused delete must not have run the destructive pre-pass.
+    #[tokio::test]
+    async fn delete_org_guarded_refusal_leaves_project_data() {
+        use crate::queries::test_helpers::insert_test_event;
+        let pool = crate::db::open_test_pool().await;
+        let u = crate::queries::users::upsert_from_oidc(&pool, "iss", "del-keep", None, None)
+            .await
+            .unwrap();
+        let personal = ensure_personal_org(&pool, u.user_id).await.unwrap();
+
+        sqlx::query(sql!("INSERT INTO projects (project_id, status, source, org_id) VALUES (7500, 'active', 'manual', ?1)"))
+            .bind(personal).execute(&pool).await.unwrap();
+        insert_test_event(&pool, "pev1", 7500, 0, None, None, None).await;
+
+        assert!(matches!(
+            delete_org_guarded(&pool, personal).await.unwrap(),
+            DeleteOrgOutcome::NotDeletable
+        ));
+
+        let events: i64 = sqlx::query_scalar::<_, i64>(sql!(
+            "SELECT COUNT(*) FROM events WHERE project_id = 7500"
+        ))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(events, 1, "refused delete must not touch event data");
     }
 
     #[tokio::test]

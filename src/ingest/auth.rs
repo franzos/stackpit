@@ -218,10 +218,7 @@ pub async fn validate_project_key(
     let pool = &state.pool;
 
     // Single status lookup shared between the archived check and the open-mode project-exists check below.
-    let project_status = queries::projects::get_project_status(pool, project_id)
-        .await
-        .ok()
-        .flatten();
+    let project_status = project_status_checked(pool, project_id).await?;
     if let Some(status) = &project_status {
         if status.is_archived() {
             negative_cache_insert(state, sentry_key, project_id, Denial::Archived);
@@ -321,6 +318,19 @@ pub async fn validate_project_key(
     }
 
     Ok(())
+}
+
+/// A failed status lookup must surface as a retryable 5xx: flattening it to `None` would let open mode auto-register an unknown key into an existing project and skip the archived check.
+async fn project_status_checked(
+    pool: &crate::db::DbPool,
+    project_id: u64,
+) -> Result<Option<ProjectStatus>, AuthError> {
+    queries::projects::get_project_status(pool, project_id)
+        .await
+        .map_err(|e| {
+            tracing::warn!("auth: project status lookup failed: {e}");
+            AuthError::InternalError
+        })
 }
 
 /// Commits the project/key row on the writer pool so it serialises with the
@@ -555,6 +565,33 @@ mod tests {
         assert!(negative.get(&("other".to_owned(), 1)).is_some());
     }
 
+    // Mirrors the project-delete flow: a still-cached key for the deleted
+    // project must not keep authenticating ingest until its TTL runs out.
+    #[test]
+    fn invalidate_project_clears_positive_entries() {
+        let positive: AuthCache = Arc::new(dashmap::DashMap::new());
+        let negative = new_negative_cache();
+        positive.insert(
+            "deleted_key".to_owned(),
+            CacheEntry {
+                project_id: 9,
+                status: ProjectStatus::Active,
+                inserted_at: Instant::now(),
+            },
+        );
+        positive.insert(
+            "other_key".to_owned(),
+            CacheEntry {
+                project_id: 10,
+                status: ProjectStatus::Active,
+                inserted_at: Instant::now(),
+            },
+        );
+        invalidate_project(&positive, &negative, 9);
+        assert!(positive.get("deleted_key").is_none());
+        assert!(positive.get("other_key").is_some());
+    }
+
     #[test]
     fn invalidate_project_clears_negative_entries() {
         let positive: AuthCache = Arc::new(dashmap::DashMap::new());
@@ -601,6 +638,23 @@ mod tests {
             cache.get("newkey").is_none(),
             "failed insert must not cache"
         );
+    }
+
+    // Regression: a failed status lookup must propagate as InternalError, not
+    // flatten to None (which would bypass the open-mode existing-project guard).
+    #[tokio::test]
+    async fn project_status_lookup_failure_returns_internal_error() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        pool.close().await;
+        let result = project_status_checked(&pool, 1).await;
+        assert!(matches!(result, Err(AuthError::InternalError)));
+    }
+
+    #[tokio::test]
+    async fn project_status_absent_row_is_none() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        let result = project_status_checked(&pool, 424_242).await;
+        assert!(matches!(result, Ok(None)));
     }
 
     // Mirrors the archive -> denied-ingest -> unarchive flow: an Archived denial cached while the project was archived must be gone once it's unarchived, so a valid key passes without waiting out NEGATIVE_AUTH_CACHE_TTL.

@@ -410,10 +410,9 @@ async fn bulk_delete_issues_chunked(
 
     tx.commit().await?;
 
-    // Vacuum outside any transaction so it doesn't hold the write lock.
     #[cfg(feature = "sqlite")]
     if deleted > 0 {
-        if let Err(e) = sqlx::query("PRAGMA incremental_vacuum").execute(pool).await {
+        if let Err(e) = super::retention::incremental_vacuum(pool).await {
             tracing::warn!("bulk_delete_issues: incremental_vacuum failed: {e}");
         }
     }

@@ -127,6 +127,12 @@ pub struct FilterConfig {
     pub max_projects: usize,
     #[serde(default = "default_max_native_orgs")]
     pub max_native_orgs_per_user: u32,
+    /// Explicit acknowledgement of open registration on a non-loopback
+    /// ingest bind with no global rate limit (unauthenticated remote
+    /// storage exhaustion). Startup refuses that combination unless this
+    /// is set.
+    #[serde(default)]
+    pub open_ingest_unlimited_acknowledged: bool,
 }
 
 // Manual (not derived) so an absent `[filter]` table and a missing config file
@@ -142,6 +148,7 @@ impl Default for FilterConfig {
             blocked_user_agents: Vec::new(),
             max_projects: default_max_projects(),
             max_native_orgs_per_user: default_max_native_orgs(),
+            open_ingest_unlimited_acknowledged: false,
         }
     }
 }
@@ -466,6 +473,40 @@ impl McpConfig {
 }
 
 impl Config {
+    /// Open registration + non-loopback ingest + no global rate limit =
+    /// unauthenticated remote storage exhaustion; refuse without an explicit ack.
+    /// Reads `filter.rate_limit` directly -- the same value the filter engine
+    /// uses as its global limit.
+    pub(crate) fn validate_ingest_exposure(&self) -> Result<()> {
+        if self.filter.mode != RegistrationMode::Open || self.filter.rate_limit != 0 {
+            return Ok(());
+        }
+        let ingest_loopback = self
+            .server
+            .ingest_bind
+            .parse::<std::net::SocketAddr>()
+            .map(|addr| addr.ip().is_loopback())
+            .unwrap_or(false);
+        if ingest_loopback {
+            return Ok(());
+        }
+        if !self.filter.open_ingest_unlimited_acknowledged {
+            anyhow::bail!(
+                "filter.mode = \"open\" with non-loopback server.ingest_bind '{}' and \
+                 filter.rate_limit = 0 (unlimited): anyone who can reach the ingest port \
+                 can auto-register projects and fill the disk. Set `filter.rate_limit` to \
+                 a per-minute cap, set `filter.mode = \"closed\"`, or acknowledge with \
+                 `filter.open_ingest_unlimited_acknowledged = true`.",
+                self.server.ingest_bind
+            );
+        }
+        tracing::warn!(
+            "open registration with unlimited ingest on non-loopback bind acknowledged via \
+             filter.open_ingest_unlimited_acknowledged"
+        );
+        Ok(())
+    }
+
     pub fn load(path: &Path, explicit: bool) -> Result<Self> {
         if path.exists() {
             let contents = std::fs::read_to_string(path)?;
@@ -827,6 +868,57 @@ mod tests {
             format!("{err:#}").contains("plaintext"),
             "error should mention plaintext; got: {err:#}"
         );
+    }
+
+    fn open_ingest_config(ingest_bind: &str, rate_limit: u32, ack: bool) -> Config {
+        let mut cfg = no_auth_config("127.0.0.1:3000", true);
+        cfg.server.ingest_bind = ingest_bind.to_string();
+        cfg.filter.rate_limit = rate_limit;
+        cfg.filter.open_ingest_unlimited_acknowledged = ack;
+        cfg
+    }
+
+    #[test]
+    fn open_unlimited_non_loopback_ingest_rejected() {
+        let cfg = open_ingest_config("0.0.0.0:3001", 0, false);
+        let err = cfg
+            .validate()
+            .expect_err("open mode + non-loopback ingest + unlimited must fail");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("open_ingest_unlimited_acknowledged"),
+            "error should point at the ack flag; got: {msg}"
+        );
+        assert!(
+            msg.contains("rate_limit") && msg.contains("closed"),
+            "error should name the other two ways out; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn open_unlimited_non_loopback_ingest_with_ack_ok() {
+        let cfg = open_ingest_config("0.0.0.0:3001", 0, true);
+        cfg.validate().expect("explicit ack should validate");
+    }
+
+    #[test]
+    fn open_rate_limited_non_loopback_ingest_ok() {
+        let cfg = open_ingest_config("0.0.0.0:3001", 300, false);
+        cfg.validate()
+            .expect("a global rate_limit should validate without the ack");
+    }
+
+    #[test]
+    fn open_unlimited_loopback_ingest_ok() {
+        let cfg = open_ingest_config("127.0.0.1:3001", 0, false);
+        cfg.validate().expect("loopback ingest needs no ack");
+    }
+
+    #[test]
+    fn closed_mode_unlimited_non_loopback_ingest_ok() {
+        let mut cfg = open_ingest_config("0.0.0.0:3001", 0, false);
+        cfg.filter.mode = RegistrationMode::Closed;
+        cfg.validate().expect("closed mode needs no ack");
     }
 
     #[test]

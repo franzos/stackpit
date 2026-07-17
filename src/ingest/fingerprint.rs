@@ -28,9 +28,8 @@ pub fn compute_fingerprint_from_value(
     item_type: &ItemType,
     json: &Value,
 ) -> Option<String> {
-    match item_type {
-        ItemType::Event => {}
-        _ => return None,
+    if !item_type.can_fingerprint() {
+        return None;
     }
 
     compute_fingerprint_inner(project_id, json)
@@ -44,9 +43,8 @@ pub fn compute_fingerprint(
     item_type: &ItemType,
     payload_json: &[u8],
 ) -> Option<String> {
-    match item_type {
-        ItemType::Event => {}
-        _ => return None,
+    if !item_type.can_fingerprint() {
+        return None;
     }
 
     let json: Value = match serde_json::from_slice(payload_json) {

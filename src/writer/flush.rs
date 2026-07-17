@@ -63,10 +63,11 @@ pub(super) async fn flush_batch(
     let should_agg = accumulators.should_flush();
 
     let mut pending = Vec::new();
+    let mut merged = false;
 
     if !should_agg {
         // Common path: no clone; do_flush_tx merges the batch scratch into the accumulators only after its commit succeeds, so a failed attempt leaves them clean and the retry is idempotent.
-        match do_flush_tx(pool, batch, false, accumulators, &mut pending).await {
+        match do_flush_tx(pool, batch, false, accumulators, &mut pending, &mut merged).await {
             Ok(t) => {
                 log_flush_timings(batch.len(), false, compress, &t);
                 return true;
@@ -75,7 +76,7 @@ pub(super) async fn flush_batch(
                 tracing::warn!("batch flush failed, retrying once: {e}");
             }
         }
-        match do_flush_tx(pool, batch, false, accumulators, &mut pending).await {
+        match do_flush_tx(pool, batch, false, accumulators, &mut pending, &mut merged).await {
             Ok(t) => {
                 log_flush_timings(batch.len(), false, compress, &t);
                 tracing::info!("batch flush retry succeeded ({} items)", batch.len());
@@ -90,9 +91,9 @@ pub(super) async fn flush_batch(
             }
         }
     } else {
-        // Aggregation path: do_flush_tx merges the batch scratch into the accumulators before the aggregation flush, so keep a snapshot to revert on failure (neither double-counting nor losing prior deltas).
+        // Aggregation path: do_flush_tx merges the batch scratch into the accumulators before the aggregation flush, so keep a snapshot to revert on failure (neither double-counting nor losing prior deltas). Restores happen only when the failed attempt actually merged, and only the intermediate one clones (`snapshot` must survive for the retry's rollback); the final restore moves.
         let snapshot = accumulators.clone();
-        match do_flush_tx(pool, batch, true, accumulators, &mut pending).await {
+        match do_flush_tx(pool, batch, true, accumulators, &mut pending, &mut merged).await {
             Ok(t) => {
                 finalize_agg_flush(accumulators, pending, notify_tx);
                 log_flush_timings(batch.len(), true, compress, &t);
@@ -101,10 +102,13 @@ pub(super) async fn flush_batch(
             Err(e) => {
                 tracing::warn!("batch flush failed, retrying once: {e}");
                 pending.clear();
-                *accumulators = snapshot.clone();
+                if merged {
+                    accumulators.clone_from(&snapshot);
+                }
             }
         }
-        match do_flush_tx(pool, batch, true, accumulators, &mut pending).await {
+        merged = false;
+        match do_flush_tx(pool, batch, true, accumulators, &mut pending, &mut merged).await {
             Ok(t) => {
                 finalize_agg_flush(accumulators, pending, notify_tx);
                 log_flush_timings(batch.len(), true, compress, &t);
@@ -116,14 +120,16 @@ pub(super) async fn flush_batch(
                     "batch flush failed after retry ({} items), pending re-queue: {e2}",
                     batch.len()
                 );
-                *accumulators = snapshot;
+                if merged {
+                    *accumulators = snapshot;
+                }
                 false
             }
         }
     }
 }
 
-/// Inserts events and (if ready) flushes aggregated issue/tag/session/txn data in one transaction, building a batch-local scratch from only the rows the insert actually created (SDK-retried duplicates are dropped by the conflict clause and must not inflate counts) and folding it into `accumulators` after commit on the non-agg path, or before the aggregation flush on the agg path so the flush includes this batch.
+/// Inserts events and (if ready) flushes aggregated issue/tag/session/txn data in one transaction, building a batch-local scratch from only the rows the insert actually created (SDK-retried duplicates are dropped by the conflict clause and must not inflate counts) and folding it into `accumulators` after commit on the non-agg path, or before the aggregation flush on the agg path so the flush includes this batch. Sets `*merged` once the scratch has been folded in pre-commit, so a failed agg attempt knows whether the caller must roll `accumulators` back.
 #[cfg(any(feature = "sqlite", test))]
 async fn do_flush_tx(
     pool: &DbPool,
@@ -131,6 +137,7 @@ async fn do_flush_tx(
     should_agg: bool,
     accumulators: &mut Accumulators,
     pending: &mut Vec<crate::notify::NotificationEvent>,
+    merged: &mut bool,
 ) -> Result<TxTimings> {
     let mut timings = TxTimings::default();
     let insert_started = Instant::now();
@@ -148,6 +155,7 @@ async fn do_flush_tx(
     }
 
     if should_agg {
+        *merged = true;
         accumulators.merge(&scratch);
         let agg_started = Instant::now();
         let threshold_candidates = flush_aggregation_inner(&mut tx, accumulators, pending).await?;

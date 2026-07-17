@@ -48,7 +48,8 @@ ingest_batch_size = 2000          # max events per ingest write transaction (see
 
 [filter]
 mode = "open"                     # "open" = auto-provision new projects on first ingest; "closed" = pre-register everything
-rate_limit = 0                    # global max events per minute (0 = unlimited)
+rate_limit = 0                    # global max events per minute (0 = unlimited; `stackpit init` writes 300)
+open_ingest_unlimited_acknowledged = false  # required for open mode + non-loopback ingest_bind + rate_limit = 0
 max_projects = 1000               # max auto-registered projects in open mode
 max_native_orgs_per_user = 10     # max organizations a single user can create
 excluded_environments = []        # environment names to reject globally
@@ -80,14 +81,14 @@ token = ""                        # lettermint / postmark API token (required wh
 # pass = ""                       # SMTP-AUTH password; refused when tls = "none"
 ```
 
-All fields have sane defaults. An empty config file works fine — though for any non-loopback deployment you'll want `external_url` set and `force_secure_cookies = true` so session cookies get the `Secure` flag.
+All fields have sane defaults, but two combinations refuse startup: no auth at all (set `server.admin_token`, configure `[auth.oauth]`, or accept the no-auth posture on a loopback bind with `no_auth_loopback_acknowledged = true`), and open mode on a non-loopback `ingest_bind` with `rate_limit = 0` (set a rate limit, switch to `mode = "closed"`, or set `open_ingest_unlimited_acknowledged = true`). For any non-loopback deployment you'll also want `external_url` set and `force_secure_cookies = true` so session cookies get the `Secure` flag.
 
 **Filter modes — what `open` vs `closed` controls is ingest admission, not event filtering:**
 
 - `open` — the first event for an unknown `project_id` auto-creates the project and registers the key it was sent with. After that, only registered keys are accepted; further keys must be added explicitly via the admin UI. Convenient for solo deployments and CI bring-up.
 - `closed` — every project and every key must be created up-front via the admin UI. Unknown `project_id` or unknown key → reject.
 
-Event-level filtering (message globs, IP CIDRs, rate limits, release/environment/user-agent rules, fingerprint discards) is layered on top of either mode and managed per-project in the web UI under **Filters**. Filtering runs in two tiers so cheap checks happen before expensive ones. Before the body is even parsed, the pre-filter runs per-key rate limits, user-agent blocks, and IP CIDR matches. Once the event is parsed, the event-level filter runs in order: fingerprint discards, built-in inbound filters (browser-extension/localhost), message globs, environment excludes, release filters, and finally custom filter rules.
+Event-level filtering (message globs, IP CIDRs, rate limits, release/environment/user-agent rules, fingerprint discards) is layered on top of either mode and managed per-project in the web UI under **Filters**. Filtering runs in two tiers so cheap checks happen before expensive ones. Before the body is even parsed, the pre-filter runs rate limits (per-key, per-project, or global; the window is shared at whichever scope supplied the limit), user-agent blocks, and IP CIDR matches. Once the event is parsed, the event-level filter runs in order: fingerprint discards, built-in inbound filters (browser-extension/localhost), message globs, environment excludes, release filters, and finally custom filter rules.
 
 ## PostgreSQL
 
@@ -129,7 +130,7 @@ Set `admin_token` in `[server]` (`stackpit init` does this for you):
 admin_token = "..."   # 64-char hex string (32 bytes) from `openssl rand -hex 32`, min 16 chars
 ```
 
-Requests need either `Authorization: Bearer <token>` or a `stackpit_token` cookie (set via `/web/login`). The cookie stores SHA-256 of the token, never the raw value.
+Requests need either `Authorization: Bearer <token>` or a `stackpit_token` cookie (set via `/web/login`). The cookie holds a random per-login session handle (24h expiry, revoked on logout), never the token itself.
 
 ### OAuth / SSO
 

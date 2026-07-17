@@ -1,7 +1,7 @@
 //! Reusable OIDC/OAuth auth primitives.
 //!
-//! The framework-agnostic core provides admin-token cookie hashing
-//! ([`hash_token_for_cookie`]), a TTL-bounded [`JwksCache`], the [`BearerGate`]
+//! The framework-agnostic core provides the admin browser-session store
+//! ([`AdminSessionStore`]), a TTL-bounded [`JwksCache`], the [`BearerGate`]
 //! dispatcher (admin-token break-glass, RS256/JWKS and RFC 7662 introspection
 //! arms, positive + revocation caches), and the [`AuthContext`] identity
 //! vocabulary. It compiles with no axum dependency.
@@ -14,7 +14,7 @@ pub mod bearer;
 pub mod context;
 pub mod jwks;
 
-pub use admin_token::hash_token_for_cookie;
+pub use admin_token::{AdminSessionStore, ADMIN_SESSION_TTL_SECS};
 pub use bearer::{
     extract_bearer, BackendError, BearerAuthOutcome, BearerGate, BearerGateConfig,
     JwtVerifierConfig, ProvisionResult, RevocationStore, UserProvisioner,

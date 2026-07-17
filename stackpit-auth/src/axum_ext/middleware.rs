@@ -6,17 +6,19 @@ use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use subtle::ConstantTimeEq;
 
-use crate::admin_token::hash_token_for_cookie;
+use crate::admin_token::AdminSessionStore;
 use crate::bearer::extract_bearer;
 use crate::context::AuthContext;
 use crate::cookie::read_cookie;
 
-/// Returns `None` if no admin credential was presented. `cookie_name` lets
-/// callers pick `__Host-`-prefixed names.
+/// Returns `None` if no admin credential was presented. The bearer arm
+/// compares the raw admin token; the cookie arm looks the per-login handle
+/// up in `sessions`. `cookie_name` lets callers pick `__Host-`-prefixed names.
 pub fn resolve_admin(
     headers: &HeaderMap,
     expected: &str,
     cookie_name: &str,
+    sessions: &AdminSessionStore,
 ) -> Option<AuthContext> {
     if let Some(bearer) = extract_bearer(headers) {
         if bearer.as_bytes().ct_eq(expected.as_bytes()).into() {
@@ -24,8 +26,7 @@ pub fn resolve_admin(
         }
     }
     if let Some(cookie_val) = read_cookie(headers, cookie_name) {
-        let expected_hash = hash_token_for_cookie(expected);
-        if cookie_val.as_bytes().ct_eq(expected_hash.as_bytes()).into() {
+        if sessions.is_valid(cookie_val) {
             return Some(AuthContext::Admin);
         }
     }

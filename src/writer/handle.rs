@@ -81,11 +81,10 @@ impl WriterHandle {
     /// instead of serializing on the writer. Large payloads go through
     /// `block_in_place` (multi-thread runtime only) to not stall the worker.
     fn compress_event(event: &mut StorableEvent) {
-        const INLINE_COMPRESS_MAX: usize = 64 * 1024;
         if event.compressed {
             return;
         }
-        if event.payload.len() > INLINE_COMPRESS_MAX {
+        if event.payload.len() > crate::util::INLINE_CPU_MAX_BYTES {
             super::block_in_place_if_multi_thread(|| event.compress_payload());
         } else {
             event.compress_payload();

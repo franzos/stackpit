@@ -3,7 +3,6 @@ mod rate_limit;
 mod web_auth;
 
 pub(crate) use stackpit_auth::cookie;
-pub use stackpit_auth::hash_token_for_cookie;
 
 pub use csrf::{csrf_middleware, derive_admin_csrf_token, CsrfConfig, CsrfToken};
 pub use rate_limit::{new_rate_limiter_state, rate_limit_middleware};

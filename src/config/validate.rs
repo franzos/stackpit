@@ -156,6 +156,8 @@ impl Config {
             );
         }
 
+        self.validate_ingest_exposure()?;
+
         if let Some(email) = &self.email {
             use polymail::provider::smtp::SmtpTls;
             use polymail::ProviderConfig;

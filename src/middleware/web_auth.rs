@@ -73,9 +73,12 @@ pub async fn web_auth_middleware(
     // 1. admin_token break-glass -- works even when Hydra is down.
     if let Some(expected) = admin_token {
         let admin_cookie = crate::html::login::admin_cookie_name(secure_cookies);
-        if let Some(ctx) =
-            auth_mw::resolve_admin(req.headers(), expected.expose_secret(), admin_cookie)
-        {
+        if let Some(ctx) = auth_mw::resolve_admin(
+            req.headers(),
+            expected.expose_secret(),
+            admin_cookie,
+            &state.admin_sessions,
+        ) {
             // Same salt cookie feeds render (here) and verify (csrf_middleware
             // reads the CsrfToken we insert), so the tokens always match. A
             // logged-in admin missing the cookie gets a fresh salt set below.
@@ -231,13 +234,21 @@ pub async fn web_auth_middleware(
                 };
                 req.extensions_mut()
                     .insert(crate::html::utils::PreferredLanguage(preferred));
-                let active_org = resolve_session_active_org(
+                // Fail closed: a DB error here must not fabricate a membership.
+                let active_org = match resolve_session_active_org(
                     &state.auth_pool,
                     user_id,
                     req.headers(),
                     state.encryptor.as_deref(),
                 )
-                .await;
+                .await
+                {
+                    Ok(org) => org,
+                    Err(e) => {
+                        tracing::error!("active-org resolution failed for user {user_id}: {e:#}");
+                        return internal_error_response(&req);
+                    }
+                };
                 req.extensions_mut().insert(active_org);
                 return next.run(req).await;
             }
@@ -253,50 +264,27 @@ pub async fn web_auth_middleware(
     unauthenticated_response(&req, secure_cookies)
 }
 
-/// Load memberships and resolve which org is active for a browser session user.
+/// Load memberships and resolve which org is active for a browser session
+/// user. DB errors propagate so the caller can fail closed instead of
+/// fabricating a membership.
 async fn resolve_session_active_org(
     pool: &crate::db::DbPool,
     user_id: i64,
     headers: &axum::http::HeaderMap,
     encryptor: Option<&crate::util::crypto::SecretEncryptor>,
-) -> crate::orgs::extractor::ActiveOrg {
+) -> anyhow::Result<crate::orgs::extractor::ActiveOrg> {
     use crate::orgs::extractor::{resolve_active_org, unpack, ActiveOrg, ACTIVE_ORG_COOKIE};
     use crate::queries::orgs::{ensure_personal_org, list_memberships, personal_org_id};
 
     // Read-only on the hot path; login (OIDC reconcile) already ensured the
     // personal org. The upsert fallback only fires for sessions that predate
     // that guarantee (e.g. grants surviving an upgrade).
-    let personal_org_id = match personal_org_id(pool, user_id).await {
-        Ok(Some(id)) => id,
-        Ok(None) => match ensure_personal_org(pool, user_id).await {
-            Ok(id) => id,
-            Err(e) => {
-                tracing::error!("ensure_personal_org failed for user {user_id}: {e:#}");
-                return ActiveOrg {
-                    org_id: 1,
-                    role: Some(crate::orgs::Role::Member),
-                };
-            }
-        },
-        Err(e) => {
-            tracing::error!("personal org lookup failed for user {user_id}: {e:#}");
-            return ActiveOrg {
-                org_id: 1,
-                role: Some(crate::orgs::Role::Member),
-            };
-        }
+    let personal_org_id = match personal_org_id(pool, user_id).await? {
+        Some(id) => id,
+        None => ensure_personal_org(pool, user_id).await?,
     };
 
-    let memberships = match list_memberships(pool, user_id).await {
-        Ok(m) => m,
-        Err(e) => {
-            tracing::error!("list_memberships failed for user {user_id}: {e:#}");
-            return ActiveOrg {
-                org_id: personal_org_id,
-                role: Some(crate::orgs::Role::Member),
-            };
-        }
-    };
+    let memberships = list_memberships(pool, user_id).await?;
 
     let cookie_org = encryptor.and_then(|enc| {
         crate::middleware::cookie::read_cookie(headers, ACTIVE_ORG_COOKIE)
@@ -312,9 +300,22 @@ async fn resolve_session_active_org(
         .map(|m| crate::orgs::Role::parse(&m.role))
         .unwrap_or(crate::orgs::Role::Member);
 
-    ActiveOrg {
+    Ok(ActiveOrg {
         org_id,
         role: Some(role),
+    })
+}
+
+fn internal_error_response(req: &Request<Body>) -> Response {
+    let status = axum::http::StatusCode::INTERNAL_SERVER_ERROR;
+    if auth_mw::wants_html(req.headers()) {
+        (status, "internal error").into_response()
+    } else {
+        (
+            status,
+            axum::Json(serde_json::json!({ "error": "internal error" })),
+        )
+            .into_response()
     }
 }
 
@@ -362,7 +363,9 @@ mod tests {
 
         // Pre-existing session without a personal org: fallback creates it once.
         let headers = axum::http::HeaderMap::new();
-        let active = super::resolve_session_active_org(&pool, u.user_id, &headers, None).await;
+        let active = super::resolve_session_active_org(&pool, u.user_id, &headers, None)
+            .await
+            .unwrap();
         let personal = crate::queries::orgs::personal_org_id(&pool, u.user_id)
             .await
             .unwrap()
@@ -371,9 +374,28 @@ mod tests {
         assert_eq!(active.role, Some(crate::orgs::Role::Owner));
 
         // Once it exists, the read-only path resolves the same org.
-        let active2 = super::resolve_session_active_org(&pool, u.user_id, &headers, None).await;
+        let active2 = super::resolve_session_active_org(&pool, u.user_id, &headers, None)
+            .await
+            .unwrap();
         assert_eq!(active2.org_id, personal);
         assert_eq!(active2.role, Some(crate::orgs::Role::Owner));
+    }
+
+    #[tokio::test]
+    async fn resolve_active_org_fails_closed_on_db_error() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        let u =
+            crate::queries::users::upsert_from_oidc(&pool, "https://idp", "sub-err", None, None)
+                .await
+                .unwrap();
+        pool.close().await;
+
+        let headers = axum::http::HeaderMap::new();
+        let res = super::resolve_session_active_org(&pool, u.user_id, &headers, None).await;
+        assert!(
+            res.is_err(),
+            "a DB error must propagate, not fabricate a membership"
+        );
     }
 
     #[test]

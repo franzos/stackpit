@@ -846,10 +846,68 @@ pub async fn delete_project_in_tx(
     Ok(())
 }
 
+/// Per-chunk delete cap; keeps each write-lock hold short so ingest can interleave.
+const DELETE_CHUNK_LIMIT: i64 = 5000;
+
+/// Chunk-delete rows matching `where_clause` (binding ?1 = pid), pausing
+/// between chunks so a waiting writer can grab the DB write lock.
+async fn chunked_delete(
+    pool: &crate::db::DbPool,
+    table: &str,
+    where_clause: &str,
+    pid: i64,
+) -> Result<()> {
+    #[cfg(feature = "sqlite")]
+    let row_ref = "rowid";
+    #[cfg(not(feature = "sqlite"))]
+    let row_ref = "ctid";
+
+    loop {
+        let raw = format!(
+            "DELETE FROM {table} WHERE {row_ref} IN (
+                SELECT {row_ref} FROM {table} WHERE {where_clause} LIMIT ?2
+            )"
+        );
+        let stmt = crate::db::translate_sql(&raw);
+        let deleted = sqlx::query(&stmt)
+            .bind(pid)
+            .bind(DELETE_CHUNK_LIMIT)
+            .execute(pool)
+            .await?
+            .rows_affected();
+
+        if deleted < DELETE_CHUNK_LIMIT as u64 {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Chunk-delete a project's high-volume rows (attachments, events, logs,
+/// spans, metrics) outside any transaction, so a following transactional
+/// cascade only holds the write lock for the small metadata tables.
+pub(crate) async fn prechunk_project_data(pool: &crate::db::DbPool, pid: i64) -> Result<()> {
+    chunked_delete(
+        pool,
+        "attachments",
+        "event_id IN (SELECT event_id FROM events WHERE project_id = ?1)",
+        pid,
+    )
+    .await?;
+    for table in ["events", "logs", "spans", "metrics"] {
+        chunked_delete(pool, table, "project_id = ?1", pid).await?;
+    }
+    Ok(())
+}
+
 /// Delete a project and everything it owns (events, issues, keys, repos, releases).
 pub async fn delete_project(pool: &crate::db::DbPool, project_id: u64) -> Result<()> {
+    let pid = project_id as i64;
+
+    prechunk_project_data(pool, pid).await?;
+
     let mut tx = pool.begin().await?;
-    delete_project_in_tx(&mut tx, project_id as i64).await?;
+    delete_project_in_tx(&mut tx, pid).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -1209,6 +1267,82 @@ mod tests {
                 "table `{table}` has a project_id column but is not in PROJECT_SCOPED_TABLES; \
                  add it (and a delete_project case) or it will orphan rows"
             );
+        }
+    }
+
+    /// The standalone path (chunked pre-deletes + final transactional cascade)
+    /// must leave no rows behind in any table the project touches.
+    #[tokio::test]
+    async fn delete_project_removes_events_and_attachments() {
+        let pool = open_test_db().await;
+        set_project_org(&pool, 77, ORG_A).await;
+
+        insert_test_event(&pool, "ev1", 77, 1000, Some("fp77"), Some("error"), None).await;
+        insert_test_event(&pool, "ev2", 77, 1000, Some("fp77"), Some("error"), None).await;
+        insert_test_issue(
+            &pool,
+            "fp77",
+            77,
+            Some("t"),
+            Some("error"),
+            0,
+            0,
+            2,
+            "unresolved",
+        )
+        .await;
+
+        sqlx::query(sql!(
+            "INSERT INTO attachments (event_id, filename, data) VALUES ('ev1', 'a.txt', ?1)"
+        ))
+        .bind(&b"blob"[..])
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO logs (payload, project_id, public_key, timestamp) VALUES (?1, 77, 'k', 0)"
+        ))
+        .bind(&b"{}"[..])
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO spans (span_id, payload, project_id, public_key, timestamp) VALUES ('s1', ?1, 77, 'k', 0)"
+        ))
+        .bind(&b"{}"[..])
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO metrics (project_id, timestamp, mri, metric_type) VALUES (77, 0, 'm', 'c')"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO project_keys (public_key, project_id) VALUES ('key77', 77)"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        delete_project(&pool, 77).await.unwrap();
+
+        for table in [
+            "events",
+            "attachments",
+            "logs",
+            "spans",
+            "metrics",
+            "issues",
+            "project_keys",
+            "projects",
+        ] {
+            let n: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(n, 0, "table `{table}` should be empty after delete_project");
         }
     }
 

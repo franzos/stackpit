@@ -5,9 +5,13 @@ use crate::ingest::models::{ItemType, StorableEvent};
 use serde_json::Value;
 
 /// Parse the JSON payload and fill in `fingerprint` (if missing) and `title`.
-/// Skips re-parsing if both are already set (e.g. from `extract_fields`).
+/// Skips re-parsing when nothing is left to compute (e.g. after `extract_fields`).
 pub fn enrich_event(event: &mut StorableEvent) {
-    if event.fingerprint.is_some() && event.title.is_some() {
+    let need_fingerprint = event.fingerprint.is_none() && event.item_type.can_fingerprint();
+    // Log batches carry no title fields; their entries were already extracted.
+    let need_title =
+        event.title.is_none() && !(event.item_type == ItemType::Log && event.log_entries.is_some());
+    if !need_fingerprint && !need_title {
         return;
     }
 
@@ -16,11 +20,11 @@ pub fn enrich_event(event: &mut StorableEvent) {
         Err(_) => return,
     };
 
-    if event.fingerprint.is_none() {
+    if need_fingerprint {
         event.fingerprint =
             fingerprint::compute_fingerprint_from_value(event.project_id, &event.item_type, &json);
     }
-    if event.title.is_none() {
+    if need_title {
         if let Some(title) = extract_title(&json, &event.item_type, event.monitor_slug.as_deref()) {
             event.title = Some(title);
         }
@@ -220,6 +224,37 @@ mod tests {
         let mut event = make_event(&json, ItemType::UserReport);
         enrich_event(&mut event);
         assert_eq!(event.title.as_deref(), Some("User Report from Alice"));
+    }
+
+    #[test]
+    fn enrich_titled_non_fingerprintable_skips_payload() {
+        let json = serde_json::json!({"transaction": "/other"});
+        let mut event = make_event(&json, ItemType::Transaction);
+        event.title = Some("/api/health".to_string());
+        enrich_event(&mut event);
+        // nothing left to compute: no fingerprint for transactions, title kept
+        assert!(event.fingerprint.is_none());
+        assert_eq!(event.title.as_deref(), Some("/api/health"));
+    }
+
+    #[test]
+    fn enrich_log_batch_skips_payload() {
+        let json = serde_json::json!({"items": []});
+        let mut event = make_event(&json, ItemType::Log);
+        event.log_entries = Some(Vec::new());
+        enrich_event(&mut event);
+        assert!(event.fingerprint.is_none());
+        assert!(event.title.is_none());
+    }
+
+    #[test]
+    fn enrich_event_without_fingerprint_still_enriched() {
+        let json = serde_json::json!({"message": "hello"});
+        let mut event = make_event(&json, ItemType::Event);
+        event.title = Some("preset".to_string());
+        enrich_event(&mut event);
+        assert!(event.fingerprint.is_some());
+        assert_eq!(event.title.as_deref(), Some("preset"));
     }
 
     #[test]

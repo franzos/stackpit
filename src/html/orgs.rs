@@ -977,6 +977,14 @@ pub async fn delete_org(
             &chrome.locale,
         ),
         Ok(DeleteOrgOutcome::Deleted(counts)) => {
+            // Flush the auth caches or ingestion to the deleted projects keeps working until the entries expire.
+            for pid in &counts.project_ids {
+                crate::ingest::auth::invalidate_project(
+                    &state.auth_cache,
+                    &state.negative_auth_cache,
+                    *pid as u64,
+                );
+            }
             let actor = opt_auth
                 .as_ref()
                 .map(|e| e.0.source())

@@ -47,9 +47,10 @@ pub async fn list_spans(
     Ok(PagedResult::from_page(items, total, page))
 }
 
-/// Newest spans to scan when aggregating by (op, description). Bounds the read
-/// so a busy project can't force an unbounded table scan; the spans page has no
-/// period filter, so we cap on recency via the (project_id, timestamp) index.
+/// Newest spans to scan when aggregating (by (op, description) or by trace).
+/// Bounds the read so a busy project can't force an unbounded table scan; the
+/// spans page has no period filter, so we cap on recency via the
+/// (project_id, timestamp) index.
 const SPAN_AGG_SCAN_LIMIT: i64 = 50_000;
 /// Most (op, description) groups to render; the tail is dropped and flagged.
 pub const MAX_SPAN_GROUPS: usize = 100;
@@ -509,10 +510,25 @@ pub async fn list_traces(
     project_id: u64,
     page: &Page,
 ) -> Result<PagedResult<TraceSummary>> {
+    list_traces_with_scan_limit(pool, project_id, page, SPAN_AGG_SCAN_LIMIT).await
+}
+
+async fn list_traces_with_scan_limit(
+    pool: &crate::db::DbPool,
+    project_id: u64,
+    page: &Page,
+    scan_limit: i64,
+) -> Result<PagedResult<TraceSummary>> {
+    // Count over the same recency window as the listing so pagination stays consistent with what the bounded scan can return.
     let count_row = sqlx::query(sql!(
-        "SELECT COUNT(DISTINCT trace_id) FROM spans WHERE project_id = ?1 AND trace_id IS NOT NULL"
+        "SELECT COUNT(DISTINCT trace_id) FROM (
+            SELECT trace_id FROM spans
+            WHERE project_id = ?1 AND trace_id IS NOT NULL
+            ORDER BY timestamp DESC
+            LIMIT ?2) recent"
     ))
     .bind(project_id as i64)
+    .bind(scan_limit)
     .fetch_one(pool)
     .await?;
     let total = count_row.get::<i64, _>(0);
@@ -522,46 +538,77 @@ pub async fn list_traces(
                 COUNT(*) AS span_count,
                 MIN(timestamp) AS first_timestamp,
                 MAX(timestamp) AS last_timestamp,
-                MAX(start_ms + COALESCE(duration_ms, 0)) - MIN(start_ms) AS span_extent_ms,
-                (SELECT MAX(e.duration_ms) FROM events e
-                 WHERE e.project_id = ?1 AND e.trace_id = spans.trace_id AND e.item_type = 'transaction') AS root_duration_ms,
-                (SELECT MAX(e.transaction_name) FROM events e
-                 WHERE e.project_id = ?1 AND e.trace_id = spans.trace_id AND e.item_type = 'transaction') AS root_txn_name
-         FROM spans
-         WHERE project_id = ?1 AND trace_id IS NOT NULL
+                MAX(start_ms + COALESCE(duration_ms, 0)) - MIN(start_ms) AS span_extent_ms
+         FROM (SELECT trace_id, timestamp, start_ms, duration_ms
+               FROM spans
+               WHERE project_id = ?1 AND trace_id IS NOT NULL
+               ORDER BY timestamp DESC
+               LIMIT ?2) recent
          GROUP BY trace_id
          ORDER BY last_timestamp DESC
-         LIMIT ?2 OFFSET ?3"
+         LIMIT ?3 OFFSET ?4"
     ))
     .bind(project_id as i64)
+    .bind(scan_limit)
     .bind(page.limit as i64)
     .bind(page.offset as i64)
     .fetch_all(pool)
     .await?;
 
-    // transaction_name fallback for root_description when no stored root span supplies one.
-    let mut fallback_names: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
     let mut items: Vec<TraceSummary> = Vec::with_capacity(rows.len());
     for row in &rows {
-        let trace_id: String = row.get_opt_string("trace_id").unwrap_or_default();
         let span_extent_ms = row
             .get::<Option<i64>, _>("span_extent_ms")
             .unwrap_or(0)
             .max(0);
-        let root_duration_ms = row.get::<Option<i64>, _>("root_duration_ms").unwrap_or(0);
-        if let Some(name) = row.get_opt_string("root_txn_name") {
-            fallback_names.insert(trace_id.clone(), name);
-        }
         items.push(TraceSummary {
-            trace_id,
+            trace_id: row.get_opt_string("trace_id").unwrap_or_default(),
             span_count: row.get_u64("span_count"),
             first_timestamp: row.get("first_timestamp"),
             last_timestamp: row.get("last_timestamp"),
             root_op: None,
             root_description: None,
-            total_duration_ms: Some(span_extent_ms.max(root_duration_ms)),
+            total_duration_ms: Some(span_extent_ms),
         });
+    }
+
+    // transaction_name fallback for root_description when no stored root span supplies one.
+    let mut fallback_names: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+
+    if !items.is_empty() {
+        // One batched lookup for the page's owning transactions (duration + name)
+        // instead of correlated subqueries inside the GROUP BY over all spans.
+        let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new(
+            "SELECT trace_id, MAX(duration_ms) AS root_duration_ms, MAX(transaction_name) AS root_txn_name
+             FROM events WHERE item_type = 'transaction' AND trace_id IN (",
+        );
+        let mut sep = qb.separated(", ");
+        for item in &items {
+            sep.push_bind(item.trace_id.clone());
+        }
+        qb.push(") AND project_id = ");
+        qb.push_bind(project_id as i64);
+        qb.push(" GROUP BY trace_id");
+        let txn_meta_rows = qb.build().fetch_all(pool).await?;
+
+        let mut duration_map: std::collections::HashMap<String, i64> =
+            std::collections::HashMap::new();
+        for row in &txn_meta_rows {
+            let tid: String = row.get_opt_string("trace_id").unwrap_or_default();
+            if let Some(d) = row.get::<Option<i64>, _>("root_duration_ms") {
+                duration_map.insert(tid.clone(), d);
+            }
+            if let Some(name) = row.get_opt_string("root_txn_name") {
+                fallback_names.insert(tid, name);
+            }
+        }
+
+        for item in &mut items {
+            if let Some(root_duration_ms) = duration_map.remove(&item.trace_id) {
+                item.total_duration_ms = item.total_duration_ms.map(|e| e.max(root_duration_ms));
+            }
+        }
     }
 
     if !items.is_empty() {
@@ -1061,6 +1108,36 @@ mod tests {
         assert_eq!(t.total_duration_ms, Some(1000));
         assert_eq!(t.root_description.as_deref(), Some("GET /checkout"));
         assert_eq!(t.root_op.as_deref(), Some("http.server"));
+    }
+
+    // The trace listing (count + GROUP BY) must only scan the newest
+    // `scan_limit` spans, so older traces fall out of both the page and the total.
+    #[tokio::test]
+    async fn list_traces_scan_limit_bounds_to_newest_spans() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        insert_span(&pool, "o1", "t_old", None, 1, 100, 0, 10, None, None).await;
+        insert_span(&pool, "o2", "t_old", None, 1, 101, 0, 10, None, None).await;
+        insert_span(&pool, "n1", "t_new", None, 1, 200, 0, 10, None, None).await;
+        insert_span(&pool, "n2", "t_new", None, 1, 201, 0, 10, None, None).await;
+
+        let page = Page {
+            offset: 0,
+            limit: 50,
+        };
+        let bounded = list_traces_with_scan_limit(&pool, 1, &page, 2)
+            .await
+            .unwrap();
+        assert_eq!(bounded.total, 1, "count must respect the scan bound");
+        assert_eq!(bounded.items.len(), 1);
+        assert_eq!(bounded.items[0].trace_id, "t_new");
+        assert_eq!(bounded.items[0].span_count, 2);
+
+        let unbounded = list_traces_with_scan_limit(&pool, 1, &page, 1000)
+            .await
+            .unwrap();
+        assert_eq!(unbounded.total, 2);
+        assert_eq!(unbounded.items[0].trace_id, "t_new");
+        assert_eq!(unbounded.items[1].trace_id, "t_old");
     }
 
     #[test]

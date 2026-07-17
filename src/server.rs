@@ -58,6 +58,8 @@ pub struct AppState {
     pub trusted_proxies: Arc<crate::util::network::TrustedProxies>,
     pub encryptor: Option<Arc<SecretEncryptor>>,
     pub ingest_stats: Arc<IngestStats>,
+    /// Admin browser sessions (per-login random handles; dropped on restart).
+    pub admin_sessions: Arc<stackpit_auth::AdminSessionStore>,
     /// `Some` iff `[auth.oauth]` is configured and discovery succeeded.
     pub oidc: Option<Arc<OidcClient>>,
     /// Web gate: introspects the cookie-indexed grant's access token.
@@ -385,6 +387,7 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
         trusted_proxies,
         encryptor,
         ingest_stats,
+        admin_sessions: Arc::new(stackpit_auth::AdminSessionStore::new()),
         oidc: oidc.clone(),
         web_bearer_gate: web_bearer_gate.clone(),
         mcp: mcp.clone(),

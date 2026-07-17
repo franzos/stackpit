@@ -97,7 +97,7 @@ The repo ships `stackpit-bench`, an open-loop load generator that ramps Sentry e
 - During the overload probes (14,000 and 16,000/s offered) the server accepted and persisted **12,000-13,000 events/s in bursts** and shed the rest with HTTP 503 backpressure; nothing is dropped silently. The knee varies between 12,000 and 14,000/s run to run on this machine (some runs hold 12,600/s for the full soak), hence the conservative sustained figure.
 - Payloads are ~2.9 KiB error events across 100 distinct issues.
 
-To reproduce (fresh database; the default `mode = "open"` auto-provisions the project on the first envelope):
+To reproduce (fresh database; `mode = "open"` auto-provisions the project on the first envelope). In `stackpit.toml`, set `ingest_bind = "127.0.0.1:3001"` and `rate_limit = 0` under `[filter]` first: `stackpit init` writes a default rate limit, and unlimited open-mode ingest requires a loopback bind (or an explicit `open_ingest_unlimited_acknowledged = true`):
 
 ```bash
 cargo build --release -p stackpit-bench

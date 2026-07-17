@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- Startup check refuses open-mode ingest on a public bind with no rate limit, unless `open_ingest_unlimited_acknowledged` is set; `stackpit init` now generates a default rate limit
+- Admin browser logins get a random per-session cookie with 24h expiry; logout revokes it
+
+### Changed
+- Rate limits now enforce their scope: a per-project limit is shared across all of the project's DSN keys, and the global limit across all ingest
+- Traces list queries are bounded to the newest 50,000 spans
+
+### Fixed
+- Ingest auth no longer reads a database error as "project missing", which in open mode could let a new key register into an existing project
+- Web sessions fail closed instead of falling back to the default organization when a database error occurs during org resolution
+
 ## [0.3.15] - 2026-07-13
 
 ### Added

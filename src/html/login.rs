@@ -191,8 +191,16 @@ pub async fn handle_login(
         let secure = state.config.server.cookies_should_be_secure();
         let secure_flag = if secure { "; Secure" } else { "" };
         let name = admin_cookie_name(secure);
-        let hashed = crate::middleware::hash_token_for_cookie(&token);
-        let cookie = format!("{name}={hashed}; Path=/; SameSite=Strict; HttpOnly{secure_flag}");
+        // Per-login random handle, validated against the server-side store;
+        // the cookie never carries anything derived from admin_token.
+        let handle = crate::util::crypto::random_hex::<32>();
+        let ttl = stackpit_auth::ADMIN_SESSION_TTL_SECS;
+        state
+            .admin_sessions
+            .insert(&handle, std::time::Duration::from_secs(ttl));
+        let cookie = format!(
+            "{name}={handle}; Path=/; SameSite=Strict; HttpOnly; Max-Age={ttl}{secure_flag}"
+        );
         // Fresh per-login salt so the CSRF token isn't a fixed function of admin_token.
         let salt = crate::util::crypto::random_hex::<32>();
         let salt_cookie = build_csrf_salt_cookie(&salt, secure);
@@ -225,6 +233,13 @@ pub struct LoginForm {
 /// server-side grant and runs RP-initiated logout against the IdP.
 pub async fn handle_logout(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     let secure = state.config.server.cookies_should_be_secure();
+
+    // Revoke server-side so the handle dies even if the cookie clear is lost.
+    for name in [ADMIN_COOKIE, ADMIN_COOKIE_HOST] {
+        if let Some(handle) = stackpit_auth::read_cookie(&headers, name) {
+            state.admin_sessions.revoke(handle);
+        }
+    }
 
     let mut had_grant = false;
     let mut id_token_hint = None;

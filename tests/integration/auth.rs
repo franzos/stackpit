@@ -3,8 +3,7 @@
 
 use crate::common;
 
-#[tokio::test]
-async fn login_sets_sha256_cookie_and_redirects() {
+async fn login_session_cookie() -> String {
     let c = common::client();
     let resp = c
         .post(format!("{}/web/login", common::admin_url()))
@@ -19,31 +18,49 @@ async fn login_sets_sha256_cookie_and_redirects() {
         "/web/projects/"
     );
 
-    let set_cookie = resp
-        .headers()
+    resp.headers()
         .get_all("set-cookie")
         .iter()
         .map(|v| v.to_str().unwrap().to_string())
         .find(|c| c.starts_with("stackpit_token=") || c.starts_with("__Host-stackpit_token="))
-        .expect("admin session Set-Cookie");
+        .expect("admin session Set-Cookie")
+}
+
+#[tokio::test]
+async fn login_sets_random_session_cookie_and_redirects() {
+    let set_cookie = login_session_cookie().await;
 
     assert!(set_cookie.contains("HttpOnly"), "cookie must be HttpOnly");
     assert!(
         set_cookie.contains("SameSite=Strict"),
         "cookie must be SameSite=Strict"
     );
+    assert!(
+        set_cookie.contains("Max-Age="),
+        "cookie must carry an absolute expiry"
+    );
 
-    let value = set_cookie
-        .split_once('=')
-        .unwrap()
-        .1
-        .split(';')
-        .next()
-        .unwrap();
-    assert_eq!(
-        value,
-        stackpit_auth::hash_token_for_cookie(&common::admin_token()),
-        "cookie value must equal SHA-256(admin_token)"
+    let value = |sc: &str| {
+        sc.split_once('=')
+            .unwrap()
+            .1
+            .split(';')
+            .next()
+            .unwrap()
+            .to_string()
+    };
+    let first = value(&set_cookie);
+    assert_eq!(first.len(), 64, "handle must be 64 hex chars");
+    assert!(
+        first.chars().all(|c| c.is_ascii_hexdigit()),
+        "handle must be hex"
+    );
+
+    // Per-login random handle: a second login must mint a different value.
+    let second = value(&login_session_cookie().await);
+    assert_ne!(
+        first, second,
+        "cookie value must be random per login, not derived from admin_token"
     );
 }
 
@@ -74,6 +91,53 @@ async fn logout_succeeds_without_csrf_token() {
     assert_eq!(
         resp.headers().get("location").unwrap().to_str().unwrap(),
         "/web/login"
+    );
+}
+
+#[tokio::test]
+async fn logout_revokes_admin_session_handle() {
+    let set_cookie = login_session_cookie().await;
+    let cookie_pair = set_cookie.split(';').next().unwrap().to_string();
+
+    // Jarless client so the replayed cookie is exactly what we set.
+    let c = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+
+    let authed = c
+        .get(format!("{}/web/projects/", common::admin_url()))
+        .header("cookie", &cookie_pair)
+        .header("accept", "text/html")
+        .send()
+        .await
+        .expect("GET projects with session cookie");
+    assert_eq!(
+        authed.status().as_u16(),
+        200,
+        "fresh handle must authenticate"
+    );
+
+    let logout = c
+        .post(format!("{}/web/logout", common::admin_url()))
+        .header("cookie", &cookie_pair)
+        .form(&[("csrf_token", "x")])
+        .send()
+        .await
+        .expect("POST /web/logout");
+    assert_eq!(logout.status().as_u16(), 303, "logout should 303");
+
+    let replay = c
+        .get(format!("{}/web/projects/", common::admin_url()))
+        .header("cookie", &cookie_pair)
+        .header("accept", "text/html")
+        .send()
+        .await
+        .expect("GET projects with revoked cookie");
+    assert_eq!(
+        replay.status().as_u16(),
+        303,
+        "revoked handle must bounce to login, not authenticate"
     );
 }
 

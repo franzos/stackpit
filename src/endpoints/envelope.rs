@@ -24,7 +24,13 @@ pub async fn handle(
         Err(resp) => return resp,
     };
 
-    let parsed = match envelope::parse(&body, project_id, &auth) {
+    // Large envelopes (up to max_body_size) parse JSON off the reactor, matching the writer's compression threshold.
+    let parse_result = if body.len() > crate::util::INLINE_CPU_MAX_BYTES {
+        crate::writer::block_in_place_if_multi_thread(|| envelope::parse(&body, project_id, &auth))
+    } else {
+        envelope::parse(&body, project_id, &auth)
+    };
+    let parsed = match parse_result {
         Ok(p) => p,
         Err(e) => {
             tracing::warn!("envelope parse error: {e}");

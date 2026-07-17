@@ -87,15 +87,44 @@ pub async fn delete_old_events(pool: &DbPool, retention_days: u32) -> Result<usi
     total_deleted += delete_old_logs(pool, cutoff).await?;
     total_deleted += delete_old_transaction_metrics(pool, cutoff).await?;
 
-    // Vacuum outside any transaction so it doesn't hold the write lock.
     #[cfg(feature = "sqlite")]
     if total_deleted > 0 {
-        if let Err(e) = sqlx::query("PRAGMA incremental_vacuum").execute(pool).await {
+        if let Err(e) = incremental_vacuum(pool).await {
             tracing::warn!("retention: incremental_vacuum failed: {e}");
         }
     }
 
     Ok(total_deleted)
+}
+
+/// Pages reclaimed per vacuum batch; keeps each write-lock hold short.
+#[cfg(feature = "sqlite")]
+const VACUUM_BATCH_PAGES: i64 = 1000;
+
+/// Reclaim freelist pages in bounded batches with pauses in between: an
+/// unbounded `incremental_vacuum` holds the write lock for the whole run,
+/// long enough to starve the ingest writer past its retry ceiling.
+#[cfg(feature = "sqlite")]
+pub(crate) async fn incremental_vacuum(pool: &DbPool) -> Result<()> {
+    loop {
+        let before: i64 = sqlx::query_scalar("PRAGMA freelist_count")
+            .fetch_one(pool)
+            .await?;
+        if before == 0 {
+            return Ok(());
+        }
+        sqlx::query(&format!("PRAGMA incremental_vacuum({VACUUM_BATCH_PAGES})"))
+            .execute(pool)
+            .await?;
+        let after: i64 = sqlx::query_scalar("PRAGMA freelist_count")
+            .fetch_one(pool)
+            .await?;
+        // No progress means the db can't shrink further (e.g. not auto_vacuum=incremental).
+        if after == 0 || after >= before {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
 }
 
 async fn delete_old_spans(pool: &DbPool, cutoff: i64) -> Result<usize> {
@@ -300,6 +329,20 @@ mod tests {
             .fetch_one(pool)
             .await
             .unwrap()
+    }
+
+    // The batched vacuum must terminate even when the db can't shrink
+    // (freelist not draining, e.g. auto_vacuum off).
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn incremental_vacuum_terminates() {
+        let pool = open_test_db().await;
+        insert_test_event(&pool, "e1", 1, 0, None, None, None).await;
+        sqlx::query("DELETE FROM events")
+            .execute(&pool)
+            .await
+            .unwrap();
+        incremental_vacuum(&pool).await.unwrap();
     }
 
     // Guards the reconcile-correctness contract: fingerprints reconciled after a delete must exactly cover the deleted rows; asserts the happy-path invariant, since the real divergence is a nondeterministic LIMIT-scan race.

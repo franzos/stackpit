@@ -186,6 +186,11 @@ impl ItemType {
         }
     }
 
+    /// Only error events produce issues; every other item type never gets a fingerprint.
+    pub fn can_fingerprint(&self) -> bool {
+        matches!(self, Self::Event)
+    }
+
     /// Storage table this item writes to. Exhaustive on purpose: spans, metrics
     /// and logs get dedicated tables, everything else lands in the events table.
     pub fn storage_bucket(&self) -> StorageBucket {

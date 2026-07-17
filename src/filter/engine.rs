@@ -24,6 +24,16 @@ pub enum PreFilterReject {
     DroppedIp,
 }
 
+/// Sliding-window key: the scope that supplied the effective limit, so a
+/// per-project limit is shared across all of that project's DSN keys and the
+/// global limit is one shared window (not silently multiplied per key).
+#[derive(Hash, PartialEq, Eq)]
+enum RateScope {
+    Key(Box<str>),
+    Project(u64),
+    Global,
+}
+
 /// Immutable lookup data, swapped atomically on reload so readers never see
 /// a half-updated state.
 struct FilterSnapshot {
@@ -75,8 +85,8 @@ pub struct FilterEngine {
     snapshot: arc_swap::ArcSwap<FilterSnapshot>,
     /// Separate from snapshot: fingerprints get added/removed on the fly.
     discarded: RwLock<HashSet<String>>,
-    /// Per-key sliding windows.
-    rate_windows: dashmap::DashMap<Box<str>, SlidingWindow>,
+    /// Per-scope sliding windows.
+    rate_windows: dashmap::DashMap<RateScope, SlidingWindow>,
     global_rate_limit: u32,
     global_excluded_environments: Vec<String>,
     /// Pre-lowercased for case-insensitive glob matching.
@@ -256,13 +266,15 @@ impl FilterEngine {
             .unwrap_or_default()
             .as_secs();
 
-        // Priority: per-key > per-project > global.
-        let limit = snap
-            .rate_limits_by_key
-            .get(public_key)
-            .copied()
-            .or_else(|| snap.rate_limits_by_project.get(&project_id).copied())
-            .unwrap_or(self.global_rate_limit);
+        // Priority: per-key > per-project > global. The window is keyed by
+        // whichever scope supplied the limit.
+        let (limit, scope) = if let Some(&limit) = snap.rate_limits_by_key.get(public_key) {
+            (limit, RateScope::Key(Box::from(public_key)))
+        } else if let Some(&limit) = snap.rate_limits_by_project.get(&project_id) {
+            (limit, RateScope::Project(project_id))
+        } else {
+            (self.global_rate_limit, RateScope::Global)
+        };
 
         if limit == 0 {
             return Ok(());
@@ -274,7 +286,7 @@ impl FilterEngine {
         {
             let mut window = self
                 .rate_windows
-                .entry(Box::from(public_key))
+                .entry(scope)
                 .or_insert_with(SlidingWindow::new);
             window.advance(now_secs);
 
@@ -559,20 +571,25 @@ mod tests {
     }
 
     // Guards against the entry-guard-held-across-retain reentrant deadlock.
+    // Two keys/projects: the global limit is one shared window.
     #[test]
     fn rate_limit_eviction_does_not_deadlock() {
         let mut engine = FilterEngine::new(FilterData::default(), 5, vec![], vec![]);
         // Backdate the throttle so eviction's `allow(now, 60)` fires on the first call.
         engine.backdate_eviction_throttle(0);
 
-        for _ in 0..5 {
-            assert!(engine.check_rate_limit("testkey", 1).is_ok());
+        for _ in 0..3 {
+            assert!(engine.check_rate_limit("key-a", 1).is_ok());
         }
-        assert!(engine.check_rate_limit("testkey", 1).is_err());
+        for _ in 0..2 {
+            assert!(engine.check_rate_limit("key-b", 2).is_ok());
+        }
+        assert!(engine.check_rate_limit("key-c", 3).is_err());
     }
 
     // Per-project and per-key limits drive the same eviction path as the global
-    // limit; guard the reentrant-deadlock fix on those branches too.
+    // limit; guard the reentrant-deadlock fix on those branches too. Two keys:
+    // a project limit is shared across the project's DSN keys.
     #[test]
     fn rate_limit_eviction_does_not_deadlock_per_project() {
         let mut data = FilterData::default();
@@ -580,10 +597,13 @@ mod tests {
         let mut engine = FilterEngine::new(data, 0, vec![], vec![]);
         engine.backdate_eviction_throttle(0);
 
-        for _ in 0..5 {
-            assert!(engine.check_rate_limit("anykey", 1).is_ok());
+        for _ in 0..3 {
+            assert!(engine.check_rate_limit("key-a", 1).is_ok());
         }
-        assert!(engine.check_rate_limit("anykey", 1).is_err());
+        for _ in 0..2 {
+            assert!(engine.check_rate_limit("key-b", 1).is_ok());
+        }
+        assert!(engine.check_rate_limit("key-a", 1).is_err());
     }
 
     #[test]
@@ -597,6 +617,38 @@ mod tests {
             assert!(engine.check_rate_limit("testkey", 1).is_ok());
         }
         assert!(engine.check_rate_limit("testkey", 1).is_err());
+    }
+
+    #[test]
+    fn project_rate_limit_scoped_to_project() {
+        let mut data = FilterData::default();
+        data.rate_limits.insert("project:1".to_string(), 5);
+        let engine = FilterEngine::new(data, 0, vec![], vec![]);
+
+        for _ in 0..5 {
+            assert!(engine.check_rate_limit("key-a", 1).is_ok());
+        }
+        assert!(engine.check_rate_limit("key-b", 1).is_err());
+        // Another project has no limit (global is 0 = unlimited).
+        assert!(engine.check_rate_limit("key-a", 2).is_ok());
+    }
+
+    #[test]
+    fn per_key_rate_limit_stays_per_key() {
+        let mut data = FilterData::default();
+        data.rate_limits.insert("key:limited".to_string(), 5);
+        data.rate_limits.insert("project:1".to_string(), 5);
+        let engine = FilterEngine::new(data, 0, vec![], vec![]);
+
+        for _ in 0..5 {
+            assert!(engine.check_rate_limit("limited", 1).is_ok());
+        }
+        assert!(engine.check_rate_limit("limited", 1).is_err());
+        // The per-key window didn't consume the project's budget.
+        for _ in 0..5 {
+            assert!(engine.check_rate_limit("other", 1).is_ok());
+        }
+        assert!(engine.check_rate_limit("other", 1).is_err());
     }
 
     #[test]

@@ -1,0 +1,20 @@
+# src = "." roots the book at docs/ so the existing guides and READMEs keep
+# their paths; files not listed in SUMMARY.md are never published.
+[book]
+title = "Stackpit"
+description = "A drop-in, self-hosted replacement for Sentry's event ingestion and browsing."
+authors = ["Franz Geffke"]
+language = "en"
+src = "."
+
+[build]
+build-dir = "book"
+
+[output.html]
+git-repository-url = "https://github.com/franzos/stackpit"
+edit-url-template = "https://github.com/franzos/stackpit/edit/master/docs/{path}"
+# Project-pages path (franzos.github.io/stackpit/). Set to "/" for a root-domain deploy.
+site-url = "/stackpit/"
+
+[output.html.search]
+enable = true

@@ -172,6 +172,8 @@ The admin port serves the browsing UI and API. The ingestion port is where your 
 
 ## Documentation
 
+Full documentation is published at **<https://franzos.github.io/stackpit/>**, including the [user guide](docs/user-guide.md) for browsing and triaging errors in the web UI.
+
 Everything past first boot — the full `stackpit.toml` reference, PostgreSQL, authentication and OIDC/SSO setup, connecting SDKs, notifications, source maps, monitors, syncing from Sentry, and the CLI — lives in the **[Operator Guide](docs/operator-guide.md)**:
 
 - [Configuration](docs/operator-guide.md#configuration) — the full config reference, filter modes, [PostgreSQL](docs/operator-guide.md#postgresql), [ingestion tuning](docs/operator-guide.md#ingestion-tuning)

@@ -21,3 +21,6 @@ __pycache__/
 
 # insta pending snapshots
 *.snap.new
+
+# mdBook build output
+docs/book/

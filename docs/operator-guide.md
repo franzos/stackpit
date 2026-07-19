@@ -1,6 +1,6 @@
 # Operator Guide
 
-Everything beyond getting the binary and starting it: the full configuration reference, authentication and OIDC setup, connecting SDKs, notifications, source maps, syncing, and the CLI. For install and first boot, see the [README](../README.md).
+Everything beyond getting the binary and starting it: the full configuration reference, authentication and OIDC setup, connecting SDKs, notifications, source maps, syncing, and the CLI. For install and first boot, see the [README](https://github.com/franzos/stackpit#readme).
 
 ## Contents
 

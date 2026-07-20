@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.svg" alt="stackpit" width="480">
+  <img src="assets/logo.png" alt="stackpit" width="480">
 </p>
 <p align="center">
   A drop-in, self-hosted replacement for Sentry's event ingestion and browsing. Single binary, single SQLite file, no external dependencies.

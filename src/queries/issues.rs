@@ -186,7 +186,7 @@ pub async fn issue_sparklines(
         QueryBuilder::new("SELECT fingerprint, CAST((timestamp - ");
     qb.push_bind(start_ts);
     qb.push(format!(
-        ") / {bucket_secs} AS INTEGER) AS bucket, COUNT(*) FROM events WHERE project_id = "
+        ") / {bucket_secs} AS BIGINT) AS bucket, COUNT(*) FROM events WHERE project_id = "
     ));
     qb.push_bind(project_id as i64);
     qb.push(" AND timestamp >= ");

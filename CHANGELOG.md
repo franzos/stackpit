@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.17] - 2026-07-21
+
+### Fixed
+- Per-issue sparklines failed to load on Postgres (INT4/INT8 type mismatch)
+
 ## [0.3.16] - 2026-07-21
 
 ### Added

@@ -1,6 +1,6 @@
 [package]
 name = "stackpit"
-version = "0.3.16"
+version = "0.3.17"
 edition = "2021"
 description = "Lightweight, self-hosted error tracking and event monitoring"
 authors = ["Franz Geffke <mail@gofranz.com>"]

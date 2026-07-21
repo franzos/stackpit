@@ -156,6 +156,7 @@
                 <th class="col-check"></th>
                 <th class="col-title">{{ chrome.t("issues-label-title") }}</th>
                 <th class="col-narrow">{{ chrome.t("issues-label-level") }}</th>
+                <th class="col-spark hide-mobile">{{ chrome.t("issues-label-trend") }}</th>
                 <th class="col-narrow">
                   <a href="/web/projects/{{ project_id }}/?sort=event_count{{ base_qs }}"
                      {% if sort == "event_count" %}class="active-sort"{% endif %}>{{ chrome.t("issues-label-events") }}</a>
@@ -200,6 +201,7 @@
           <td>
             {% match issue.level %}{% when Some with (lvl) %}<span class="badge badge-{{ lvl }}">{{ lvl }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
         </td>
+        <td class="col-spark hide-mobile">{% match sparks.get(issue.fingerprint.as_str()) %}{% when Some with (s) %}<span title="{{ chrome.t("issues-trend-tooltip") }}">{{ s|safe }}</span>{% when None %}{% endmatch %}</td>
         <td class="text-tabular">{{ issue.event_count }}</td>
         <td class="text-tabular">{{ issue.user_count }}</td>
         <td class="hide-mobile text-muted">

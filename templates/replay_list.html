@@ -31,7 +31,6 @@
           <thead>
             <tr>
               <th>{{ chrome.t("replays-col-event-id") }}</th>
-              <th>{{ chrome.t("replays-col-type") }}</th>
               <th>{{ chrome.t("replays-col-release") }}</th>
               <th class="hide-mobile">{{ chrome.t("replays-col-environment") }}</th>
               <th>{{ chrome.t("replays-col-timestamp") }}</th>
@@ -44,11 +43,8 @@
                   <a class="text-mono"
                      href="/web/projects/{{ project_id }}/replays/{{ r.event_id }}/">{{ r.event_id|truncate_id }}</a>
                 </td>
-                <td>
-                  <span class="badge badge-neutral">{{ r.replay_type }}</span>
-                </td>
                 <td class="text-mono text-[12px]">
-                  {% match r.release %}{% when Some with (rel) %}{{ rel }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
+                  {% match r.release %}{% when Some with (rel) %}<span title="{{ rel }}">{{ rel|short_release }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
               </td>
               <td class="hide-mobile text-mono text-[12px]">
                 {% match r.environment %}{% when Some with (e) %}{{ e }}{% when None %}<span class="text-muted">—</span>{% endmatch %}

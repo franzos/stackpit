@@ -242,20 +242,22 @@ pub fn extract_breadcrumbs(payload: &serde_json::Value) -> Vec<Breadcrumb> {
     values
         .iter()
         .map(|crumb| {
+            // SDKs send the crumb time as either epoch seconds (float) or an
+            // RFC 3339 string. Render both as HH:MM:SS; drop missing/zero
+            // stamps to empty rather than showing a bogus 00:00:00.
             let timestamp = crumb
                 .get("timestamp")
                 .and_then(|v| v.as_f64())
-                .map(|t| {
-                    chrono::DateTime::from_timestamp(t as i64, 0)
-                        .map(|dt| dt.format("%H:%M:%S").to_string())
-                        .unwrap_or_default()
-                })
+                .filter(|t| *t > 0.0)
+                .and_then(|t| chrono::DateTime::from_timestamp(t as i64, 0))
                 .or_else(|| {
                     crumb
                         .get("timestamp")
                         .and_then(|v| v.as_str())
-                        .map(|s| s.to_string())
+                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                        .map(|dt| dt.with_timezone(&chrono::Utc))
                 })
+                .map(|dt| dt.format("%H:%M:%S").to_string())
                 .unwrap_or_default();
             let level = crumb
                 .get("level")
@@ -748,6 +750,24 @@ mod tests {
         let crumbs = extract_breadcrumbs(&payload);
         assert_eq!(crumbs.len(), 1);
         assert_eq!(crumbs[0].category, "nav");
+    }
+
+    #[test]
+    fn breadcrumb_timestamp_epoch_iso_and_missing() {
+        let payload = json!({"breadcrumbs": [
+            {"timestamp": 1_784_405_627.0, "category": "epoch"},
+            {"timestamp": "2026-07-18T20:13:47.482Z", "category": "iso"},
+            {"timestamp": 0, "category": "zero"},
+            {"category": "absent"},
+        ]});
+        let crumbs = extract_breadcrumbs(&payload);
+        // Epoch seconds render as time-of-day, not a bogus 00:00:00.
+        assert_eq!(crumbs[0].timestamp, "20:13:47");
+        // RFC 3339 strings are parsed rather than passed through verbatim.
+        assert_eq!(crumbs[1].timestamp, "20:13:47");
+        // A zero/absent stamp yields empty, never 00:00:00.
+        assert_eq!(crumbs[2].timestamp, "");
+        assert_eq!(crumbs[3].timestamp, "");
     }
 
     #[test]

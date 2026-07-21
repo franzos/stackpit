@@ -4,11 +4,21 @@
 {% block title %}{{ chrome.t("nav-releases") }} {{ chrome.t("releases-title-suffix") }}{% endblock %}
 
 {% block sidebar_nav %}
-  {% call m::top_sidebar(chrome, "releases") %}
-  {% endcall %}
+  {% match project_nav %}
+  {% when Some with (pnav) %}
+    {% call m::project_sidebar(chrome, project_id_num, pnav, "releases") %}
+    {% endcall %}
+  {% when None %}
+    {% call m::top_sidebar(chrome, "releases") %}
+    {% endcall %}
+  {% endmatch %}
 {% endblock %}
 
 {% block breadcrumbs %}
+  {% match project_nav %}{% when Some with (pnav) %}
+  <span class="breadcrumb-sep">/</span>
+  <a class="breadcrumb-link" href="/web/projects/{{ project_id_num }}/"><bdi>{{ pnav.label }}</bdi></a>
+  {% when None %}{% endmatch %}
   <span class="breadcrumb-sep">/</span>
   <span class="breadcrumb-current">{{ chrome.t("nav-releases") }}</span>
 {% endblock %}

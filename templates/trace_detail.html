@@ -24,7 +24,7 @@
       <p class="text-muted text-[13px] mt-1 text-mono break-all">
         {{ chrome.t("trace-detail-trace-id-label") }} {{ trace_id }} ·
         {{- " " }}{{ chrome.tv_count("trace-detail-span-count", waterfall.span_count as i64) }}
-        · {{ waterfall.total_ms }}ms {{ chrome.t("trace-detail-total") }}
+        {% if waterfall.span_count > 0 %}· {{ waterfall.total_ms }}ms {{ chrome.t("trace-detail-total") }}{% endif %}
         {% if waterfall.truncated %}· {{ chrome.t("trace-detail-showing-first") }} {{ waterfall.rows.len() }} {{ chrome.t("trace-detail-of") }} {{ waterfall.span_count }}{% endif %}
       </p>
     </div>

@@ -8,6 +8,7 @@ use crate::html::utils::{build_filter_qs, period_to_timestamp, Chrome, ListParam
 use crate::orgs::extractor::ActiveOrg;
 use crate::queries;
 use crate::queries::types::{PagedResult, ReleaseFilter};
+use crate::queries::ProjectNavCounts;
 use crate::server::AppState;
 
 use super::HtmlError;
@@ -25,11 +26,15 @@ struct ReleaseListTemplate {
     period: String,
     filter_qs: String,
     base_qs: String,
+    // When the page is scoped to one project (reached from its sidebar), carry
+    // its nav so we can keep the project rail instead of dropping to the global one.
+    project_nav: Option<ProjectNavCounts>,
+    project_id_num: u64,
     chrome: PageChrome,
 }
 
 pub async fn handler(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     ReadPool(pool): ReadPool,
     Chrome(chrome): Chrome,
     Query(params): Query<ListParams>,
@@ -38,7 +43,19 @@ pub async fn handler(
     let query_str = params.query.clone().unwrap_or_default();
     let project_id_str = params.project_id.map(|p| p.to_string()).unwrap_or_default();
     let sort_str = params.sort.clone().unwrap_or_default();
-    let period_str = params.period.clone().unwrap_or_else(|| "24h".to_string());
+    let period_str = params.period.clone().unwrap_or_else(|| "7d".to_string());
+
+    // Keep the project sidebar when scoped to a project the caller can access.
+    let project_nav = match params.project_id {
+        Some(pid)
+            if crate::orgs::extractor::require_project_scope(&active, &pool, pid as i64)
+                .await
+                .is_ok() =>
+        {
+            Some(queries::projects::nav_counts_cached(&pool, &state.nav_cache, pid).await)
+        }
+        _ => None,
+    };
 
     let adoption_since = period_to_timestamp(&period_str);
 
@@ -74,6 +91,8 @@ pub async fn handler(
         period: period_str,
         filter_qs,
         base_qs,
+        project_nav,
+        project_id_num: params.project_id.unwrap_or(0),
         chrome,
     };
 

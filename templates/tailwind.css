@@ -395,6 +395,12 @@
   .col-narrow { width: 1%; white-space: nowrap; }
   .col-time { width: 1%; white-space: nowrap; }
   .col-check { width: 28px; }
+  .col-spark { width: 92px; white-space: nowrap; }
+  /* Per-issue trend mini bar chart: muted so counts/levels stay the focus.
+     Rendered at natural size (no width/height override) to keep it crisp. */
+  .spark { display: block; color: var(--color-on-surface-variant); }
+  .spark .spark-bars { fill-opacity: 0.85; }
+  .spark .spark-axis { stroke: currentColor; stroke-width: 1; stroke-opacity: 0.35; }
   .event-nav { display: flex; gap: 0.5rem; align-items: center; }
   /* Horizontal row of labelled stat tiles (release detail session health). */
   .stat-row {

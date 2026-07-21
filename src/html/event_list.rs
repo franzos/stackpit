@@ -38,7 +38,7 @@ pub async fn handler(
     State(_state): State<AppState>,
     ReadPool(pool): ReadPool,
     Chrome(chrome): Chrome,
-    Query(params): Query<ListParams>,
+    Query(mut params): Query<ListParams>,
     active: ActiveOrg,
 ) -> Result<axum::response::Response, HtmlError> {
     if let Some(url) = defaults_redirect_url(
@@ -48,6 +48,12 @@ pub async fn handler(
         &["level", "item_type"],
     ) {
         return Ok(axum::response::Redirect::to(&url).into_response());
+    }
+    // A fresh visit (no type in the query at all) defaults to error events so
+    // the far more numerous session/transaction pings don't bury them.
+    // Choosing "All types" submits item_type="" and is respected as-is.
+    if params.item_type.is_none() {
+        params.item_type = Some("event".to_string());
     }
     let query_str = params.query.clone().unwrap_or_default();
     let level_str = params.level.clone().unwrap_or_default();

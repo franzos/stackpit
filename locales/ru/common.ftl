@@ -6,6 +6,9 @@ common-id-prefix = id:
 common-time-just-now = только что
 common-time-min-ago = { $n } мин назад
 common-time-hour-ago = { $n } ч назад
+common-time-week-ago = { $n } нед назад
+common-time-month-ago = { $n } мес назад
+common-time-year-ago = { $n } г назад
 common-time-day-ago = { $n ->
     [one] { $n } день назад
     [few] { $n } дня назад

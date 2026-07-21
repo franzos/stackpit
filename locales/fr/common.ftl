@@ -6,6 +6,9 @@ common-id-prefix = id :
 common-time-just-now = à l'instant
 common-time-min-ago = il y a { $n } min
 common-time-hour-ago = il y a { $n } h
+common-time-week-ago = il y a { $n } sem
+common-time-month-ago = il y a { $n } mois
+common-time-year-ago = il y a { $n } an
 common-time-day-ago = il y a { $n } j
 test-count = { $count ->
     [one] { $count } élément

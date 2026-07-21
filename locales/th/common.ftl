@@ -6,6 +6,9 @@ common-id-prefix = id:
 common-time-just-now = เมื่อสักครู่
 common-time-min-ago = { $n } นาทีที่แล้ว
 common-time-hour-ago = { $n } ชั่วโมงที่แล้ว
+common-time-week-ago = { $n } สัปดาห์ที่แล้ว
+common-time-month-ago = { $n } เดือนที่แล้ว
+common-time-year-ago = { $n } ปีที่แล้ว
 common-time-day-ago = { $n ->
    *[other] { $n } วันที่แล้ว
 }

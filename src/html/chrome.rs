@@ -111,10 +111,12 @@ impl PageChrome {
             tn("common-time-hour-ago", secs / 3600)
         } else if secs < 604_800 {
             tn("common-time-day-ago", secs / 86400)
+        } else if secs < 2_592_000 {
+            tn("common-time-week-ago", secs / 604_800)
+        } else if secs < 31_536_000 {
+            tn("common-time-month-ago", secs / 2_592_000)
         } else {
-            chrono::DateTime::from_timestamp(ts, 0)
-                .map(|dt| dt.format("%Y-%m-%d").to_string())
-                .unwrap_or_else(|| ts.to_string())
+            tn("common-time-year-ago", secs / 31_536_000)
         }
     }
 

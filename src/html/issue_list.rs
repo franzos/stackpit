@@ -41,6 +41,8 @@ struct IssueListTemplate {
     base_qs: String,
     nav: ProjectNavCounts,
     chart_svg: String,
+    // fingerprint -> inline trend sparkline SVG for the rows on this page.
+    sparks: std::collections::HashMap<String, String>,
     chrome: PageChrome,
 }
 
@@ -107,6 +109,31 @@ async fn issue_or_transaction_handler(
             Err(_) => String::new(),
         };
 
+    // Per-issue trend sparklines: 20 buckets across the active period, one query
+    // for the whole page. Skipped for the "all time" window (no fixed start).
+    let sparks = match period_to_timestamp(&period_str) {
+        Some(start_ts) => {
+            const BUCKETS: usize = 20;
+            let now = chrono::Utc::now().timestamp();
+            let bucket_secs = ((now - start_ts) / BUCKETS as i64).max(1);
+            let fps: Vec<String> = result.items.iter().map(|i| i.fingerprint.clone()).collect();
+            queries::issues::issue_sparklines(
+                pool,
+                project_id,
+                &fps,
+                start_ts,
+                bucket_secs,
+                BUCKETS,
+            )
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(fp, counts)| (fp, charts::render_sparkline(&counts)))
+            .collect()
+        }
+        None => std::collections::HashMap::new(),
+    };
+
     let (base_qs, filter_qs) = build_filter_qs(
         &[
             ("query", &query_str),
@@ -134,6 +161,71 @@ async fn issue_or_transaction_handler(
         base_qs,
         nav,
         chart_svg,
+        sparks,
         chrome,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::IssueStatus;
+    use crate::queries::IssueSummary;
+    use unic_langid::langid;
+
+    fn issue(fp: &str) -> IssueSummary {
+        IssueSummary {
+            fingerprint: fp.into(),
+            project_id: 1,
+            title: Some("TypeError: boom".into()),
+            level: Some("error".into()),
+            first_seen: 1000,
+            last_seen: 2000,
+            event_count: 7,
+            status: IssueStatus::Unresolved,
+            item_type: Default::default(),
+            user_count: 2,
+        }
+    }
+
+    // Exercises the sparkline column end to end: the SVG is injected verbatim
+    // for rows that have one and the row stays intact for those that don't.
+    #[test]
+    fn renders_rows_with_and_without_sparkline() {
+        let mut sparks = std::collections::HashMap::new();
+        sparks.insert(
+            "fp-has".to_string(),
+            "<svg class=\"spark\"><rect/></svg>".to_string(),
+        );
+        let tmpl = IssueListTemplate {
+            project_id: 1,
+            result: PagedResult {
+                items: vec![issue("fp-has"), issue("fp-none")],
+                total: 2,
+                offset: 0,
+                limit: 25,
+            },
+            query: String::new(),
+            level: String::new(),
+            status: String::new(),
+            sort: String::new(),
+            release: String::new(),
+            tag: String::new(),
+            period: "7d".into(),
+            releases: Vec::new(),
+            filter_qs: String::new(),
+            base_qs: String::new(),
+            nav: ProjectNavCounts {
+                label: "Proj".into(),
+                ..Default::default()
+            },
+            chart_svg: String::new(),
+            sparks,
+            chrome: PageChrome::new(String::new(), langid!("en"), "/web/projects/1/".into()),
+        };
+        let out = tmpl.render().expect("render");
+        assert!(!out.contains(crate::i18n::MISSING_PREFIX));
+        assert!(out.contains("<svg class=\"spark\"><rect/></svg>"));
+        assert!(out.contains("fp-has") && out.contains("fp-none"));
+    }
 }

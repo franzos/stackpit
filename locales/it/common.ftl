@@ -6,6 +6,9 @@ common-id-prefix = id:
 common-time-just-now = proprio ora
 common-time-min-ago = { $n } min fa
 common-time-hour-ago = { $n } h fa
+common-time-week-ago = { $n } sett fa
+common-time-month-ago = { $n } mes fa
+common-time-year-ago = { $n } anni fa
 common-time-day-ago = { $n } g fa
 test-count = { $count ->
     [one] { $count } elemento

@@ -6,6 +6,9 @@ common-id-prefix = id:
 common-time-just-now = الآن
 common-time-min-ago = منذ { $n } د
 common-time-hour-ago = منذ { $n } س
+common-time-week-ago = منذ { $n } أسبوع
+common-time-month-ago = منذ { $n } شهر
+common-time-year-ago = منذ { $n } سنة
 common-time-day-ago = { $n ->
     [zero] منذ { $n } يوم
     [one] منذ يوم واحد

@@ -161,6 +161,57 @@ pub async fn get_issue_release_range(
     Ok((first, last))
 }
 
+/// Per-fingerprint event counts bucketed across `[start_ts, now]` into
+/// `bucket_count` equal slots, keyed by fingerprint. Powers the issue-row trend
+/// sparklines: one query for the whole page rather than one per row. Missing
+/// fingerprints simply won't appear in the map (their sparkline renders blank).
+pub async fn issue_sparklines(
+    pool: &crate::db::DbPool,
+    project_id: u64,
+    fingerprints: &[String],
+    start_ts: i64,
+    bucket_secs: i64,
+    bucket_count: usize,
+) -> Result<std::collections::HashMap<String, Vec<f32>>> {
+    use sqlx::QueryBuilder;
+
+    let mut out: std::collections::HashMap<String, Vec<f32>> = std::collections::HashMap::new();
+    if fingerprints.is_empty() || bucket_secs <= 0 || bucket_count == 0 {
+        return Ok(out);
+    }
+
+    // bucket_secs is a server-computed integer, safe to inline; everything
+    // caller-influenced is bound.
+    let mut qb: QueryBuilder<'_, crate::db::Db> =
+        QueryBuilder::new("SELECT fingerprint, CAST((timestamp - ");
+    qb.push_bind(start_ts);
+    qb.push(format!(
+        ") / {bucket_secs} AS INTEGER) AS bucket, COUNT(*) FROM events WHERE project_id = "
+    ));
+    qb.push_bind(project_id as i64);
+    qb.push(" AND timestamp >= ");
+    qb.push_bind(start_ts);
+    qb.push(" AND fingerprint IN (");
+    {
+        let mut sep = qb.separated(", ");
+        for fp in fingerprints {
+            sep.push_bind(fp.as_str());
+        }
+    }
+    qb.push(") GROUP BY fingerprint, bucket");
+
+    let rows = qb.build().fetch_all(pool).await?;
+    for row in &rows {
+        let fp: String = row.get(0);
+        let bucket: i64 = row.get(1);
+        let count: i64 = row.get(2);
+        let idx = bucket.clamp(0, bucket_count as i64 - 1) as usize;
+        let series = out.entry(fp).or_insert_with(|| vec![0.0; bucket_count]);
+        series[idx] += count as f32;
+    }
+    Ok(out)
+}
+
 // --- Write operations ---
 
 /// Flip an issue's status. Returns 0 if the fingerprint doesn't exist.
@@ -527,6 +578,47 @@ mod tests {
         assert_eq!(result.items.len(), 1);
         assert!(!result.has_next());
         assert!(result.has_prev());
+    }
+
+    #[tokio::test]
+    async fn issue_sparklines_buckets_per_fingerprint() {
+        let pool = open_test_db().await;
+        // 10 buckets of 100s each, window [1000, 2000).
+        let start = 1000i64;
+        let bucket_secs = 100i64;
+        let buckets = 10usize;
+        // fp1: two events in bucket 0, one in bucket 3.
+        insert_test_event(&pool, "e1", 1, 1010, Some("fp1"), None, None).await;
+        insert_test_event(&pool, "e2", 1, 1050, Some("fp1"), None, None).await;
+        insert_test_event(&pool, "e3", 1, 1320, Some("fp1"), None, None).await;
+        // fp2: one event in bucket 5.
+        insert_test_event(&pool, "e4", 1, 1550, Some("fp2"), None, None).await;
+        // fp3: an event before the window and one for another project — both excluded.
+        insert_test_event(&pool, "e5", 1, 500, Some("fp3"), None, None).await;
+        insert_test_event(&pool, "e6", 2, 1500, Some("fp1"), None, None).await;
+
+        let fps = vec!["fp1".to_string(), "fp2".to_string(), "fp3".to_string()];
+        let out = issue_sparklines(&pool, 1, &fps, start, bucket_secs, buckets)
+            .await
+            .unwrap();
+
+        let fp1 = out.get("fp1").expect("fp1 present");
+        assert_eq!(fp1.len(), buckets);
+        assert_eq!(fp1[0], 2.0);
+        assert_eq!(fp1[3], 1.0);
+        assert_eq!(fp1[5], 0.0); // project 2 event must not leak in
+        assert_eq!(out.get("fp2").unwrap()[5], 1.0);
+        // fp3's only event predates the window, so it has no bucketed row.
+        assert!(!out.contains_key("fp3"));
+    }
+
+    #[tokio::test]
+    async fn issue_sparklines_empty_inputs() {
+        let pool = open_test_db().await;
+        assert!(issue_sparklines(&pool, 1, &[], 0, 100, 10)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]

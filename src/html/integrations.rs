@@ -44,6 +44,12 @@ pub struct CreateForm {
     pub from_name: Option<String>,
     #[serde(default)]
     pub provider: Option<String>,
+    #[serde(default)]
+    pub owner: Option<String>,
+    #[serde(default)]
+    pub repo: Option<String>,
+    #[serde(default)]
+    pub project_id: Option<String>,
 }
 
 pub async fn create(
@@ -67,7 +73,7 @@ pub async fn create(
         .await;
     }
     let kind = form.kind.trim().to_string();
-    if !["webhook", "slack", "email"].contains(&kind.as_str()) {
+    if !["webhook", "slack", "email", "github", "forgejo", "gitlab"].contains(&kind.as_str()) {
         return render_list(
             &state,
             org_filter,
@@ -174,6 +180,44 @@ pub async fn create(
             // SMTP has no per-integration token, so never store a submitted secret.
             (None, Some(cfg.to_string()), is_smtp)
         }
+    } else if ["github", "forgejo", "gitlab"].contains(&kind.as_str()) {
+        let base_url = form.url.trim().to_string();
+        if base_url.is_empty() {
+            return render_list(
+                &state,
+                org_filter,
+                Some(chrome.t("flash-url-required")),
+                &chrome,
+            )
+            .await;
+        }
+        // Same SSRF gate as the webhook branch: trackers point at a
+        // user-controlled base URL (self-hosted Forgejo/GitLab instances).
+        if let Err(msg) = crate::util::ssrf::check_ssrf(&base_url).await {
+            return render_list(&state, org_filter, Some(msg), &chrome).await;
+        }
+        let owner = form.owner.as_deref().unwrap_or("");
+        let repo = form.repo.as_deref().unwrap_or("");
+        let project_id = form.project_id.as_deref().unwrap_or("");
+        let config = match build_tracker_config(&kind, owner, repo, project_id) {
+            Ok(c) => c,
+            Err(key) => return render_list(&state, org_filter, Some(chrome.t(key)), &chrome).await,
+        };
+        let has_token = form
+            .secret
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|s| !s.is_empty());
+        if !has_token {
+            return render_list(
+                &state,
+                org_filter,
+                Some(chrome.t("flash-api-token-required")),
+                &chrome,
+            )
+            .await;
+        }
+        (Some(base_url), Some(config), false)
     } else {
         let url = form.url.trim().to_string();
         if url.is_empty() {
@@ -250,6 +294,34 @@ pub async fn create(
             .await
         }
         Err(e) => render_list(&state, org_filter, Some(chrome.err(e)), &chrome).await,
+    }
+}
+
+/// Builds the `config` JSON stored for a tracker integration. github/forgejo
+/// target an owner/repo pair; gitlab targets a numeric project id.
+fn build_tracker_config(
+    kind: &str,
+    owner: &str,
+    repo: &str,
+    project_id: &str,
+) -> Result<String, &'static str> {
+    match kind {
+        "github" | "forgejo" => {
+            let owner = owner.trim();
+            let repo = repo.trim();
+            if owner.is_empty() || repo.is_empty() {
+                return Err("flash-tracker-repo-required");
+            }
+            Ok(serde_json::json!({ "owner": owner, "repo": repo }).to_string())
+        }
+        "gitlab" => {
+            let project_id: i64 = project_id
+                .trim()
+                .parse()
+                .map_err(|_| "flash-tracker-project-required")?;
+            Ok(serde_json::json!({ "project_id": project_id }).to_string())
+        }
+        other => unreachable!("build_tracker_config called with non-tracker kind: {other}"),
     }
 }
 
@@ -491,6 +563,16 @@ pub async fn new_email(
     })
 }
 
+#[derive(Template)]
+#[template(path = "integration_new_tracker.html")]
+struct NewTrackerTemplate {
+    chrome: PageChrome,
+}
+
+pub async fn new_tracker(Chrome(chrome): Chrome) -> axum::response::Response {
+    render_template(&NewTrackerTemplate { chrome })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -545,6 +627,11 @@ mod tests {
                 }
                 .render()
                 .expect("locked email form renders"),
+                NewTrackerTemplate {
+                    chrome: chrome.clone(),
+                }
+                .render()
+                .expect("tracker form renders"),
             ];
             for html in pages {
                 assert!(
@@ -577,6 +664,40 @@ mod tests {
             Some("alerts@stackpit.test"),
         );
         assert_eq!(resolve_email_test_recipient(&email_cfg(None), None), None);
+    }
+
+    #[test]
+    fn tracker_config_github_forgejo_require_owner_and_repo() {
+        for kind in ["github", "forgejo"] {
+            assert_eq!(
+                build_tracker_config(kind, "acme", "my-app", "").unwrap(),
+                serde_json::json!({ "owner": "acme", "repo": "my-app" }).to_string(),
+            );
+            assert_eq!(
+                build_tracker_config(kind, "", "my-app", ""),
+                Err("flash-tracker-repo-required"),
+            );
+            assert_eq!(
+                build_tracker_config(kind, "acme", "", ""),
+                Err("flash-tracker-repo-required"),
+            );
+        }
+    }
+
+    #[test]
+    fn tracker_config_gitlab_requires_numeric_project_id() {
+        assert_eq!(
+            build_tracker_config("gitlab", "", "", "12345678").unwrap(),
+            serde_json::json!({ "project_id": 12_345_678_i64 }).to_string(),
+        );
+        assert_eq!(
+            build_tracker_config("gitlab", "", "", "not-a-number"),
+            Err("flash-tracker-project-required"),
+        );
+        assert_eq!(
+            build_tracker_config("gitlab", "", "", ""),
+            Err("flash-tracker-project-required"),
+        );
     }
 }
 

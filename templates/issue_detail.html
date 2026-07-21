@@ -20,6 +20,9 @@
 {% endblock %}
 
 {% block content %}
+  {% match tracker_flash %}{% when Some with (msg) %}
+  <div class="settings-message-error mb-4">{{ msg }}</div>
+  {% when None %}{% endmatch %}
   <div class="issue-header">
     <div class="min-w-0">
       <h1 class="page-h1 break-words">
@@ -51,6 +54,26 @@
             class="btn btn-secondary">{{ chrome.t("issue-detail-unignore") }}</button>
   {% endif %}
 </form>
+
+{% if !available_trackers.is_empty() %}
+  <form class="event-nav"
+        method="post"
+        action="/web/projects/{{ issue.project_id }}/issues/{{ issue.fingerprint }}/external">
+    <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+    {% if available_trackers.len() == 1 %}
+      {% for tracker in available_trackers %}
+        <input type="hidden" name="integration_id" value="{{ tracker.id }}">
+      {% endfor %}
+    {% else %}
+      <select class="select w-auto" name="integration_id">
+        {% for tracker in available_trackers %}
+          <option value="{{ tracker.id }}">{{ tracker.name }}</option>
+        {% endfor %}
+      </select>
+    {% endif %}
+    <button type="submit" class="btn btn-secondary">{{ chrome.t("issue-detail-create-external-issue") }}</button>
+  </form>
+{% endif %}
 </div>
 
 {% if !summary_tags.is_empty() %}
@@ -511,6 +534,12 @@
 <dd class="text-mono text-[11px] break-all">
   {{ issue.fingerprint }}
 </dd>
+{% for link in external_links %}
+  <dt>{{ chrome.t("issue-detail-external-tracker") }}</dt>
+  <dd class="break-all">
+    <a href="{{ link.external_url }}">{{ chrome.t("issue-detail-view-on") }} {{ link.integration_name }} #{{ link.external_id }}</a>
+  </dd>
+{% endfor %}
 </dl>
 </div>
 

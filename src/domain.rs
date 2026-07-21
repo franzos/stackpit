@@ -99,6 +99,9 @@ pub enum IntegrationKind {
     Webhook,
     Slack,
     Email,
+    GitHub,
+    Forgejo,
+    GitLab,
 }
 
 impl std::str::FromStr for IntegrationKind {
@@ -109,6 +112,9 @@ impl std::str::FromStr for IntegrationKind {
             "webhook" => Ok(Self::Webhook),
             "slack" => Ok(Self::Slack),
             "email" => Ok(Self::Email),
+            "github" => Ok(Self::GitHub),
+            "forgejo" => Ok(Self::Forgejo),
+            "gitlab" => Ok(Self::GitLab),
             other => anyhow::bail!("unknown integration kind: {other}"),
         }
     }
@@ -120,7 +126,15 @@ impl IntegrationKind {
             Self::Webhook => "webhook",
             Self::Slack => "slack",
             Self::Email => "email",
+            Self::GitHub => "github",
+            Self::Forgejo => "forgejo",
+            Self::GitLab => "gitlab",
         }
+    }
+
+    // by value to match the existing as_str(self) convention on this Copy enum
+    pub fn is_tracker(self) -> bool {
+        matches!(self, Self::GitHub | Self::Forgejo | Self::GitLab)
     }
 }
 
@@ -284,6 +298,7 @@ impl UserInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr;
 
     fn frame(filename: &str, colno: Option<u64>, context: Option<&str>) -> StackFrame {
         StackFrame {
@@ -336,5 +351,19 @@ mod tests {
     #[test]
     fn empty_frames_are_not_flagged() {
         assert!(!exc(Vec::new()).looks_minified());
+    }
+
+    #[test]
+    fn tracker_kinds_roundtrip_and_flag() {
+        for (s, k) in [
+            ("github", IntegrationKind::GitHub),
+            ("forgejo", IntegrationKind::Forgejo),
+            ("gitlab", IntegrationKind::GitLab),
+        ] {
+            assert_eq!(IntegrationKind::from_str(s).unwrap(), k);
+            assert_eq!(k.as_str(), s);
+            assert!(k.is_tracker());
+        }
+        assert!(!IntegrationKind::Webhook.is_tracker());
     }
 }

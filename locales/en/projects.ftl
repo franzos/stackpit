@@ -227,6 +227,12 @@ projects-integrations-activate-heading = Activate integration
 projects-integrations-integration-label = Integration
 projects-integrations-activate-submit = Activate
 projects-integrations-available-empty = No integrations available. <a class="text-primary" href="/web/settings/integrations/">Create one first</a>.
+projects-integrations-tracker-hint = Overrides the org-level tracker for this project. Leave blank to fall back to the default.
+projects-integrations-tracker-owner = Owner
+projects-integrations-tracker-repo = Repository
+projects-integrations-tracker-project-id = Project ID
+projects-integrations-tracker-project-id-note = (GitLab only)
+projects-integrations-tracker-save = Save target
 
 # --- Project created ---
 projects-created-word = created

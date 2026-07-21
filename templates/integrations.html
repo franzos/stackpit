@@ -25,9 +25,11 @@
       <a href="/web/settings/integrations/new/webhook"
          class="btn btn-secondary">{{ chrome.t("integrations-add-webhook") }}</a>
       <a href="/web/settings/integrations/new/slack" class="btn btn-secondary">{{ chrome.t("integrations-add-slack") }}</a>
-      <a href="/web/settings/integrations/new/email" class="btn btn-primary">{{ chrome.t("integrations-add-email") }}</a>
+      <a href="/web/settings/integrations/new/email" class="btn btn-secondary">{{ chrome.t("integrations-add-email") }}</a>
+      <a href="/web/settings/integrations/new/tracker" class="btn btn-primary">{{ chrome.t("integrations-add-tracker") }}</a>
     </div>
   </div>
+
 
   {% match message %}{% when Some with (msg) %}
   <div class="settings-message mb-4">{{ msg }}</div>
@@ -70,8 +72,10 @@
           </td>
           <td class="nowrap">
             {# Email tests need a recipient, which lives per project, so the
-               working email Test button is on the project integrations page. #}
-            {% if i.kind != "email" %}
+               working email Test button is on the project integrations page.
+               Trackers have no notification dispatch, so their Test would
+               always fail. #}
+            {% if i.kind != "email" && !i.kind.is_tracker() %}
               <form method="post"
                     action="/web/settings/integrations/{{ i.id }}/test"
                     class="inline">

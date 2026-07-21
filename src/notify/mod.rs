@@ -121,16 +121,12 @@ where
 fn pinned_client(
     cache: &ClientCache,
     resolved: &crate::util::ssrf::ResolvedWebhook,
-) -> Result<reqwest::Client, reqwest::Error> {
+) -> anyhow::Result<reqwest::Client> {
     let key = (resolved.hostname.clone(), resolved.addr);
     if let Some(client) = cache.lock().get(&key) {
         return Ok(client.clone());
     }
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .redirect(reqwest::redirect::Policy::none())
-        .resolve(&resolved.hostname, resolved.addr)
-        .build()?;
+    let client = crate::util::ssrf::build_pinned_client(resolved)?;
     cache.lock().put(key, client.clone());
     Ok(client)
 }

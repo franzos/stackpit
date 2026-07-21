@@ -957,6 +957,15 @@ pub async fn project_of_event(pool: &DbPool, event_id: &str) -> Result<Option<i6
     Ok(row.map(|r| r.get("project_id")))
 }
 
+/// Returns the `org_id` that owns `project_id`, or `None` if unknown.
+pub async fn org_of_project(pool: &DbPool, project_id: i64) -> Result<Option<i64>> {
+    let row = sqlx::query(sql!("SELECT org_id FROM projects WHERE project_id = ?1"))
+        .bind(project_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(|r| r.get("org_id")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1923,6 +1932,19 @@ mod tests {
         assert_eq!(found, Some(200));
 
         let missing = project_of_fingerprint(&pool, "fp-unknown").await.unwrap();
+        assert_eq!(missing, None);
+    }
+
+    #[tokio::test]
+    async fn org_of_project_hit_and_miss() {
+        let pool = crate::db::open_test_pool().await;
+        let org = insert_native_org(&pool, "org-of-project-org").await;
+        insert_test_project(&pool, 500, org).await;
+
+        let found = org_of_project(&pool, 500).await.unwrap();
+        assert_eq!(found, Some(org));
+
+        let missing = org_of_project(&pool, 999_999).await.unwrap();
         assert_eq!(missing, None);
     }
 

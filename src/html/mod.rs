@@ -69,6 +69,10 @@ pub fn routes() -> Router<AppState> {
             post(issue_detail::toggle_discard),
         )
         .route(
+            "/web/projects/{project_id}/issues/{fingerprint}/external",
+            post(issue_detail::create_external_issue),
+        )
+        .route(
             "/web/projects/{project_id}/events/{event_id}/",
             get(event_detail::handler),
         )
@@ -284,6 +288,10 @@ pub fn routes() -> Router<AppState> {
             get(integrations::new_email),
         )
         .route(
+            "/web/settings/integrations/new/tracker",
+            get(integrations::new_tracker),
+        )
+        .route(
             "/web/settings/integrations/create",
             post(integrations::create),
         )
@@ -353,6 +361,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/web/projects/{project_id}/settings/integrations/{id}/test",
             post(project_integrations::test),
+        )
+        .route(
+            "/web/projects/{project_id}/settings/integrations/{id}/target",
+            post(project_integrations::set_target),
         )
         // -- global views --
         .route("/web/events/", get(event_list::handler))

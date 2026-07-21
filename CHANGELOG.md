@@ -5,6 +5,7 @@
 ### Added
 - Startup check refuses open-mode ingest on a public bind with no rate limit, unless `open_ingest_unlimited_acknowledged` is set; `stackpit init` now generates a default rate limit
 - Admin browser logins get a random per-session cookie with 24h expiry; logout revokes it
+- Create an issue on an external tracker (GitHub, Forgejo/Gitea, GitLab) directly from a Stackpit issue, configured once per organization with an optional per-project repository override; only publicly reachable tracker instances are supported for now
 
 ### Changed
 - Rate limits now enforce their scope: a per-project limit is shared across all of the project's DSN keys, and the global limit across all ingest

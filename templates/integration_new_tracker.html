@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+
+{% block title %}{{ chrome.t("integrations-tracker-title") }}{% endblock %}
+
+{% block sidebar_nav %}
+  {% call m::settings_sidebar(chrome, "integrations") %}
+  {% endcall %}
+{% endblock %}
+
+{% block breadcrumbs %}
+  <span class="breadcrumb-sep">/</span>
+  <a class="breadcrumb-link" href="/web/settings/integrations/">{{ chrome.t("nav-integrations") }}</a>
+  <span class="breadcrumb-sep">/</span>
+  <span class="breadcrumb-current">{{ chrome.t("integrations-tracker-breadcrumb") }}</span>
+{% endblock %}
+
+{% block content %}
+  <div class="page-header">
+    <div>
+      <h1>{{ chrome.t("integrations-tracker-heading") }}</h1>
+    </div>
+    <div class="page-actions">
+      <a href="/web/settings/integrations/" class="btn btn-secondary">{{ chrome.t("integrations-cancel") }}</a>
+    </div>
+  </div>
+
+  <div class="card card-pad max-w-2xl">
+    <form class="settings-form"
+          method="post"
+          action="/web/settings/integrations/create">
+      <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+      <div>
+        <label class="field-label" for="int_kind">{{ chrome.t("integrations-tracker-kind-label") }}</label>
+        <select class="select" id="int_kind" name="kind" required>
+          <option value="github">GitHub</option>
+          <option value="forgejo">Forgejo</option>
+          <option value="gitlab">GitLab</option>
+        </select>
+      </div>
+      <div>
+        <label class="field-label" for="int_name">{{ chrome.t("integrations-col-name") }}</label>
+        <input class="input"
+               type="text"
+               id="int_name"
+               name="name"
+               placeholder="{{ chrome.t("integrations-tracker-name-placeholder") }}"
+               required>
+      </div>
+      <div>
+        <label class="field-label" for="int_url">{{ chrome.t("integrations-tracker-url-label") }}</label>
+        <input class="input text-mono"
+               type="url"
+               id="int_url"
+               name="url"
+               placeholder="https://api.github.com"
+               required>
+      </div>
+      <div>
+        <label class="field-label" for="int_owner">{{ chrome.t("integrations-tracker-owner-label") }}</label>
+        <input class="input" type="text" id="int_owner" name="owner" placeholder="acme">
+      </div>
+      <div>
+        <label class="field-label" for="int_repo">{{ chrome.t("integrations-tracker-repo-label") }}</label>
+        <input class="input" type="text" id="int_repo" name="repo" placeholder="my-app">
+      </div>
+      <div>
+        <label class="field-label" for="int_project_id">{{ chrome.t("integrations-tracker-project-id-label") }}</label>
+        <input class="input" type="text" id="int_project_id" name="project_id" placeholder="12345678">
+      </div>
+      <div>
+        <label class="field-label" for="int_secret">{{ chrome.t("integrations-tracker-token-label") }}</label>
+        <input class="input"
+               type="password"
+               id="int_secret"
+               name="secret"
+               placeholder="{{ chrome.t("integrations-tracker-token-placeholder") }}"
+               required>
+      </div>
+      <div>
+        <button type="submit" class="btn btn-primary">{{ chrome.t("integrations-create") }}</button>
+      </div>
+    </form>
+  </div>
+{% endblock %}

@@ -516,6 +516,11 @@
     background: color-mix(in srgb, var(--color-success) 14%, transparent);
     color: var(--color-success); font-size: 13px;
   }
+  .settings-message-error {
+    padding: 0.5rem 0.75rem; border-radius: var(--radius);
+    background: color-mix(in srgb, var(--color-error) 14%, transparent);
+    color: var(--color-error); font-size: 13px;
+  }
   .help-text, .hint { font-size: 12px; color: var(--color-on-surface-variant); }
 
   /* small icon stub for "type" indicators next to nav items — kept as a colored dot */

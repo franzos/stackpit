@@ -59,6 +59,7 @@ flash-integration-not-found = Integration not found
 flash-integration-activated = Integration activated
 flash-integration-updated = Integration updated
 flash-integration-deactivated = Integration deactivated
+flash-integration-target-saved = Tracker target saved
 
 # Org integrations
 flash-name-required = Name is required
@@ -73,6 +74,8 @@ flash-test-digest-sent = Test digest queued for { $count } project(s) to their d
 flash-test-digest-sample = No recent activity, so a labeled sample digest was queued.
 flash-test-digest-no-target = No integration has digests enabled for this schedule's project.
 flash-url-required = URL is required
+flash-tracker-repo-required = Owner and repository are required
+flash-tracker-project-required = A numeric GitLab project ID is required
 flash-secret-not-configured = Cannot store secret: encryption is not configured. Set STACKPIT_MASTER_KEY to enable secret storage.
 flash-integration-created = Integration created
 flash-integration-name-exists = An integration with that name already exists.

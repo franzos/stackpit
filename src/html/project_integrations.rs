@@ -32,12 +32,37 @@ fn recipient_config(to_address: Option<String>) -> Result<Option<String>, &'stat
     }
 }
 
+/// Pre-filled tracker override fields for one integration, parsed from the
+/// `project_tracker_targets.target` JSON blob.
+struct TrackerOverrideView {
+    owner: Option<String>,
+    repo: Option<String>,
+    tracker_project_id: Option<i64>,
+}
+
+impl TrackerOverrideView {
+    fn from_target(target: &serde_json::Value) -> Self {
+        Self {
+            owner: target
+                .get("owner")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            repo: target
+                .get("repo")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            tracker_project_id: target.get("project_id").and_then(|v| v.as_i64()),
+        }
+    }
+}
+
 #[derive(Template)]
 #[template(path = "project_integrations.html")]
 struct ProjectIntegrationsTemplate {
     project_id: u64,
     active: Vec<ProjectIntegration>,
     available: Vec<Integration>,
+    overrides: std::collections::HashMap<i64, TrackerOverrideView>,
     message: Option<String>,
     nav: ProjectNavCounts,
     chrome: PageChrome,
@@ -385,6 +410,90 @@ pub async fn test(
     render_page(&state, project_id, Some(msg), &chrome, active.org_id).await
 }
 
+#[derive(Deserialize)]
+pub struct TargetForm {
+    pub owner: Option<String>,
+    pub repo: Option<String>,
+    pub project_id: Option<String>,
+}
+
+/// Sets the optional per-project tracker target override (D2): a standalone
+/// row in `project_tracker_targets`, kept out of the notify `activate`/`update`
+/// flow so it never surfaces in the live dispatcher or the Alerts Hub.
+pub async fn set_target(
+    State(state): State<AppState>,
+    active: ActiveOrg,
+    Chrome(chrome): Chrome,
+    Path((project_id, id)): Path<(u64, i64)>,
+    Form(form): Form<TargetForm>,
+) -> axum::response::Response {
+    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
+        return r;
+    }
+    if let Err(r) = require_owner(&active) {
+        return r;
+    }
+    // Reject cross-org targets: the integration must belong to the active org.
+    match queries::integrations::get_integration(&state.pool, id, Some(active.org_id)).await {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return render_page(
+                &state,
+                project_id,
+                Some(chrome.t("flash-integration-not-found")),
+                &chrome,
+                active.org_id,
+            )
+            .await;
+        }
+        Err(e) => {
+            return render_page(
+                &state,
+                project_id,
+                Some(chrome.err(e)),
+                &chrome,
+                active.org_id,
+            )
+            .await;
+        }
+    }
+
+    let owner = form.owner.filter(|s| !s.trim().is_empty());
+    let repo = form.repo.filter(|s| !s.trim().is_empty());
+    let tracker_project_id = form
+        .project_id
+        .filter(|s| !s.trim().is_empty())
+        .and_then(|s| s.trim().parse::<i64>().ok());
+
+    let mut target = serde_json::Map::new();
+    if let Some(o) = owner {
+        target.insert("owner".to_string(), serde_json::Value::String(o));
+    }
+    if let Some(r) = repo {
+        target.insert("repo".to_string(), serde_json::Value::String(r));
+    }
+    if let Some(p) = tracker_project_id {
+        target.insert("project_id".to_string(), serde_json::Value::from(p));
+    }
+
+    let result = if target.is_empty() {
+        queries::tracker_targets::delete_override(&state.writer_pool, project_id as i64, id).await
+    } else {
+        queries::tracker_targets::set_override(
+            &state.writer_pool,
+            project_id as i64,
+            id,
+            &serde_json::Value::Object(target),
+        )
+        .await
+    };
+    let msg = match result {
+        Ok(()) => chrome.t("flash-integration-target-saved"),
+        Err(e) => chrome.err(e),
+    };
+    render_page(&state, project_id, Some(msg), &chrome, active.org_id).await
+}
+
 async fn render_page(
     state: &AppState,
     project_id: u64,
@@ -400,12 +509,28 @@ async fn render_page(
             .await
             .unwrap_or_default();
 
+    let mut overrides = std::collections::HashMap::new();
+    for pi in &active {
+        if pi.integration_kind.is_tracker() {
+            if let Ok(Some(target)) = queries::tracker_targets::get_override(
+                &state.pool,
+                project_id as i64,
+                pi.integration_id,
+            )
+            .await
+            {
+                overrides.insert(pi.integration_id, TrackerOverrideView::from_target(&target));
+            }
+        }
+    }
+
     let nav = state.nav_counts(project_id).await;
 
     let tmpl = ProjectIntegrationsTemplate {
         project_id,
         active,
         available,
+        overrides,
         message,
         nav,
         chrome: chrome.clone(),

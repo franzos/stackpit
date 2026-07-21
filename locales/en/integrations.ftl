@@ -7,6 +7,7 @@ integrations-subtitle = Webhook, Slack and email outputs. Per-project routing is
 integrations-add-webhook = + Webhook
 integrations-add-slack = + Slack
 integrations-add-email = + Email
+integrations-add-tracker = + Issue tracker
 integrations-empty = No integrations yet. Add one above to start receiving notifications. After adding, enable it per-project under <strong>Project settings → Integrations</strong>.
 integrations-col-name = Name
 integrations-col-type = Type
@@ -53,3 +54,16 @@ integrations-email-token-placeholder = Provider API token
 integrations-email-from-label = From address
 integrations-email-fromname-label = From name
 integrations-email-smtp-hint = SMTP uses the server's [email] connection; no per-integration token is needed.
+
+# --- Add issue tracker (GitHub/Forgejo/GitLab) ---
+integrations-tracker-title = Add issue tracker — Stackpit
+integrations-tracker-breadcrumb = Add issue tracker
+integrations-tracker-heading = Add issue tracker integration
+integrations-tracker-kind-label = Tracker
+integrations-tracker-name-placeholder = e.g. GitHub issues
+integrations-tracker-url-label = Base URL
+integrations-tracker-owner-label = Owner
+integrations-tracker-repo-label = Repository
+integrations-tracker-project-id-label = Project ID (GitLab only)
+integrations-tracker-token-label = API token
+integrations-tracker-token-placeholder = Personal access token

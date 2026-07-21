@@ -31,6 +31,16 @@ pub async fn check_ssrf(url: &str) -> Result<ResolvedWebhook, String> {
     Ok(ResolvedWebhook { hostname, addr })
 }
 
+/// Build a `reqwest::Client` pinned to the SSRF-resolved address so DNS can't
+/// be re-resolved to a private address between check and connect.
+pub fn build_pinned_client(resolved: &ResolvedWebhook) -> anyhow::Result<reqwest::Client> {
+    Ok(reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none())
+        .resolve(&resolved.hostname, resolved.addr)
+        .build()?)
+}
+
 /// Pulls the hostname and "host:port" out of a URL.
 /// Returns (hostname, host_port) -- hostname is the bare host (no brackets,
 /// for reqwest `.resolve()`), host_port is bracketed-as-needed for `lookup_host`.
@@ -240,5 +250,14 @@ mod tests {
         // Public v6 (Cloudflare, Google DNS)
         assert!(!is_private_ip(&v6("2606:4700:4700::1111")));
         assert!(!is_private_ip(&v6("2001:4860:4860::8888")));
+    }
+
+    #[test]
+    fn build_pinned_client_succeeds() {
+        let rw = ResolvedWebhook {
+            hostname: "example.com".into(),
+            addr: "93.184.216.34:443".parse().unwrap(),
+        };
+        assert!(build_pinned_client(&rw).is_ok());
     }
 }

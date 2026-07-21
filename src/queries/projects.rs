@@ -796,6 +796,8 @@ const PROJECT_SCOPED_TABLES: &[&str] = &[
     "upload_chunks",
     "session_aggregates",
     "transaction_metrics",
+    "issue_external_links",
+    "project_tracker_targets",
 ];
 
 /// Delete a project and all it owns, reusing the caller's transaction.

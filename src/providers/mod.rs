@@ -1,5 +1,6 @@
 pub mod email;
 pub mod slack;
+pub mod tracker;
 pub mod webhook;
 
 use crate::domain::IntegrationKind;
@@ -30,6 +31,13 @@ pub async fn dispatch(
         IntegrationKind::Slack => slack::send(client, url, event).await,
         IntegrationKind::Email => {
             anyhow::bail!("email integrations are dispatched separately, not via dispatch()")
+        }
+        IntegrationKind::GitHub | IntegrationKind::Forgejo | IntegrationKind::GitLab => {
+            // Trackers are not notification channels; issue creation is an explicit user action.
+            anyhow::bail!(
+                "integration kind {} is not a notification provider",
+                kind.as_str()
+            )
         }
     }
 }

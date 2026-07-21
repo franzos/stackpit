@@ -299,10 +299,3 @@ pub fn defaults_redirect_url(
     };
     Some(format!("{path}?{merged}"))
 }
-
-/// Strips characters that'd break SVG text elements.
-pub fn sanitize_svg_text(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-}

@@ -19,7 +19,7 @@ use crate::html::filters;
 struct ReleaseHealthTemplate {
     project_id: u64,
     releases: Vec<ReleaseHealthRow>,
-    chart: String,
+    chart_data: String,
     nav: ProjectNavCounts,
     chrome: PageChrome,
 }
@@ -100,12 +100,12 @@ pub async fn handler(ctx: ProjectPageCtx) -> Result<axum::response::Response, Ht
     let daily = queries::releases::get_release_health_daily(&ctx.pool, ctx.project_id, since_ts)
         .await
         .unwrap_or_default();
-    let chart = charts::render_session_chart(&daily).unwrap_or_default();
+    let chart_data = charts::session_chart_json(&daily);
 
     let tmpl = ReleaseHealthTemplate {
         project_id: ctx.project_id,
         releases,
-        chart,
+        chart_data,
         nav: ctx.nav,
         chrome: ctx.chrome,
     };

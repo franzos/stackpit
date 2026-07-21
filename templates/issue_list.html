@@ -23,8 +23,10 @@
     </div>
   </div>
 
-  {% if !chart_svg.is_empty() %}
-    <div class="event-chart">{{ chart_svg|safe }}</div>
+  {% if !chart_data.is_empty() %}
+    <div class="event-chart" style="height: 220px">
+      <canvas data-chart="{{ chart_data }}"></canvas>
+    </div>
   {% endif %}
 
   {% if !tag.is_empty() %}
@@ -238,4 +240,9 @@
   </span>
 </nav>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+  <script src="/web/_assets/chart.umd.min.js"></script>
+  <script src="/web/_assets/charts.js"></script>
 {% endblock %}

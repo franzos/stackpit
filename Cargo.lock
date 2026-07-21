@@ -3915,7 +3915,6 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
- "charts-rs",
  "chrono",
  "clap",
  "dashmap",

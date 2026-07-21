@@ -514,12 +514,14 @@
 </dl>
 </div>
 
-{% if !chart_svg.is_empty() %}
+{% if !chart_data.is_empty() %}
   <div class="card">
     <div class="card-header">
       <span>{{ chrome.t("issues-label-events") }}</span>
     </div>
-    <div class="event-chart border-0 m-0 rounded-none">{{ chart_svg|safe }}</div>
+    <div class="event-chart border-0 m-0 rounded-none" style="height: 250px">
+      <canvas data-chart="{{ chart_data }}"></canvas>
+    </div>
   </div>
 {% endif %}
 
@@ -594,4 +596,9 @@
 </form>
 </aside>
 </div>
+{% endblock %}
+
+{% block scripts %}
+  <script src="/web/_assets/chart.umd.min.js"></script>
+  <script src="/web/_assets/charts.js"></script>
 {% endblock %}

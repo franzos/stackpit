@@ -479,6 +479,18 @@ static ASSET_TABLE: &[Asset] = &[
         cache_control: CACHE_DAY,
     },
     Asset {
+        path: "/web/_assets/chart.umd.min.js",
+        content_type: JS_CONTENT_TYPE,
+        body: include_bytes!("../../static/chart.umd.min.js"),
+        cache_control: CACHE_IMMUTABLE,
+    },
+    Asset {
+        path: "/web/_assets/charts.js",
+        content_type: JS_CONTENT_TYPE,
+        body: include_bytes!("../../static/charts.js"),
+        cache_control: CACHE_DAY,
+    },
+    Asset {
         path: "/web/_assets/confirm.js",
         content_type: JS_CONTENT_TYPE,
         body: include_bytes!("../../static/confirm.js"),

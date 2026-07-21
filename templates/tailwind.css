@@ -454,16 +454,23 @@
   .tag-facet-count { margin-left: auto; color: var(--color-on-surface-variant); font-variant-numeric: tabular-nums; font-weight: 500; }
   .tag-facet-row {
     position: relative; display: flex; align-items: center; gap: 0.5rem;
-    padding: 0.25rem 0.5rem; border-radius: var(--radius);
+    padding: 0.3rem 0.5rem; border-radius: var(--radius);
     font-size: 12px; color: var(--color-on-surface); overflow: hidden;
+    background: color-mix(in srgb, var(--color-on-surface) 4%, transparent);
+    transition: background-color 0.12s ease;
   }
+  .tag-facet-row + .tag-facet-row { margin-top: 2px; }
+  .tag-facet-row:hover { background: color-mix(in srgb, var(--color-on-surface) 9%, transparent); }
   .tag-facet-bar {
     position: absolute; left: 0; top: 0; bottom: 0; z-index: 0;
-    background: color-mix(in srgb, var(--color-primary) 14%, transparent);
-    width: var(--facet-pct, 0%);
+    background: color-mix(in srgb, var(--color-primary) 20%, transparent);
+    width: var(--facet-pct, 0%); min-width: 2px; border-radius: inherit;
+    transition: background-color 0.12s ease;
   }
+  .tag-facet-row:hover .tag-facet-bar { background: color-mix(in srgb, var(--color-primary) 32%, transparent); }
   .tag-facet-row > *:not(.tag-facet-bar) { position: relative; z-index: 1; }
-  .tag-facet-value { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tag-facet-value { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: color 0.12s ease; }
+  .tag-facet-row:hover .tag-facet-value { color: var(--color-primary); }
   .tag-facet-row .facet-count { margin-left: auto; color: var(--color-on-surface-variant); font-variant-numeric: tabular-nums; }
   .tag-facet-bar-stack { display: flex; height: 4px; border-radius: 9999px; overflow: hidden; margin-bottom: 0.5rem; }
   .tag-facet-segment { height: 100%; }
@@ -487,14 +494,14 @@
   .type-breakdown .seg.span { background: var(--color-primary); }
   .type-breakdown .seg.log { background: var(--color-warn); }
 
-  /* event chart container (server-rendered svg) */
+  /* event chart container (client-rendered canvas, sized by an inline height) */
   .event-chart {
+    position: relative;
     margin-bottom: 1rem; padding: 0.75rem;
     border: 1px solid var(--color-outline-variant); border-radius: var(--radius-lg);
     background: var(--color-surface-container);
-    overflow-x: auto;
   }
-  .event-chart svg { display: block; max-width: 100%; height: auto; }
+  .event-chart canvas { display: block; }
 
   /* breadcrumbs (events panel) */
   .breadcrumb-table { width: 100%; border-collapse: collapse; font-size: 12px; }

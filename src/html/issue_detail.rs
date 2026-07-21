@@ -64,7 +64,7 @@ struct IssueDetailTemplate {
     // -- events tab --
     events: PagedResult<queries::EventSummary>,
     // -- shared --
-    chart_svg: String,
+    chart_data: String,
     first_seen_release: Option<String>,
     last_seen_release: Option<String>,
     chrome: PageChrome,
@@ -102,8 +102,8 @@ pub async fn handler(
         .await
         .unwrap_or(false);
 
-    let chart_svg = match queries::events::event_histogram(&pool, &fingerprint, 30).await {
-        Ok(buckets) => charts::render_event_chart(&buckets).unwrap_or_default(),
+    let chart_data = match queries::events::event_histogram(&pool, &fingerprint, 30).await {
+        Ok(buckets) => charts::chart_json(&buckets, "Events"),
         Err(_) => String::new(),
     };
 
@@ -142,7 +142,7 @@ pub async fn handler(
             raw_json: String::new(),
             tag_facets,
             events,
-            chart_svg,
+            chart_data,
             first_seen_release,
             last_seen_release,
             chrome,
@@ -251,7 +251,7 @@ pub async fn handler(
         raw_json,
         tag_facets,
         events: empty_events,
-        chart_svg,
+        chart_data,
         first_seen_release,
         last_seen_release,
         chrome,

@@ -23,7 +23,7 @@
   </head>
   <body class="min-h-screen">
     {% block layout %}
-      <div class="flex min-h-screen">
+      <div class="flex" style="height: 100dvh; overflow: hidden">
         <aside class="w-[var(--spacing-sidebar)] shrink-0 border-e border-outline-variant flex flex-col"
                style="background: var(--color-surface-container-low)">
           <a href="/web/projects/"
@@ -73,7 +73,7 @@
               {% endblock %}
             </nav>
           </header>
-          <main class="flex-1 px-6 py-6 min-w-0">
+          <main class="flex-1 px-6 py-6 min-w-0 overflow-y-auto">
             {% block content %}{% endblock %}
           </main>
         </div>

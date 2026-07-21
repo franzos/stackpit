@@ -1,19 +1,34 @@
-use super::utils::sanitize_svg_text;
 use crate::queries::types::DailySessions;
+use serde::Serialize;
 
-/// charts-rs emits a fixed pixel `width`/`height` on the root `<svg>`. Override
-/// them with an inline style so the chart fills its container; the existing
-/// `viewBox` makes it scale uniformly (height auto-derived, text undistorted).
-fn make_responsive(svg: String) -> String {
-    svg.replacen("<svg ", "<svg style=\"width:100%;height:auto\" ", 1)
+/// Payload embedded on a `<canvas data-chart>` for the client-side Chart.js
+/// reader (`static/charts.js`). Labels are the pre-formatted bucket captions;
+/// values are the per-bucket counts; `name` is the dataset/tooltip label.
+#[derive(Serialize)]
+struct ChartData<'a> {
+    labels: Vec<&'a str>,
+    values: Vec<f32>,
+    name: &'a str,
 }
 
-/// Bar chart of total sessions per day. `None` when there's no data so the
-/// template can hide the card. Mirrors `render_event_chart`'s styling.
-pub fn render_session_chart(daily: &[DailySessions]) -> Option<String> {
-    if daily.is_empty() {
-        return None;
+/// Serialize time-bucketed counts to the JSON the client renders as a bar chart.
+/// Returns an empty string when there's nothing to plot so the template can hide
+/// the card (`{% if !chart_data.is_empty() %}`).
+pub fn chart_json(buckets: &[(String, f32)], name: &str) -> String {
+    if buckets.is_empty() {
+        return String::new();
     }
+    let data = ChartData {
+        labels: buckets.iter().map(|(l, _)| l.as_str()).collect(),
+        values: buckets.iter().map(|(_, c)| *c).collect(),
+        name,
+    };
+    serde_json::to_string(&data).unwrap_or_default()
+}
+
+/// JSON for the release-health "sessions per day" bar chart. Empty string when
+/// there's no data.
+pub fn session_chart_json(daily: &[DailySessions]) -> String {
     let buckets: Vec<(String, f32)> = daily
         .iter()
         .map(|d| {
@@ -23,35 +38,7 @@ pub fn render_session_chart(daily: &[DailySessions]) -> Option<String> {
             (label, d.total as f32)
         })
         .collect();
-    render_session_chart_sized(&buckets, 800.0, 250.0).ok()
-}
-
-fn render_session_chart_sized(
-    buckets: &[(String, f32)],
-    width: f32,
-    height: f32,
-) -> Result<String, Box<dyn std::error::Error>> {
-    use charts_rs::{BarChart, THEME_GRAFANA};
-
-    let x_labels: Vec<String> = buckets.iter().map(|(l, _)| sanitize_svg_text(l)).collect();
-    let values: Vec<f32> = buckets.iter().map(|(_, c)| *c).collect();
-
-    let mut chart =
-        BarChart::new_with_theme(vec![("Sessions", values).into()], x_labels, THEME_GRAFANA);
-
-    chart.width = width;
-    chart.height = height;
-    chart.margin.left = 20.0;
-    chart.margin.right = 20.0;
-    chart.margin.top = 20.0;
-    chart.margin.bottom = 20.0;
-    chart.legend_show = Some(false);
-    chart.x_axis_name_rotate = -45.0;
-    chart.x_axis_font_size = 10.0;
-    chart.series_label_formatter = "{c:.0}".to_string();
-    chart.background_color = charts_rs::Color::transparent();
-
-    Ok(make_responsive(chart.svg()?))
+    chart_json(&buckets, "Sessions")
 }
 
 /// Tiny inline bar chart for an issue row's event trend. Hand-rolled SVG so it
@@ -93,57 +80,28 @@ pub fn render_sparkline(counts: &[f32]) -> String {
     )
 }
 
-pub fn render_event_chart(buckets: &[(String, f32)]) -> Result<String, Box<dyn std::error::Error>> {
-    render_event_chart_sized(buckets, 800.0, 250.0)
-}
-
-pub fn render_event_chart_wide(
-    buckets: &[(String, f32)],
-) -> Result<String, Box<dyn std::error::Error>> {
-    render_event_chart_sized(buckets, 1400.0, 220.0)
-}
-
-fn render_event_chart_sized(
-    buckets: &[(String, f32)],
-    width: f32,
-    height: f32,
-) -> Result<String, Box<dyn std::error::Error>> {
-    use charts_rs::{BarChart, THEME_GRAFANA};
-
-    // Labels come from chrono formatting, but sanitize defensively anyway.
-    let x_labels: Vec<String> = buckets.iter().map(|(l, _)| sanitize_svg_text(l)).collect();
-    let values: Vec<f32> = buckets.iter().map(|(_, c)| *c).collect();
-
-    let mut chart =
-        BarChart::new_with_theme(vec![("Events", values).into()], x_labels, THEME_GRAFANA);
-
-    chart.width = width;
-    chart.height = height;
-    chart.margin.left = 20.0;
-    chart.margin.right = 20.0;
-    chart.margin.top = 20.0;
-    chart.margin.bottom = 20.0;
-    chart.legend_show = Some(false);
-    chart.x_axis_name_rotate = -45.0;
-    chart.x_axis_font_size = 10.0;
-    chart.series_label_formatter = "{c:.0}".to_string();
-    // Transparent background lets the card supply the color (works in light and dark modes).
-    chart.background_color = charts_rs::Color::transparent();
-
-    Ok(make_responsive(chart.svg()?))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn make_responsive_injects_style_and_keeps_viewbox() {
-        let out = make_responsive(
-            "<svg width=\"1400\" height=\"220\" viewBox=\"0 0 1400 220\">x</svg>".into(),
+    fn chart_json_blank_when_no_buckets() {
+        assert_eq!(chart_json(&[], "Events"), "");
+    }
+
+    #[test]
+    fn chart_json_serializes_labels_values_and_name() {
+        let buckets = vec![("Jul 20".to_string(), 3.0), ("Jul 21".to_string(), 5.0)];
+        let json = chart_json(&buckets, "Events");
+        assert_eq!(
+            json,
+            r#"{"labels":["Jul 20","Jul 21"],"values":[3.0,5.0],"name":"Events"}"#
         );
-        assert!(out.starts_with("<svg style=\"width:100%;height:auto\" "));
-        assert!(out.contains("viewBox=\"0 0 1400 220\""));
+    }
+
+    #[test]
+    fn session_chart_json_blank_when_empty() {
+        assert_eq!(session_chart_json(&[]), "");
     }
 
     #[test]

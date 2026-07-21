@@ -40,7 +40,7 @@ struct IssueListTemplate {
     filter_qs: String,
     base_qs: String,
     nav: ProjectNavCounts,
-    chart_svg: String,
+    chart_data: String,
     // fingerprint -> inline trend sparkline SVG for the rows on this page.
     sparks: std::collections::HashMap<String, String>,
     chrome: PageChrome,
@@ -101,11 +101,11 @@ async fn issue_or_transaction_handler(
         .await
         .unwrap_or_default();
 
-    let chart_svg =
+    let chart_data =
         match queries::events::project_event_histogram(pool, project_id, item_type, &period_str)
             .await
         {
-            Ok(buckets) => charts::render_event_chart_wide(&buckets).unwrap_or_default(),
+            Ok(buckets) => charts::chart_json(&buckets, "Events"),
             Err(_) => String::new(),
         };
 
@@ -160,7 +160,7 @@ async fn issue_or_transaction_handler(
         filter_qs,
         base_qs,
         nav,
-        chart_svg,
+        chart_data,
         sparks,
         chrome,
     }))
@@ -219,7 +219,7 @@ mod tests {
                 label: "Proj".into(),
                 ..Default::default()
             },
-            chart_svg: String::new(),
+            chart_data: String::new(),
             sparks,
             chrome: PageChrome::new(String::new(), langid!("en"), "/web/projects/1/".into()),
         };

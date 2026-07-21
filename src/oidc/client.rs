@@ -52,6 +52,8 @@ struct Inner {
     /// Hydra binds this as the token's `aud`; sent as the non-standard
     /// `audience=` authorization param. Empty = omit it.
     web_audience: String,
+    /// Forseti `organization_id` authorize param (id or slug). Empty = omit.
+    organization_id: String,
 }
 
 /// Auth start: auth URL + session secrets (state/nonce/PKCE).
@@ -212,6 +214,7 @@ impl OidcClient {
                 end_session_endpoint: endpoints.end_session_endpoint,
                 introspection_endpoint: endpoints.introspection_endpoint,
                 web_audience: cfg.web_audience.clone(),
+                organization_id: cfg.organization_id.clone().unwrap_or_default(),
             }),
         })
     }
@@ -271,6 +274,11 @@ impl OidcClient {
         // which the web gate then requires.
         if !self.inner.web_audience.is_empty() {
             req = req.add_extra_param("audience", self.inner.web_audience.as_str());
+        }
+
+        // Forseti org-scoped login: route the user into a specific org.
+        if !self.inner.organization_id.is_empty() {
+            req = req.add_extra_param("organization_id", self.inner.organization_id.as_str());
         }
 
         let (auth_url, state, nonce) = req.url();
@@ -814,6 +822,7 @@ impl OidcClient {
                 end_session_endpoint: None,
                 introspection_endpoint: None,
                 web_audience: String::new(),
+                organization_id: String::new(),
             }),
         }
     }

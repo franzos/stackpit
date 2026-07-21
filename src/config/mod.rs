@@ -230,6 +230,10 @@ pub struct OAuthConfig {
     /// only safe when no other resource server shares the IdP.
     #[serde(default)]
     pub web_audience: String,
+    /// Forseti org to scope logins into: appended as the `organization_id`
+    /// authorize param (id or slug). Empty = omit.
+    #[serde(default)]
+    pub organization_id: Option<String>,
     /// Required scope on every web bearer-gate authorization. Empty = accept
     /// any introspection-valid token. Set to e.g. `stackpit:web` for
     /// defense-in-depth against tokens reused from other resource servers.

@@ -1,15 +1,16 @@
-<p align="center">
-  <img src="assets/logo.png" alt="stackpit" width="480">
-</p>
-<p align="center">
+<div align="center">
+  <img src="assets/logo.png" alt="Stackpit" width="128" />
+
+  # Stackpit
+
   A drop-in, self-hosted replacement for Sentry's event ingestion and browsing. Single binary, single SQLite file, no external dependencies.
-</p>
-<p align="center">
-  <a href="https://github.com/franzos/stackpit/actions/workflows/ci.yml"><img src="https://github.com/franzos/stackpit/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/franzos/stackpit/actions/workflows/release.yml"><img src="https://github.com/franzos/stackpit/actions/workflows/release.yml/badge.svg" alt="Release"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
-  <a href="https://github.com/franzos/stackpit/pkgs/container/stackpit"><img src="https://img.shields.io/badge/ghcr.io-stackpit-097aba?logo=docker&logoColor=white" alt="Container"></a>
-</p>
+
+  [![CI](https://github.com/franzos/stackpit/actions/workflows/ci.yml/badge.svg)](https://github.com/franzos/stackpit/actions/workflows/ci.yml)
+  [![Release](https://github.com/franzos/stackpit/actions/workflows/release.yml/badge.svg)](https://github.com/franzos/stackpit/actions/workflows/release.yml)
+  [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+  [![Container](https://img.shields.io/badge/ghcr.io-stackpit-097aba?logo=docker&logoColor=white)](https://github.com/franzos/stackpit/pkgs/container/stackpit)
+
+</div>
 
 I got tired of paying for Sentry on smaller projects and self-hosting the official thing is... a lot. The thing is, most of what I need is ingestion, grouping, and a way to browse errors. So I built this — point your existing Sentry SDKs at it, browse errors in the web UI, or query via the JSON API.
 

@@ -462,18 +462,24 @@ async fn render_page(
 
     // Project selector: name when set, else `Project {id}`. Sorted by label so
     // the dropdown stays scannable as project count grows.
-    let mut projects: Vec<ProjectOption> =
-        queries::projects::list_projects(&state.pool, org_id, None, None, None)
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .map(|p| {
-                let label = p.name.unwrap_or_else(|| {
-                    chrome.tv1("alerts-project-fallback", "id", &p.project_id.to_string())
-                });
-                (p.project_id, label)
-            })
-            .collect();
+    let mut projects: Vec<ProjectOption> = queries::projects::list_projects_cached(
+        &state.pool,
+        &state.project_list_cache,
+        org_id,
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap_or_default()
+    .into_iter()
+    .map(|p| {
+        let label = p.name.unwrap_or_else(|| {
+            chrome.tv1("alerts-project-fallback", "id", &p.project_id.to_string())
+        });
+        (p.project_id, label)
+    })
+    .collect();
     projects.sort_by_key(|a| a.1.to_lowercase());
 
     // Active project integrations across the org, paired with their project

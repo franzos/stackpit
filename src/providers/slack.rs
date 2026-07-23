@@ -1,6 +1,15 @@
 use crate::notify::NotificationEvent;
 use anyhow::Result;
 
+/// Escape Slack mrkdwn control characters so attacker-controlled fields (event
+/// title, environment, project/issue name) can't inject a `<url|text>` link into
+/// an operator's alert channel. `&` must be replaced first to avoid double-escaping.
+fn escape_mrkdwn(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 pub async fn send(client: &reqwest::Client, url: &str, event: &NotificationEvent) -> Result<()> {
     let emoji = match event.level.as_deref() {
         Some("fatal") => ":fire:",
@@ -13,7 +22,7 @@ pub async fn send(client: &reqwest::Client, url: &str, event: &NotificationEvent
 
     let trigger_text = event.trigger.display_label();
 
-    let title = event.title.as_deref().unwrap_or("(untitled)");
+    let title = escape_mrkdwn(event.title.as_deref().unwrap_or("(untitled)"));
 
     let payload = if matches!(event.trigger, crate::notify::NotifyTrigger::Digest) {
         let mut blocks: Vec<serde_json::Value> = vec![serde_json::json!({
@@ -27,7 +36,7 @@ pub async fn send(client: &reqwest::Client, url: &str, event: &NotificationEvent
 
         if let Some(ref digest) = event.digest {
             for project in &digest.projects {
-                let name = project.name.as_deref().unwrap_or("Unknown");
+                let name = escape_mrkdwn(project.name.as_deref().unwrap_or("Unknown"));
                 blocks.push(serde_json::json!({
                     "type": "section",
                     "text": {
@@ -41,8 +50,10 @@ pub async fn send(client: &reqwest::Client, url: &str, event: &NotificationEvent
                 }));
 
                 for issue in project.new_issues.iter().take(5) {
-                    let issue_title = issue.title.as_deref().unwrap_or("(untitled)");
-                    let level = issue.level.as_deref().unwrap_or("-");
+                    // Backticks stripped so the title can't break out of the code span.
+                    let issue_title = escape_mrkdwn(issue.title.as_deref().unwrap_or("(untitled)"))
+                        .replace('`', "'");
+                    let level = escape_mrkdwn(issue.level.as_deref().unwrap_or("-"));
                     blocks.push(serde_json::json!({
                         "type": "section",
                         "text": {
@@ -87,7 +98,7 @@ pub async fn send(client: &reqwest::Client, url: &str, event: &NotificationEvent
                         },
                         {
                             "type": "mrkdwn",
-                            "text": format!("*Level:*\n{}", event.level.as_deref().unwrap_or("-")),
+                            "text": format!("*Level:*\n{}", escape_mrkdwn(event.level.as_deref().unwrap_or("-"))),
                         },
                         {
                             "type": "mrkdwn",
@@ -95,7 +106,7 @@ pub async fn send(client: &reqwest::Client, url: &str, event: &NotificationEvent
                         },
                         {
                             "type": "mrkdwn",
-                            "text": format!("*Environment:*\n{}", event.environment.as_deref().unwrap_or("-")),
+                            "text": format!("*Environment:*\n{}", escape_mrkdwn(event.environment.as_deref().unwrap_or("-"))),
                         },
                     ]
                 }

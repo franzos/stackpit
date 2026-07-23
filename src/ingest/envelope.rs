@@ -149,13 +149,15 @@ pub fn parse(body: &[u8], project_id: u64, auth: &SentryAuth) -> Result<ParsedEn
                 }
                 slice
             } else {
+                // A declared length past the body desyncs the item stream, so we
+                // can't locate the next item; skip the rest rather than accept a
+                // truncated payload as a real item.
                 tracing::warn!(
-                    "envelope item declared length {len_u64} exceeds remaining body ({} bytes), truncating",
+                    "envelope item declared length {len_u64} exceeds remaining body ({} bytes), skipping",
                     body.len() - pos
                 );
-                let slice = &body[pos..];
                 pos = body.len();
-                slice
+                continue;
             }
         } else {
             // No declared length: read until the next newline.

@@ -5,7 +5,7 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::Sender;
 use tokio_util::sync::CancellationToken;
 
-use crate::ingest::models::{StorableAttachment, StorableEvent};
+use crate::ingest::models::{StorableAttachment, StorableEvent, StorageBucket};
 use crate::util::stats::IngestStats;
 use crate::util::throttle::Throttle;
 
@@ -84,6 +84,14 @@ impl WriterHandle {
         if event.compressed {
             return;
         }
+        // Metrics, and logs whose entries were pre-extracted at parse time,
+        // re-derive their rows from the raw payload at flush and never persist
+        // the compressed form, so compressing it is wasted work.
+        match event.item_type.storage_bucket() {
+            StorageBucket::Metrics => return,
+            StorageBucket::Logs if event.log_entries.is_some() => return,
+            _ => {}
+        }
         if event.payload.len() > crate::util::INLINE_CPU_MAX_BYTES {
             super::block_in_place_if_multi_thread(|| event.compress_payload());
         } else {
@@ -114,40 +122,9 @@ impl WriterHandle {
 
     // -- Event ingestion (fire-and-forget) -----------------------------------
 
-    pub fn send_event(&self, mut event: StorableEvent) -> Result<(), SendError> {
-        // Once shutdown starts, reject instead of falsely acking into a queue nobody drains.
-        if self.shutdown.is_cancelled() {
-            self.ingest_stats
-                .events_rejected
-                .fetch_add(1, Ordering::Relaxed);
-            return Err(Box::new(TrySendError::Closed(WriteMsg::Event(event))));
-        }
-        Self::compress_event(&mut event);
-        let tx = self.shard();
-        self.warn_if_backpressure(tx);
-        let msg = WriteMsg::Event(event);
-        let size = msg_bytes(&msg);
-        if !self.try_reserve_bytes(size) {
-            self.ingest_stats
-                .events_rejected
-                .fetch_add(1, Ordering::Relaxed);
-            return Err(Box::new(TrySendError::Full(msg)));
-        }
-        match tx.try_send(msg) {
-            Ok(()) => {
-                self.ingest_stats
-                    .events_accepted
-                    .fetch_add(1, Ordering::Relaxed);
-                Ok(())
-            }
-            Err(e) => {
-                self.queued_bytes.fetch_sub(size, Ordering::Relaxed);
-                self.ingest_stats
-                    .events_rejected
-                    .fetch_add(1, Ordering::Relaxed);
-                Err(Box::new(e))
-            }
-        }
+    pub fn send_event(&self, event: StorableEvent) -> Result<(), SendError> {
+        // Empty attachments produce exactly WriteMsg::Event, so this is identical.
+        self.send_event_with_attachments(event, Vec::new())
     }
 
     fn warn_if_backpressure(&self, tx: &Sender<WriteMsg>) {

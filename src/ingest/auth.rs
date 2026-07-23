@@ -121,6 +121,24 @@ fn cache_fresh(entry_age: std::time::Duration, ttl: std::time::Duration) -> bool
     entry_age < ttl
 }
 
+/// Hard-evict arbitrary entries until the map is at or below `cap`, so a
+/// unique-key flood that outpaces expiry can't grow a cache without bound.
+/// The key is cloned out before `remove` so no shard lock is held across it.
+fn evict_to_cap<K, V>(cache: &dashmap::DashMap<K, V>, cap: usize)
+where
+    K: std::hash::Hash + Eq + Clone,
+{
+    while cache.len() > cap {
+        let key = cache.iter().next().map(|e| e.key().clone());
+        match key {
+            Some(k) => {
+                cache.remove(&k);
+            }
+            None => break,
+        }
+    }
+}
+
 /// Drops all cached entries (positive and negative) for a project; call when project settings change so an unarchive/registration clears stale denials.
 pub fn invalidate_project(cache: &AuthCache, negative: &NegativeAuthCache, project_id: u64) {
     cache.retain(|_, entry| entry.project_id != project_id);
@@ -136,6 +154,7 @@ fn negative_cache_insert(state: &AppState, sentry_key: &str, project_id: u64, de
     let cache = &state.negative_auth_cache;
     if cache.len() > NEGATIVE_AUTH_CACHE_MAX_ENTRIES {
         cache.retain(|_, e| cache_fresh(e.inserted_at.elapsed(), NEGATIVE_AUTH_CACHE_TTL));
+        evict_to_cap(cache, NEGATIVE_AUTH_CACHE_MAX_ENTRIES);
     }
     cache.insert(
         (sentry_key.to_owned(), project_id),
@@ -231,6 +250,7 @@ pub async fn validate_project_key(
         state
             .auth_cache
             .retain(|_, entry| entry.inserted_at.elapsed() < AUTH_CACHE_TTL);
+        evict_to_cap(&state.auth_cache, AUTH_CACHE_MAX_ENTRIES);
     }
 
     match state.config.filter.mode {

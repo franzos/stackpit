@@ -68,6 +68,8 @@ pub struct AppState {
     pub mcp: Option<Arc<McpRuntime>>,
     /// Short-TTL cache of per-project nav badge counts (display convenience).
     pub nav_cache: crate::queries::projects::NavCountsCache,
+    /// Short-TTL cache of the assembled project list (avoids full-table `events` aggregations per render).
+    pub project_list_cache: crate::queries::projects::ProjectListCache,
     /// Queues notifications to the dispatcher; used by the digest-test preview.
     pub notify_tx: tokio::sync::mpsc::Sender<crate::notify::NotificationEvent>,
     /// Commercial license status (lock-free `ArcSwap`); gates commercial
@@ -392,6 +394,7 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
         web_bearer_gate: web_bearer_gate.clone(),
         mcp: mcp.clone(),
         nav_cache: Arc::new(dashmap::DashMap::new()),
+        project_list_cache: Arc::new(dashmap::DashMap::new()),
         notify_tx: web_notify_tx,
         license,
         metrics_handle,

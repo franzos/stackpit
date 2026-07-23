@@ -13,12 +13,20 @@ use crate::extractors::ReadPool;
 
 /// GET /api/0/projects/
 pub async fn list(
+    State(state): State<AppState>,
     ReadPool(pool): ReadPool,
     active_org: ActiveOrg,
 ) -> Result<impl IntoResponse, ApiError> {
-    let projects = queries::projects::list_projects(&pool, active_org.org_id, None, None, None)
-        .await
-        .map_err(ApiError::internal)?;
+    let projects = queries::projects::list_projects_cached(
+        &pool,
+        &state.project_list_cache,
+        active_org.org_id,
+        None,
+        None,
+        None,
+    )
+    .await
+    .map_err(ApiError::internal)?;
     Ok(Json(projects))
 }
 

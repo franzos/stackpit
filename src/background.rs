@@ -143,7 +143,7 @@ async fn run_digest_cycle(
     let schedules = match crate::queries::alerts::list_due_digests(pool, now).await {
         Ok(s) => s,
         Err(e) => {
-            tracing::debug!("digest: failed to query schedules: {e}");
+            tracing::warn!("digest: failed to query schedules: {e}");
             return;
         }
     };

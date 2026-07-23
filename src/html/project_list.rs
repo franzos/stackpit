@@ -28,7 +28,7 @@ struct ProjectListTemplate {
 pub async fn handler(
     BrowserDefaults(defaults): BrowserDefaults,
     RawQuery(raw_qs): RawQuery,
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     ReadPool(pool): ReadPool,
     Chrome(chrome): Chrome,
     Query(params): Query<ListParams>,
@@ -45,8 +45,9 @@ pub async fn handler(
 
     let since = period_to_timestamp(&period_str);
 
-    let projects = queries::projects::list_projects(
+    let projects = queries::projects::list_projects_cached(
         &pool,
+        &state.project_list_cache,
         active_org.org_id,
         params.sort.as_deref().filter(|s| !s.is_empty()),
         params.query.as_deref().filter(|s| !s.is_empty()),

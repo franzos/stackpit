@@ -138,7 +138,7 @@ pub struct LogEntry {
     pub attributes: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct ProjectSummary {
     pub project_id: u64,
     pub name: Option<String>,

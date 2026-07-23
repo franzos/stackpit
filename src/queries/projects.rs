@@ -17,6 +17,16 @@ pub type NavCountsCache = Arc<DashMap<u64, (ProjectNavCounts, Instant)>>;
 /// Nav badges are a display convenience, so 30s trades slight staleness for far fewer full-table aggregations on busy projects.
 const NAV_COUNTS_TTL: Duration = Duration::from_secs(30);
 
+/// Assembled project-list result cached with the same short TTL as [`NavCountsCache`], shared via `AppState`. Keyed by the params that shape the SQL result (org, sort, and a TTL-bucketed `since`); the name/id `query` filter runs over the cached clone, so it stays out of the key.
+pub type ProjectListCache =
+    Arc<DashMap<(i64, Option<String>, Option<i64>), (Vec<ProjectSummary>, Instant)>>;
+
+/// Same rationale as [`NAV_COUNTS_TTL`]: the project list runs full-table GROUP BYs over `events`, so a short staleness window avoids re-aggregating on every render.
+const PROJECT_LIST_TTL: Duration = Duration::from_secs(30);
+
+/// Safety valve for [`ProjectListCache`]: over this many entries an insert first drops expired ones. The live key space is tiny in practice (orgs × sort × current time bucket).
+const PROJECT_LIST_CACHE_MAX_ENTRIES: usize = 512;
+
 /// True while a cache entry of the given age is still within the TTL window.
 fn nav_cache_fresh(entry_age: Duration, ttl: Duration) -> bool {
     entry_age < ttl
@@ -50,6 +60,40 @@ pub async fn list_projects(
     since: Option<i64>,
 ) -> Result<Vec<ProjectSummary>> {
     list_projects_inner(pool, Some(org_id), sort, query, since).await
+}
+
+/// Cached [`list_projects`]: a fresh hit returns the stored list (query-filtered),
+/// otherwise recompute the full list, cache it, and return the filtered view. The
+/// all-time `first_seen` semantics are unchanged; only the assembled Vec is cached.
+pub async fn list_projects_cached(
+    pool: &crate::db::DbPool,
+    cache: &ProjectListCache,
+    org_id: i64,
+    sort: Option<&str>,
+    query: Option<&str>,
+    since: Option<i64>,
+) -> Result<Vec<ProjectSummary>> {
+    // Bucket `since` to the TTL width: callers pass a live `now - period` timestamp
+    // that changes every second, so keying on it raw would never hit and would grow
+    // the cache without bound. Flooring to TTL-wide windows collapses a window onto
+    // one key; the small resulting staleness is within the TTL the cache already accepts.
+    let since_bucket = since.map(|s| s / PROJECT_LIST_TTL.as_secs() as i64);
+    let key = (org_id, sort.map(str::to_string), since_bucket);
+    if let Some(entry) = cache.get(&key) {
+        if nav_cache_fresh(entry.1.elapsed(), PROJECT_LIST_TTL) {
+            let mut projects = entry.0.clone();
+            filter_projects_by_query(&mut projects, query);
+            return Ok(projects);
+        }
+    }
+    let full = list_projects_inner(pool, Some(org_id), sort, None, since).await?;
+    if cache.len() > PROJECT_LIST_CACHE_MAX_ENTRIES {
+        cache.retain(|_, (_, inserted)| nav_cache_fresh(inserted.elapsed(), PROJECT_LIST_TTL));
+    }
+    cache.insert(key, (full.clone(), Instant::now()));
+    let mut projects = full;
+    filter_projects_by_query(&mut projects, query);
+    Ok(projects)
 }
 
 /// List all projects across every org (CLI / superuser context).
@@ -158,22 +202,24 @@ async fn list_projects_inner(
     };
 
     let mut projects: Vec<ProjectSummary> = rows.iter().map(map_project_row).collect();
-
-    // Filter client-side by name/id; simpler than more dynamic SQL.
-    if let Some(q) = query {
-        if !q.is_empty() {
-            let q_lower = q.to_lowercase();
-            projects.retain(|p| {
-                p.project_id.to_string().contains(&q_lower)
-                    || p.name
-                        .as_ref()
-                        .map(|n| n.to_lowercase().contains(&q_lower))
-                        .unwrap_or(false)
-            });
-        }
-    }
-
+    filter_projects_by_query(&mut projects, query);
     Ok(projects)
+}
+
+/// Narrow the list to projects whose id or name contains `query` (case-insensitive).
+/// Client-side so it can run over a cached list without re-querying.
+fn filter_projects_by_query(projects: &mut Vec<ProjectSummary>, query: Option<&str>) {
+    let Some(q) = query.filter(|q| !q.is_empty()) else {
+        return;
+    };
+    let q_lower = q.to_lowercase();
+    projects.retain(|p| {
+        p.project_id.to_string().contains(&q_lower)
+            || p.name
+                .as_ref()
+                .map(|n| n.to_lowercase().contains(&q_lower))
+                .unwrap_or(false)
+    });
 }
 
 fn map_project_row(row: &crate::db::DbRow) -> ProjectSummary {

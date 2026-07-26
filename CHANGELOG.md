@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.3.18] - 2026-07-26
+
+### Changed
+- New Stackpit logo across the web UI and favicon
+- Project list is cached, and auth caches are capped
+
+### Fixed
+- Slack notifications escape mrkdwn, so event text can't forge formatting
+- Truncated envelope items are skipped instead of misparsed
+
 ## [0.3.17] - 2026-07-21
 
 ### Fixed

@@ -479,9 +479,9 @@ static ASSET_TABLE: &[Asset] = &[
         cache_control: CACHE_DAY,
     },
     Asset {
-        path: "/web/_assets/icon.svg",
-        content_type: "image/svg+xml",
-        body: include_bytes!("../../assets/icon.svg"),
+        path: "/web/_assets/icon.png",
+        content_type: "image/png",
+        body: include_bytes!("../../assets/icon.png"),
         cache_control: CACHE_DAY,
     },
     Asset {
@@ -620,11 +620,11 @@ pub(crate) fn html_error_localized(
 <link rel="preload" href="/web/_assets/fonts/Inter-Regular.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/web/_assets/fonts/Inter-SemiBold.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/web/_assets/style.css">
-<link rel="icon" type="image/svg+xml" href="/web/_assets/icon.svg"></head>
+<link rel="icon" type="image/png" href="/web/_assets/icon.png"></head>
 <body>
 <div class="min-h-screen flex items-center justify-center px-6">
 <div class="card card-pad max-w-lg w-full">
-<div class="flex items-center gap-2 mb-4"><img src="/web/_assets/icon.svg" alt="" width="22" height="22"><span class="font-semibold">Stackpit</span></div>
+<div class="flex items-center gap-2 mb-4"><img src="/web/_assets/icon.png" alt="" width="22" height="22"><span class="font-semibold">Stackpit</span></div>
 <div class="page-h1 mb-2">{heading} {}</div>
 <p class="text-muted">{}</p>
 <div class="mt-6"><a href="/web/projects/" class="btn btn-secondary">{back}</a></div>

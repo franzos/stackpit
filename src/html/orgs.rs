@@ -222,11 +222,11 @@ pub async fn create_org_invite(
 <link rel="preload" href="/web/_assets/fonts/Inter-Regular.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/web/_assets/fonts/Inter-SemiBold.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/web/_assets/style.css">
-<link rel="icon" type="image/svg+xml" href="/web/_assets/icon.svg"></head>
+<link rel="icon" type="image/png" href="/web/_assets/icon.png"></head>
 <body class="min-h-screen flex items-center justify-center px-4">
 <div class="w-full max-w-md">
 <div class="flex flex-col items-center mb-6">
-<div class="flex items-center gap-2 mb-4"><img src="/web/_assets/icon.svg" alt="" width="28" height="28"><span class="text-xl font-semibold tracking-tight">Stackpit</span></div>
+<div class="flex items-center gap-2 mb-4"><img src="/web/_assets/icon.png" alt="" width="28" height="28"><span class="text-xl font-semibold tracking-tight">Stackpit</span></div>
 <h1 class="page-h1">{heading}</h1>
 </div>
 <div class="card card-pad space-y-4">

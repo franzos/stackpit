@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.3.19] - 2026-07-29
+
+### Changed
+- Releases seen on incoming events are recorded, matching Sentry
+- Release list shows uploaded releases that have no events yet
+
+### Fixed
+- Uploading source maps for one release hid every other release
+- Project list showed the wrong "latest release"
+
 ## [0.3.18] - 2026-07-26
 
 ### Changed

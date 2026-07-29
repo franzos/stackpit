@@ -248,9 +248,75 @@ pub(super) async fn flush_aggregation_inner(
     event_writes::bulk_upsert_tag_counts(tx, &accumulators.tags).await?;
     flush_session_aggregates(tx, accumulators).await?;
     flush_transaction_metrics(tx, accumulators).await?;
+    flush_releases(tx, accumulators).await?;
 
     tracing::debug!("aggregation flush: {issue_count} issues, {tag_count} tag entries");
     Ok(threshold_candidates)
+}
+
+/// Max release rows per multi-row INSERT chunk. 4 bind params per row;
+/// 32766 / 4 = 8191, use 8000 for margin.
+const RELEASE_UPSERT_CHUNK_SIZE: usize = 8000;
+
+/// Materialize releases seen on events. Keeps `releases` the single source of
+/// truth, so versions that were only ever ingested sit alongside the ones
+/// registered up front by sync or a sourcemap upload.
+async fn flush_releases(
+    tx: &mut sqlx::Transaction<'_, crate::db::Db>,
+    accumulators: &Accumulators,
+) -> Result<()> {
+    if accumulators.releases.is_empty() {
+        return Ok(());
+    }
+
+    let mut rows: Vec<(i64, &str, i64, i64)> = accumulators
+        .releases
+        .iter()
+        .map(|((project_id, version), delta)| {
+            (
+                *project_id as i64,
+                version.as_str(),
+                delta.first_seen,
+                delta.last_seen,
+            )
+        })
+        .collect();
+    // Deterministic key order so concurrent writers acquire row locks in the same order.
+    rows.sort_unstable_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+
+    for chunk in rows.chunks(RELEASE_UPSERT_CHUNK_SIZE) {
+        let mut builder = QueryBuilder::<crate::db::Db>::new(
+            "INSERT INTO releases (project_id, version, first_event, last_event) ",
+        );
+
+        builder.push_values(chunk.iter(), |mut b, row| {
+            b.push_bind(row.0);
+            b.push_bind(row.1);
+            b.push_bind(row.2);
+            b.push_bind(row.3);
+        });
+
+        // first_event/last_event are nullable (a release registered via the
+        // sourcemap API has neither), and sqlite's scalar MIN/MAX return NULL if
+        // any argument is NULL. COALESCE on both sides makes this behave exactly
+        // like postgres LEAST/GREATEST, which skip NULLs on their own.
+        #[cfg(feature = "sqlite")]
+        builder.push(
+            " ON CONFLICT(project_id, version) DO UPDATE SET \
+                 first_event = MIN(COALESCE(releases.first_event, excluded.first_event), COALESCE(excluded.first_event, releases.first_event)), \
+                 last_event = MAX(COALESCE(releases.last_event, excluded.last_event), COALESCE(excluded.last_event, releases.last_event))",
+        );
+        #[cfg(not(feature = "sqlite"))]
+        builder.push(
+            " ON CONFLICT(project_id, version) DO UPDATE SET \
+                 first_event = LEAST(releases.first_event, excluded.first_event), \
+                 last_event = GREATEST(releases.last_event, excluded.last_event)",
+        );
+
+        builder.build().execute(&mut **tx).await?;
+    }
+
+    Ok(())
 }
 
 /// Max session-aggregate rows per multi-row INSERT chunk. 11 bind params per

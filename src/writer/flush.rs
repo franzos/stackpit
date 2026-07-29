@@ -250,6 +250,7 @@ fn finalize_agg_flush(
     accumulators.tags.clear();
     accumulators.session_aggregates.clear();
     accumulators.transaction_metrics.clear();
+    accumulators.releases.clear();
     send_notifications(pending, notify_tx);
     accumulators.last_flush = Instant::now();
 }
@@ -306,11 +307,7 @@ pub(super) async fn flush_aggregation(
     accumulators: &mut Accumulators,
     notify_tx: Option<&tokio::sync::mpsc::Sender<crate::notify::NotificationEvent>>,
 ) -> Result<()> {
-    if accumulators.issues.is_empty()
-        && accumulators.tags.is_empty()
-        && accumulators.session_aggregates.is_empty()
-        && accumulators.transaction_metrics.is_empty()
-    {
+    if accumulators.is_empty() {
         accumulators.last_flush = Instant::now();
         return Ok(());
     }

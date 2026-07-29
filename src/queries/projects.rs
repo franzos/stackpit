@@ -183,11 +183,14 @@ async fn list_projects_inner(
             GROUP BY project_id
          ) i ON e.project_id = i.project_id
          LEFT JOIN (
-            SELECT project_id, version
-            FROM releases
-            WHERE id IN (
-                SELECT MAX(id) FROM releases GROUP BY project_id
-            )
+            SELECT project_id, version FROM (
+                SELECT project_id, version,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY project_id
+                           ORDER BY COALESCE(last_event, date_released, created_at) DESC, id DESC
+                       ) AS rn
+                FROM releases
+            ) ranked WHERE rn = 1
          ) lr ON e.project_id = lr.project_id
          {project_join}
          ORDER BY {order_expr} DESC"

@@ -967,6 +967,7 @@ mod tests {
         // Batch 1: non-agg path commits its rows and merges into the accumulators (the issue delta is in memory, not yet in the DB).
         let mut e1 = make_event("prior1");
         e1.fingerprint = Some("prior_fp".to_string());
+        e1.release = Some("prior@1.0".to_string());
         let mut batch1 = vec![WriteMsg::Event(e1)];
         assert!(flush_batch(&pool, &mut batch1, &mut acc, None).await);
         assert_eq!(
@@ -981,6 +982,7 @@ mod tests {
 
         let mut e2 = make_event("fail1");
         e2.fingerprint = Some("fail_fp".to_string());
+        e2.release = Some("fail@1.0".to_string());
         let mut batch2 = vec![WriteMsg::Event(e2)];
         assert!(
             !flush_batch(&pool, &mut batch2, &mut acc, None).await,
@@ -995,6 +997,14 @@ mod tests {
         assert!(
             !acc.issues.contains_key("fail_fp"),
             "the failed batch must not be merged into the accumulators"
+        );
+        assert!(
+            acc.releases.contains_key(&(1, "prior@1.0".to_string())),
+            "prior release delta must survive the rollback"
+        );
+        assert!(
+            !acc.releases.contains_key(&(1, "fail@1.0".to_string())),
+            "the failed batch's release must not be merged"
         );
     }
 
@@ -1341,6 +1351,153 @@ mod tests {
             did: did.map(String::from),
             is_aggregate: false,
         }
+    }
+
+    // --- releases materialized from ingest ---
+
+    // `make_event` carries no fingerprint, no tags and no session buckets, so
+    // these tests also pin `Accumulators::is_empty` counting the releases map --
+    // drop that and the flush short-circuits and writes nothing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ingested_release_becomes_a_release_row() {
+        let pool = test_pool().await;
+        let mut acc = Accumulators::new();
+
+        for (id, ts) in [("rel1", 5000), ("rel2", 9000), ("rel3", 7000)] {
+            let mut e = make_event(id);
+            e.release = Some("app@2.0".to_string());
+            e.timestamp = ts;
+            insert_event(&pool, &e).await.unwrap();
+            acc.accumulate(&e);
+        }
+        flush_aggregation(&pool, &mut acc, None).await.unwrap();
+
+        let row: (String, Option<i64>, Option<i64>) = sqlx::query_as(
+            "SELECT version, first_event, last_event FROM releases WHERE project_id = 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0, "app@2.0");
+        assert_eq!(row.1, Some(5000), "earliest event timestamp");
+        assert_eq!(row.2, Some(9000), "latest event timestamp");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ingest_fills_event_span_on_a_release_registered_without_one() {
+        let pool = test_pool().await;
+
+        // What a sourcemap upload leaves behind: version only, no event span.
+        let info = crate::queries::releases::ReleaseUpsert {
+            version: "app@3.0",
+            commit_sha: None,
+            date_released: None,
+            first_event: None,
+            last_event: None,
+            new_groups: 0,
+        };
+        crate::queries::releases::upsert_release(&pool, 1, &info)
+            .await
+            .unwrap();
+
+        let mut acc = Accumulators::new();
+        let mut e = make_event("rel4");
+        e.release = Some("app@3.0".to_string());
+        e.timestamp = 4242;
+        insert_event(&pool, &e).await.unwrap();
+        acc.accumulate(&e);
+        flush_aggregation(&pool, &mut acc, None).await.unwrap();
+
+        let rows: Vec<(Option<i64>, Option<i64>)> = sqlx::query_as(
+            "SELECT first_event, last_event FROM releases WHERE version = 'app@3.0'",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(rows.len(), 1, "upload and ingest share one row");
+        // NULL-safe: sqlite's MIN/MAX would return NULL without the COALESCE.
+        assert_eq!(rows[0], (Some(4242), Some(4242)));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn second_flush_widens_the_event_span_instead_of_replacing_it() {
+        let pool = test_pool().await;
+
+        let mut acc = Accumulators::new();
+        let mut late = make_event("rel5");
+        late.release = Some("app@4.0".to_string());
+        late.timestamp = 9000;
+        insert_event(&pool, &late).await.unwrap();
+        acc.accumulate(&late);
+        flush_aggregation(&pool, &mut acc, None).await.unwrap();
+
+        // An older event arriving after the row exists must pull first_event
+        // back, not overwrite the span with the newest value.
+        let mut acc2 = Accumulators::new();
+        let mut early = make_event("rel6");
+        early.release = Some("app@4.0".to_string());
+        early.timestamp = 5000;
+        insert_event(&pool, &early).await.unwrap();
+        acc2.accumulate(&early);
+        flush_aggregation(&pool, &mut acc2, None).await.unwrap();
+
+        let row: (Option<i64>, Option<i64>) = sqlx::query_as(
+            "SELECT first_event, last_event FROM releases WHERE version = 'app@4.0'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row, (Some(5000), Some(9000)));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn session_bucket_releases_are_materialized() {
+        let pool = test_pool().await;
+        let mut acc = Accumulators::new();
+
+        // No event-level release: only the buckets carry versions, so this
+        // exercises the bucket loop rather than the `event.release` path.
+        let mut e = make_session_event("relsess", "app@1.0", vec![]);
+        e.release = None;
+        e.session_buckets = vec![
+            SessionBucket {
+                release: "bucket@1.0".to_string(),
+                ..bucket(0, 0, Some("u1"))
+            },
+            SessionBucket {
+                release: "bucket@2.0".to_string(),
+                ..bucket(0, 0, Some("u2"))
+            },
+        ];
+        insert_event(&pool, &e).await.unwrap();
+        acc.accumulate(&e);
+        flush_aggregation(&pool, &mut acc, None).await.unwrap();
+
+        let versions: Vec<(String,)> =
+            sqlx::query_as("SELECT version FROM releases ORDER BY version")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        let versions: Vec<String> = versions.into_iter().map(|r| r.0).collect();
+        assert_eq!(versions, vec!["bucket@1.0", "bucket@2.0"]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn overlong_release_version_is_dropped() {
+        let pool = test_pool().await;
+        let mut acc = Accumulators::new();
+
+        let mut e = make_event("rel7");
+        e.release = Some("v".repeat(201));
+        insert_event(&pool, &e).await.unwrap();
+        acc.accumulate(&e);
+        flush_aggregation(&pool, &mut acc, None).await.unwrap();
+
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM releases")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count.0, 0, "client-supplied versions are length-capped");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

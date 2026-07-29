@@ -37,7 +37,7 @@ impl ReleaseSort {
             Self::Events => "event_count DESC, last_seen DESC",
             Self::Issues => "issue_count DESC, last_seen DESC",
             Self::Adoption => "adoption DESC, last_seen DESC",
-            Self::ProjectId => "e.project_id ASC, last_seen DESC",
+            Self::ProjectId => "r.project_id ASC, last_seen DESC",
             Self::LastSeen => "last_seen DESC",
         }
     }
@@ -120,35 +120,16 @@ pub async fn get_release(pool: &DbPool, project_id: u64, version: &str) -> Resul
 
 /// Distinct releases for a project, most recent first. Capped at 50.
 pub async fn list_releases_for_project(pool: &DbPool, project_id: u64) -> Result<Vec<String>> {
-    // Prefer the releases table (populated by sync), fall back to events.release.
     let rows = sqlx::query(sql!(
         "SELECT version FROM releases
          WHERE project_id = ?1
-         ORDER BY created_at DESC
+         ORDER BY COALESCE(last_event, date_released, created_at) DESC, version DESC
          LIMIT 50"
     ))
     .bind(project_id as i64)
     .fetch_all(pool)
     .await?;
 
-    if !rows.is_empty() {
-        return Ok(rows
-            .into_iter()
-            .map(|row| row.get::<String, _>(0))
-            .collect());
-    }
-
-    // Fallback: releases from event payloads.
-    let rows = sqlx::query(sql!(
-        "SELECT release, MAX(timestamp) AS latest FROM events
-         WHERE project_id = ?1 AND release IS NOT NULL
-         GROUP BY release
-         ORDER BY latest DESC
-         LIMIT 50"
-    ))
-    .bind(project_id as i64)
-    .fetch_all(pool)
-    .await?;
     Ok(rows
         .into_iter()
         .map(|row| row.get::<String, _>(0))
@@ -347,37 +328,30 @@ pub async fn list_all_releases(
     let adoption_since_ts =
         adoption_since.unwrap_or_else(|| chrono::Utc::now().timestamp() - 86400);
 
-    let mut count_qb = sqlx::QueryBuilder::<crate::db::Db>::new(
-        "SELECT COUNT(*) FROM (
-            SELECT e.project_id, e.release
-            FROM events e
-            WHERE e.release IS NOT NULL",
-    );
+    let mut count_qb =
+        sqlx::QueryBuilder::<crate::db::Db>::new("SELECT COUNT(*) FROM releases r WHERE 1 = 1");
 
     if let Some(project_id) = filter.project_id {
-        count_qb.push(" AND e.project_id = ");
+        count_qb.push(" AND r.project_id = ");
         count_qb.push_bind(project_id as i64);
     }
     if let Some(ref query) = filter.query {
-        count_qb.push(" AND e.release LIKE ");
+        count_qb.push(" AND r.version LIKE ");
         count_qb.push_bind(super::like_contains(query));
         count_qb.push(" ESCAPE '\\'");
     }
     if let Some(oid) = org_id {
-        count_qb.push(" AND e.project_id IN (SELECT project_id FROM projects WHERE org_id = ");
+        count_qb.push(" AND r.project_id IN (SELECT project_id FROM projects WHERE org_id = ");
         count_qb.push_bind(oid);
         count_qb.push(")");
     }
-
-    #[cfg(feature = "sqlite")]
-    count_qb.push(" GROUP BY e.project_id, e.release)");
-    #[cfg(not(feature = "sqlite"))]
-    count_qb.push(" GROUP BY e.project_id, e.release) AS sub");
 
     let total: i64 = count_qb.build().fetch_one(pool).await?.get(0);
 
     let sort = ReleaseSort::parse(filter.sort.as_deref());
 
+    // Driven off `releases`, not `events`: a release registered up front but not
+    // yet seen in traffic is a real release with zero events, not a missing row.
     let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new(
         "WITH project_totals AS (
             SELECT project_id, COUNT(*) AS total
@@ -385,49 +359,94 @@ pub async fn list_all_releases(
             WHERE timestamp >= ",
     );
     qb.push_bind(adoption_since_ts);
+    if let Some(project_id) = filter.project_id {
+        qb.push(" AND project_id = ");
+        qb.push_bind(project_id as i64);
+    }
+    if let Some(oid) = org_id {
+        qb.push(" AND project_id IN (SELECT project_id FROM projects WHERE org_id = ");
+        qb.push_bind(oid);
+        qb.push(")");
+    }
     qb.push(
         "
             GROUP BY project_id
-        )
-        SELECT
-            e.release,
-            e.project_id,
-            p.name,
-            MIN(e.timestamp) AS first_seen,
-            MAX(e.timestamp) AS last_seen,
-            COUNT(*) AS event_count,
-            COUNT(DISTINCT e.fingerprint) AS issue_count,
-            COALESCE(
-                CAST(SUM(CASE WHEN e.timestamp >= ",
+        ),
+        release_events AS (
+            SELECT
+                project_id,
+                release,
+                MIN(timestamp) AS first_seen,
+                MAX(timestamp) AS last_seen,
+                COUNT(*) AS event_count,
+                COUNT(DISTINCT fingerprint) AS issue_count,
+                SUM(CASE WHEN timestamp >= ",
     );
     qb.push_bind(adoption_since_ts);
     qb.push(
-        " THEN 1 ELSE 0 END) AS REAL) /
-                NULLIF(pt.total, 0) * 100.0,
-                0.0
-            ) AS adoption
-         FROM events e
-         LEFT JOIN projects p ON p.project_id = e.project_id
-         LEFT JOIN project_totals pt ON pt.project_id = e.project_id
-         WHERE e.release IS NOT NULL",
+        " THEN 1 ELSE 0 END) AS recent_count
+            FROM events
+            WHERE release IS NOT NULL",
     );
-
+    // The same filters as the outer query, repeated inside the CTE. The outer
+    // ones sit on the preserved side of a LEFT JOIN, and sqlite won't infer
+    // them through it -- without this it materializes every release in the
+    // events table to answer a single-project page.
     if let Some(project_id) = filter.project_id {
-        qb.push(" AND e.project_id = ");
+        qb.push(" AND project_id = ");
         qb.push_bind(project_id as i64);
     }
     if let Some(ref query) = filter.query {
-        qb.push(" AND e.release LIKE ");
+        qb.push(" AND release LIKE ");
         qb.push_bind(super::like_contains(query));
         qb.push(" ESCAPE '\\'");
     }
     if let Some(oid) = org_id {
-        qb.push(" AND e.project_id IN (SELECT project_id FROM projects WHERE org_id = ");
+        qb.push(" AND project_id IN (SELECT project_id FROM projects WHERE org_id = ");
+        qb.push_bind(oid);
+        qb.push(")");
+    }
+    qb.push(
+        "
+            GROUP BY project_id, release
+        )
+        SELECT
+            r.version,
+            r.project_id,
+            p.name,
+            COALESCE(re.first_seen, r.first_event, r.created_at) AS first_seen,
+            COALESCE(re.last_seen, r.last_event, r.created_at) AS last_seen,
+            COALESCE(re.event_count, 0) AS event_count,
+            COALESCE(re.issue_count, 0) AS issue_count,
+            COALESCE(
+                CAST(COALESCE(re.recent_count, 0) AS REAL) /
+                NULLIF(pt.total, 0) * 100.0,
+                0.0
+            ) AS adoption
+         FROM releases r
+         LEFT JOIN projects p ON p.project_id = r.project_id
+         LEFT JOIN project_totals pt ON pt.project_id = r.project_id
+         LEFT JOIN release_events re
+                ON re.project_id = r.project_id AND re.release = r.version
+         WHERE 1 = 1",
+    );
+
+    if let Some(project_id) = filter.project_id {
+        qb.push(" AND r.project_id = ");
+        qb.push_bind(project_id as i64);
+    }
+    if let Some(ref query) = filter.query {
+        qb.push(" AND r.version LIKE ");
+        qb.push_bind(super::like_contains(query));
+        qb.push(" ESCAPE '\\'");
+    }
+    if let Some(oid) = org_id {
+        qb.push(" AND r.project_id IN (SELECT project_id FROM projects WHERE org_id = ");
         qb.push_bind(oid);
         qb.push(")");
     }
 
-    qb.push(" GROUP BY e.project_id, e.release, p.name, pt.total ORDER BY ");
+    qb.push(" ORDER BY ");
     qb.push(sort.as_sql_ident());
     qb.push(" LIMIT ");
     qb.push_bind(page.limit as i64);
@@ -716,6 +735,94 @@ mod tests {
             .execute(pool)
             .await
             .unwrap();
+        // Ingest materializes the release row; mirror that here.
+        let info = ReleaseUpsert {
+            version: release,
+            commit_sha: None,
+            date_released: None,
+            first_event: Some(1000),
+            last_event: Some(1000),
+            new_groups: 0,
+        };
+        upsert_release(pool, project_id as u64, &info)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn list_releases_for_project_keeps_ingested_and_uploaded_together() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        insert_event_with_release(&pool, "rm1", 501, "v1.0").await;
+        insert_event_with_release(&pool, "rm2", 501, "v1.1").await;
+
+        assert_eq!(
+            list_releases_for_project(&pool, 501).await.unwrap().len(),
+            2
+        );
+
+        // A sourcemap upload registers a version with no events. It must join the
+        // ingested ones rather than displace them.
+        let info = ReleaseUpsert {
+            version: "v2.0",
+            commit_sha: None,
+            date_released: None,
+            first_event: None,
+            last_event: None,
+            new_groups: 0,
+        };
+        upsert_release(&pool, 501, &info).await.unwrap();
+
+        let all = list_releases_for_project(&pool, 501).await.unwrap();
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0], "v2.0", "newest first: the upload has no events yet");
+        assert!(all.contains(&"v1.0".to_string()));
+        assert!(all.contains(&"v1.1".to_string()));
+    }
+
+    #[tokio::test]
+    async fn list_all_releases_includes_uploaded_release_with_zero_events() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        let org = insert_org_rel(&pool, "rel-zero-org").await;
+        insert_project_rel(&pool, 601, org).await;
+        insert_event_with_release(&pool, "rz1", 601, "v1.0").await;
+
+        let info = ReleaseUpsert {
+            version: "v2.0",
+            commit_sha: None,
+            date_released: None,
+            first_event: None,
+            last_event: None,
+            new_groups: 0,
+        };
+        upsert_release(&pool, 601, &info).await.unwrap();
+
+        let page = list_all_releases(
+            &pool,
+            &ReleaseFilter::default(),
+            &Page::new(None, None),
+            None,
+            Some(org),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(page.total, 2);
+        let uploaded = page
+            .items
+            .iter()
+            .find(|r| r.version == "v2.0")
+            .expect("uploaded release listed");
+        assert_eq!(uploaded.event_count, 0);
+        assert_eq!(uploaded.issue_count, 0);
+        assert_eq!(uploaded.adoption, 0.0);
+        assert!(uploaded.first_seen > 0, "falls back to created_at");
+
+        let ingested = page
+            .items
+            .iter()
+            .find(|r| r.version == "v1.0")
+            .expect("ingested release listed");
+        assert_eq!(ingested.event_count, 1);
     }
 
     #[tokio::test]

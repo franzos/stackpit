@@ -17,6 +17,16 @@ pub(super) const TXN_DURATION_BUCKETS: usize = 24;
 /// flood of unique env strings bloating memory. Once full, new envs are ignored.
 const MAX_DELTA_ENVIRONMENTS: usize = 16;
 
+/// Cap on distinct releases tracked per flush. A project runs a handful of live
+/// versions; the cap only bites when a client floods unique release strings. A
+/// version dropped here is picked up from the next event that carries it, but a
+/// one-shot version arriving in a saturated batch is lost.
+const MAX_DELTA_RELEASES: usize = 1000;
+
+/// Version strings are client-supplied and every distinct one now becomes a
+/// permanent row, so cap the length. Matches Sentry's `MAX_VERSION_LENGTH`.
+const MAX_RELEASE_VERSION_LEN: usize = 200;
+
 /// Map a duration in milliseconds to its log2 histogram bucket, clamped to
 /// `0..=23`. Bucket b covers `[2^b, 2^(b+1))` ms.
 pub(super) fn duration_bucket(ms: i64) -> usize {
@@ -87,6 +97,13 @@ impl SessionDelta {
     }
 }
 
+/// Tracks the event-timestamp span a release was seen over between flushes.
+#[derive(Clone)]
+pub(super) struct ReleaseDelta {
+    pub first_seen: i64,
+    pub last_seen: i64,
+}
+
 /// Tracks accumulated transaction performance rollup for a
 /// (project, transaction_name, hour_bucket).
 #[derive(Clone)]
@@ -126,6 +143,8 @@ pub(super) struct Accumulators {
     pub session_aggregates: HashMap<(u64, String, String, i64), SessionDelta>,
     /// Transaction perf rollups -- keyed by (project_id, transaction_name, hour_bucket)
     pub transaction_metrics: HashMap<(u64, String, i64), TxnDelta>,
+    /// Releases observed on events -- keyed by (project_id, version)
+    pub releases: HashMap<(u64, String), ReleaseDelta>,
     pub last_flush: Instant,
 }
 
@@ -136,6 +155,7 @@ impl Accumulators {
             tags: HashMap::new(),
             session_aggregates: HashMap::new(),
             transaction_metrics: HashMap::new(),
+            releases: HashMap::new(),
             last_flush: Instant::now(),
         }
     }
@@ -145,6 +165,8 @@ impl Accumulators {
         self.accumulate_sessions(event);
         // Transactions carry no fingerprint either -- roll up before returning.
         self.accumulate_transactions(event);
+        // Every item type can carry a release, fingerprint or not.
+        self.accumulate_releases(event);
 
         let fp = match event.fingerprint.as_ref() {
             Some(fp) => fp,
@@ -194,6 +216,52 @@ impl Accumulators {
                 .tags
                 .entry((fp.clone(), key.clone(), value.clone()))
                 .or_insert(0) += 1;
+        }
+    }
+
+    /// Materialize the releases an event mentions, so a version that only ever
+    /// arrives on ingest still becomes a row in `releases` (Sentry does the same
+    /// on first sight of a version).
+    fn accumulate_releases(&mut self, event: &StorableEvent) {
+        let ts = event.timestamp;
+        // One clock read per event, so every bucket is judged against the same bound.
+        let max_ts = chrono::Utc::now().timestamp() + 86400 * 365;
+        if let Some(release) = event.release.as_deref() {
+            self.touch_release(event.project_id, release, ts, max_ts);
+        }
+        for bucket in &event.session_buckets {
+            let seen = if bucket.started_ts > 0 {
+                bucket.started_ts
+            } else {
+                ts
+            };
+            self.touch_release(event.project_id, &bucket.release, seen, max_ts);
+        }
+    }
+
+    fn touch_release(&mut self, project_id: u64, version: &str, ts: i64, max_ts: i64) {
+        // Same bogus-timestamp guard as issues: negative or over a year out.
+        if version.is_empty() || version.len() > MAX_RELEASE_VERSION_LEN || ts <= 0 || ts >= max_ts
+        {
+            return;
+        }
+        match self.releases.get_mut(&(project_id, version.to_string())) {
+            Some(delta) => {
+                delta.first_seen = delta.first_seen.min(ts);
+                delta.last_seen = delta.last_seen.max(ts);
+            }
+            None => {
+                if self.releases.len() >= MAX_DELTA_RELEASES {
+                    return;
+                }
+                self.releases.insert(
+                    (project_id, version.to_string()),
+                    ReleaseDelta {
+                        first_seen: ts,
+                        last_seen: ts,
+                    },
+                );
+            }
         }
     }
 
@@ -334,6 +402,20 @@ impl Accumulators {
             }
         }
 
+        for (key, src) in &other.releases {
+            match self.releases.get_mut(key) {
+                Some(dst) => {
+                    dst.first_seen = dst.first_seen.min(src.first_seen);
+                    dst.last_seen = dst.last_seen.max(src.last_seen);
+                }
+                None => {
+                    if self.releases.len() < MAX_DELTA_RELEASES {
+                        self.releases.insert(key.clone(), src.clone());
+                    }
+                }
+            }
+        }
+
         for (key, src) in &other.transaction_metrics {
             match self.transaction_metrics.get_mut(key) {
                 Some(dst) => {
@@ -361,6 +443,8 @@ impl Accumulators {
             || self.tags.len() >= AGGREGATION_FLUSH_TAG_THRESHOLD
             || self.session_aggregates.len() >= AGGREGATION_FLUSH_FINGERPRINT_THRESHOLD
             || self.transaction_metrics.len() >= AGGREGATION_FLUSH_FINGERPRINT_THRESHOLD
+            // At the cap new versions get dropped, so flush rather than lose them.
+            || self.releases.len() >= MAX_DELTA_RELEASES
     }
 
     pub fn is_empty(&self) -> bool {
@@ -368,6 +452,7 @@ impl Accumulators {
             && self.tags.is_empty()
             && self.session_aggregates.is_empty()
             && self.transaction_metrics.is_empty()
+            && self.releases.is_empty()
     }
 }
 

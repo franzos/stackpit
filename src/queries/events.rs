@@ -5,7 +5,8 @@ use crate::db::sql;
 use crate::db::DbRowExt;
 
 use super::types::{
-    EventDetail, EventFilter, EventSummary, Page, PagedResult, TagFacet, TagFacetValue, TailEvent,
+    EventDetail, EventFilter, EventSummary, IssueFilter, Page, PagedResult, TagFacet,
+    TagFacetValue, TailEvent,
 };
 
 /// Closed set of allowed ORDER BY clauses, so the value reaching
@@ -202,7 +203,7 @@ pub async fn event_histogram(
     let start_ts = start.timestamp();
 
     let rows = sqlx::query(sql!(
-        "SELECT CAST((timestamp - ?1) / 86400 AS INTEGER) AS bucket, COUNT(*)
+        "SELECT CAST((timestamp - ?1) / 86400 AS BIGINT) AS bucket, COUNT(*)
          FROM events
          WHERE fingerprint = ?2 AND timestamp >= ?1
          GROUP BY bucket
@@ -231,14 +232,17 @@ pub async fn event_histogram(
     Ok(buckets)
 }
 
-/// Bucket event counts for a project's issue list histogram.
+/// Bucket event counts for a project's issue list histogram, narrowed by the same
+/// filter as the list underneath it so chart and table always agree.
 /// Adapts bucket size to the period: hourly for <=24h, daily otherwise.
 pub async fn project_event_histogram(
     pool: &crate::db::DbPool,
     project_id: u64,
-    item_type: &str,
+    filter: &IssueFilter,
     period: &str,
 ) -> Result<Vec<(String, f32)>> {
+    use sqlx::QueryBuilder;
+
     let now = chrono::Utc::now();
 
     let (bucket_secs, bucket_count, fmt) = match period {
@@ -255,21 +259,20 @@ pub async fn project_event_histogram(
     let start = now - chrono::Duration::seconds(bucket_secs * bucket_count as i64);
     let start_ts = start.timestamp();
 
-    let sql_str = format!(
-        "SELECT CAST((timestamp - ?1) / {bucket_secs} AS INTEGER) AS bucket, COUNT(*)
-         FROM events
-         WHERE project_id = ?2 AND item_type = ?3 AND timestamp >= ?1
-         GROUP BY bucket
-         ORDER BY bucket"
-    );
-    let sql_str = crate::db::translate_sql(&sql_str);
+    // bucket_secs is a server-computed integer, safe to inline; everything
+    // caller-influenced is bound.
+    let mut qb: QueryBuilder<'_, crate::db::Db> = QueryBuilder::new("SELECT CAST((timestamp - ");
+    qb.push_bind(start_ts);
+    qb.push(format!(
+        ") / {bucket_secs} AS BIGINT) AS bucket, COUNT(*) FROM events WHERE project_id = "
+    ));
+    qb.push_bind(project_id as i64);
+    qb.push(" AND timestamp >= ");
+    qb.push_bind(start_ts);
+    push_issue_filter_on_events(&mut qb, filter);
+    qb.push(" GROUP BY bucket ORDER BY bucket");
 
-    let rows = sqlx::query(&sql_str)
-        .bind(start_ts)
-        .bind(project_id as i64)
-        .bind(item_type)
-        .fetch_all(pool)
-        .await?;
+    let rows = qb.build().fetch_all(pool).await?;
 
     let mut counts = std::collections::HashMap::new();
     for row in &rows {
@@ -287,6 +290,44 @@ pub async fn project_event_histogram(
     }
 
     Ok(buckets)
+}
+
+/// Translate an [`IssueFilter`] onto the `events` table for the histogram.
+/// `level`, `title` and `release` live on the event row itself; `status` and the
+/// tag facet only exist per issue, so they go through the fingerprint.
+fn push_issue_filter_on_events<'args>(
+    qb: &mut sqlx::QueryBuilder<'args, crate::db::Db>,
+    filter: &'args IssueFilter,
+) {
+    if let Some(ref item_type) = filter.item_type {
+        qb.push(" AND item_type = ");
+        qb.push_bind(item_type.as_str());
+    }
+    if let Some(ref level) = filter.level {
+        qb.push(" AND level = ");
+        qb.push_bind(level.as_str());
+    }
+    if let Some(ref query) = filter.query {
+        qb.push(" AND title LIKE ");
+        qb.push_bind(super::like_contains(query));
+        qb.push(" ESCAPE '\\'");
+    }
+    if let Some(ref release) = filter.release {
+        qb.push(" AND release = ");
+        qb.push_bind(release.as_str());
+    }
+    if let Some(ref status) = filter.status {
+        qb.push(" AND EXISTS (SELECT 1 FROM issues i WHERE i.fingerprint = events.fingerprint AND i.project_id = events.project_id AND i.status = ");
+        qb.push_bind(status.as_str());
+        qb.push(")");
+    }
+    if let Some((ref key, ref value)) = filter.tag {
+        qb.push(" AND EXISTS (SELECT 1 FROM issue_tag_values itv WHERE itv.fingerprint = events.fingerprint AND itv.tag_key = ");
+        qb.push_bind(key.as_str());
+        qb.push(" AND itv.tag_value = ");
+        qb.push_bind(value.as_str());
+        qb.push(")");
+    }
 }
 
 /// Grab the most recent event for an issue.
@@ -488,6 +529,86 @@ mod tests {
     use crate::db::sql;
     use crate::queries::test_helpers::*;
     use sqlx::Row;
+
+    // The issue-list chart must move with the list filters, not just the period:
+    // release, level and status each narrow the buckets.
+    #[tokio::test]
+    async fn project_event_histogram_applies_issue_filters() {
+        let pool = open_test_db().await;
+        let now = chrono::Utc::now().timestamp();
+
+        for (event_id, fingerprint, level, release) in [
+            ("e1", "fp-open", "error", "app@1.0"),
+            ("e2", "fp-open", "warning", "app@1.0"),
+            ("e3", "fp-done", "error", "app@2.0"),
+        ] {
+            sqlx::query(sql!(
+                "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, level, title, release, received_at, fingerprint)
+                 VALUES (?1, 'event', ?2, 1, 'testkey', ?3, ?4, 'Boom', ?5, ?3, ?6)"
+            ))
+            .bind(event_id)
+            .bind(Vec::<u8>::new())
+            .bind(now - 60)
+            .bind(level)
+            .bind(release)
+            .bind(fingerprint)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        insert_test_issue(&pool, "fp-open", 1, None, None, now, now, 2, "unresolved").await;
+        insert_test_issue(&pool, "fp-done", 1, None, None, now, now, 1, "resolved").await;
+
+        let total = |buckets: Vec<(String, f32)>| buckets.iter().map(|(_, c)| c).sum::<f32>();
+        let filter = |f: fn(&mut IssueFilter)| {
+            let mut filter = IssueFilter {
+                item_type: Some("event".to_string()),
+                ..Default::default()
+            };
+            f(&mut filter);
+            filter
+        };
+
+        let unfiltered = filter(|_| {});
+        assert_eq!(
+            total(
+                project_event_histogram(&pool, 1, &unfiltered, "24h")
+                    .await
+                    .unwrap()
+            ),
+            3.0
+        );
+
+        let by_release = filter(|f| f.release = Some("app@1.0".to_string()));
+        assert_eq!(
+            total(
+                project_event_histogram(&pool, 1, &by_release, "24h")
+                    .await
+                    .unwrap()
+            ),
+            2.0
+        );
+
+        let by_level = filter(|f| f.level = Some("error".to_string()));
+        assert_eq!(
+            total(
+                project_event_histogram(&pool, 1, &by_level, "24h")
+                    .await
+                    .unwrap()
+            ),
+            2.0
+        );
+
+        let by_status = filter(|f| f.status = Some("resolved".to_string()));
+        assert_eq!(
+            total(
+                project_event_histogram(&pool, 1, &by_status, "24h")
+                    .await
+                    .unwrap()
+            ),
+            1.0
+        );
+    }
 
     #[tokio::test]
     async fn list_events_empty() {

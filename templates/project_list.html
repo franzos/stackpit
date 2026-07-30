@@ -87,6 +87,7 @@
                 <td>
                   <a class="font-semibold"
                      href="/web/projects/{{ p.project_id }}/?{% if !query.is_empty() %}query={{ query }}&amp;{% endif %}period={{ period }}">{% match p.name %}{% when Some with (n) %}<bdi>{{ n }}</bdi>{% when None %}{{ p.project_id }}{% endmatch %}</a>
+                {% if p.archived %}<span class="text-muted text-[12px]">{{ chrome.t("projects-settings-archived") }}</span>{% endif %}
                 <div class="text-muted text-[12px] text-mono mt-0.5">{{ chrome.t("common-id-prefix") }} {{ p.project_id }}</div>
               </td>
               <td>
@@ -126,12 +127,20 @@
                 {% match p.latest_release %}{% when Some with (r) %}<a href="/web/projects/{{ p.project_id }}/releases/{{ r|urlencode }}/" title="{{ r }}">{{ r|short_release }}</a>{% when None %}<span class="text-muted">—</span>{% endmatch %}
             </td>
             <td class="hide-mobile text-muted">
-              <time datetime="{{ p.first_seen|format_ts }}"
-                    title="{{ p.first_seen|format_ts }}">{{ chrome.rel_time(p.first_seen) }}</time>
+              {% match p.first_seen %}
+                {% when Some with (ts) %}
+                  <time datetime="{{ ts|format_ts }}" title="{{ ts|format_ts }}">{{ chrome.rel_time(*ts) }}</time>
+                {% when None %}
+                  —
+              {% endmatch %}
             </td>
             <td class="text-muted">
-              <time datetime="{{ p.last_seen|format_ts }}"
-                    title="{{ p.last_seen|format_ts }}">{{ chrome.rel_time(p.last_seen) }}</time>
+              {% match p.last_seen %}
+                {% when Some with (ts) %}
+                  <time datetime="{{ ts|format_ts }}" title="{{ ts|format_ts }}">{{ chrome.rel_time(*ts) }}</time>
+                {% when None %}
+                  —
+              {% endmatch %}
             </td>
           </tr>
         {% endfor %}

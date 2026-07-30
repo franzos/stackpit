@@ -16,12 +16,13 @@ pub async fn run(pool: &crate::db::DbPool) -> Result<()> {
     println!("{}", "-".repeat(64));
 
     for p in projects {
-        let first = chrono::DateTime::from_timestamp(p.first_seen, 0)
-            .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
-            .unwrap_or_else(|| "?".to_string());
-        let last = chrono::DateTime::from_timestamp(p.last_seen, 0)
-            .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
-            .unwrap_or_else(|| "?".to_string());
+        let fmt_ts = |ts: Option<i64>| {
+            ts.and_then(|ts| chrono::DateTime::from_timestamp(ts, 0))
+                .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
+                .unwrap_or_else(|| "-".to_string())
+        };
+        let first = fmt_ts(p.first_seen);
+        let last = fmt_ts(p.last_seen);
 
         println!(
             "{:<12} {:>8} {:>20} {:>20}",

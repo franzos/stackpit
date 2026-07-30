@@ -101,13 +101,17 @@ async fn issue_or_transaction_handler(
         .await
         .unwrap_or_default();
 
-    let chart_data =
-        match queries::events::project_event_histogram(pool, project_id, item_type, &period_str)
-            .await
-        {
-            Ok(buckets) => charts::chart_json(&buckets, "Events"),
-            Err(_) => String::new(),
-        };
+    let chart_data = match queries::events::project_event_histogram(
+        pool,
+        project_id,
+        &filter,
+        &period_str,
+    )
+    .await
+    {
+        Ok(buckets) => charts::chart_json(&buckets, "Events"),
+        Err(_) => String::new(),
+    };
 
     // Per-issue trend sparklines: 20 buckets across the active period, one query
     // for the whole page. Skipped for the "all time" window (no fixed start).

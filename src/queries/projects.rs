@@ -114,23 +114,23 @@ async fn list_projects_inner(
     since: Option<i64>,
 ) -> Result<Vec<ProjectSummary>> {
     // Safety: order_expr is always a hardcoded literal from this match, never user input.
+    // COALESCE over the outer-joined aggregates keeps projects with no events in the
+    // period ordering the same way on SQLite and PostgreSQL, which disagree on where
+    // NULLs land in a DESC sort.
     let order_expr = match sort {
-        Some("issues") => "issue_count",
-        Some("events") => "e.event_count",
-        Some("first_seen") => "fs.first_seen",
-        Some("project_id") => "e.project_id",
-        _ => "e.last_seen",
+        Some("issues") => "COALESCE(i.issue_count, 0)",
+        Some("events") => "COALESCE(e.event_count, 0)",
+        Some("first_seen") => "COALESCE(fs.first_seen, 0)",
+        Some("project_id") => "p.project_id",
+        _ => "COALESCE(e.last_seen, 0)",
     };
 
-    // When org_id is given, promote to INNER JOIN with org filter as ?1.
-    // The time filter shifts to ?2 so its bind slot doesn't collide with org_id.
-    let (project_join, time_param) = if org_id.is_some() {
-        (
-            "JOIN projects p ON e.project_id = p.project_id AND p.org_id = ?1",
-            "?2",
-        )
+    // When org_id is given it filters the driving table as ?1, so the time filter
+    // shifts to ?2 and its bind slot doesn't collide.
+    let (org_filter, time_param) = if org_id.is_some() {
+        ("WHERE p.org_id = ?1", "?2")
     } else {
-        ("LEFT JOIN projects p ON e.project_id = p.project_id", "?1")
+        ("", "?1")
     };
 
     let time_filter = if since.is_some() {
@@ -144,21 +144,26 @@ async fn list_projects_inner(
     #[cfg(not(feature = "sqlite"))]
     let platform_agg = "STRING_AGG(DISTINCT platform, ',')";
 
+    // Driven from `projects`, not from the event aggregate: a project that received
+    // nothing in the period (newly created, dormant) still gets a row, with NULL
+    // counts the mapper folds to zero.
     let sql = format!(
         "SELECT
-            e.project_id,
-            e.event_count,
+            p.project_id,
+            p.name,
+            p.status,
+            COALESCE(e.event_count, 0) AS event_count,
             COALESCE(i.issue_count, 0) AS issue_count,
             fs.first_seen,
             e.last_seen,
             e.platforms,
             lr.version AS latest_release,
-            e.error_count,
-            e.transaction_count,
-            e.session_count,
-            e.other_count,
-            p.name
-         FROM (
+            COALESCE(e.error_count, 0) AS error_count,
+            COALESCE(e.transaction_count, 0) AS transaction_count,
+            COALESCE(e.session_count, 0) AS session_count,
+            COALESCE(e.other_count, 0) AS other_count
+         FROM projects p
+         LEFT JOIN (
             SELECT
                 project_id,
                 COUNT(*) AS event_count,
@@ -171,17 +176,17 @@ async fn list_projects_inner(
             FROM events
             {time_filter}
             GROUP BY project_id
-         ) e
+         ) e ON e.project_id = p.project_id
          LEFT JOIN (
             SELECT project_id, MIN(timestamp) AS first_seen
             FROM events
             GROUP BY project_id
-         ) fs ON e.project_id = fs.project_id
+         ) fs ON fs.project_id = p.project_id
          LEFT JOIN (
             SELECT project_id, COUNT(*) AS issue_count
             FROM issues
             GROUP BY project_id
-         ) i ON e.project_id = i.project_id
+         ) i ON i.project_id = p.project_id
          LEFT JOIN (
             SELECT project_id, version FROM (
                 SELECT project_id, version,
@@ -191,9 +196,9 @@ async fn list_projects_inner(
                        ) AS rn
                 FROM releases
             ) ranked WHERE rn = 1
-         ) lr ON e.project_id = lr.project_id
-         {project_join}
-         ORDER BY {order_expr} DESC"
+         ) lr ON lr.project_id = p.project_id
+         {org_filter}
+         ORDER BY CASE WHEN fs.first_seen IS NULL THEN 1 ELSE 0 END, {order_expr} DESC, p.project_id DESC"
     );
 
     let sql = crate::db::translate_sql(&sql);
@@ -227,9 +232,13 @@ fn filter_projects_by_query(projects: &mut Vec<ProjectSummary>, query: Option<&s
 
 fn map_project_row(row: &crate::db::DbRow) -> ProjectSummary {
     let platforms: Option<String> = row.get("platforms");
+    let status: Option<String> = row.get("status");
     ProjectSummary {
         project_id: row.get::<i64, _>("project_id") as u64,
         name: row.get("name"),
+        archived: status
+            .and_then(|s| s.parse::<ProjectStatus>().ok())
+            .is_some_and(|s| s.is_archived()),
         event_count: row.get::<i64, _>("event_count") as u64,
         issue_count: row.get::<i64, _>("issue_count") as u64,
         first_seen: row.get("first_seen"),
@@ -1068,8 +1077,8 @@ mod tests {
         assert_eq!(projects[0].project_id, 1);
         assert_eq!(projects[0].event_count, 2);
         assert_eq!(projects[0].issue_count, 1);
-        assert_eq!(projects[0].first_seen, 100);
-        assert_eq!(projects[0].last_seen, 200);
+        assert_eq!(projects[0].first_seen, Some(100));
+        assert_eq!(projects[0].last_seen, Some(200));
 
         assert_eq!(projects[1].project_id, 2);
         assert_eq!(projects[1].event_count, 1);
@@ -1086,6 +1095,70 @@ mod tests {
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].issue_count, 0);
         assert_eq!(projects[0].event_count, 1);
+    }
+
+    // The list is driven by `projects`, not by the event aggregate: a project
+    // that has never ingested anything still gets a row, with zeroed counts and
+    // no first/last seen.
+    #[tokio::test]
+    async fn list_projects_includes_project_without_events() {
+        let pool = open_test_db().await;
+        set_project_org(&pool, 1, ORG_A).await;
+
+        let projects = list_projects(&pool, ORG_A, None, None, None).await.unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].project_id, 1);
+        assert_eq!(projects[0].event_count, 0);
+        assert_eq!(projects[0].issue_count, 0);
+        assert_eq!(projects[0].first_seen, None);
+        assert_eq!(projects[0].last_seen, None);
+        assert!(projects[0].platforms.is_empty());
+    }
+
+    // A project that has never received an event has nothing meaningful to sort
+    // on, so it stays at the bottom whatever column is picked -- including the
+    // id sort, where its high id would otherwise put it on top.
+    #[tokio::test]
+    async fn list_projects_sorts_never_seen_projects_last() {
+        let pool = open_test_db().await;
+        set_project_org(&pool, 1, ORG_A).await;
+        set_project_org(&pool, 2, ORG_A).await;
+        insert_test_event(&pool, "e1", 1, 100, None, None, None).await;
+
+        for sort in [None, Some("project_id"), Some("first_seen"), Some("events")] {
+            let projects = list_projects(&pool, ORG_A, sort, None, None).await.unwrap();
+            assert_eq!(
+                projects.last().unwrap().project_id,
+                2,
+                "empty project should sort last for {sort:?}"
+            );
+        }
+    }
+
+    // A project whose only events fall outside the period stays listed, but its
+    // period-scoped counts are zero and `last_seen` is empty; `first_seen` is
+    // all-time so it survives.
+    #[tokio::test]
+    async fn list_projects_includes_dormant_project_for_period() {
+        let pool = open_test_db().await;
+        set_project_org(&pool, 1, ORG_A).await;
+        set_project_org(&pool, 2, ORG_A).await;
+        let now = chrono::Utc::now().timestamp();
+        insert_test_event(&pool, "old", 1, now - 86_400 * 30, None, None, None).await;
+        insert_test_event(&pool, "new", 2, now - 60, None, None, None).await;
+
+        let projects = list_projects(&pool, ORG_A, None, None, Some(now - 3600))
+            .await
+            .unwrap();
+        assert_eq!(projects.len(), 2);
+        // Active project sorts above the dormant one (NULL last_seen orders last).
+        assert_eq!(projects[0].project_id, 2);
+        assert_eq!(projects[0].event_count, 1);
+
+        assert_eq!(projects[1].project_id, 1);
+        assert_eq!(projects[1].event_count, 0);
+        assert_eq!(projects[1].last_seen, None);
+        assert_eq!(projects[1].first_seen, Some(now - 86_400 * 30));
     }
 
     #[tokio::test]

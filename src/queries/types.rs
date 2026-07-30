@@ -142,14 +142,17 @@ pub struct LogEntry {
 pub struct ProjectSummary {
     pub project_id: u64,
     pub name: Option<String>,
+    pub archived: bool,
     pub event_count: u64,
     pub error_count: u64,
     pub transaction_count: u64,
     pub session_count: u64,
     pub other_count: u64,
     pub issue_count: u64,
-    pub first_seen: i64,
-    pub last_seen: i64,
+    /// `None` for a project that has never received an event.
+    pub first_seen: Option<i64>,
+    /// `None` when the project received nothing inside the selected period.
+    pub last_seen: Option<i64>,
     pub platforms: String,
     pub latest_release: Option<String>,
 }

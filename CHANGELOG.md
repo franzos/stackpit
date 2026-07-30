@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.3.20] - 2026-07-30
+
+### Changed
+- Project list shows every project, including new and dormant ones
+- Archived projects are marked in the project list
+
+### Fixed
+- Issue chart now follows the release, level, status and tag filters
+- Issue and project charts were blank on Postgres
+
 ## [0.3.19] - 2026-07-29
 
 ### Changed

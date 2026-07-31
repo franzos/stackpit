@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.21] - 2026-07-31
+
+### Added
+- Release health page has a time-range filter and sortable columns
+
+### Changed
+- Releases are ordered by version everywhere, newest first
+- Release list version column is sortable and no longer truncated
+- Project list breakdown column is framed like the trend column
+
+### Fixed
+- React Native errors showed no description and grouped into one issue
+
 ## [0.3.20] - 2026-07-30
 
 ### Changed

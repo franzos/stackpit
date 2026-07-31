@@ -39,6 +39,13 @@ releases-count = { $count ->
 release-health-title = Состояние релиза
 release-health-heading = Состояние релиза
 release-health-sessions-heading = Сессии во времени
+release-health-period-label = Период
+release-health-period-1h = Последний час
+release-health-period-24h = Последние 24 ч
+release-health-period-7d = Последние 7 дней
+release-health-period-14d = Последние 14 дней
+release-health-period-30d = Последние 30 дней
+release-health-period-90d = Последние 90 дней
 release-health-empty = Данные о сессиях недоступны. События сессий с полем <code class="text-mono">status</code> появятся здесь.
 release-health-col-release = Релиз
 release-health-col-sessions = Сессии

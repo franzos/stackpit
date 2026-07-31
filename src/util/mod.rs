@@ -8,3 +8,4 @@ pub mod sliding_window;
 pub mod ssrf;
 pub mod stats;
 pub mod throttle;
+pub mod version;

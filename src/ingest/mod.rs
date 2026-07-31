@@ -4,6 +4,7 @@ pub mod envelope;
 pub mod event_data;
 pub mod failure_limiter;
 pub mod fingerprint;
+pub mod lenient;
 pub mod models;
 pub mod parse_log;
 pub mod parse_metric;

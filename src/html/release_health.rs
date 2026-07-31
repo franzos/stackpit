@@ -1,9 +1,12 @@
 use askama::Template;
+use axum::extract::Query;
 
 use crate::extractors::ProjectPageCtx;
 use crate::html::chrome::PageChrome;
 use crate::html::render_template;
+use crate::html::utils::{period_to_timestamp, ListParams};
 use crate::queries;
+use crate::queries::releases::ReleaseHealthSort;
 use crate::queries::types::ReleaseHealth;
 use crate::queries::ProjectNavCounts;
 
@@ -20,6 +23,8 @@ struct ReleaseHealthTemplate {
     project_id: u64,
     releases: Vec<ReleaseHealthRow>,
     chart_data: String,
+    sort: String,
+    period: String,
     nav: ProjectNavCounts,
     chrome: PageChrome,
 }
@@ -88,24 +93,38 @@ fn error_free_pct(total: u64, ok: u64) -> Option<f64> {
     Some(pct.clamp(0.0, 100.0))
 }
 
-pub async fn handler(ctx: ProjectPageCtx) -> Result<axum::response::Response, HtmlError> {
+pub async fn handler(
+    ctx: ProjectPageCtx,
+    Query(params): Query<ListParams>,
+) -> Result<axum::response::Response, HtmlError> {
+    let period = params.period.clone().unwrap_or_else(|| "7d".to_string());
+    let sort = ReleaseHealthSort::parse(params.sort.as_deref());
+    // `session_aggregates` is rolled up per day, so the window snaps down to a
+    // day boundary; a sub-day period would otherwise select nothing at all.
+    let since_ts = period_to_timestamp(&period).map(|ts| ts.div_euclid(86400) * 86400);
+
     let releases: Vec<ReleaseHealthRow> =
-        queries::releases::get_release_health(&ctx.pool, ctx.project_id)
+        queries::releases::get_release_health(&ctx.pool, ctx.project_id, since_ts, sort)
             .await?
             .into_iter()
             .map(ReleaseHealthRow::from)
             .collect();
 
-    let since_ts = ((chrono::Utc::now().timestamp() - 86400 * 30) / 86400) * 86400;
-    let daily = queries::releases::get_release_health_daily(&ctx.pool, ctx.project_id, since_ts)
-        .await
-        .unwrap_or_default();
+    let daily = queries::releases::get_release_health_daily(
+        &ctx.pool,
+        ctx.project_id,
+        since_ts.unwrap_or(0),
+    )
+    .await
+    .unwrap_or_default();
     let chart_data = charts::session_chart_json(&daily);
 
     let tmpl = ReleaseHealthTemplate {
         project_id: ctx.project_id,
         releases,
         chart_data,
+        sort: sort.as_str().to_string(),
+        period,
         nav: ctx.nav,
         chrome: ctx.chrome,
     };

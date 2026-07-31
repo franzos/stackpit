@@ -159,6 +159,7 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
     let migration_pool = db::create_writer_pool(&db_url).await?;
     db::run_migrations(&migration_pool).await?;
     crate::oidc::grants::backfill_csrf_tokens(&migration_pool).await?;
+    crate::queries::releases::backfill_version_sort(&migration_pool).await?;
     drop(migration_pool);
 
     let pool = db::create_pool(&db_url).await?;

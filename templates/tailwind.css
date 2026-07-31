@@ -488,6 +488,14 @@
 
   /* type-breakdown sparkline / mini bars used in lists */
   .type-breakdown { display: inline-flex; gap: 2px; height: 14px; align-items: flex-end; }
+  /* Framed variant for table cells: the same L-shaped axis the trend sparkline
+     draws, so the two columns read as one family. Bare .type-breakdown stays
+     unframed for the legend swatches. */
+  .type-breakdown.framed {
+    height: 20px; min-width: 26px; padding: 0 2px 0 3px;
+    border-left: 1px solid color-mix(in srgb, var(--color-on-surface-variant) 35%, transparent);
+    border-bottom: 1px solid color-mix(in srgb, var(--color-on-surface-variant) 35%, transparent);
+  }
   .type-breakdown .seg { width: 4px; background: var(--color-surface-container-highest); border-radius: 1px; }
   .type-breakdown .seg.event { background: var(--color-error); }
   .type-breakdown .seg.transaction { background: var(--color-info); }
@@ -560,6 +568,9 @@
   .table-wrap { overflow-x: auto; }
   .nowrap { white-space: nowrap; }
   .truncate-cell { max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Release versions are the row's identity: give the column its natural width
+     so the full string is readable, and let .table-wrap scroll if that's wide. */
+  .col-version { width: 1%; white-space: nowrap; }
 
   /* directional glyphs (back-nav arrow): flip under RTL */
   .rtl-flip { display: inline-block; }

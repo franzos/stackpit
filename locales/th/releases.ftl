@@ -35,6 +35,13 @@ releases-count = { $count ->
 release-health-title = สุขภาพรีลีส
 release-health-heading = สุขภาพรีลีส
 release-health-sessions-heading = เซสชันตามช่วงเวลา
+release-health-period-label = ช่วงเวลา
+release-health-period-1h = ชั่วโมงที่ผ่านมา
+release-health-period-24h = 24 ชม. ที่ผ่านมา
+release-health-period-7d = 7 วันที่ผ่านมา
+release-health-period-14d = 14 วันที่ผ่านมา
+release-health-period-30d = 30 วันที่ผ่านมา
+release-health-period-90d = 90 วันที่ผ่านมา
 release-health-empty = ไม่มีข้อมูลเซสชัน เหตุการณ์เซสชันที่มีฟิลด์ <code class="text-mono">status</code> จะปรากฏที่นี่
 release-health-col-release = รีลีส
 release-health-col-sessions = เซสชัน

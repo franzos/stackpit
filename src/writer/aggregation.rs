@@ -254,9 +254,9 @@ pub(super) async fn flush_aggregation_inner(
     Ok(threshold_candidates)
 }
 
-/// Max release rows per multi-row INSERT chunk. 4 bind params per row;
-/// 32766 / 4 = 8191, use 8000 for margin.
-const RELEASE_UPSERT_CHUNK_SIZE: usize = 8000;
+/// Max release rows per multi-row INSERT chunk. 5 bind params per row;
+/// 32766 / 5 = 6553, use 6400 for margin.
+const RELEASE_UPSERT_CHUNK_SIZE: usize = 6400;
 
 /// Materialize releases seen on events. Keeps `releases` the single source of
 /// truth, so versions that were only ever ingested sit alongside the ones
@@ -286,7 +286,7 @@ async fn flush_releases(
 
     for chunk in rows.chunks(RELEASE_UPSERT_CHUNK_SIZE) {
         let mut builder = QueryBuilder::<crate::db::Db>::new(
-            "INSERT INTO releases (project_id, version, first_event, last_event) ",
+            "INSERT INTO releases (project_id, version, first_event, last_event, version_sort) ",
         );
 
         builder.push_values(chunk.iter(), |mut b, row| {
@@ -294,6 +294,7 @@ async fn flush_releases(
             b.push_bind(row.1);
             b.push_bind(row.2);
             b.push_bind(row.3);
+            b.push_bind(crate::util::version::version_sort_key(row.1));
         });
 
         // first_event/last_event are nullable (a release registered via the
@@ -304,13 +305,15 @@ async fn flush_releases(
         builder.push(
             " ON CONFLICT(project_id, version) DO UPDATE SET \
                  first_event = MIN(COALESCE(releases.first_event, excluded.first_event), COALESCE(excluded.first_event, releases.first_event)), \
-                 last_event = MAX(COALESCE(releases.last_event, excluded.last_event), COALESCE(excluded.last_event, releases.last_event))",
+                 last_event = MAX(COALESCE(releases.last_event, excluded.last_event), COALESCE(excluded.last_event, releases.last_event)), \
+                 version_sort = excluded.version_sort",
         );
         #[cfg(not(feature = "sqlite"))]
         builder.push(
             " ON CONFLICT(project_id, version) DO UPDATE SET \
                  first_event = LEAST(releases.first_event, excluded.first_event), \
-                 last_event = GREATEST(releases.last_event, excluded.last_event)",
+                 last_event = GREATEST(releases.last_event, excluded.last_event), \
+                 version_sort = excluded.version_sort",
         );
 
         builder.build().execute(&mut **tx).await?;

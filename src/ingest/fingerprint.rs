@@ -85,7 +85,7 @@ fn compute_fingerprint_inner(project_id: u64, json: &Value) -> Option<String> {
         .and_then(|arr| arr.first())
     {
         let exc_type = exc.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        let exc_value = exc.get("value").and_then(|v| v.as_str()).unwrap_or("");
+        let exc_value = crate::ingest::lenient::lenient_field(exc, "value").unwrap_or_default();
 
         let mut input = Vec::new();
         input.extend_from_slice(project_id.to_string().as_bytes());
@@ -97,13 +97,7 @@ fn compute_fingerprint_inner(project_id: u64, json: &Value) -> Option<String> {
     }
 
     // logentry.message is the unformatted template (what we group on); top-level `message` is the fallback.
-    let logentry_msg = json
-        .get("logentry")
-        .and_then(|l| l.get("message"))
-        .and_then(|v| v.as_str());
-    let top_msg = json.get("message").and_then(|v| v.as_str());
-
-    if let Some(msg) = logentry_msg.or(top_msg) {
+    if let Some(msg) = crate::ingest::lenient::message_text(json) {
         let mut input = Vec::new();
         input.extend_from_slice(project_id.to_string().as_bytes());
         input.push(0x00);
@@ -206,6 +200,24 @@ mod tests {
         // Different project: must not collide.
         let fp3 = compute_fingerprint(43, &ItemType::Event, payload).unwrap();
         assert_ne!(fp, fp3);
+    }
+
+    // An array-valued `value` used to read as absent, collapsing every React
+    // Native console error in a project into one type-only issue.
+    #[test]
+    fn array_valued_exception_groups_by_message() {
+        let a = br#"{"exception":{"values":[{"type":"Error","value":["consent unknown"]}]}}"#;
+        let b = br#"{"exception":{"values":[{"type":"Error","value":["token expired"]}]}}"#;
+        let fp_a = compute_fingerprint(1, &ItemType::Event, a).unwrap();
+        let fp_b = compute_fingerprint(1, &ItemType::Event, b).unwrap();
+        assert_ne!(fp_a, fp_b, "distinct messages must be distinct issues");
+
+        // Coerced identically to the equivalent plain-string payload.
+        let plain = br#"{"exception":{"values":[{"type":"Error","value":"consent unknown"}]}}"#;
+        assert_eq!(
+            fp_a,
+            compute_fingerprint(1, &ItemType::Event, plain).unwrap()
+        );
     }
 
     #[test]

@@ -44,12 +44,17 @@ pub async fn handler(
 
     // Session health for just this version, reusing the health page's defensive
     // crash-free recompute. The per-project set is small, so filter in Rust.
-    let health = queries::releases::get_release_health(&pool, project_id)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .find(|r| r.release == version)
-        .map(ReleaseHealthRow::from);
+    let health = queries::releases::get_release_health(
+        &pool,
+        project_id,
+        None,
+        queries::releases::ReleaseHealthSort::Release,
+    )
+    .await
+    .unwrap_or_default()
+    .into_iter()
+    .find(|r| r.release == version)
+    .map(ReleaseHealthRow::from);
 
     // Distinct error groups (issues) seen with this release.
     let filter = IssueFilter {

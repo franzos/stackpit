@@ -3,6 +3,7 @@ use sqlx::Row;
 
 use crate::db::sql;
 use crate::db::DbPool;
+use crate::util::version::version_sort_key;
 
 use super::types::{
     DailySessions, Page, PagedResult, Release, ReleaseFilter, ReleaseHealth, ReleaseSummary,
@@ -11,6 +12,7 @@ use super::types::{
 /// Closed set of allowed ORDER BY clauses; the rendered ident is always
 /// `&'static str`, keeping user input out of the SQL string.
 enum ReleaseSort {
+    Version,
     FirstSeen,
     Events,
     Issues,
@@ -27,12 +29,16 @@ impl ReleaseSort {
             Some("issues") => Self::Issues,
             Some("adoption") => Self::Adoption,
             Some("project_id") => Self::ProjectId,
-            _ => Self::LastSeen,
+            Some("last_seen") => Self::LastSeen,
+            _ => Self::Version,
         }
     }
 
     fn as_sql_ident(&self) -> &'static str {
         match self {
+            // COALESCE so a row whose key predates the backfill still lands in
+            // roughly the right place instead of sorting as NULL.
+            Self::Version => "COALESCE(r.version_sort, r.version) DESC",
             Self::FirstSeen => "first_seen ASC",
             Self::Events => "event_count DESC, last_seen DESC",
             Self::Issues => "issue_count DESC, last_seen DESC",
@@ -62,14 +68,15 @@ pub async fn upsert_release(
     info: &ReleaseUpsert<'_>,
 ) -> Result<()> {
     sqlx::query(sql!(
-        "INSERT INTO releases (project_id, version, commit_sha, date_released, first_event, last_event, new_groups)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+        "INSERT INTO releases (project_id, version, commit_sha, date_released, first_event, last_event, new_groups, version_sort)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
          ON CONFLICT(project_id, version) DO UPDATE SET
              commit_sha = COALESCE(excluded.commit_sha, releases.commit_sha),
              date_released = COALESCE(excluded.date_released, releases.date_released),
              first_event = COALESCE(excluded.first_event, releases.first_event),
              last_event = COALESCE(excluded.last_event, releases.last_event),
-             new_groups = CASE WHEN excluded.new_groups > 0 THEN excluded.new_groups ELSE releases.new_groups END"
+             new_groups = CASE WHEN excluded.new_groups > 0 THEN excluded.new_groups ELSE releases.new_groups END,
+             version_sort = excluded.version_sort"
     ))
     .bind(project_id as i64)
     .bind(info.version)
@@ -78,6 +85,7 @@ pub async fn upsert_release(
     .bind(info.first_event)
     .bind(info.last_event)
     .bind(info.new_groups as i64)
+    .bind(version_sort_key(info.version))
     .execute(pool)
     .await?;
     Ok(())
@@ -123,7 +131,7 @@ pub async fn list_releases_for_project(pool: &DbPool, project_id: u64) -> Result
     let rows = sqlx::query(sql!(
         "SELECT version FROM releases
          WHERE project_id = ?1
-         ORDER BY COALESCE(last_event, date_released, created_at) DESC, version DESC
+         ORDER BY COALESCE(version_sort, version) DESC
          LIMIT 50"
     ))
     .bind(project_id as i64)
@@ -136,10 +144,54 @@ pub async fn list_releases_for_project(pool: &DbPool, project_id: u64) -> Result
         .collect())
 }
 
+/// How many release rows to key per backfill round-trip.
+const VERSION_SORT_BACKFILL_BATCH: i64 = 500;
+
+/// One-shot startup fixup: compute `version_sort` for rows that pre-date
+/// migration 021. Every write path sets it, so this only ever runs once per
+/// upgrade; it works in batches so a large release table can't stall boot on a
+/// single statement.
+pub async fn backfill_version_sort(pool: &DbPool) -> Result<u64> {
+    let mut updated = 0u64;
+    loop {
+        let rows = sqlx::query(sql!(
+            "SELECT id, version FROM releases WHERE version_sort IS NULL LIMIT ?1"
+        ))
+        .bind(VERSION_SORT_BACKFILL_BATCH)
+        .fetch_all(pool)
+        .await?;
+
+        if rows.is_empty() {
+            return Ok(updated);
+        }
+
+        for row in &rows {
+            let id: i64 = row.get(0);
+            let version: String = row.get(1);
+            let res = sqlx::query(sql!(
+                "UPDATE releases SET version_sort = ?1 WHERE id = ?2 AND version_sort IS NULL"
+            ))
+            .bind(version_sort_key(&version))
+            .bind(id)
+            .execute(pool)
+            .await?;
+            updated += res.rows_affected();
+        }
+    }
+}
+
 /// Crash-free rate per release from the `session_aggregates` rollup, summing
 /// environments. User-level crash-free merges HLL sketches and is None when an
 /// identity-less aggregate contributed to the release.
-pub async fn get_release_health(pool: &DbPool, project_id: u64) -> Result<Vec<ReleaseHealth>> {
+///
+/// `since_ts` bounds the window on `day_bucket`; the caller floors it to a day
+/// boundary because the rollup has no finer granularity. `None` means all time.
+pub async fn get_release_health(
+    pool: &DbPool,
+    project_id: u64,
+    since_ts: Option<i64>,
+    sort: ReleaseHealthSort,
+) -> Result<Vec<ReleaseHealth>> {
     use crate::ingest::models::HLL_REGISTER_COUNT;
     use simple_hll::HyperLogLog;
 
@@ -147,9 +199,10 @@ pub async fn get_release_health(pool: &DbPool, project_id: u64) -> Result<Vec<Re
         "SELECT release, sessions_total, sessions_crashed, sessions_errored, sessions_abnormal,
                 users_hll, users_crashed_hll, has_aggregate
          FROM session_aggregates
-         WHERE project_id = ?1"
+         WHERE project_id = ?1 AND day_bucket >= ?2"
     ))
     .bind(project_id as i64)
+    .bind(since_ts.unwrap_or(0))
     .fetch_all(pool)
     .await?;
 
@@ -239,9 +292,40 @@ pub async fn get_release_health(pool: &DbPool, project_id: u64) -> Result<Vec<Re
         })
         .collect();
 
-    out.sort_by_key(|r| std::cmp::Reverse(r.total_sessions));
+    // Sorted before the cap so the 200 rows kept are the ones the active sort
+    // actually asks for, not the top 200 by sessions re-ordered afterwards.
+    match sort {
+        ReleaseHealthSort::Sessions => out.sort_by_key(|r| std::cmp::Reverse(r.total_sessions)),
+        ReleaseHealthSort::Release => {
+            out.sort_by_cached_key(|r| std::cmp::Reverse(version_sort_key(&r.release)))
+        }
+    }
     out.truncate(200);
     Ok(out)
+}
+
+/// Column the release-health table is ordered by. Both are descending: newest
+/// release first, or busiest release first.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ReleaseHealthSort {
+    Release,
+    Sessions,
+}
+
+impl ReleaseHealthSort {
+    pub fn parse(sort: Option<&str>) -> Self {
+        match sort {
+            Some("sessions") => Self::Sessions,
+            _ => Self::Release,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Release => "release",
+            Self::Sessions => "sessions",
+        }
+    }
 }
 
 /// Per-day session totals for a project, from `day_bucket` >= `since_ts`,
@@ -544,6 +628,13 @@ mod tests {
         .unwrap();
     }
 
+    /// All-time health for a project, newest release first.
+    async fn health_all(pool: &DbPool, project_id: u64) -> Vec<ReleaseHealth> {
+        get_release_health(pool, project_id, None, ReleaseHealthSort::Release)
+            .await
+            .unwrap()
+    }
+
     fn hll_of(ids: &[&str]) -> Vec<u8> {
         let mut h: HyperLogLog<12> = HyperLogLog::new();
         for id in ids {
@@ -558,7 +649,7 @@ mod tests {
         // 100 sessions, 0 crashed, 10 errored -> crash-free should be 100%.
         insert_agg(&pool, 1, "app@1.0", "prod", 100, 0, 10, 0, None, None).await;
 
-        let health = get_release_health(&pool, 1).await.unwrap();
+        let health = health_all(&pool, 1).await;
         assert_eq!(health.len(), 1);
         assert_eq!(health[0].crash_free_rate, 100.0);
     }
@@ -568,7 +659,7 @@ mod tests {
         let pool = crate::queries::test_helpers::open_test_db().await;
         insert_agg(&pool, 1, "app@1.0", "prod", 100, 5, 0, 0, None, None).await;
 
-        let health = get_release_health(&pool, 1).await.unwrap();
+        let health = health_all(&pool, 1).await;
         assert_eq!(health[0].crash_free_rate, 95.0);
     }
 
@@ -581,8 +672,52 @@ mod tests {
         insert_agg(&pool, 1, "app@1.0", "staging", 1, 1, 0, 0, None, None).await;
 
         // total=1, crashed=2 -> must clamp to 0%, never panic or wrap.
-        let health = get_release_health(&pool, 1).await.unwrap();
+        let health = health_all(&pool, 1).await;
         assert_eq!(health[0].crash_free_rate, 0.0);
+    }
+
+    #[tokio::test]
+    async fn health_default_sort_is_newest_release_first() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        // Busiest release is the oldest one, so a session sort would invert this.
+        insert_agg(&pool, 1, "app@1.0.9", "prod", 900, 0, 0, 0, None, None).await;
+        insert_agg(&pool, 1, "app@1.0.12", "prod", 5, 0, 0, 0, None, None).await;
+        insert_agg(&pool, 1, "app@1.0.10", "prod", 50, 0, 0, 0, None, None).await;
+
+        let by_release: Vec<String> = health_all(&pool, 1)
+            .await
+            .into_iter()
+            .map(|r| r.release)
+            .collect();
+        assert_eq!(by_release, ["app@1.0.12", "app@1.0.10", "app@1.0.9"]);
+
+        let by_sessions: Vec<String> =
+            get_release_health(&pool, 1, None, ReleaseHealthSort::Sessions)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|r| r.release)
+                .collect();
+        assert_eq!(by_sessions, ["app@1.0.9", "app@1.0.10", "app@1.0.12"]);
+    }
+
+    #[tokio::test]
+    async fn health_window_excludes_days_before_since() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        let day1 = 1_609_459_200;
+        let day2 = day1 + 86400;
+        insert_agg_day(&pool, 1, "app@1.0", "prod", day1, 10, 0, 0, 0, None, None).await;
+        insert_agg_day(&pool, 1, "app@2.0", "prod", day2, 20, 0, 0, 0, None, None).await;
+
+        let all = health_all(&pool, 1).await;
+        assert_eq!(all.len(), 2, "unbounded window keeps both days");
+
+        let recent = get_release_health(&pool, 1, Some(day2), ReleaseHealthSort::Release)
+            .await
+            .unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].release, "app@2.0");
+        assert_eq!(recent[0].total_sessions, 20);
     }
 
     #[tokio::test]
@@ -605,7 +740,7 @@ mod tests {
         )
         .await;
 
-        let health = get_release_health(&pool, 1).await.unwrap();
+        let health = health_all(&pool, 1).await;
         assert_eq!(health[0].total_users, Some(4));
         assert_eq!(health[0].crash_free_users, Some(75.0));
     }
@@ -629,7 +764,7 @@ mod tests {
         .await;
         insert_agg(&pool, 1, "app@1.0", "staging", 100, 3, 0, 1, None, None).await;
 
-        let health = get_release_health(&pool, 1).await.unwrap();
+        let health = health_all(&pool, 1).await;
         assert_eq!(health.len(), 1, "environments summed under one release");
         assert!(health[0].crash_free_users.is_none());
         assert!(health[0].total_users.is_none());
@@ -647,7 +782,7 @@ mod tests {
         insert_agg_day(&pool, 1, "app@1.0", "prod", day1, 60, 3, 0, 0, None, None).await;
         insert_agg_day(&pool, 1, "app@1.0", "prod", day2, 40, 2, 0, 0, None, None).await;
 
-        let health = get_release_health(&pool, 1).await.unwrap();
+        let health = health_all(&pool, 1).await;
         assert_eq!(health.len(), 1, "one row per release across days");
         assert_eq!(health[0].total_sessions, 100);
         assert_eq!(health[0].crashed_count, 5);
@@ -774,9 +909,59 @@ mod tests {
 
         let all = list_releases_for_project(&pool, 501).await.unwrap();
         assert_eq!(all.len(), 3);
-        assert_eq!(all[0], "v2.0", "newest first: the upload has no events yet");
+        assert_eq!(all[0], "v2.0", "highest version first, events or not");
         assert!(all.contains(&"v1.0".to_string()));
         assert!(all.contains(&"v1.1".to_string()));
+    }
+
+    // The filter dropdown used to order by last activity, which interleaves old
+    // versions that are still sending events with genuinely newer ones.
+    #[tokio::test]
+    async fn list_releases_for_project_orders_by_version_not_activity() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        for (id, version) in [
+            ("rv1", "com.softmax.did@1.0.4+111"),
+            ("rv2", "com.softmax.did@1.0.12+119"),
+            ("rv3", "com.softmax.did@1.0.9+116"),
+        ] {
+            insert_event_with_release(&pool, id, 502, version).await;
+        }
+        // 1.0.4 is the most recently active, but it is not the newest release.
+        sqlx::query(sql!(
+            "UPDATE releases SET last_event = 9999 WHERE version = 'com.softmax.did@1.0.4+111'"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(
+            list_releases_for_project(&pool, 502).await.unwrap(),
+            [
+                "com.softmax.did@1.0.12+119",
+                "com.softmax.did@1.0.9+116",
+                "com.softmax.did@1.0.4+111",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn backfill_version_sort_keys_pre_migration_rows() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        insert_event_with_release(&pool, "rb1", 503, "app@1.0.9").await;
+        insert_event_with_release(&pool, "rb2", 503, "app@1.0.12").await;
+        // Simulate rows written before migration 021 added the column.
+        sqlx::query(sql!("UPDATE releases SET version_sort = NULL"))
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(backfill_version_sort(&pool).await.unwrap(), 2);
+        assert_eq!(
+            list_releases_for_project(&pool, 503).await.unwrap(),
+            ["app@1.0.12", "app@1.0.9"]
+        );
+        // Idempotent: a second boot has nothing left to do.
+        assert_eq!(backfill_version_sort(&pool).await.unwrap(), 0);
     }
 
     #[tokio::test]
@@ -823,6 +1008,43 @@ mod tests {
             .find(|r| r.version == "v1.0")
             .expect("ingested release listed");
         assert_eq!(ingested.event_count, 1);
+    }
+
+    // The list is paginated in SQL, so ordering has to happen there: sorting the
+    // page in the handler would only order 25 rows at a time.
+    #[tokio::test]
+    async fn list_all_releases_defaults_to_version_order() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        let org = insert_org_rel(&pool, "rel-ver-org").await;
+        insert_project_rel(&pool, 701, org).await;
+        for (id, version) in [
+            ("rw1", "app@1.0.9"),
+            ("rw2", "app@1.0.12"),
+            ("rw3", "app@1.0.10"),
+            ("rw4", "app@1.0.2"),
+        ] {
+            insert_event_with_release(&pool, id, 701, version).await;
+        }
+
+        let versions: Vec<String> = list_all_releases(
+            &pool,
+            &ReleaseFilter::default(),
+            &Page::new(None, None),
+            None,
+            Some(org),
+        )
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .map(|r| r.version)
+        .collect();
+
+        assert_eq!(
+            versions,
+            ["app@1.0.12", "app@1.0.10", "app@1.0.9", "app@1.0.2"],
+            "plain string order would put 1.0.9 above 1.0.12"
+        );
     }
 
     #[tokio::test]

@@ -65,7 +65,10 @@
         <table class="table">
           <thead>
             <tr>
-              <th>{{ chrome.t("releases-col-version") }}</th>
+              <th class="col-version">
+                <a href="/web/releases/?sort=version{{ base_qs }}"
+                   {% if sort.is_empty() || sort == "version" %}class="active-sort"{% endif %}>{{ chrome.t("releases-col-version") }}</a>
+              </th>
               <th>
                 <a href="/web/releases/?sort=project_id{{ base_qs }}"
                    {% if sort == "project_id" %}class="active-sort"{% endif %}>{{ chrome.t("releases-col-project") }}</a>
@@ -87,16 +90,16 @@
                    {% if sort == "first_seen" %}class="active-sort"{% endif %}>{{ chrome.t("releases-col-first-seen") }}</a>
               </th>
               <th>
-                <a href="/web/releases/?{{ base_qs }}"
-                   {% if sort.is_empty() %}class="active-sort"{% endif %}>{{ chrome.t("releases-col-last-seen") }}</a>
+                <a href="/web/releases/?sort=last_seen{{ base_qs }}"
+                   {% if sort == "last_seen" %}class="active-sort"{% endif %}>{{ chrome.t("releases-col-last-seen") }}</a>
               </th>
             </tr>
           </thead>
           <tbody>
             {% for r in result.items %}
               <tr>
-                <td class="truncate-cell text-mono" title="{{ r.version }}">
-                  <a href="/web/projects/{{ r.project_id }}/releases/{{ r.version|urlencode }}/">{{ r.version|short_release }}</a>
+                <td class="col-version text-mono" title="{{ r.version }}">
+                  <a href="/web/projects/{{ r.project_id }}/releases/{{ r.version|urlencode }}/"><bdi>{{ r.version|short_release }}</bdi></a>
                 </td>
                 <td>
                   <a href="/web/projects/{{ r.project_id }}/">{% match r.project_name %}{% when Some with (n) %}{{ n }}{% when None %}{{ r.project_id }}{% endmatch %}</a>

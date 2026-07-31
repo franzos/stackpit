@@ -37,6 +37,13 @@ releases-count = { $count ->
 release-health-title = Stato delle release
 release-health-heading = Stato delle release
 release-health-sessions-heading = Sessioni nel tempo
+release-health-period-label = Intervallo di tempo
+release-health-period-1h = Ultima ora
+release-health-period-24h = Ultime 24h
+release-health-period-7d = Ultimi 7 giorni
+release-health-period-14d = Ultimi 14 giorni
+release-health-period-30d = Ultimi 30 giorni
+release-health-period-90d = Ultimi 90 giorni
 release-health-empty = Nessun dato di sessione disponibile. Gli eventi di sessione con un campo <code class="text-mono">status</code> appariranno qui.
 release-health-col-release = Release
 release-health-col-sessions = Sessioni

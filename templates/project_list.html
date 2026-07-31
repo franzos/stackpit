@@ -100,7 +100,8 @@
               <td class="text-tabular">{{ p.issue_count }}</td>
               <td class="text-tabular">{{ p.event_count }}</td>
               <td class="hide-mobile">
-                <div class="type-breakdown">
+                <div class="type-breakdown framed"
+                     title="{{ chrome.t("projects-col-breakdown") }}">
                   {% if p.error_count > 0 %}
                     <span class="seg event"
                           style="height:{% if p.event_count > 0 %}{{ p.error_count * 100 / p.event_count }}{% else %}0{% endif %}%"

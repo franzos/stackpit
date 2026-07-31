@@ -61,11 +61,7 @@ pub fn extract_exceptions(
             .and_then(|v| v.as_str())
             .unwrap_or("Exception")
             .to_string();
-        let exc_value = exc
-            .get("value")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+        let exc_value = crate::ingest::lenient::lenient_field(exc, "value").unwrap_or_default();
 
         let mechanism_handled = exc
             .get("mechanism")

@@ -23,6 +23,23 @@
     </div>
   </div>
 
+  <form class="filter-form"
+        method="get"
+        action="/web/projects/{{ project_id }}/health/">
+    {% if !sort.is_empty() %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
+    <select class="select w-auto"
+            name="period"
+            aria-label="{{ chrome.t("release-health-period-label") }}">
+      <option value="1h"{% if period == "1h" %} selected{% endif %}>{{ chrome.t("release-health-period-1h") }}</option>
+      <option value="24h"{% if period == "24h" %} selected{% endif %}>{{ chrome.t("release-health-period-24h") }}</option>
+      <option value="7d"{% if period == "7d" %} selected{% endif %}>{{ chrome.t("release-health-period-7d") }}</option>
+      <option value="14d"{% if period == "14d" %} selected{% endif %}>{{ chrome.t("release-health-period-14d") }}</option>
+      <option value="30d"{% if period == "30d" %} selected{% endif %}>{{ chrome.t("release-health-period-30d") }}</option>
+      <option value="90d"{% if period == "90d" %} selected{% endif %}>{{ chrome.t("release-health-period-90d") }}</option>
+    </select>
+    <button class="btn btn-secondary" type="submit">{{ chrome.t("releases-filter-submit") }}</button>
+  </form>
+
   {% if !chart_data.is_empty() %}
     <div class="card">
       <h2 class="text-[14px] font-semibold">{{ chrome.t("release-health-sessions-heading") }}</h2>
@@ -42,8 +59,14 @@
         <table class="table">
           <thead>
             <tr>
-              <th>{{ chrome.t("release-health-col-release") }}</th>
-              <th>{{ chrome.t("release-health-col-sessions") }}</th>
+              <th class="col-version">
+                <a href="/web/projects/{{ project_id }}/health/?sort=release&amp;period={{ period }}"
+                   {% if sort == "release" %}class="active-sort"{% endif %}>{{ chrome.t("release-health-col-release") }}</a>
+              </th>
+              <th>
+                <a href="/web/projects/{{ project_id }}/health/?sort=sessions&amp;period={{ period }}"
+                   {% if sort == "sessions" %}class="active-sort"{% endif %}>{{ chrome.t("release-health-col-sessions") }}</a>
+              </th>
               <th>{{ chrome.t("release-health-col-ok") }}</th>
               <th>{{ chrome.t("release-health-col-crashed") }}</th>
               <th title="{{ chrome.t("release-health-errored-hint") }}">{{ chrome.t("release-health-col-errored") }}</th>
@@ -55,7 +78,7 @@
           <tbody>
             {% for r in releases %}
               <tr>
-                <td class="text-mono">
+                <td class="col-version text-mono">
                   <a href="/web/projects/{{ project_id }}/releases/{{ r.release|urlencode }}/"
                      title="{{ r.release }}"><bdi>{{ r.release|short_release }}</bdi></a>
                 </td>

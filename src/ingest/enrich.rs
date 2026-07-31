@@ -1,6 +1,7 @@
 //! Post-parse enrichment: fingerprinting and title extraction (business logic separate from parser).
 
 use crate::ingest::fingerprint;
+use crate::ingest::lenient::{lenient_field, message_text};
 use crate::ingest::models::{ItemType, StorableEvent};
 use serde_json::Value;
 
@@ -81,18 +82,14 @@ fn extract_title(json: &Value, item_type: &ItemType, monitor_slug: Option<&str>)
         .and_then(|arr| arr.first())
     {
         let exc_type = exc.get("type").and_then(|v| v.as_str()).unwrap_or("Error");
-        let exc_value = exc.get("value").and_then(|v| v.as_str()).unwrap_or("");
+        let exc_value = lenient_field(exc, "value").unwrap_or_default();
         if exc_value.is_empty() {
             return Some(exc_type.to_string());
         }
         return Some(format!("{exc_type}: {exc_value}"));
     }
 
-    if let Some(msg) = json.get("message").and_then(|v| v.as_str()).or_else(|| {
-        json.get("logentry")
-            .and_then(|l| l.get("message"))
-            .and_then(|v| v.as_str())
-    }) {
+    if let Some(msg) = message_text(json) {
         return Some(msg.chars().take(200).collect());
     }
 
@@ -168,6 +165,30 @@ mod tests {
             event.title.as_deref(),
             Some("TypeError: null is not an object")
         );
+    }
+
+    // The React Native console integration forwards the console argument list,
+    // so `value` arrives as an array. Dropping it left every such event titled
+    // with a bare "Error" and grouped into one issue.
+    #[test]
+    fn enrich_exception_title_from_array_value() {
+        let json = serde_json::json!({
+            "exception": {"values": [{"type": "Error", "value": ["+ STATE: Unknown consent status"]}]}
+        });
+        let mut event = make_event(&json, ItemType::Event);
+        enrich_event(&mut event);
+        assert_eq!(
+            event.title.as_deref(),
+            Some("Error: + STATE: Unknown consent status")
+        );
+    }
+
+    #[test]
+    fn enrich_title_from_object_valued_message() {
+        let json = serde_json::json!({"message": {"message": ["consent missing"]}});
+        let mut event = make_event(&json, ItemType::Event);
+        enrich_event(&mut event);
+        assert_eq!(event.title.as_deref(), Some("consent missing"));
     }
 
     #[test]

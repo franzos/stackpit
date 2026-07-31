@@ -40,6 +40,13 @@ releases-count = { $count ->
 release-health-title = صحة الإصدار
 release-health-heading = صحة الإصدار
 release-health-sessions-heading = الجلسات عبر الزمن
+release-health-period-label = النطاق الزمني
+release-health-period-1h = آخر ساعة
+release-health-period-24h = آخر 24 ساعة
+release-health-period-7d = آخر 7 أيام
+release-health-period-14d = آخر 14 يومًا
+release-health-period-30d = آخر 30 يومًا
+release-health-period-90d = آخر 90 يومًا
 release-health-empty = لا تتوفّر بيانات جلسات. ستظهر هنا أحداث الجلسات التي تحمل حقل <code class="text-mono">status</code>.
 release-health-col-release = الإصدار
 release-health-col-sessions = الجلسات

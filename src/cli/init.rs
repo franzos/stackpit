@@ -91,8 +91,66 @@ pub fn run(path: &Path) -> Result<()> {
     let token = generate_admin_token();
     let contents = CONFIG_TEMPLATE.replace("__ADMIN_TOKEN__", &token);
 
-    std::fs::write(path, contents)?;
+    write_private(path, contents.as_bytes())?;
     println!("created {}", path.display());
     println!("admin token generated and written to config (64 hex chars)");
     Ok(())
+}
+
+/// The config carries admin_token, master_key and the OAuth client secret, so
+/// it must not be world-readable.
+#[cfg(unix)]
+fn write_private(path: &Path, contents: &[u8]) -> Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)?;
+    f.write_all(contents)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn write_private(path: &Path, contents: &[u8]) -> Result<()> {
+    use std::io::Write;
+
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    f.write_all(contents)?;
+    Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn temp_path(name: &str) -> std::path::PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!("stackpit-init-{}-{name}.toml", std::process::id()));
+        p
+    }
+
+    #[test]
+    fn generated_config_is_owner_readable_only() {
+        let path = temp_path("perms");
+        let _ = std::fs::remove_file(&path);
+        run(&path).expect("init writes config");
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "config must not be group/world readable");
+
+        let err = run(&path).expect_err("init must refuse to overwrite");
+        assert!(
+            err.to_string().contains("already exists"),
+            "expected refusal, got: {err}"
+        );
+
+        std::fs::remove_file(&path).unwrap();
+    }
 }

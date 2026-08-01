@@ -19,10 +19,12 @@ pub fn sentry_response_with_discarded(event_id: &str, discarded: usize) -> impl 
     (StatusCode::OK, headers, axum::Json(body))
 }
 
-/// 429 with Retry-After so the SDK knows when to back off.
+/// 429 with Retry-After so the SDK knows when to back off. The empty category
+/// list means "all categories": the limiter gates the whole project/key, so an
+/// SDK told only `error` would keep sending transactions into more 429s.
 pub fn rate_limited_response_with_retry(retry_after: u32) -> impl IntoResponse {
     let mut headers = HeaderMap::new();
-    if let Ok(val) = format!("{retry_after}:error:org").parse() {
+    if let Ok(val) = format!("{retry_after}::org").parse() {
         headers.insert("X-Sentry-Rate-Limits", val);
     }
     headers.insert("Retry-After", HeaderValue::from(retry_after));
@@ -47,4 +49,17 @@ pub fn error_response(status: StatusCode, message: &str) -> impl IntoResponse {
         headers.insert("X-Sentry-Error", val);
     }
     (status, headers, message.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rate_limit_header_applies_to_all_categories() {
+        let resp = rate_limited_response_with_retry(42).into_response();
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(resp.headers()["X-Sentry-Rate-Limits"], "42::org");
+        assert_eq!(resp.headers()["Retry-After"], "42");
+    }
 }

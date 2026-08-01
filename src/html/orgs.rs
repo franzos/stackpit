@@ -98,6 +98,16 @@ pub async fn switch_org(
     resp
 }
 
+const DEFAULT_INVITE_TTL_SECS: i64 = 7 * 24 * 3600;
+const MIN_INVITE_TTL_SECS: i64 = 3600;
+const MAX_INVITE_TTL_SECS: i64 = 30 * 24 * 3600;
+
+/// The form value is unvalidated i64; unclamped it yields instantly-expired
+/// (negative) or effectively permanent invites.
+fn clamp_invite_ttl(ttl_secs: i64) -> i64 {
+    ttl_secs.clamp(MIN_INVITE_TTL_SECS, MAX_INVITE_TTL_SECS)
+}
+
 #[derive(Deserialize)]
 pub struct CreateInviteForm {
     role: String,
@@ -165,7 +175,7 @@ pub async fn create_org_invite(
 
     let role = Role::parse(&form.role);
     let email = form.email.as_deref().filter(|s| !s.is_empty());
-    let ttl_secs = form.ttl_secs.unwrap_or(7 * 24 * 3600);
+    let ttl_secs = clamp_invite_ttl(form.ttl_secs.unwrap_or(DEFAULT_INVITE_TTL_SECS));
 
     let token = match create_invite(
         &state.writer_pool,
@@ -1165,6 +1175,16 @@ mod tests {
         let form: CreateInviteForm = serde_urlencoded::from_str("role=member&ttl_secs=3600")
             .expect("numeric ttl must parse");
         assert_eq!(form.ttl_secs, Some(3600));
+    }
+
+    #[test]
+    fn invite_ttl_is_clamped_to_sane_bounds() {
+        assert_eq!(clamp_invite_ttl(i64::MAX), MAX_INVITE_TTL_SECS);
+        assert_eq!(clamp_invite_ttl(i64::MIN), MIN_INVITE_TTL_SECS);
+        assert_eq!(clamp_invite_ttl(-1), MIN_INVITE_TTL_SECS);
+        assert_eq!(clamp_invite_ttl(0), MIN_INVITE_TTL_SECS);
+        assert_eq!(clamp_invite_ttl(DEFAULT_INVITE_TTL_SECS), 7 * 24 * 3600);
+        assert_eq!(clamp_invite_ttl(3600), 3600);
     }
 
     #[test]

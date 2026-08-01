@@ -65,6 +65,14 @@ struct ReplayDetailTemplate {
     chrome: PageChrome,
 }
 
+/// Recordings and videos are stored as opaque bytes, so the events API -- which
+/// decodes payloads as JSON -- can't serve them in full.
+fn replay_raw_json(replay: &queries::types::ReplayDetail) -> String {
+    let full_payload_id =
+        (replay.replay_type == "replay_event").then_some(replay.event_id.as_str());
+    queries::event_supplements::render_raw_json(&replay.payload, full_payload_id)
+}
+
 pub async fn detail_handler(
     active: ActiveOrg,
     State(state): State<AppState>,
@@ -89,7 +97,7 @@ pub async fn detail_handler(
         replay,
         "Replay not found",
         move |project_id, replay, nav, chrome| {
-            let raw_json = serde_json::to_string_pretty(&replay.payload).unwrap_or_default();
+            let raw_json = replay_raw_json(&replay);
             ReplayDetailTemplate {
                 project_id,
                 replay,
@@ -101,4 +109,66 @@ pub async fn detail_handler(
         },
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use unic_langid::langid;
+
+    const OVERSIZED: usize = 512 * 1024;
+
+    fn detail(replay_type: &str, payload: serde_json::Value) -> queries::types::ReplayDetail {
+        queries::types::ReplayDetail {
+            event_id: "e1".into(),
+            project_id: 1,
+            timestamp: 0,
+            replay_type: replay_type.into(),
+            release: None,
+            environment: None,
+            payload,
+        }
+    }
+
+    fn render(replay: queries::types::ReplayDetail) -> String {
+        let raw_json = replay_raw_json(&replay);
+        ReplayDetailTemplate {
+            project_id: 1,
+            replay,
+            errors: Vec::new(),
+            raw_json,
+            nav: ProjectNavCounts::default(),
+            chrome: PageChrome::new(String::new(), langid!("en"), "/web/projects/1/".into()),
+        }
+        .render()
+        .expect("replay detail renders")
+    }
+
+    #[test]
+    fn oversized_replay_event_is_truncated_with_the_api_hint() {
+        let out = render(detail(
+            "replay_event",
+            serde_json::json!({"blob": "x".repeat(OVERSIZED)}),
+        ));
+        assert!(out.contains("[truncated: showing"), "{out:.400}");
+        assert!(out.contains("/api/v1/events/e1/"));
+        assert!(
+            out.len() < OVERSIZED,
+            "page must not carry the full payload"
+        );
+    }
+
+    #[test]
+    fn oversized_recording_is_truncated_without_an_api_hint() {
+        let out = render(detail(
+            "replay_recording",
+            serde_json::Value::String("x".repeat(OVERSIZED)),
+        ));
+        assert!(out.contains("[truncated: showing"));
+        assert!(
+            !out.contains("/api/v1/events/"),
+            "recordings are not served as JSON by the events API"
+        );
+        assert!(out.len() < OVERSIZED);
+    }
 }

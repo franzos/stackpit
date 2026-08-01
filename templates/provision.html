@@ -34,6 +34,7 @@
 
       <div class="card card-pad space-y-4">
         <form method="POST" action="/web/provision" class="space-y-3">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           {% for org in orgs %}
             <label class="flex items-center gap-3 cursor-pointer">
               <input type="checkbox"

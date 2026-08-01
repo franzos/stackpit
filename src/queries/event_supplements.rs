@@ -186,7 +186,24 @@ pub async fn preload_sourcemaps(
     payload: &serde_json::Value,
     project_id: u64,
 ) -> std::collections::HashMap<String, ::sourcemap::SourceMap> {
-    let mut map = std::collections::HashMap::new();
+    let debug_ids = collect_debug_ids(payload);
+    if debug_ids.is_empty() {
+        return std::collections::HashMap::new();
+    }
+
+    match crate::ingest::sourcemap::load_sourcemaps(pool, &debug_ids, project_id).await {
+        Ok(map) => map,
+        Err(e) => {
+            tracing::warn!("failed to load sourcemaps: {e}");
+            std::collections::HashMap::new()
+        }
+    }
+}
+
+/// Distinct, plausibly-shaped sourcemap debug ids from an event payload,
+/// capped at [`MAX_EVENT_DEBUG_IDS`].
+fn collect_debug_ids(payload: &serde_json::Value) -> Vec<String> {
+    use crate::ingest::sourcemap::{is_plausible_debug_id, MAX_EVENT_DEBUG_IDS};
 
     let images = payload
         .get("debug_meta")
@@ -195,37 +212,32 @@ pub async fn preload_sourcemaps(
 
     let images = match images {
         Some(arr) => arr,
-        None => return map,
+        None => return Vec::new(),
     };
 
+    let mut seen = std::collections::HashSet::new();
+    let mut ids = Vec::new();
+
     for img in images {
-        let img_type = img.get("type").and_then(|t| t.as_str()).unwrap_or("");
-        if img_type != "sourcemap" {
+        if img.get("type").and_then(|t| t.as_str()) != Some("sourcemap") {
             continue;
         }
         let debug_id = match img.get("debug_id").and_then(|v| v.as_str()) {
             Some(id) => id.to_lowercase(),
             None => continue,
         };
-
-        if map.contains_key(&debug_id) {
+        if !is_plausible_debug_id(&debug_id) || !seen.insert(debug_id.clone()) {
             continue;
         }
 
-        match crate::ingest::sourcemap::load_sourcemap(pool, &debug_id, project_id).await {
-            Ok(Some(sm)) => {
-                map.insert(debug_id, sm);
-            }
-            Ok(None) => {
-                tracing::debug!("no sourcemap found for debug_id={debug_id}");
-            }
-            Err(e) => {
-                tracing::warn!("failed to load sourcemap {debug_id}: {e}");
-            }
+        ids.push(debug_id);
+        if ids.len() == MAX_EVENT_DEBUG_IDS {
+            tracing::debug!("debug_meta.images exceeds {MAX_EVENT_DEBUG_IDS} ids, truncating");
+            break;
         }
     }
 
-    map
+    ids
 }
 
 pub fn get_event_detail_data(
@@ -245,8 +257,7 @@ pub fn get_event_detail_data(
     let request = crate::ingest::event_data::extract_request(&event.payload);
     let user = crate::ingest::event_data::extract_user(&event.payload);
     let summary_tags = crate::ingest::event_data::extract_summary_tags(&tags, &contexts);
-    let raw_json =
-        serde_json::to_string_pretty(&event.payload).unwrap_or_else(|_| "{}".to_string());
+    let raw_json = render_raw_json(&event.payload, Some(&event.event_id));
 
     let own_feedback = (event.item_type == crate::ingest::models::ItemType::UserReport)
         .then(|| extract_user_feedback(&event.payload))
@@ -268,6 +279,68 @@ pub fn get_event_detail_data(
         own_feedback,
         measurements,
         raw_json,
+    }
+}
+
+/// Payloads of profile/replay item types run to tens of megabytes; the rendered
+/// page would carry the pretty-printed copy plus its HTML-escaped render.
+const MAX_RAW_JSON_BYTES: usize = 256 * 1024;
+
+/// Pretty-print a payload for display, bounded at [`MAX_RAW_JSON_BYTES`].
+/// Pass `full_payload_event_id` only when `GET /api/v1/events/{event_id}/` can
+/// actually serve this payload: it decodes stored bytes as JSON, which replay
+/// recordings and videos are not.
+pub(crate) fn render_raw_json(
+    payload: &serde_json::Value,
+    full_payload_event_id: Option<&str>,
+) -> String {
+    let mut writer = BoundedWriter {
+        buf: Vec::new(),
+        limit: MAX_RAW_JSON_BYTES,
+        total: 0,
+    };
+    if serde_json::to_writer_pretty(&mut writer, payload).is_err() {
+        return "{}".to_string();
+    }
+
+    let shown = match std::str::from_utf8(&writer.buf) {
+        Ok(s) => s,
+        Err(e) => std::str::from_utf8(&writer.buf[..e.valid_up_to()]).unwrap_or(""),
+    };
+
+    if writer.total <= writer.limit {
+        return shown.to_string();
+    }
+
+    let shown_kib = shown.len() / 1024;
+    let total_kib = writer.total / 1024;
+    match full_payload_event_id {
+        Some(event_id) => format!(
+            "{shown}\n\n[truncated: showing {shown_kib} KiB of {total_kib} KiB - fetch the full payload from GET /api/v1/events/{event_id}/]"
+        ),
+        None => format!("{shown}\n\n[truncated: showing {shown_kib} KiB of {total_kib} KiB]"),
+    }
+}
+
+/// Keeps the first `limit` bytes, counts the rest.
+struct BoundedWriter {
+    buf: Vec<u8>,
+    limit: usize,
+    total: usize,
+}
+
+impl std::io::Write for BoundedWriter {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        self.total = self.total.saturating_add(data.len());
+        if self.buf.len() < self.limit {
+            let take = (self.limit - self.buf.len()).min(data.len());
+            self.buf.extend_from_slice(&data[..take]);
+        }
+        Ok(data.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 
@@ -363,5 +436,73 @@ mod tests {
     #[test]
     fn empty_when_no_feedback_fields() {
         assert!(!extract_user_feedback(&json!({"foo": "bar"})).has_any());
+    }
+
+    fn payload_with_images(count: usize) -> serde_json::Value {
+        let images: Vec<_> = (0..count)
+            .map(|i| json!({"type": "sourcemap", "debug_id": format!("{i:032x}")}))
+            .collect();
+        json!({"debug_meta": {"images": images}})
+    }
+
+    #[test]
+    fn debug_ids_are_capped() {
+        let ids = collect_debug_ids(&payload_with_images(30_000));
+        assert_eq!(
+            ids.len(),
+            crate::ingest::sourcemap::MAX_EVENT_DEBUG_IDS,
+            "fan-out must stop at the cap"
+        );
+    }
+
+    #[test]
+    fn debug_ids_dedupe_and_skip_junk() {
+        let p = json!({"debug_meta": {"images": [
+            {"type": "sourcemap", "debug_id": "AAAAAAAA1111"},
+            {"type": "sourcemap", "debug_id": "aaaaaaaa1111"},
+            {"type": "sourcemap", "debug_id": "x"},
+            {"type": "macho", "debug_id": "bbbbbbbb2222"},
+            {"type": "sourcemap"},
+            {"type": "sourcemap", "debug_id": "cccccccc3333"},
+        ]}});
+        assert_eq!(
+            collect_debug_ids(&p),
+            vec!["aaaaaaaa1111".to_string(), "cccccccc3333".to_string()]
+        );
+    }
+
+    #[test]
+    fn no_debug_meta_yields_no_ids() {
+        assert!(collect_debug_ids(&json!({"foo": "bar"})).is_empty());
+    }
+
+    #[test]
+    fn small_payload_renders_untruncated() {
+        let out = render_raw_json(&json!({"a": 1}), Some("e1"));
+        assert_eq!(out, "{\n  \"a\": 1\n}");
+    }
+
+    #[test]
+    fn oversized_payload_is_truncated_with_notice() {
+        let big = json!({"blob": "x".repeat(MAX_RAW_JSON_BYTES * 2)});
+        let out = render_raw_json(&big, Some("e1"));
+        assert!(out.len() < MAX_RAW_JSON_BYTES + 512);
+        assert!(out.contains("[truncated: showing 256 KiB of 512 KiB"));
+        assert!(out.contains("/api/v1/events/e1/"));
+    }
+
+    #[test]
+    fn truncation_notice_omits_endpoint_when_unavailable() {
+        let big = json!({"blob": "x".repeat(MAX_RAW_JSON_BYTES * 2)});
+        let out = render_raw_json(&big, None);
+        assert!(out.contains("[truncated: showing 256 KiB of 512 KiB]"));
+        assert!(!out.contains("/api/v1/events/"));
+    }
+
+    #[test]
+    fn truncation_does_not_split_utf8() {
+        let big = json!({"blob": "é".repeat(MAX_RAW_JSON_BYTES)});
+        let out = render_raw_json(&big, Some("e1"));
+        assert!(out.contains("[truncated:"));
     }
 }

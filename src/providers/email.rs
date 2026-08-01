@@ -42,6 +42,17 @@ pub fn global_api_token<'a>(global: &'a ProviderConfig, provider: &str) -> Optio
         .filter(|t| !t.trim().is_empty())
 }
 
+/// RFC 5322 line limits (and hosted-provider APIs) reject or mangle very long
+/// Subject lines, which would silently kill delivery for that project.
+const MAX_SUBJECT_CHARS: usize = 120;
+
+fn clamp_subject(subject: &str) -> String {
+    match subject.char_indices().nth(MAX_SUBJECT_CHARS) {
+        Some((idx, _)) => format!("{}...", &subject[..idx]),
+        None => subject.to_string(),
+    }
+}
+
 fn api_provider_config(provider: &str, token: String) -> ProviderConfig {
     match provider {
         "lettermint" => ProviderConfig::Lettermint { token },
@@ -129,7 +140,7 @@ pub async fn send(
     let title = event.title.as_deref().unwrap_or("(untitled)");
     let level = event.level.as_deref().unwrap_or("-");
     let env = event.environment.as_deref().unwrap_or("-");
-    let subject = format!("[Stackpit] {trigger_text}: {title}");
+    let subject = clamp_subject(&format!("[Stackpit] {trigger_text}: {title}"));
 
     let (text_body, html_body) = if matches!(event.trigger, crate::notify::NotifyTrigger::Digest) {
         let mut text = format!("{trigger_text}\n\n");
@@ -292,6 +303,17 @@ mod tests {
             user: user.map(String::from),
             pass: user.map(|_| "pass".into()),
         }
+    }
+
+    #[test]
+    fn subject_is_clamped_on_a_char_boundary() {
+        let short = "[Stackpit] New Issue: boom";
+        assert_eq!(clamp_subject(short), short);
+
+        let long = format!("[Stackpit] New Issue: {}", "é".repeat(1000));
+        let clamped = clamp_subject(&long);
+        assert_eq!(clamped.chars().count(), MAX_SUBJECT_CHARS + 3);
+        assert!(clamped.ends_with("..."));
     }
 
     #[test]

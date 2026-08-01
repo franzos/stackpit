@@ -210,16 +210,12 @@ pub fn parse(body: &[u8], project_id: u64, auth: &SentryAuth) -> Result<ParsedEn
             effective_key.clone(),
         );
 
-        let parsed_event_id = extract_fields(payload_bytes, &item_type, &mut event);
-
-        if result.clock_drift_secs != 0 {
-            event.timestamp += result.clock_drift_secs;
-            // Session buckets carry their own start time; correct it too or
-            // drifted clients bucket sessions to the wrong day.
-            for bucket in &mut event.session_buckets {
-                bucket.started_ts += result.clock_drift_secs;
-            }
-        }
+        let parsed_event_id = extract_fields(
+            payload_bytes,
+            &item_type,
+            &mut event,
+            result.clock_drift_secs,
+        );
 
         // UserReport's event_id refers to the parent event; give it its own UUID.
         if item_type == ItemType::UserReport {
@@ -243,15 +239,20 @@ pub(crate) fn extract_fields_for_test(
     item_type: &ItemType,
     event: &mut StorableEvent,
 ) {
-    extract_fields(payload, item_type, event);
+    extract_fields(payload, item_type, event, 0);
 }
 
 /// Pull known fields out of the JSON payload into a StorableEvent.
 /// Returns the event_id if one was present.
+///
+/// `drift` is added to client-supplied timestamps only; anything that falls back
+/// to `event.timestamp` (itself server-authoritative unless the payload carried a
+/// timestamp) inherits that value's correction, so nothing is corrected twice.
 fn extract_fields(
     payload: &[u8],
     item_type: &ItemType,
     event: &mut StorableEvent,
+    drift: i64,
 ) -> Option<String> {
     let json: Value = match serde_json::from_slice(payload) {
         Ok(v) => v,
@@ -264,12 +265,12 @@ fn extract_fields(
     if *item_type == ItemType::Log
         && (json.is_array() || json.get("items").and_then(|v| v.as_array()).is_some())
     {
-        event.log_entries = Some(
-            crate::ingest::parse_log::log_entries_from_value(json)
-                .iter()
-                .map(crate::ingest::parse_log::parse_log_entry)
-                .collect(),
-        );
+        let mut entries: Vec<_> = crate::ingest::parse_log::log_entries_from_value(json)
+            .iter()
+            .map(crate::ingest::parse_log::parse_log_entry)
+            .collect();
+        shift_log_entries(&mut entries, drift);
+        event.log_entries = Some(entries);
         return None;
     }
 
@@ -309,7 +310,7 @@ fn extract_fields(
                 })
             })
     }) {
-        event.timestamp = ts;
+        event.timestamp = ts + drift;
     }
 
     event.level = json
@@ -350,17 +351,23 @@ fn extract_fields(
             .get("status")
             .and_then(|v| v.as_str())
             .map(String::from);
-        extract_session_bucket(&json, event);
+        extract_session_bucket(&json, event, drift);
     } else if *item_type == ItemType::Sessions {
-        extract_session_aggregates(&json, event);
+        extract_session_aggregates(&json, event, drift);
     } else if *item_type == ItemType::Transaction {
         extract_transaction_perf(&json, event);
-        event.embedded_spans =
-            Some(crate::ingest::parse_span::extract_embedded_spans_from_value(&json));
+        let mut spans = crate::ingest::parse_span::extract_embedded_spans_from_value(&json);
+        for span in &mut spans {
+            if let Some(ts) = span.timestamp.as_mut() {
+                *ts += drift;
+            }
+            shift_span_start(&mut span.fields, drift);
+        }
+        event.embedded_spans = Some(spans);
     } else if *item_type == ItemType::Span {
-        event.span_fields = Some(crate::ingest::parse_span::extract_span_fields_from_value(
-            &json,
-        ));
+        let mut fields = crate::ingest::parse_span::extract_span_fields_from_value(&json);
+        shift_span_start(&mut fields, drift);
+        event.span_fields = Some(fields);
     }
 
     // Error and default events also carry a trace context; capture trace_id so
@@ -412,10 +419,29 @@ fn extract_fields(
 
     // Single-object log item (batches returned early above).
     if *item_type == ItemType::Log {
-        event.log_entries = Some(vec![crate::ingest::parse_log::parse_log_entry(&json)]);
+        let mut entries = vec![crate::ingest::parse_log::parse_log_entry(&json)];
+        shift_log_entries(&mut entries, drift);
+        event.log_entries = Some(entries);
     }
 
     event_id
+}
+
+fn shift_log_entries(entries: &mut [crate::ingest::parse_log::ParsedLogEntry], drift: i64) {
+    if drift == 0 {
+        return;
+    }
+    for entry in entries {
+        if let Some(ts) = entry.timestamp.as_mut() {
+            *ts += drift;
+        }
+    }
+}
+
+fn shift_span_start(fields: &mut crate::ingest::parse_span::SpanFields, drift: i64) {
+    if let Some(start_ms) = fields.start_ms.as_mut() {
+        *start_ms += drift * 1000;
+    }
 }
 
 /// Pull trace_id, duration, and trace status off a transaction payload.
@@ -473,7 +499,7 @@ fn session_attrs(json: &Value) -> (String, String) {
 }
 
 /// Parse a single `session` item into one SessionBucket.
-fn extract_session_bucket(json: &Value, event: &mut StorableEvent) {
+fn extract_session_bucket(json: &Value, event: &mut StorableEvent, drift: i64) {
     let (release, environment) = session_attrs(json);
     let status = json.get("status").and_then(|v| v.as_str()).unwrap_or("ok");
     let errors = json.get("errors").and_then(|v| v.as_u64()).unwrap_or(0);
@@ -501,7 +527,7 @@ fn extract_session_bucket(json: &Value, event: &mut StorableEvent) {
         .or_else(|| json.get("timestamp"))
         .and_then(|v| v.as_str())
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-        .map_or(event.timestamp, |dt| dt.timestamp());
+        .map_or(event.timestamp, |dt| dt.timestamp() + drift);
 
     event
         .session_buckets
@@ -519,7 +545,7 @@ fn extract_session_bucket(json: &Value, event: &mut StorableEvent) {
 }
 
 /// Parse a `sessions` aggregate item into one SessionBucket per `aggregates[]` entry.
-fn extract_session_aggregates(json: &Value, event: &mut StorableEvent) {
+fn extract_session_aggregates(json: &Value, event: &mut StorableEvent, drift: i64) {
     let (release, environment) = session_attrs(json);
     let Some(aggregates) = json.get("aggregates").and_then(|v| v.as_array()) else {
         return;
@@ -536,7 +562,7 @@ fn extract_session_aggregates(json: &Value, event: &mut StorableEvent) {
             .get("started")
             .and_then(|v| v.as_str())
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-            .map_or(event.timestamp, |dt| dt.timestamp());
+            .map_or(event.timestamp, |dt| dt.timestamp() + drift);
 
         event
             .session_buckets
@@ -606,7 +632,7 @@ pub fn parse_store_body(body: &[u8], project_id: u64, auth: &SentryAuth) -> Resu
         auth.sentry_key.clone(),
     );
 
-    let event_id = extract_fields(body, &ItemType::Event, &mut event);
+    let event_id = extract_fields(body, &ItemType::Event, &mut event, 0);
     event.event_id = event_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     Ok(event)
@@ -893,7 +919,7 @@ mod tests {
             1,
             "k".to_string(),
         );
-        extract_fields(payload.as_bytes(), &ItemType::Transaction, &mut event);
+        extract_fields(payload.as_bytes(), &ItemType::Transaction, &mut event, 0);
         event
     }
 
@@ -930,7 +956,7 @@ mod tests {
             1,
             "k".to_string(),
         );
-        extract_fields(payload.as_bytes(), &ItemType::Event, &mut event);
+        extract_fields(payload.as_bytes(), &ItemType::Event, &mut event, 0);
         assert_eq!(event.trace_id.as_deref(), Some("x"));
         assert!(event.duration_ms.is_none());
         assert!(event.trace_status.is_none());
@@ -946,7 +972,7 @@ mod tests {
             1,
             "k".to_string(),
         );
-        extract_fields(payload.as_bytes(), &ItemType::Session, &mut event);
+        extract_fields(payload.as_bytes(), &ItemType::Session, &mut event, 0);
         event
     }
 
@@ -1035,7 +1061,7 @@ mod tests {
             1,
             "k".to_string(),
         );
-        extract_fields(payload.as_bytes(), &ItemType::Sessions, &mut event);
+        extract_fields(payload.as_bytes(), &ItemType::Sessions, &mut event, 0);
         assert_eq!(event.session_buckets.len(), 2);
         let first = &event.session_buckets[0];
         assert_eq!(first.release, "app@2.0");
@@ -1061,7 +1087,7 @@ mod tests {
             1,
             "k".to_string(),
         );
-        extract_fields(payload.as_bytes(), &ItemType::Event, &mut event);
+        extract_fields(payload.as_bytes(), &ItemType::Event, &mut event, 0);
         event.timestamp
     }
 
@@ -1099,6 +1125,90 @@ mod tests {
         );
     }
 
+    /// Envelope with a 2h-stale `sent_at` (so drift ≈ +7200) around one item.
+    fn drifted_envelope(item_type: &str, payload: &str) -> ParsedEnvelope {
+        let sent_at = (chrono::Utc::now() - chrono::Duration::hours(2)).to_rfc3339();
+        let body =
+            format!("{{\"sent_at\":\"{sent_at}\"}}\n{{\"type\":\"{item_type}\"}}\n{payload}\n");
+        let result = parse(body.as_bytes(), 1, &test_auth()).unwrap();
+        assert!(
+            (7195..=7205).contains(&result.clock_drift_secs),
+            "drift={}",
+            result.clock_drift_secs
+        );
+        result
+    }
+
+    #[test]
+    fn clock_drift_corrects_client_supplied_event_timestamp() {
+        let result = drifted_envelope("event", r#"{"event_id":"e1","timestamp":1780000000}"#);
+        assert_eq!(
+            result.events[0].timestamp,
+            1_780_000_000 + result.clock_drift_secs
+        );
+    }
+
+    // Regression: an event with no payload timestamp still holds the server-side
+    // Utc::now() default, so drift correction would push it into the future.
+    #[test]
+    fn clock_drift_leaves_server_timestamp_alone() {
+        let before = chrono::Utc::now().timestamp();
+        let result = drifted_envelope("event", r#"{"event_id":"e1","message":"hi"}"#);
+        let ts = result.events[0].timestamp;
+        assert!(
+            (before..=chrono::Utc::now().timestamp()).contains(&ts),
+            "server timestamp must not be drifted: ts={ts}, now={before}"
+        );
+    }
+
+    // Log batches never reach the timestamp block, so their event timestamp is
+    // always server-side; only the per-entry client timestamps carry drift.
+    #[test]
+    fn clock_drift_applies_to_log_entries_not_the_batch() {
+        let before = chrono::Utc::now().timestamp();
+        let result = drifted_envelope(
+            "log",
+            r#"{"items":[{"body":"a","timestamp":1780000000},{"body":"b"}]}"#,
+        );
+        let event = &result.events[0];
+        assert!((before..=chrono::Utc::now().timestamp()).contains(&event.timestamp));
+        let entries = event.log_entries.as_ref().unwrap();
+        assert_eq!(
+            entries[0].timestamp,
+            Some(1_780_000_000 + result.clock_drift_secs)
+        );
+        assert_eq!(
+            entries[1].timestamp, None,
+            "an entry without its own timestamp falls back to the event's at write time"
+        );
+    }
+
+    #[test]
+    fn clock_drift_corrects_embedded_span_timestamps() {
+        let result = drifted_envelope(
+            "transaction",
+            r#"{"transaction":"/t","timestamp":1700000001.0,"contexts":{"trace":{"trace_id":"tr1"}},"spans":[{"span_id":"c1","trace_id":"tr1","op":"db","start_timestamp":1700000000.0,"timestamp":1700000000.5}]}"#,
+        );
+        let drift = result.clock_drift_secs;
+        let span = &result.events[0].embedded_spans.as_ref().unwrap()[0];
+        assert_eq!(span.timestamp, Some(1_700_000_001 + drift));
+        assert_eq!(span.fields.start_ms, Some(1_700_000_000_000 + drift * 1000));
+    }
+
+    #[test]
+    fn clock_drift_corrects_standalone_span_start_ms() {
+        let result = drifted_envelope(
+            "span",
+            r#"{"span_id":"sp1","trace_id":"tr","op":"http.client","start_timestamp":1700000000.0,"timestamp":1700000000.25}"#,
+        );
+        let fields = result.events[0].span_fields.as_ref().unwrap();
+        assert_eq!(
+            fields.start_ms,
+            Some(1_700_000_000_000 + result.clock_drift_secs * 1000)
+        );
+        assert_eq!(fields.duration_ms, Some(250), "durations are deltas");
+    }
+
     // --- parse-time pre-extraction (spans, logs) ---
 
     #[test]
@@ -1129,7 +1239,7 @@ mod tests {
             1,
             "k".to_string(),
         );
-        extract_fields(payload.as_bytes(), &ItemType::Span, &mut event);
+        extract_fields(payload.as_bytes(), &ItemType::Span, &mut event, 0);
         let f = event.span_fields.as_ref().unwrap();
         assert_eq!(f.span_id.as_deref(), Some("sp1"));
         assert_eq!(f.trace_id.as_deref(), Some("tr"));
@@ -1150,7 +1260,7 @@ mod tests {
             1,
             "k".to_string(),
         );
-        extract_fields(payload.as_bytes(), &ItemType::Log, &mut event);
+        extract_fields(payload.as_bytes(), &ItemType::Log, &mut event, 0);
         let entries = event.log_entries.as_ref().unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].fields.body.as_deref(), Some("first"));
@@ -1171,7 +1281,7 @@ mod tests {
             1,
             "k".to_string(),
         );
-        extract_fields(payload.as_bytes(), &ItemType::Log, &mut event);
+        extract_fields(payload.as_bytes(), &ItemType::Log, &mut event, 0);
         let entries = event.log_entries.as_ref().unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].fields.body.as_deref(), Some("only"));

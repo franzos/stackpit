@@ -307,7 +307,7 @@ pub async fn create_invite(
     let now = chrono::Utc::now().timestamp();
     let token = crate::util::crypto::random_hex::<32>();
     let hash = token_hash(&token);
-    let expires_at = now + ttl_secs;
+    let expires_at = now.saturating_add(ttl_secs);
 
     sqlx::query(sql!(
         "INSERT INTO invites (org_id, role, token_hash, email, created_by, created_at, expires_at) \
@@ -1474,6 +1474,24 @@ mod tests {
             err.to_string().contains("Forseti"),
             "expected Forseti-org rejection, got: {err}"
         );
+    }
+
+    // Release builds have overflow-checks off, so an unsaturated add would wrap
+    // i64::MAX into an instantly-expired invite.
+    #[tokio::test]
+    async fn create_invite_saturates_absurd_ttl() {
+        let pool = crate::db::open_test_pool().await;
+        let u = crate::queries::users::upsert_from_oidc(&pool, "iss", "sub-inv-sat", None, None)
+            .await
+            .unwrap();
+        let org_id = insert_native_org(&pool, "native-sat").await;
+        create_invite(&pool, org_id, Role::Member, None, u.user_id, i64::MAX)
+            .await
+            .unwrap();
+
+        let invites = list_org_invites(&pool, org_id).await.unwrap();
+        assert_eq!(invites.len(), 1);
+        assert_eq!(invites[0].expires_at, i64::MAX);
     }
 
     #[tokio::test]

@@ -200,7 +200,11 @@ pub async fn callback(
 
     // Build provision cookie first so we know if it succeeds before deciding redirect.
     let provision_cookie = if !recon.provisionable.is_empty() {
-        let ps = crate::html::provision::new_state(recon.provisionable, success.claims.iss.clone());
+        let ps = crate::html::provision::new_state(
+            recon.provisionable,
+            success.claims.iss.clone(),
+            user.user_id,
+        );
         match crate::html::provision::pack(encryptor, &ps) {
             Some(blob) => Some(crate::html::provision::build_provision_cookie(
                 &blob, secure,

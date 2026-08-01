@@ -84,7 +84,10 @@ pub async fn detail_handler(
         profile,
         "Profile not found",
         |project_id, profile, nav, chrome| {
-            let raw_json = serde_json::to_string_pretty(&profile.payload).unwrap_or_default();
+            let raw_json = queries::event_supplements::render_raw_json(
+                &profile.payload,
+                Some(&profile.event_id),
+            );
             ProfileDetailTemplate {
                 project_id,
                 profile,
@@ -95,4 +98,43 @@ pub async fn detail_handler(
         },
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use unic_langid::langid;
+
+    const OVERSIZED: usize = 512 * 1024;
+
+    #[test]
+    fn oversized_profile_payload_is_truncated_with_the_api_hint() {
+        let profile = queries::types::ProfileDetail {
+            event_id: "e1".into(),
+            timestamp: 0,
+            transaction_name: None,
+            platform: None,
+            release: None,
+            environment: None,
+            payload: serde_json::json!({"blob": "x".repeat(OVERSIZED)}),
+        };
+        let raw_json =
+            queries::event_supplements::render_raw_json(&profile.payload, Some(&profile.event_id));
+        let out = ProfileDetailTemplate {
+            project_id: 1,
+            profile,
+            raw_json,
+            nav: ProjectNavCounts::default(),
+            chrome: PageChrome::new(String::new(), langid!("en"), "/web/projects/1/".into()),
+        }
+        .render()
+        .expect("profile detail renders");
+
+        assert!(out.contains("[truncated: showing"), "{out:.400}");
+        assert!(out.contains("/api/v1/events/e1/"));
+        assert!(
+            out.len() < OVERSIZED,
+            "page must not carry the full payload"
+        );
+    }
 }

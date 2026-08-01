@@ -530,6 +530,37 @@ impl Config {
     }
 }
 
+/// The config holds the admin token, the master key and the OAuth client
+/// secret, so anything readable beyond its owner is a leak. Warn, never refuse
+/// and never chmod on the operator's behalf.
+#[cfg(unix)]
+pub fn warn_if_group_or_world_readable(path: &Path) {
+    if let Some(mode) = leaky_config_mode(path) {
+        tracing::warn!(
+            "config file {} is mode {:04o}, readable beyond its owner; it holds \
+             server.admin_token, server.master_key and the OAuth client secret. \
+             Run: chmod 600 {}",
+            path.display(),
+            mode,
+            path.display()
+        );
+    }
+}
+
+/// `Some(mode)` when `path` is a regular file whose permissions grant group or
+/// other any access. `None` for anything else, including unreadable paths.
+#[cfg(unix)]
+fn leaky_config_mode(path: &Path) -> Option<u32> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let meta = std::fs::metadata(path).ok()?;
+    let mode = meta.permissions().mode() & 0o777;
+    (meta.is_file() && mode & 0o077 != 0).then_some(mode)
+}
+
+#[cfg(not(unix))]
+pub fn warn_if_group_or_world_readable(_path: &Path) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -934,5 +965,32 @@ mod tests {
             .validate()
             .expect_err("ack on non-loopback must still fail");
         assert!(format!("{err:#}").contains("no auth mode configured"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn only_group_or_world_readable_config_files_are_flagged() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("stackpit-cfgperm-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, b"").unwrap();
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(leaky_config_mode(&path), None);
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(leaky_config_mode(&path), Some(0o644));
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        assert_eq!(leaky_config_mode(&path), Some(0o640));
+
+        assert_eq!(leaky_config_mode(&dir.join("absent.toml")), None);
+        assert_eq!(leaky_config_mode(&dir), None, "directories are not configs");
+
+        warn_if_group_or_world_readable(&dir.join("absent.toml"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

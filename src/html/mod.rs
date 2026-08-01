@@ -580,7 +580,26 @@ impl IntoResponse for HtmlError {
 
 impl From<anyhow::Error> for HtmlError {
     fn from(e: anyhow::Error) -> Self {
-        HtmlError(axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+        HtmlError(
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            safe_error_message(&e),
+        )
+    }
+}
+
+/// Shown instead of a database error. Not localized yet: the flash/error page
+/// strings it replaces come straight from `anyhow`.
+const INTERNAL_ERROR_DETAIL: &str = "internal server error";
+
+/// Message safe to render for the user. A DB error anywhere in the chain leaks
+/// SQL and schema names, so it is logged in full and replaced; deliberate
+/// application messages ("project not found", validation) pass through.
+pub(crate) fn safe_error_message(e: &anyhow::Error) -> String {
+    if e.chain().any(|cause| cause.is::<sqlx::Error>()) {
+        tracing::error!("database error: {e:#}");
+        INTERNAL_ERROR_DETAIL.to_string()
+    } else {
+        e.to_string()
     }
 }
 
@@ -645,5 +664,47 @@ pub fn render_template(tmpl: &impl Template) -> axum::response::Response {
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             &e.to_string(),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn db_error() -> anyhow::Error {
+        anyhow::Error::from(sqlx::Error::RowNotFound)
+            .context("loading project 7 from the projects table")
+    }
+
+    #[test]
+    fn db_errors_do_not_reach_the_user() {
+        assert_eq!(safe_error_message(&db_error()), INTERNAL_ERROR_DETAIL);
+    }
+
+    #[test]
+    fn application_messages_are_preserved() {
+        let e = anyhow::anyhow!("project not found: 42");
+        assert_eq!(safe_error_message(&e), "project not found: 42");
+    }
+
+    #[test]
+    fn html_error_from_db_error_is_generic() {
+        let err: HtmlError = db_error().into();
+        assert_eq!(err.0, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(err.1, INTERNAL_ERROR_DETAIL);
+    }
+
+    #[test]
+    fn chrome_err_masks_db_errors_but_keeps_app_messages() {
+        let chrome = crate::html::chrome::PageChrome::new(
+            "csrf".to_string(),
+            crate::locale::default_locale(),
+            "/web/projects/".to_string(),
+        );
+        assert_eq!(chrome.err(db_error()), "Error: internal server error");
+        assert_eq!(
+            chrome.err(anyhow::anyhow!("project not found: 42")),
+            "Error: project not found: 42"
+        );
     }
 }

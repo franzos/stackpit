@@ -124,7 +124,7 @@ pub async fn update_rule(
     {
         Ok(0) => Err(ApiError::not_found(format!("not found: alert rule: {id}"))),
         Ok(_) => Ok(StatusCode::NO_CONTENT),
-        Err(e) => Err(ApiError::not_found(e.to_string())),
+        Err(e) => Err(ApiError::internal(e)),
     }
 }
 
@@ -138,7 +138,7 @@ pub async fn delete_rule(
     match queries::alerts::delete_alert_rule(&state.writer_pool, id, active.org_id).await {
         Ok(0) => Err(ApiError::not_found(format!("not found: alert rule: {id}"))),
         Ok(_) => Ok(StatusCode::NO_CONTENT),
-        Err(e) => Err(ApiError::not_found(e.to_string())),
+        Err(e) => Err(ApiError::internal(e)),
     }
 }
 
@@ -232,7 +232,7 @@ pub async fn update_digest(
             "not found: digest schedule: {id}"
         ))),
         Ok(_) => Ok(StatusCode::NO_CONTENT),
-        Err(e) => Err(ApiError::not_found(e.to_string())),
+        Err(e) => Err(ApiError::internal(e)),
     }
 }
 
@@ -248,6 +248,6 @@ pub async fn delete_digest(
             "not found: digest schedule: {id}"
         ))),
         Ok(_) => Ok(StatusCode::NO_CONTENT),
-        Err(e) => Err(ApiError::not_found(e.to_string())),
+        Err(e) => Err(ApiError::internal(e)),
     }
 }

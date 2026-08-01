@@ -81,8 +81,12 @@ impl PageChrome {
         crate::i18n::lookup(&self.locale, id)
     }
 
-    pub(crate) fn err(&self, e: impl std::fmt::Display) -> String {
-        format!("{} {e}", self.t("common-error-prefix"))
+    pub(crate) fn err(&self, e: impl Into<anyhow::Error>) -> String {
+        format!(
+            "{} {}",
+            self.t("common-error-prefix"),
+            crate::html::safe_error_message(&e.into())
+        )
     }
 
     // Borrow<i64> so askama call sites (which pass `&(x as i64)`) and plain i64

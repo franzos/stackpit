@@ -10,6 +10,9 @@ use std::sync::Arc;
 const ADMIN_RATE_LIMIT: u32 = 600;
 const LOGIN_RATE_LIMIT: u32 = 10;
 const ADMIN_RATE_WINDOW_SECS: u64 = 60;
+// The limiter caps requests per IP but not the number of distinct IPs, so an
+// address-rotating flood would otherwise grow `buckets` without bound.
+const MAX_BUCKETS: usize = 100_000;
 
 pub(crate) struct IpBucket {
     count: u32,
@@ -40,9 +43,32 @@ pub fn new_rate_limiter_state(
     })
 }
 
+/// Drops expired buckets first, then sheds arbitrary live ones until the map is
+/// back under `cap`. Sheds a tenth of the cap on top so the O(n) sweep amortises
+/// instead of running on every insert once the map is full.
+fn evict_to_cap(buckets: &mut HashMap<String, IpBucket>, now: u64, cap: usize) {
+    buckets.retain(|_, bucket| now.saturating_sub(bucket.window_start) < ADMIN_RATE_WINDOW_SECS);
+    if buckets.len() < cap {
+        return;
+    }
+    let excess = buckets.len() - cap + cap / 10 + 1;
+    let victims: Vec<String> = buckets.keys().take(excess).cloned().collect();
+    for key in victims {
+        buckets.remove(&key);
+    }
+}
+
 fn check_rate_limit(
     limiter: &SharedRateLimiter,
     req: &axum::http::Request<axum::body::Body>,
+) -> bool {
+    check_rate_limit_capped(limiter, req, MAX_BUCKETS)
+}
+
+fn check_rate_limit_capped(
+    limiter: &SharedRateLimiter,
+    req: &axum::http::Request<axum::body::Body>,
+    cap: usize,
 ) -> bool {
     // Static assets are cheap and fan out per page load; don't count them against the bucket.
     if req.uri().path().starts_with("/web/_assets/") {
@@ -81,6 +107,10 @@ fn check_rate_limit(
     } else {
         (ip, ADMIN_RATE_LIMIT)
     };
+
+    if inner.buckets.len() >= cap && !inner.buckets.contains_key(&key) {
+        evict_to_cap(&mut inner.buckets, now, cap);
+    }
 
     let bucket = inner.buckets.entry(key).or_insert(IpBucket {
         count: 0,
@@ -170,6 +200,35 @@ mod tests {
             assert!(check_rate_limit(&limiter, &req));
         }
         assert!(!check_rate_limit(&limiter, &req));
+    }
+
+    // An address-rotating flood must not grow the bucket map without bound.
+    #[test]
+    fn distinct_ips_stay_under_the_cap() {
+        let limiter = limiter();
+        let cap = 20;
+        for i in 0..500u32 {
+            let req = login_request(&format!("198.51.100.{}:{}", i % 250, 1000 + i));
+            assert!(check_rate_limit_capped(&limiter, &req, cap));
+            assert!(limiter.inner.lock().buckets.len() <= cap);
+        }
+    }
+
+    #[test]
+    fn evict_to_cap_prefers_expired_buckets() {
+        let mut buckets = HashMap::new();
+        for i in 0..30 {
+            buckets.insert(
+                format!("ip{i}"),
+                IpBucket {
+                    count: 1,
+                    window_start: if i < 25 { 0 } else { 1_000 },
+                },
+            );
+        }
+        evict_to_cap(&mut buckets, 1_000, 20);
+        assert_eq!(buckets.len(), 5, "only the live buckets survive");
+        assert!(buckets.contains_key("ip29"));
     }
 
     #[test]

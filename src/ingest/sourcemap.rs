@@ -11,6 +11,18 @@ const MAX_BUNDLE_ENTRIES: usize = 10_000;
 const MAX_BUNDLE_ENTRY_BYTES: usize = 64 * 1024 * 1024; // 64 MiB per entry
 pub const MAX_BUNDLE_TOTAL_BYTES: usize = 512 * 1024 * 1024; // 512 MiB total, zip-bomb guard
 
+/// Distinct debug ids resolved for a single event. `debug_meta.images` is
+/// attacker-controlled; a real bundled app stays well under this.
+pub const MAX_EVENT_DEBUG_IDS: usize = 512;
+
+const MIN_DEBUG_ID_LEN: usize = 8;
+const MAX_DEBUG_ID_LEN: usize = 64;
+
+/// Length sanity check only: debug id formats differ per platform.
+pub fn is_plausible_debug_id(id: &str) -> bool {
+    (MIN_DEBUG_ID_LEN..=MAX_DEBUG_ID_LEN).contains(&id.len())
+}
+
 /// Assembling persisted chunks exceeded the bundle size cap.
 #[derive(Debug)]
 pub struct BundleTooLarge {
@@ -447,10 +459,63 @@ pub async fn load_sourcemap(
     };
 
     let compressed: Vec<u8> = row.get("data");
-    let raw = zstd::decode_all(compressed.as_slice()).context("zstd decompress sourcemap")?;
-    let sm = sourcemap::SourceMap::from_slice(&raw).context("parse sourcemap")?;
+    let sm = tokio::task::spawn_blocking(move || decode_sourcemap(&compressed))
+        .await
+        .context("sourcemap decode task join failed")??;
 
     Ok(Some(sm))
+}
+
+/// Load and parse several sourcemaps in one query (scoped to `project_id`).
+/// Missing or unparseable ids are simply absent from the returned map.
+pub async fn load_sourcemaps(
+    pool: &DbPool,
+    debug_ids: &[String],
+    project_id: u64,
+) -> Result<std::collections::HashMap<String, sourcemap::SourceMap>> {
+    if debug_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+
+    let placeholders: Vec<String> = (1..=debug_ids.len()).map(|i| format!("?{i}")).collect();
+    let pid_idx = debug_ids.len() + 1;
+    let query = format!(
+        "SELECT debug_id, data FROM sourcemaps WHERE project_id = ?{pid_idx} AND debug_id IN ({})",
+        placeholders.join(", ")
+    );
+    let query = translate_sql(&query);
+
+    let mut q = sqlx::query(&query);
+    for id in debug_ids {
+        q = q.bind(id.clone());
+    }
+    q = q.bind(project_id as i64);
+
+    let rows = q.fetch_all(pool).await?;
+    let compressed: Vec<(String, Vec<u8>)> = rows
+        .iter()
+        .map(|r| (r.get("debug_id"), r.get("data")))
+        .collect();
+
+    tokio::task::spawn_blocking(move || {
+        compressed
+            .into_iter()
+            .filter_map(|(debug_id, data)| match decode_sourcemap(&data) {
+                Ok(sm) => Some((debug_id, sm)),
+                Err(e) => {
+                    tracing::warn!("failed to parse sourcemap {debug_id}: {e}");
+                    None
+                }
+            })
+            .collect()
+    })
+    .await
+    .context("sourcemap decode task join failed")
+}
+
+fn decode_sourcemap(compressed: &[u8]) -> Result<sourcemap::SourceMap> {
+    let raw = zstd::decode_all(compressed).context("zstd decompress sourcemap")?;
+    sourcemap::SourceMap::from_slice(&raw).context("parse sourcemap")
 }
 
 /// Delete sourcemaps older than `max_age_secs`. Tied to the same retention
@@ -543,6 +608,45 @@ mod tests {
 
         assert!(load_sourcemap(&pool, "dead", 1).await.unwrap().is_some());
         assert!(load_sourcemap(&pool, "dead", 2).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn batch_load_returns_found_ids_scoped_by_project() {
+        let pool = open_test_pool().await;
+        store_sourcemap(&pool, &entry("aaaaaaaa1111", "a.js"), 1)
+            .await
+            .unwrap();
+        store_sourcemap(&pool, &entry("bbbbbbbb2222", "b.js"), 1)
+            .await
+            .unwrap();
+        store_sourcemap(&pool, &entry("cccccccc3333", "c.js"), 2)
+            .await
+            .unwrap();
+
+        let ids = vec![
+            "aaaaaaaa1111".to_string(),
+            "bbbbbbbb2222".to_string(),
+            "cccccccc3333".to_string(),
+            "missing00000".to_string(),
+        ];
+        let map = load_sourcemaps(&pool, &ids, 1).await.unwrap();
+
+        assert_eq!(map.len(), 2);
+        assert_eq!(map["aaaaaaaa1111"].get_source(0), Some("a.js"));
+        assert_eq!(map["bbbbbbbb2222"].get_source(0), Some("b.js"));
+    }
+
+    #[tokio::test]
+    async fn batch_load_empty_ids_skips_query() {
+        let pool = open_test_pool().await;
+        assert!(load_sourcemaps(&pool, &[], 1).await.unwrap().is_empty());
+    }
+
+    #[test]
+    fn debug_id_shape_check_rejects_absurd_lengths() {
+        assert!(is_plausible_debug_id("f3a1b2c4-1111-2222-3333-4444"));
+        assert!(!is_plausible_debug_id("abc"));
+        assert!(!is_plausible_debug_id(&"a".repeat(1024)));
     }
 
     #[tokio::test]

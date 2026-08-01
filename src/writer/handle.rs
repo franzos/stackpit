@@ -5,7 +5,7 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::Sender;
 use tokio_util::sync::CancellationToken;
 
-use crate::ingest::models::{StorableAttachment, StorableEvent, StorageBucket};
+use crate::ingest::models::{StorableAttachment, StorableEvent};
 use crate::util::stats::IngestStats;
 use crate::util::throttle::Throttle;
 
@@ -81,16 +81,8 @@ impl WriterHandle {
     /// instead of serializing on the writer. Large payloads go through
     /// `block_in_place` (multi-thread runtime only) to not stall the worker.
     fn compress_event(event: &mut StorableEvent) {
-        if event.compressed {
+        if event.compressed || !event.should_compress_payload() {
             return;
-        }
-        // Metrics, and logs whose entries were pre-extracted at parse time,
-        // re-derive their rows from the raw payload at flush and never persist
-        // the compressed form, so compressing it is wasted work.
-        match event.item_type.storage_bucket() {
-            StorageBucket::Metrics => return,
-            StorageBucket::Logs if event.log_entries.is_some() => return,
-            _ => {}
         }
         if event.payload.len() > crate::util::INLINE_CPU_MAX_BYTES {
             super::block_in_place_if_multi_thread(|| event.compress_payload());

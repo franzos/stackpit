@@ -15,7 +15,7 @@ use crate::locale::LanguageIdentifier;
 use crate::oidc::client::OrgClaim;
 use crate::queries::{orgs as orgs_queries, users};
 use crate::server::AppState;
-use crate::util::crypto::{random_hex, SecretEncryptor};
+use crate::util::crypto::SecretEncryptor;
 
 pub const PROVISION_COOKIE: &str = "sp_provision";
 const AAD: &[u8] = b"stackpit:provision:v1";
@@ -26,7 +26,11 @@ pub struct ProvisionState {
     pub orgs: Vec<OrgClaim>,
     pub iss: String,
     pub expires_at: i64,
-    pub nonce: String,
+    /// Owner of the cookie, bound when the interstitial is first rendered. A
+    /// POST from any other session (shared browser) is refused, as is an
+    /// unbound cookie.
+    #[serde(default)]
+    pub user_id: Option<i64>,
 }
 
 pub fn pack(enc: &SecretEncryptor, s: &ProvisionState) -> Option<String> {
@@ -41,13 +45,14 @@ pub fn unpack(enc: &SecretEncryptor, blob_b64: &str) -> Option<ProvisionState> {
     serde_json::from_slice(&pt).ok()
 }
 
-/// Build a fresh ProvisionState cookie blob for the given orgs + issuer.
-pub fn new_state(orgs: Vec<OrgClaim>, iss: String) -> ProvisionState {
+/// Build a fresh ProvisionState cookie blob for the given orgs + issuer, bound
+/// to the user it was minted for.
+pub fn new_state(orgs: Vec<OrgClaim>, iss: String, user_id: i64) -> ProvisionState {
     ProvisionState {
         orgs,
         iss,
         expires_at: chrono::Utc::now().timestamp() + PROVISION_TTL_SECS,
-        nonce: random_hex::<16>(),
+        user_id: Some(user_id),
     }
 }
 
@@ -81,6 +86,7 @@ fn clear_provision_cookie(secure: bool) -> HeaderValue {
 #[template(path = "provision.html")]
 struct ProvisionTemplate {
     orgs: Vec<OrgClaim>,
+    csrf_token: String,
     /// Standalone page (no PageChrome), so it carries its own locale and looks
     /// strings up directly.
     locale: LanguageIdentifier,
@@ -92,10 +98,12 @@ impl Localized for ProvisionTemplate {
     }
 }
 
-/// `GET /web/provision` -- render the provisioning interstitial from the signed cookie.
+/// `GET /web/provision` -- render the provisioning interstitial from the signed
+/// cookie, binding the cookie to the viewing user on the way out.
 pub async fn provision_form(
     State(state): State<AppState>,
     Chrome(chrome): Chrome,
+    opt_auth: Option<Extension<AuthContext>>,
     headers: HeaderMap,
 ) -> Response {
     let Some(enc) = state.encryptor.as_deref() else {
@@ -104,16 +112,55 @@ pub async fn provision_form(
     let Some(blob) = read_cookie(&headers, PROVISION_COOKIE) else {
         return Redirect::to("/web/").into_response();
     };
-    let Some(ps) = unpack(enc, blob) else {
+    let Some(mut ps) = unpack(enc, blob) else {
         return Redirect::to("/web/").into_response();
     };
     if chrono::Utc::now().timestamp() > ps.expires_at {
         return Redirect::to("/web/").into_response();
     }
-    crate::html::render_template(&ProvisionTemplate {
+
+    let viewer = match opt_auth.as_ref().map(|e| &e.0) {
+        Some(AuthContext::User { iss, sub, .. }) => {
+            match users::find_by_iss_sub(&state.pool, iss, sub).await {
+                Ok(Some(u)) => Some(u.user_id),
+                Ok(None) => None,
+                Err(e) => {
+                    tracing::error!("find_by_iss_sub failed in provision_form: {e:#}");
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+            }
+        }
+        _ => None,
+    };
+
+    // A cookie already bound to someone else must not be shown, let alone rebound.
+    let foreign = matches!((ps.user_id, viewer), (Some(owner), Some(v)) if owner != v);
+    if foreign {
+        let mut resp = Redirect::to("/web/").into_response();
+        resp.headers_mut().append(
+            SET_COOKIE,
+            clear_provision_cookie(state.config.server.cookies_should_be_secure()),
+        );
+        return resp;
+    }
+
+    let rebound_cookie = if ps.user_id.is_none() && viewer.is_some() {
+        ps.user_id = viewer;
+        let secure = state.config.server.cookies_should_be_secure();
+        pack(enc, &ps).map(|blob| build_provision_cookie(&blob, secure))
+    } else {
+        None
+    };
+
+    let mut resp = crate::html::render_template(&ProvisionTemplate {
         orgs: ps.orgs,
+        csrf_token: chrome.csrf_token,
         locale: chrome.locale,
-    })
+    });
+    if let Some(cookie) = rebound_cookie {
+        resp.headers_mut().append(SET_COOKIE, cookie);
+    }
+    resp
 }
 
 /// `POST /web/provision` -- validate cookie, intersect submitted ids with signed set, provision.
@@ -157,6 +204,20 @@ pub async fn provision_submit(
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
+
+    // A cookie left behind by an earlier session must not provision for whoever
+    // holds the browser now; unbound cookies are refused for the same reason.
+    if ps.user_id != Some(user.user_id) {
+        tracing::warn!(
+            target: "stackpit::audit",
+            user_id = user.user_id,
+            "refused provision: sp_provision cookie is not bound to this session"
+        );
+        let mut resp = StatusCode::FORBIDDEN.into_response();
+        resp.headers_mut()
+            .append(SET_COOKIE, clear_provision_cookie(secure));
+        return resp;
+    }
 
     // Collect submitted org_ids from the raw form body.
     let submitted: Vec<String> = form_urlencoded::parse(&body)
@@ -205,6 +266,7 @@ mod tests {
         for locale in [langid!("en"), langid!("de")] {
             let tmpl = ProvisionTemplate {
                 orgs: Vec::new(),
+                csrf_token: "tok-123".into(),
                 locale: locale.clone(),
             };
             let html = tmpl.render().expect("provision renders");
@@ -212,7 +274,80 @@ mod tests {
                 !html.contains(crate::i18n::MISSING_PREFIX),
                 "provision ({locale}) leaked a missing localization key: {html}"
             );
+            // Without this field the POST is rejected by csrf_middleware.
+            assert!(
+                html.contains(r#"name="csrf_token" value="tok-123""#),
+                "provision ({locale}) form must carry the csrf token: {html}"
+            );
         }
+    }
+
+    #[tokio::test]
+    async fn provision_post_is_rejected_without_csrf_token() {
+        use axum::body::Body;
+        use axum::http::Request;
+        use axum::routing::post;
+        use axum::Router;
+        use tower::ServiceExt;
+
+        async fn inject(
+            mut req: Request<Body>,
+            next: axum::middleware::Next,
+        ) -> axum::response::Response {
+            req.extensions_mut()
+                .insert(crate::middleware::CsrfToken("tok-123".to_owned()));
+            next.run(req).await
+        }
+
+        let app = Router::new()
+            .route("/web/provision", post(|| async { StatusCode::OK }))
+            .layer(axum::middleware::from_fn_with_state(
+                crate::middleware::CsrfConfig {
+                    max_body_size: 64 * 1024,
+                },
+                crate::middleware::csrf_middleware,
+            ))
+            .layer(axum::middleware::from_fn(inject));
+
+        let submit = |body: &'static str| {
+            app.clone().oneshot(
+                Request::post("/web/provision")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+        };
+
+        let missing = submit("org_ids=acme").await.unwrap();
+        assert_eq!(
+            missing.status(),
+            StatusCode::FORBIDDEN,
+            "/web/provision is in CSRF scope: a token-less POST must 403"
+        );
+
+        let present = submit("org_ids=acme&csrf_token=tok-123").await.unwrap();
+        assert_ne!(
+            present.status(),
+            StatusCode::FORBIDDEN,
+            "a valid csrf_token must reach the handler"
+        );
+    }
+
+    // Cookies minted before the binding landed (and any hand-rolled one) must
+    // decode as unbound, which provision_submit refuses.
+    #[test]
+    fn legacy_cookie_state_decodes_as_unbound() {
+        let legacy =
+            r#"{"orgs":[],"iss":"https://idp","expires_at":9999999999,"nonce":"deadbeef"}"#;
+        let ps: ProvisionState = serde_json::from_str(legacy).expect("legacy state decodes");
+        assert_eq!(ps.user_id, None);
+    }
+
+    #[test]
+    fn new_state_is_bound_to_the_minting_user() {
+        let ps = new_state(Vec::new(), "https://idp".into(), 42);
+        assert_eq!(ps.user_id, Some(42));
+        assert!(ps.expires_at > chrono::Utc::now().timestamp());
     }
 
     #[test]

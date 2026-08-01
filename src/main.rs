@@ -112,6 +112,8 @@ fn main() -> anyhow::Result<()> {
                 )
                 .init();
 
+            config::warn_if_group_or_world_readable(&config_path);
+
             cli_run(server::run(config, ingest_only))?;
         }
         Command::Projects => {

@@ -86,6 +86,7 @@ pub async fn delete_old_events(pool: &DbPool, retention_days: u32) -> Result<usi
     total_deleted += delete_old_metrics(pool, cutoff).await?;
     total_deleted += delete_old_logs(pool, cutoff).await?;
     total_deleted += delete_old_transaction_metrics(pool, cutoff).await?;
+    total_deleted += delete_old_discard_stats(pool, cutoff).await?;
 
     #[cfg(feature = "sqlite")]
     if total_deleted > 0 {
@@ -232,12 +233,69 @@ async fn delete_old_logs(pool: &DbPool, cutoff: i64) -> Result<usize> {
 /// Drop transaction rollup rows whose most recent activity predates the cutoff.
 /// Rolled-up rows have no `received_at`, so we use `last_seen` (event time).
 async fn delete_old_transaction_metrics(pool: &DbPool, cutoff: i64) -> Result<usize> {
-    let deleted = sqlx::query(sql!("DELETE FROM transaction_metrics WHERE last_seen < ?1"))
-        .bind(cutoff)
+    let mut total = 0usize;
+    loop {
+        #[cfg(feature = "sqlite")]
+        let delete_sql = sql!(
+            "DELETE FROM transaction_metrics WHERE rowid IN (
+                SELECT rowid FROM transaction_metrics WHERE last_seen < ?1 LIMIT ?2
+            )"
+        );
+        #[cfg(not(feature = "sqlite"))]
+        let delete_sql = sql!(
+            "DELETE FROM transaction_metrics WHERE ctid IN (
+                SELECT ctid FROM transaction_metrics WHERE last_seen < ?1 LIMIT ?2
+            )"
+        );
+
+        let deleted = sqlx::query(delete_sql)
+            .bind(cutoff)
+            .bind(CHUNK_LIMIT)
+            .execute(pool)
+            .await?
+            .rows_affected() as usize;
+
+        total += deleted;
+
+        if deleted < CHUNK_LIMIT as usize {
+            break;
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    Ok(total)
+}
+
+/// Drop discard counters older than the cutoff. `date` is a `%Y-%m-%d` string,
+/// not an epoch timestamp like the sibling tables.
+async fn delete_old_discard_stats(pool: &DbPool, cutoff: i64) -> Result<usize> {
+    let Some(cutoff_date) = chrono::DateTime::from_timestamp(cutoff, 0) else {
+        return Ok(0);
+    };
+    let cutoff_date = cutoff_date.format("%Y-%m-%d").to_string();
+
+    let mut total = 0usize;
+    loop {
+        let deleted = sqlx::query(sql!(
+            "DELETE FROM discard_stats WHERE id IN (
+                SELECT id FROM discard_stats WHERE date < ?1 LIMIT ?2
+            )"
+        ))
+        .bind(&cutoff_date)
+        .bind(CHUNK_LIMIT)
         .execute(pool)
         .await?
         .rows_affected() as usize;
-    Ok(deleted)
+
+        total += deleted;
+
+        if deleted < CHUNK_LIMIT as usize {
+            break;
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    Ok(total)
 }
 
 /// Reconcile issues touched by a retention delete: remove orphans and recount the rest.
@@ -369,5 +427,30 @@ mod tests {
         assert_eq!(event_rows(&pool).await, 1);
         assert_eq!(issue_count(&pool, "fp1").await, Some(1));
         assert_eq!(issue_count(&pool, "fp2").await, None); // reconciled to 0, dropped
+    }
+
+    #[tokio::test]
+    async fn prunes_discard_stats_past_the_cutoff() {
+        let pool = open_test_db().await;
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let old = (chrono::Utc::now() - chrono::Duration::days(30))
+            .format("%Y-%m-%d")
+            .to_string();
+
+        for date in [&today, &old] {
+            crate::queries::filters::upsert_discard_stats(&pool, 1, "rate_limit", None, date, 4)
+                .await
+                .unwrap();
+        }
+
+        let cutoff = chrono::Utc::now().timestamp() - 7 * 86400;
+        assert_eq!(delete_old_discard_stats(&pool, cutoff).await.unwrap(), 1);
+
+        let remaining: Vec<String> =
+            sqlx::query_scalar::<_, String>(sql!("SELECT date FROM discard_stats"))
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(remaining, vec![today]);
     }
 }

@@ -12,12 +12,15 @@ use super::msg::WriteMsg;
 /// Compress event payloads with zstd. A fallback: the accept path already
 /// compresses on send, so this is a no-op for events that came through the
 /// `WriterHandle`. Moves any remaining CPU-bound compression off the async
-/// runtime's cooperative budget where the runtime allows it.
+/// runtime's cooperative budget where the runtime allows it. Shares
+/// `should_compress_payload` with the accept path so the two can't diverge.
 fn compress_batch(batch: &mut [WriteMsg]) {
     super::block_in_place_if_multi_thread(|| {
         for msg in batch.iter_mut() {
             if let WriteMsg::Event(event) | WriteMsg::EventWithAttachments(event, _) = msg {
-                event.compress_payload();
+                if event.should_compress_payload() {
+                    event.compress_payload();
+                }
             }
         }
     });
@@ -375,6 +378,39 @@ mod tests {
             decoded, json,
             "double-compressed payload must decode to original"
         );
+    }
+
+    // Regression: metric (and pre-extracted log) payloads are decoded straight
+    // from the raw bytes at insert, so compressing here is a pure round trip.
+    #[tokio::test]
+    async fn compress_batch_skips_metrics_and_pre_extracted_logs() {
+        let raw = br#"[{"name":"c:custom/x@none","type":"c","value":1}]"#.to_vec();
+        let metric = StorableEvent::new(
+            "m1".to_string(),
+            ItemType::Metric,
+            raw.clone(),
+            1,
+            "k".to_string(),
+        );
+        let mut log = StorableEvent::new(
+            "l1".to_string(),
+            ItemType::Log,
+            raw.clone(),
+            1,
+            "k".to_string(),
+        );
+        log.log_entries = Some(Vec::new());
+        let mut batch = vec![WriteMsg::Event(metric), WriteMsg::Event(log)];
+
+        compress_batch(&mut batch);
+
+        for msg in &batch {
+            let WriteMsg::Event(e) = msg else {
+                panic!("expected event");
+            };
+            assert!(!e.compressed, "{} must stay raw", e.item_type);
+            assert_eq!(e.payload, raw);
+        }
     }
 
     // Regression: block_in_place panics on a current-thread runtime; the shared

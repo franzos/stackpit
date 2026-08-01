@@ -32,6 +32,10 @@ pub fn enrich_event(event: &mut StorableEvent) {
     }
 }
 
+/// Cap on a stored title. Every branch is untrusted payload text that gets
+/// persisted, rendered per issue row, and interpolated into email subjects.
+const MAX_TITLE_CHARS: usize = 200;
+
 /// Extract a title from pre-parsed JSON — exposed so `envelope::extract_fields`
 /// can compute it without a second parse.
 pub(crate) fn extract_title_from(
@@ -42,9 +46,25 @@ pub(crate) fn extract_title_from(
     extract_title(json, item_type, monitor_slug)
 }
 
+/// Truncate on a char boundary, leaving short strings untouched.
+fn truncate_chars(s: String, max: usize) -> String {
+    match s.char_indices().nth(max) {
+        Some((idx, _)) => s[..idx].to_string(),
+        None => s,
+    }
+}
+
+fn extract_title(json: &Value, item_type: &ItemType, monitor_slug: Option<&str>) -> Option<String> {
+    extract_title_inner(json, item_type, monitor_slug).map(|t| truncate_chars(t, MAX_TITLE_CHARS))
+}
+
 /// Pick a human-readable title: special cases (check-ins, sessions, user
 /// reports), then exception > message/logentry > transaction name.
-fn extract_title(json: &Value, item_type: &ItemType, monitor_slug: Option<&str>) -> Option<String> {
+fn extract_title_inner(
+    json: &Value,
+    item_type: &ItemType,
+    monitor_slug: Option<&str>,
+) -> Option<String> {
     if *item_type == ItemType::CheckIn {
         let slug = monitor_slug.or_else(|| json.get("monitor_slug").and_then(|v| v.as_str()));
         let status = json
@@ -90,7 +110,7 @@ fn extract_title(json: &Value, item_type: &ItemType, monitor_slug: Option<&str>)
     }
 
     if let Some(msg) = message_text(json) {
-        return Some(msg.chars().take(200).collect());
+        return Some(msg);
     }
 
     if let Some(txn) = json.get("transaction").and_then(|v| v.as_str()) {
@@ -189,6 +209,39 @@ mod tests {
         let mut event = make_event(&json, ItemType::Event);
         enrich_event(&mut event);
         assert_eq!(event.title.as_deref(), Some("consent missing"));
+    }
+
+    // An untrusted exception value reaches events.title, the issue list, and the
+    // notification email Subject, so the 200-char cap must cover it too.
+    #[test]
+    fn enrich_exception_title_is_capped() {
+        let json = serde_json::json!({
+            "exception": {"values": [{"type": "Error", "value": "x".repeat(50_000)}]}
+        });
+        let mut event = make_event(&json, ItemType::Event);
+        enrich_event(&mut event);
+        let title = event.title.unwrap();
+        assert_eq!(title.chars().count(), MAX_TITLE_CHARS);
+        assert!(title.starts_with("Error: xxx"));
+    }
+
+    #[test]
+    fn enrich_transaction_title_is_capped() {
+        let json = serde_json::json!({"transaction": "/".repeat(1000)});
+        let mut event = make_event(&json, ItemType::Transaction);
+        enrich_event(&mut event);
+        assert_eq!(event.title.unwrap().chars().count(), MAX_TITLE_CHARS);
+    }
+
+    // Multi-byte input must not be sliced mid-character.
+    #[test]
+    fn enrich_title_cap_is_char_safe() {
+        let json = serde_json::json!({"message": "é".repeat(500)});
+        let mut event = make_event(&json, ItemType::Event);
+        enrich_event(&mut event);
+        let title = event.title.unwrap();
+        assert_eq!(title.chars().count(), MAX_TITLE_CHARS);
+        assert_eq!(title.len(), MAX_TITLE_CHARS * 2);
     }
 
     #[test]

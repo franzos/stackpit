@@ -34,6 +34,7 @@ impl Level {
     }
 
     /// Numeric rank for severity comparisons; higher means more severe.
+    /// `Unknown` ranks lowest, so callers gating on severity must special-case it.
     pub fn rank(self) -> usize {
         match self {
             Self::Debug => 0,
@@ -324,6 +325,18 @@ impl StorableEvent {
             .as_ref()
             .map_or(0, |l| l.iter().map(|e| e.payload.len()).sum());
         self.payload.len() + embedded + logs
+    }
+
+    /// Whether the stored payload is worth compressing. Metrics, and logs whose
+    /// entries were pre-extracted at parse time, re-derive their rows from the
+    /// raw payload at flush and never persist the compressed form, so
+    /// compressing it only to decompress it again is wasted work.
+    pub fn should_compress_payload(&self) -> bool {
+        match self.item_type.storage_bucket() {
+            StorageBucket::Metrics => false,
+            StorageBucket::Logs => self.log_entries.is_none(),
+            StorageBucket::Events | StorageBucket::Spans => true,
+        }
     }
 
     /// Compress the payload in place with zstd (idempotent via the `compressed`

@@ -191,6 +191,16 @@ pub enum AuthError {
     InternalError,
 }
 
+/// Generous bound on a project key: real DSN public keys are 32 hex chars, but
+/// open mode registers whatever an SDK sent, so only the length is constrained.
+/// Both auth caches are bounded by entry count, not bytes, so an oversized key
+/// would inflate their worst-case footprint.
+const MAX_SENTRY_KEY_BYTES: usize = 256;
+
+fn key_length_ok(sentry_key: &str) -> bool {
+    !sentry_key.is_empty() && sentry_key.len() <= MAX_SENTRY_KEY_BYTES
+}
+
 /// Checks a sentry key against the cache first, falls back to DB on miss.
 /// In open mode, unknown keys get auto-registered on the fly.
 pub async fn validate_project_key(
@@ -198,6 +208,12 @@ pub async fn validate_project_key(
     sentry_key: &str,
     project_id: u64,
 ) -> Result<(), AuthError> {
+    // Rejected before any cache lookup or DB query, and before open mode could
+    // persist it as a project key.
+    if !key_length_ok(sentry_key) {
+        return Err(AuthError::Denied("project or key denied"));
+    }
+
     // Compute all comparisons before branching to avoid leaking info through timing.
     if let Some(entry) = state.auth_cache.get(sentry_key) {
         let cached = entry.value();
@@ -500,6 +516,14 @@ mod tests {
         Instant::now()
             .checked_sub(Duration::from_secs(secs))
             .expect("test clock underflow")
+    }
+
+    #[test]
+    fn key_length_bounds() {
+        assert!(key_length_ok(&"a".repeat(32)));
+        assert!(key_length_ok(&"a".repeat(MAX_SENTRY_KEY_BYTES)));
+        assert!(!key_length_ok(&"a".repeat(MAX_SENTRY_KEY_BYTES + 1)));
+        assert!(!key_length_ok(""));
     }
 
     #[test]

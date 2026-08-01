@@ -138,6 +138,11 @@ fn passes_min_level(event_level: Option<&str>, min_level: Option<&str>) -> bool 
         (Some(ev), Some(min)) => {
             let ev_level: crate::ingest::models::Level =
                 ev.parse().unwrap_or(crate::ingest::models::Level::Unknown);
+            // A non-standard level string ranks lowest, which would suppress it;
+            // Sentry treats an unparseable level as error, so let it through.
+            if ev_level == crate::ingest::models::Level::Unknown {
+                return true;
+            }
             let min_level: crate::ingest::models::Level =
                 min.parse().unwrap_or(crate::ingest::models::Level::Unknown);
             ev_level.rank() >= min_level.rank()
@@ -341,6 +346,22 @@ pub async fn run_dispatcher(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn min_level_ranks_standard_levels() {
+        assert!(passes_min_level(Some("error"), Some("warning")));
+        assert!(!passes_min_level(Some("info"), Some("warning")));
+        assert!(passes_min_level(Some("info"), None));
+        assert!(passes_min_level(None, Some("fatal")));
+    }
+
+    // A non-standard SDK level ("critical") used to rank as debug and get
+    // suppressed by every min_level filter.
+    #[test]
+    fn min_level_lets_unrecognized_levels_through() {
+        assert!(passes_min_level(Some("critical"), Some("error")));
+        assert!(passes_min_level(Some("err"), Some("fatal")));
+    }
 
     #[test]
     fn env_set_filter_matches_any_environment() {

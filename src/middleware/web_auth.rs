@@ -130,13 +130,11 @@ pub async fn web_auth_middleware(
             return unauthenticated_response(&req, secure_cookies);
         };
 
-        let Some(grant) = grants::resolve_from_headers(
-            req.headers(),
-            secure_cookies,
-            encryptor,
-            &state.auth_pool,
-        )
-        .await
+        // Pure SELECT (grants::load), so it belongs on the read pool rather than
+        // the single-connection writer every request would otherwise serialize on.
+        let Some(grant) =
+            grants::resolve_from_headers(req.headers(), secure_cookies, encryptor, &state.pool)
+                .await
         else {
             return unauthenticated_response(&req, secure_cookies);
         };
@@ -236,6 +234,7 @@ pub async fn web_auth_middleware(
                     .insert(crate::html::utils::PreferredLanguage(preferred));
                 // Fail closed: a DB error here must not fabricate a membership.
                 let active_org = match resolve_session_active_org(
+                    &state.pool,
                     &state.auth_pool,
                     user_id,
                     req.headers(),
@@ -268,7 +267,8 @@ pub async fn web_auth_middleware(
 /// user. DB errors propagate so the caller can fail closed instead of
 /// fabricating a membership.
 async fn resolve_session_active_org(
-    pool: &crate::db::DbPool,
+    read_pool: &crate::db::DbPool,
+    write_pool: &crate::db::DbPool,
     user_id: i64,
     headers: &axum::http::HeaderMap,
     encryptor: Option<&crate::util::crypto::SecretEncryptor>,
@@ -278,13 +278,13 @@ async fn resolve_session_active_org(
 
     // Read-only on the hot path; login (OIDC reconcile) already ensured the
     // personal org. The upsert fallback only fires for sessions that predate
-    // that guarantee (e.g. grants surviving an upgrade).
-    let personal_org_id = match personal_org_id(pool, user_id).await? {
+    // that guarantee (e.g. grants surviving an upgrade), and needs the writer.
+    let personal_org_id = match personal_org_id(read_pool, user_id).await? {
         Some(id) => id,
-        None => ensure_personal_org(pool, user_id).await?,
+        None => ensure_personal_org(write_pool, user_id).await?,
     };
 
-    let memberships = list_memberships(pool, user_id).await?;
+    let memberships = list_memberships(read_pool, user_id).await?;
 
     let cookie_org = encryptor.and_then(|enc| {
         crate::middleware::cookie::read_cookie(headers, ACTIVE_ORG_COOKIE)
@@ -363,7 +363,7 @@ mod tests {
 
         // Pre-existing session without a personal org: fallback creates it once.
         let headers = axum::http::HeaderMap::new();
-        let active = super::resolve_session_active_org(&pool, u.user_id, &headers, None)
+        let active = super::resolve_session_active_org(&pool, &pool, u.user_id, &headers, None)
             .await
             .unwrap();
         let personal = crate::queries::orgs::personal_org_id(&pool, u.user_id)
@@ -374,7 +374,7 @@ mod tests {
         assert_eq!(active.role, Some(crate::orgs::Role::Owner));
 
         // Once it exists, the read-only path resolves the same org.
-        let active2 = super::resolve_session_active_org(&pool, u.user_id, &headers, None)
+        let active2 = super::resolve_session_active_org(&pool, &pool, u.user_id, &headers, None)
             .await
             .unwrap();
         assert_eq!(active2.org_id, personal);
@@ -391,11 +391,86 @@ mod tests {
         pool.close().await;
 
         let headers = axum::http::HeaderMap::new();
-        let res = super::resolve_session_active_org(&pool, u.user_id, &headers, None).await;
+        let res = super::resolve_session_active_org(&pool, &pool, u.user_id, &headers, None).await;
         assert!(
             res.is_err(),
             "a DB error must propagate, not fabricate a membership"
         );
+    }
+
+    // The read pool runs with `query_only = ON`, so any write on these paths
+    // would be a runtime failure rather than a slow query.
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
+    #[tokio::test]
+    async fn active_org_hot_path_runs_without_writing() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        let u = crate::queries::users::upsert_from_oidc(&pool, "https://idp", "sub-ro", None, None)
+            .await
+            .unwrap();
+        crate::queries::orgs::ensure_personal_org(&pool, u.user_id)
+            .await
+            .unwrap();
+
+        sqlx::query("PRAGMA query_only = ON")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let headers = axum::http::HeaderMap::new();
+        let active = super::resolve_session_active_org(&pool, &pool, u.user_id, &headers, None)
+            .await
+            .expect("the hot path must not write");
+        assert_eq!(active.role, Some(crate::orgs::Role::Owner));
+    }
+
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
+    #[tokio::test]
+    async fn grant_lookup_runs_without_writing() {
+        use crate::oidc::grants::{self, NewGrant};
+        use crate::util::crypto::SecretEncryptor;
+
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        let u = crate::queries::users::upsert_from_oidc(&pool, "https://idp", "sub-gr", None, None)
+            .await
+            .unwrap();
+        let encryptor = SecretEncryptor::from_config_or_env(Some(&secrecy::SecretString::from(
+            "11".repeat(32),
+        )))
+        .unwrap()
+        .expect("a key was supplied");
+        let handle = grants::insert(
+            &pool,
+            &encryptor,
+            &NewGrant {
+                user_id: u.user_id,
+                iss: "https://idp",
+                sub: "sub-gr",
+                sid: None,
+                access_token: "at",
+                access_exp: chrono::Utc::now().timestamp() + 3600,
+                refresh_token: None,
+                refresh_exp: None,
+                id_token: "it",
+            },
+        )
+        .await
+        .unwrap();
+
+        let mut headers = axum::http::HeaderMap::new();
+        let cookie = format!(
+            "{}={}",
+            crate::oidc::cookies::grant_cookie_name(false),
+            handle.to_hex()
+        );
+        headers.insert("cookie", cookie.parse().unwrap());
+
+        sqlx::query("PRAGMA query_only = ON")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let record = grants::resolve_from_headers(&headers, false, &encryptor, &pool)
+            .await
+            .expect("grant lookup must not write");
+        assert_eq!(record.user_id, u.user_id);
     }
 
     #[test]

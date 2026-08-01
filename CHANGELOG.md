@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.3.22] - 2026-08-01
+
+### Changed
+- `stackpit init` writes the config file owner-only
+- Startup warns when the config file is readable by others
+- Retention now prunes discard statistics
+- Organisation invite links expire within a sane range
+
+### Fixed
+- Organisation setup page was unreachable after SSO sign-in
+- Organisation setup form was always rejected as a CSRF failure
+- Compressed events above 2 MiB were rejected despite `max_body_size`
+- Long exception titles broke new-issue notification emails
+- Client clock drift pushed event timestamps into the future
+- Rate-limit responses under-reported which categories were limited
+- Unrecognised event levels were dropped by notification filters
+- Database errors were shown to users instead of a generic message
+- Profile and replay pages rendered huge payloads in full
+- Event pages could issue thousands of source-map lookups
+
 ## [0.3.21] - 2026-07-31
 
 ### Added

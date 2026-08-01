@@ -65,10 +65,14 @@ pub fn intersect_provisionable(signed: &[String], submitted: &[String]) -> Vec<S
         .collect()
 }
 
+/// `SameSite=Lax`, matching the grant cookie: this is set on the IdP callback
+/// response and the very next hop is the redirect to `/web/provision`, which is
+/// the tail of a cross-site redirect chain. `Strict` withholds it there and the
+/// interstitial can never render.
 pub fn build_provision_cookie(blob: &str, secure: bool) -> HeaderValue {
     let secure_flag = if secure { "; Secure" } else { "" };
     let v = format!(
-        "{PROVISION_COOKIE}={blob}; Path=/web/provision; SameSite=Strict; HttpOnly; \
+        "{PROVISION_COOKIE}={blob}; Path=/web/provision; SameSite=Lax; HttpOnly; \
          Max-Age={PROVISION_TTL_SECS}{secure_flag}"
     );
     HeaderValue::from_str(&v).expect("provision cookie is valid ASCII")
@@ -77,7 +81,7 @@ pub fn build_provision_cookie(blob: &str, secure: bool) -> HeaderValue {
 fn clear_provision_cookie(secure: bool) -> HeaderValue {
     let secure_flag = if secure { "; Secure" } else { "" };
     let v = format!(
-        "{PROVISION_COOKIE}=; Path=/web/provision; SameSite=Strict; HttpOnly; Max-Age=0{secure_flag}"
+        "{PROVISION_COOKIE}=; Path=/web/provision; SameSite=Lax; HttpOnly; Max-Age=0{secure_flag}"
     );
     HeaderValue::from_str(&v).expect("clear provision cookie is valid ASCII")
 }
@@ -278,6 +282,30 @@ mod tests {
             assert!(
                 html.contains(r#"name="csrf_token" value="tok-123""#),
                 "provision ({locale}) form must carry the csrf token: {html}"
+            );
+        }
+    }
+
+    #[test]
+    fn provision_cookie_survives_the_idp_redirect_like_the_grant_cookie() {
+        // Both are set on the /web/auth/callback response, and the next hop is a
+        // cross-site redirect. Anything stricter than the grant cookie is dropped
+        // there, leaving the interstitial permanently unreachable.
+        let grant = crate::oidc::cookies::build_grant_cookie("deadbeef", false);
+        assert!(grant.to_str().unwrap().contains("SameSite=Lax"));
+
+        for cookie in [
+            build_provision_cookie("blob", false),
+            clear_provision_cookie(false),
+        ] {
+            let v = cookie.to_str().unwrap();
+            assert!(
+                v.contains("SameSite=Lax"),
+                "provision cookie must match the grant cookie's SameSite: {v}"
+            );
+            assert!(
+                v.contains("HttpOnly"),
+                "provision cookie must stay HttpOnly: {v}"
             );
         }
     }

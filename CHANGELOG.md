@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.23] - 2026-08-02
+
+### Added
+- Project list now spans every organisation you belong to
+- Sortable organisation column and filter on the project list
+- Sidebar and breadcrumb show which organisation is active
+
+### Changed
+- `GET /api/v1/projects/` returns projects from all your organisations
+- Admin token now lists projects from every organisation
+
+### Fixed
+- Project links from another of your organisations no longer 404
+- Releases and events pages were empty for cross-organisation projects
+- Owning one organisation no longer grants owner rights in another
+
 ## [0.3.22] - 2026-08-01
 
 ### Changed

@@ -5,7 +5,7 @@ use serde::Deserialize;
 use crate::html::chrome::PageChrome;
 use crate::html::render_template;
 use crate::html::utils::{self, Chrome};
-use crate::orgs::extractor::{require_owner, ActiveOrg};
+use crate::orgs::extractor::{require_org_owner, ActiveOrg};
 use crate::queries;
 use crate::queries::alerts::{AlertRule, DigestSchedule};
 use crate::server::AppState;
@@ -48,7 +48,7 @@ pub async fn handler(
     Chrome(chrome): Chrome,
     active_org: ActiveOrg,
 ) -> axum::response::Response {
-    render_page(&state, active_org.org_id, None, &chrome).await
+    render_page(&state, active_org.session_org_id, None, &chrome).await
 }
 
 // -- Alert rules -------------------------------------------------------------
@@ -69,7 +69,7 @@ pub async fn create_alert_rule(
     active_org: ActiveOrg,
     Form(form): Form<CreateAlertRuleForm>,
 ) -> axum::response::Response {
-    if let Err(r) = require_owner(&active_org) {
+    if let Err(r) = require_org_owner(&active_org) {
         return r;
     }
     let project_id: Option<u64> = form
@@ -86,14 +86,14 @@ pub async fn create_alert_rule(
             && crate::queries::orgs::assert_project_in_org(
                 &state.pool,
                 pid as i64,
-                active_org.org_id,
+                active_org.session_org_id,
             )
             .await
             .is_err()
         {
             return render_page(
                 &state,
-                active_org.org_id,
+                active_org.session_org_id,
                 Some(chrome.t("flash-project-not-found-or-denied")),
                 &chrome,
             )
@@ -102,7 +102,7 @@ pub async fn create_alert_rule(
     }
 
     let s = state.clone();
-    let org_id = active_org.org_id;
+    let org_id = active_org.session_org_id;
     let success = chrome.t("flash-alert-rule-created");
     let render_chrome = chrome.clone();
     utils::query_then_render(
@@ -130,11 +130,13 @@ pub async fn delete_alert_rule(
     active_org: ActiveOrg,
     Path(id): Path<i64>,
 ) -> axum::response::Response {
-    if let Err(r) = require_owner(&active_org) {
+    if let Err(r) = require_org_owner(&active_org) {
         return r;
     }
     let msg =
-        match queries::alerts::delete_alert_rule(&state.writer_pool, id, active_org.org_id).await {
+        match queries::alerts::delete_alert_rule(&state.writer_pool, id, active_org.session_org_id)
+            .await
+        {
             Ok(0) => format!(
                 "{} {}",
                 chrome.t("common-error-prefix"),
@@ -143,7 +145,7 @@ pub async fn delete_alert_rule(
             Ok(_) => chrome.t("flash-alert-rule-deleted"),
             Err(e) => chrome.err(e),
         };
-    render_page(&state, active_org.org_id, Some(msg), &chrome).await
+    render_page(&state, active_org.session_org_id, Some(msg), &chrome).await
 }
 
 // -- Notification types ------------------------------------------------------
@@ -165,21 +167,15 @@ pub async fn update_notify_types(
     active_org: ActiveOrg,
     Form(form): Form<NotifyTypesForm>,
 ) -> axum::response::Response {
-    if let Err(r) = require_owner(&active_org) {
-        return r;
-    }
-    if active_org.role.is_some()
-        && crate::queries::orgs::assert_project_in_org(
-            &state.pool,
-            form.project_id,
-            active_org.org_id,
-        )
+    // Project-scoped despite living on the org-wide alerts hub: authorize against the
+    // org that owns the target project, not the session's.
+    if crate::orgs::extractor::require_project_owner(&active_org, &state.pool, form.project_id)
         .await
         .is_err()
     {
         return render_page(
             &state,
-            active_org.org_id,
+            active_org.session_org_id,
             Some(chrome.t("flash-project-not-found-or-denied")),
             &chrome,
         )
@@ -207,7 +203,7 @@ pub async fn update_notify_types(
         Ok(_) => chrome.t("flash-integration-updated"),
         Err(e) => chrome.err(e),
     };
-    render_page(&state, active_org.org_id, Some(msg), &chrome).await
+    render_page(&state, active_org.session_org_id, Some(msg), &chrome).await
 }
 
 // -- Digest schedules --------------------------------------------------------
@@ -224,7 +220,7 @@ pub async fn create_digest_schedule(
     active_org: ActiveOrg,
     Form(form): Form<CreateDigestForm>,
 ) -> axum::response::Response {
-    if let Err(r) = require_owner(&active_org) {
+    if let Err(r) = require_org_owner(&active_org) {
         return r;
     }
     let project_id: Option<u64> = form
@@ -237,14 +233,14 @@ pub async fn create_digest_schedule(
             && crate::queries::orgs::assert_project_in_org(
                 &state.pool,
                 pid as i64,
-                active_org.org_id,
+                active_org.session_org_id,
             )
             .await
             .is_err()
         {
             return render_page(
                 &state,
-                active_org.org_id,
+                active_org.session_org_id,
                 Some(chrome.t("flash-project-not-found-or-denied")),
                 &chrome,
             )
@@ -253,7 +249,7 @@ pub async fn create_digest_schedule(
     }
 
     let s = state.clone();
-    let org_id = active_org.org_id;
+    let org_id = active_org.session_org_id;
     let success = chrome.t("flash-digest-schedule-created");
     let render_chrome = chrome.clone();
     utils::query_then_render(
@@ -277,22 +273,25 @@ pub async fn delete_digest_schedule(
     active_org: ActiveOrg,
     Path(id): Path<i64>,
 ) -> axum::response::Response {
-    if let Err(r) = require_owner(&active_org) {
+    if let Err(r) = require_org_owner(&active_org) {
         return r;
     }
-    let msg =
-        match queries::alerts::delete_digest_schedule(&state.writer_pool, id, active_org.org_id)
-            .await
-        {
-            Ok(0) => format!(
-                "{} {}",
-                chrome.t("common-error-prefix"),
-                chrome.tv1("flash-not-found-digest-schedule", "id", &id.to_string())
-            ),
-            Ok(_) => chrome.t("flash-digest-schedule-deleted"),
-            Err(e) => chrome.err(e),
-        };
-    render_page(&state, active_org.org_id, Some(msg), &chrome).await
+    let msg = match queries::alerts::delete_digest_schedule(
+        &state.writer_pool,
+        id,
+        active_org.session_org_id,
+    )
+    .await
+    {
+        Ok(0) => format!(
+            "{} {}",
+            chrome.t("common-error-prefix"),
+            chrome.tv1("flash-not-found-digest-schedule", "id", &id.to_string())
+        ),
+        Ok(_) => chrome.t("flash-digest-schedule-deleted"),
+        Err(e) => chrome.err(e),
+    };
+    render_page(&state, active_org.session_org_id, Some(msg), &chrome).await
 }
 
 /// Send a preview of a digest schedule now. Uses real activity in the window if
@@ -305,10 +304,10 @@ pub async fn test_digest_schedule(
     active_org: ActiveOrg,
     Path(id): Path<i64>,
 ) -> axum::response::Response {
-    if let Err(r) = require_owner(&active_org) {
+    if let Err(r) = require_org_owner(&active_org) {
         return r;
     }
-    let org_id = active_org.org_id;
+    let org_id = active_org.session_org_id;
 
     let schedule = match queries::alerts::get_digest_schedule(&state.pool, id).await {
         Ok(Some(s)) if s.org_id == org_id => s,
@@ -462,10 +461,12 @@ async fn render_page(
 
     // Project selector: name when set, else `Project {id}`. Sorted by label so
     // the dropdown stays scannable as project count grows.
+    // Alert rules belong to one org, so this selector stays pinned to that org even
+    // though the project list itself is now cross-org.
     let mut projects: Vec<ProjectOption> = queries::projects::list_projects_cached(
         &state.pool,
         &state.project_list_cache,
-        org_id,
+        queries::projects::OrgScope::orgs(vec![org_id]),
         None,
         None,
         None,

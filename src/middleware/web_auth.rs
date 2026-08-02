@@ -57,10 +57,7 @@ pub async fn web_auth_middleware(
             // auth means the token is a constant, not a secret.
             req.extensions_mut().insert(CsrfToken("noauth".to_string()));
             req.extensions_mut()
-                .insert(crate::orgs::extractor::ActiveOrg {
-                    org_id: 1,
-                    role: None,
-                });
+                .insert(crate::orgs::extractor::ActiveOrg::bare(1, None));
             return next.run(req).await;
         }
         return unauthenticated_response(&req, secure_cookies);
@@ -103,10 +100,7 @@ pub async fn web_auth_middleware(
                 })
                 .unwrap_or(1);
             req.extensions_mut()
-                .insert(crate::orgs::extractor::ActiveOrg {
-                    org_id: admin_org_id,
-                    role: None,
-                });
+                .insert(crate::orgs::extractor::ActiveOrg::bare(admin_org_id, None));
             let mut resp = next.run(req).await;
             if set_salt {
                 if let Ok(val) =
@@ -294,15 +288,20 @@ async fn resolve_session_active_org(
     let member_ids: Vec<i64> = memberships.iter().map(|m| m.org_id).collect();
     let org_id = resolve_active_org(cookie_org, &member_ids, personal_org_id);
 
-    let role = memberships
-        .iter()
-        .find(|m| m.org_id == org_id)
+    let active = memberships.iter().find(|m| m.org_id == org_id);
+    let role = active
         .map(|m| crate::orgs::Role::parse(&m.role))
         .unwrap_or(crate::orgs::Role::Member);
+    let org_name = active.map(|m| m.name.clone().unwrap_or_else(|| m.slug.clone()));
 
     Ok(ActiveOrg {
-        org_id,
+        session_org_id: org_id,
         role: Some(role),
+        org_name,
+        memberships: memberships
+            .iter()
+            .map(|m| (m.org_id, crate::orgs::Role::parse(&m.role)))
+            .collect(),
     })
 }
 
@@ -370,15 +369,22 @@ mod tests {
             .await
             .unwrap()
             .expect("fallback must create the personal org");
-        assert_eq!(active.org_id, personal);
+        assert_eq!(active.session_org_id, personal);
         assert_eq!(active.role, Some(crate::orgs::Role::Owner));
 
         // Once it exists, the read-only path resolves the same org.
         let active2 = super::resolve_session_active_org(&pool, &pool, u.user_id, &headers, None)
             .await
             .unwrap();
-        assert_eq!(active2.org_id, personal);
+        assert_eq!(active2.session_org_id, personal);
         assert_eq!(active2.role, Some(crate::orgs::Role::Owner));
+        // Name and memberships both come off rows already loaded here, so neither
+        // the chrome indicator nor cross-org scope resolution costs an extra query.
+        assert_eq!(active2.org_name.as_deref(), Some("Personal"));
+        assert_eq!(
+            active2.memberships,
+            vec![(personal, crate::orgs::Role::Owner)]
+        );
     }
 
     #[tokio::test]

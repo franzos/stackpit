@@ -142,6 +142,10 @@ pub struct LogEntry {
 pub struct ProjectSummary {
     pub project_id: u64,
     pub name: Option<String>,
+    pub org_id: i64,
+    /// Org display label (name, falling back to slug). Lets a cross-org listing show
+    /// which org each project belongs to without a second query.
+    pub org_name: String,
     pub archived: bool,
     pub event_count: u64,
     pub error_count: u64,

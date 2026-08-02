@@ -17,6 +17,9 @@ pub(crate) struct PageChrome {
     // "customer · email" when a commercial license is active AND the request is on an
     // admin surface; None everywhere else. Feeds the sidebar watermark.
     pub(crate) license_watermark: Option<String>,
+    // Name of the org the request is scoped to. The active org is a mode, so it needs a
+    // persistent indicator; None on the admin-token and loopback paths, which have no name.
+    pub(crate) active_org: Option<String>,
 }
 
 /// One entry in the language switcher: BCP-47 code, endonym (shown untranslated),
@@ -60,7 +63,14 @@ impl PageChrome {
             locale,
             path,
             license_watermark: None,
+            active_org: None,
         }
+    }
+
+    /// Sets the scope indicator to the active org's name.
+    pub(crate) fn with_active_org(mut self, name: Option<String>) -> Self {
+        self.active_org = name;
+        self
     }
 
     /// Sets the sidebar watermark to "customer · email" when a license is

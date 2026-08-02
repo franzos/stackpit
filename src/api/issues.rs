@@ -84,10 +84,10 @@ pub async fn update_status(
         .await
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::not_found("issue not found"))?;
-    crate::orgs::extractor::require_project_scope(&active, &state.pool, pid)
+    let scope = crate::orgs::extractor::require_project_scope(&active, &state.pool, pid)
         .await
         .map_err(|_| ApiError::not_found("not found"))?;
-    crate::orgs::extractor::require_owner(&active)
+    crate::orgs::extractor::require_owner(&scope)
         .map_err(|_| ApiError::new(StatusCode::FORBIDDEN, "forbidden"))?;
     let affected =
         queries::issues::update_issue_status(&state.writer_pool, &fingerprint, body.status)
@@ -106,7 +106,7 @@ pub async fn update_status(
 #[cfg(test)]
 mod tests {
     use crate::db::sql;
-    use crate::orgs::extractor::{require_owner, require_project_scope, ActiveOrg};
+    use crate::orgs::extractor::{require_owner, require_project_scope, ActiveOrg, ProjectScope};
     use crate::orgs::Role;
     use crate::queries::orgs::project_of_fingerprint;
     use crate::queries::test_helpers::insert_test_issue;
@@ -139,34 +139,26 @@ mod tests {
         .unwrap();
     }
 
+    fn scope(role: Option<Role>) -> ProjectScope {
+        ProjectScope { org_id: 1, role }
+    }
+
     // Member is blocked by require_owner (update_status gate).
     #[test]
     fn update_status_member_blocked_by_require_owner() {
-        let member = ActiveOrg {
-            org_id: 1,
-            role: Some(Role::Member),
-        };
-        assert!(require_owner(&member).is_err());
+        assert!(require_owner(&scope(Some(Role::Member))).is_err());
     }
 
     // Owner passes require_owner.
     #[test]
     fn update_status_owner_allowed_by_require_owner() {
-        let owner = ActiveOrg {
-            org_id: 1,
-            role: Some(Role::Owner),
-        };
-        assert!(require_owner(&owner).is_ok());
+        assert!(require_owner(&scope(Some(Role::Owner))).is_ok());
     }
 
     // Superuser passes require_owner.
     #[test]
     fn update_status_superuser_allowed_by_require_owner() {
-        let su = ActiveOrg {
-            org_id: 1,
-            role: None,
-        };
-        assert!(require_owner(&su).is_ok());
+        assert!(require_owner(&scope(None)).is_ok());
     }
 
     // Guard chain: resolve fingerprint -> scope check denies foreign-org caller.
@@ -194,14 +186,10 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let owner_a = ActiveOrg {
-            org_id: org_a,
-            role: Some(Role::Owner),
-        };
-        let owner_b = ActiveOrg {
-            org_id: org_b,
-            role: Some(Role::Owner),
-        };
+        let owner_a =
+            ActiveOrg::with_memberships(org_a, Some(Role::Owner), vec![(org_a, Role::Owner)]);
+        let owner_b =
+            ActiveOrg::with_memberships(org_b, Some(Role::Owner), vec![(org_b, Role::Owner)]);
 
         assert!(require_project_scope(&owner_a, &pool, pid).await.is_ok());
         assert!(require_project_scope(&owner_b, &pool, pid).await.is_err());
@@ -220,14 +208,11 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let member = ActiveOrg {
-            org_id: org,
-            role: Some(Role::Member),
-        };
+        let member =
+            ActiveOrg::with_memberships(org, Some(Role::Member), vec![(org, Role::Member)]);
 
-        // Scope check passes (correct org).
-        assert!(require_project_scope(&member, &pool, pid).await.is_ok());
-        // Owner check blocks.
-        assert!(require_owner(&member).is_err());
+        // Scope check passes (correct org), owner check blocks.
+        let scope = require_project_scope(&member, &pool, pid).await.unwrap();
+        assert!(require_owner(&scope).is_err());
     }
 }

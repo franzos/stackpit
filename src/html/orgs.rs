@@ -457,7 +457,7 @@ pub async fn orgs_index(
                     slug: o.slug,
                     kind: kind.label().to_owned(),
                     role: None,
-                    active: o.org_id == active_org.org_id,
+                    active: o.org_id == active_org.session_org_id,
                 }
             })
             .collect();
@@ -497,7 +497,7 @@ pub async fn orgs_index(
                 slug: m.slug,
                 kind: kind.label().to_owned(),
                 role: Some(m.role),
-                active: m.org_id == active_org.org_id,
+                active: m.org_id == active_org.session_org_id,
             }
         })
         .collect();
@@ -1015,7 +1015,7 @@ pub async fn delete_org(
             );
 
             let mut resp = Redirect::to("/web/organizations").into_response();
-            if active_org.org_id == org_id {
+            if active_org.session_org_id == org_id {
                 let secure = state.config.server.cookies_should_be_secure();
                 let secure_flag = if secure { "; Secure" } else { "" };
                 let clear = format!(

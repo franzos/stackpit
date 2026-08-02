@@ -22,3 +22,5 @@ nav-integrations = Integrazioni
 nav-back-projects = Progetti
 nav-aria-primary = Navigazione principale
 nav-aria-breadcrumb = Percorso di navigazione
+nav-active-org = Attiva:
+nav-aria-active-org = Organizzazione attiva: { $org }

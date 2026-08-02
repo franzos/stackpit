@@ -6,7 +6,7 @@ use serde::Deserialize;
 use crate::html::chrome::PageChrome;
 use crate::html::render_template;
 use crate::html::utils::Chrome;
-use crate::orgs::extractor::{require_owner, ActiveOrg};
+use crate::orgs::extractor::{require_org_owner, ActiveOrg};
 use crate::queries;
 use crate::queries::types::Integration;
 use crate::server::AppState;
@@ -29,7 +29,7 @@ pub async fn handler(
     Chrome(chrome): Chrome,
     active: ActiveOrg,
 ) -> axum::response::Response {
-    let org_filter = active.role.as_ref().map(|_| active.org_id);
+    let org_filter = active.role.as_ref().map(|_| active.session_org_id);
     render_list(&state, org_filter, None, &chrome).await
 }
 
@@ -58,10 +58,10 @@ pub async fn create(
     active: ActiveOrg,
     Form(form): Form<CreateForm>,
 ) -> axum::response::Response {
-    if let Err(r) = require_owner(&active) {
+    if let Err(r) = require_org_owner(&active) {
         return r;
     }
-    let org_filter = active.role.as_ref().map(|_| active.org_id);
+    let org_filter = active.role.as_ref().map(|_| active.session_org_id);
     let name = form.name.trim().to_string();
     if name.is_empty() {
         return render_list(
@@ -265,7 +265,7 @@ pub async fn create(
 
     let result = queries::integrations::create_integration(
         &state.writer_pool,
-        active.org_id,
+        active.session_org_id,
         &name,
         &kind,
         url.as_deref(),
@@ -331,12 +331,16 @@ pub async fn delete(
     active: ActiveOrg,
     Path(id): Path<i64>,
 ) -> axum::response::Response {
-    if let Err(r) = require_owner(&active) {
+    if let Err(r) = require_org_owner(&active) {
         return r;
     }
-    let org_filter = active.role.as_ref().map(|_| active.org_id);
-    let msg = match queries::integrations::delete_integration(&state.writer_pool, id, active.org_id)
-        .await
+    let org_filter = active.role.as_ref().map(|_| active.session_org_id);
+    let msg = match queries::integrations::delete_integration(
+        &state.writer_pool,
+        id,
+        active.session_org_id,
+    )
+    .await
     {
         Ok(0) => format!(
             "{} {}",
@@ -367,10 +371,10 @@ pub async fn test_integration(
     active: ActiveOrg,
     Path(id): Path<i64>,
 ) -> axum::response::Response {
-    if let Err(r) = require_owner(&active) {
+    if let Err(r) = require_org_owner(&active) {
         return r;
     }
-    let org_filter = active.role.as_ref().map(|_| active.org_id);
+    let org_filter = active.role.as_ref().map(|_| active.session_org_id);
     let integration =
         match queries::integrations::get_integration(&state.pool, id, org_filter).await {
             Ok(Some(i)) => i,

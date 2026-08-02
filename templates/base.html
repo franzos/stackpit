@@ -41,6 +41,11 @@
           </nav>
           <div class="border-t border-outline-variant py-2 px-2 space-y-0.5">
             <a href="/web/organizations" class="sidebar-link"><span>{{ chrome.t("nav-organizations") }}</span></a>
+            {%- match chrome.active_org %}{%- when Some with (o) %}
+              <p class="px-2 pb-1 text-xs text-on-surface-variant truncate" title="{{ o }}">
+                {{ chrome.t("nav-active-org") }} <bdi class="text-on-surface">{{ o }}</bdi>
+              </p>
+            {%- when None %}{%- endmatch %}
             <a href="/web/settings/integrations/" class="sidebar-link"><span>{{ chrome.t("nav-settings") }}</span></a>
             <a href="/web/settings/defaults/" class="sidebar-link"><span>{{ chrome.t("nav-defaults") }}</span></a>
             <details>
@@ -68,6 +73,12 @@
                   style="background: var(--color-surface)">
             <nav class="text-[13px] flex items-center gap-1.5"
                  aria-label="{{ chrome.t("nav-aria-breadcrumb") }}">
+              {%- match chrome.active_org %}{%- when Some with (o) %}
+                <a href="/web/organizations"
+                   class="breadcrumb-link"
+                   aria-label="{{ chrome.tv1("nav-aria-active-org", "org", o) }}"><bdi>{{ o }}</bdi></a>
+                <span class="breadcrumb-sep">/</span>
+              {%- when None %}{%- endmatch %}
               <a href="/web/projects/" class="breadcrumb-link">{{ chrome.t("nav-projects") }}</a>
               {% block breadcrumbs %}
               {% endblock %}

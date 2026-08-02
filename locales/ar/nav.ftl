@@ -22,3 +22,5 @@ nav-integrations = التكاملات
 nav-back-projects = المشاريع
 nav-aria-primary = التنقل الرئيسي
 nav-aria-breadcrumb = مسار التنقل
+nav-active-org = النشطة:
+nav-aria-active-org = المؤسسة النشطة: { $org }

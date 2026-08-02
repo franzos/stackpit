@@ -17,9 +17,54 @@ pub type NavCountsCache = Arc<DashMap<u64, (ProjectNavCounts, Instant)>>;
 /// Nav badges are a display convenience, so 30s trades slight staleness for far fewer full-table aggregations on busy projects.
 const NAV_COUNTS_TTL: Duration = Duration::from_secs(30);
 
-/// Assembled project-list result cached with the same short TTL as [`NavCountsCache`], shared via `AppState`. Keyed by the params that shape the SQL result (org, sort, and a TTL-bucketed `since`); the name/id `query` filter runs over the cached clone, so it stays out of the key.
+/// Which orgs a project listing covers.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum OrgScope {
+    /// Every org, for superuser and CLI contexts.
+    All,
+    /// Exactly these orgs. Always canonically sorted and deduped, so two callers with
+    /// the same entitlements share one cache entry and cannot see each other's data.
+    Orgs(Vec<i64>),
+}
+
+impl OrgScope {
+    /// Canonicalizing constructor. Sorting and deduping here is what makes the cache
+    /// key sound: the key is the literal id list, never a hash, so a collision cannot
+    /// serve one caller another's projects.
+    pub fn orgs(mut ids: Vec<i64>) -> Self {
+        ids.sort_unstable();
+        ids.dedup();
+        OrgScope::Orgs(ids)
+    }
+
+    fn single(org_id: i64) -> Self {
+        OrgScope::Orgs(vec![org_id])
+    }
+}
+
+/// The orgs a browser caller may list projects from. Superusers (admin token and
+/// loopback) see everything; everyone else sees the orgs they belong to.
+///
+/// The system org is excluded: it collects auto-provisioned, unassigned projects and
+/// `can_switch_to` already makes it unreachable as an active org, so a stray
+/// `organization_members` row for it must not surface those projects here.
+pub fn scope_for(active: &crate::orgs::extractor::ActiveOrg) -> OrgScope {
+    if active.role.is_none() {
+        return OrgScope::All;
+    }
+    OrgScope::orgs(
+        active
+            .memberships
+            .iter()
+            .map(|(id, _)| *id)
+            .filter(|id| *id != crate::orgs::SYSTEM_ORG_ID)
+            .collect(),
+    )
+}
+
+/// Assembled project-list result cached with the same short TTL as [`NavCountsCache`], shared via `AppState`. Keyed by the params that shape the SQL result (org scope, sort, and a TTL-bucketed `since`); the name/id `query` filter and the org filter/sort both run over the cached clone, so they stay out of the key.
 pub type ProjectListCache =
-    Arc<DashMap<(i64, Option<String>, Option<i64>), (Vec<ProjectSummary>, Instant)>>;
+    Arc<DashMap<(OrgScope, Option<String>, Option<i64>), (Vec<ProjectSummary>, Instant)>>;
 
 /// Same rationale as [`NAV_COUNTS_TTL`]: the project list runs full-table GROUP BYs over `events`, so a short staleness window avoids re-aggregating on every render.
 const PROJECT_LIST_TTL: Duration = Duration::from_secs(30);
@@ -59,7 +104,18 @@ pub async fn list_projects(
     query: Option<&str>,
     since: Option<i64>,
 ) -> Result<Vec<ProjectSummary>> {
-    list_projects_inner(pool, Some(org_id), sort, query, since).await
+    list_projects_inner(pool, &OrgScope::single(org_id), sort, query, since).await
+}
+
+/// List projects across every org the caller belongs to.
+pub async fn list_projects_for_orgs(
+    pool: &crate::db::DbPool,
+    org_ids: Vec<i64>,
+    sort: Option<&str>,
+    query: Option<&str>,
+    since: Option<i64>,
+) -> Result<Vec<ProjectSummary>> {
+    list_projects_inner(pool, &OrgScope::orgs(org_ids), sort, query, since).await
 }
 
 /// Cached [`list_projects`]: a fresh hit returns the stored list (query-filtered),
@@ -68,7 +124,7 @@ pub async fn list_projects(
 pub async fn list_projects_cached(
     pool: &crate::db::DbPool,
     cache: &ProjectListCache,
-    org_id: i64,
+    scope: OrgScope,
     sort: Option<&str>,
     query: Option<&str>,
     since: Option<i64>,
@@ -78,7 +134,14 @@ pub async fn list_projects_cached(
     // the cache without bound. Flooring to TTL-wide windows collapses a window onto
     // one key; the small resulting staleness is within the TTL the cache already accepts.
     let since_bucket = since.map(|s| s / PROJECT_LIST_TTL.as_secs() as i64);
-    let key = (org_id, sort.map(str::to_string), since_bucket);
+    // Key on the normalized sort, not the raw parameter: the SQL folds every unknown
+    // value to the default ORDER BY, so keying on the raw string would let `?sort=aaa`,
+    // `?sort=aab`, ... miss the cache forever and re-run the full aggregation per request.
+    let key = (
+        scope.clone(),
+        normalized_sort(sort).map(str::to_string),
+        since_bucket,
+    );
     if let Some(entry) = cache.get(&key) {
         if nav_cache_fresh(entry.1.elapsed(), PROJECT_LIST_TTL) {
             let mut projects = entry.0.clone();
@@ -86,14 +149,39 @@ pub async fn list_projects_cached(
             return Ok(projects);
         }
     }
-    let full = list_projects_inner(pool, Some(org_id), sort, None, since).await?;
+    let full = list_projects_inner(pool, &scope, sort, None, since).await?;
+    // Keying on the membership set instead of a single org makes the live key space
+    // per-entitlement rather than per-org, so expiry alone no longer bounds it: drop
+    // expired entries first, then evict oldest-first if that was not enough.
     if cache.len() > PROJECT_LIST_CACHE_MAX_ENTRIES {
         cache.retain(|_, (_, inserted)| nav_cache_fresh(inserted.elapsed(), PROJECT_LIST_TTL));
+        evict_to_cap(cache, PROJECT_LIST_CACHE_MAX_ENTRIES);
     }
     cache.insert(key, (full.clone(), Instant::now()));
     let mut projects = full;
     filter_projects_by_query(&mut projects, query);
     Ok(projects)
+}
+
+/// The sort values that actually change the SQL ordering. Anything else (including
+/// `org`, which is sorted in the handler) collapses to the default order.
+fn normalized_sort(sort: Option<&str>) -> Option<&str> {
+    sort.filter(|s| matches!(*s, "issues" | "events" | "first_seen" | "project_id"))
+}
+
+/// Drop oldest entries until the cache is back under `cap`.
+fn evict_to_cap(cache: &ProjectListCache, cap: usize) {
+    if cache.len() <= cap {
+        return;
+    }
+    let mut entries: Vec<_> = cache
+        .iter()
+        .map(|e| (e.key().clone(), e.value().1))
+        .collect();
+    entries.sort_by_key(|(_, inserted)| *inserted);
+    for (key, _) in entries.into_iter().take(cache.len().saturating_sub(cap)) {
+        cache.remove(&key);
+    }
 }
 
 /// List all projects across every org (CLI / superuser context).
@@ -103,12 +191,12 @@ pub async fn list_all_projects(
     query: Option<&str>,
     since: Option<i64>,
 ) -> Result<Vec<ProjectSummary>> {
-    list_projects_inner(pool, None, sort, query, since).await
+    list_projects_inner(pool, &OrgScope::All, sort, query, since).await
 }
 
 async fn list_projects_inner(
     pool: &crate::db::DbPool,
-    org_id: Option<i64>,
+    scope: &OrgScope,
     sort: Option<&str>,
     query: Option<&str>,
     since: Option<i64>,
@@ -125,16 +213,26 @@ async fn list_projects_inner(
         _ => "COALESCE(e.last_seen, 0)",
     };
 
-    // When org_id is given it filters the driving table as ?1, so the time filter
-    // shifts to ?2 and its bind slot doesn't collide.
-    let (org_filter, time_param) = if org_id.is_some() {
-        ("WHERE p.org_id = ?1", "?2")
+    // An empty scope entitles the caller to nothing. `IN ()` is not valid SQL on
+    // either backend, so this must short-circuit rather than fall through.
+    let org_ids: &[i64] = match scope {
+        OrgScope::All => &[],
+        OrgScope::Orgs(ids) if ids.is_empty() => return Ok(Vec::new()),
+        OrgScope::Orgs(ids) => ids,
+    };
+
+    // Org ids occupy ?1..?n, so the time filter binds at ?n+1. Getting this wrong is
+    // invisible on SQLite and fatal on PostgreSQL, where `sql!`/`dyn_sql` rewrite
+    // positional params to $n.
+    let org_filter = if org_ids.is_empty() {
+        String::new()
     } else {
-        ("", "?1")
+        let params: Vec<String> = (1..=org_ids.len()).map(|i| format!("?{i}")).collect();
+        format!("WHERE p.org_id IN ({})", params.join(", "))
     };
 
     let time_filter = if since.is_some() {
-        format!("WHERE timestamp >= {time_param}")
+        format!("WHERE timestamp >= ?{}", org_ids.len() + 1)
     } else {
         String::new()
     };
@@ -152,6 +250,9 @@ async fn list_projects_inner(
             p.project_id,
             p.name,
             p.status,
+            p.org_id,
+            o.name AS org_name,
+            o.slug AS org_slug,
             COALESCE(e.event_count, 0) AS event_count,
             COALESCE(i.issue_count, 0) AS issue_count,
             fs.first_seen,
@@ -163,6 +264,7 @@ async fn list_projects_inner(
             COALESCE(e.session_count, 0) AS session_count,
             COALESCE(e.other_count, 0) AS other_count
          FROM projects p
+         JOIN organizations o ON o.org_id = p.org_id
          LEFT JOIN (
             SELECT
                 project_id,
@@ -201,32 +303,15 @@ async fn list_projects_inner(
          ORDER BY CASE WHEN fs.first_seen IS NULL THEN 1 ELSE 0 END, {order_expr} DESC, p.project_id DESC"
     );
 
-    let rows = match (org_id, since) {
-        (Some(oid), Some(ts)) => {
-            sqlx::query(crate::db::dyn_sql(&sql))
-                .bind(oid)
-                .bind(ts)
-                .fetch_all(pool)
-                .await?
-        }
-        (Some(oid), None) => {
-            sqlx::query(crate::db::dyn_sql(&sql))
-                .bind(oid)
-                .fetch_all(pool)
-                .await?
-        }
-        (None, Some(ts)) => {
-            sqlx::query(crate::db::dyn_sql(&sql))
-                .bind(ts)
-                .fetch_all(pool)
-                .await?
-        }
-        (None, None) => {
-            sqlx::query(crate::db::dyn_sql(&sql))
-                .fetch_all(pool)
-                .await?
-        }
-    };
+    // Bind order must mirror the placeholder numbering above: orgs first, then `since`.
+    let mut q = sqlx::query(crate::db::dyn_sql(&sql));
+    for id in org_ids {
+        q = q.bind(*id);
+    }
+    if let Some(ts) = since {
+        q = q.bind(ts);
+    }
+    let rows = q.fetch_all(pool).await?;
 
     let mut projects: Vec<ProjectSummary> = rows.iter().map(map_project_row).collect();
     filter_projects_by_query(&mut projects, query);
@@ -235,7 +320,7 @@ async fn list_projects_inner(
 
 /// Narrow the list to projects whose id or name contains `query` (case-insensitive).
 /// Client-side so it can run over a cached list without re-querying.
-fn filter_projects_by_query(projects: &mut Vec<ProjectSummary>, query: Option<&str>) {
+pub fn filter_projects_by_query(projects: &mut Vec<ProjectSummary>, query: Option<&str>) {
     let Some(q) = query.filter(|q| !q.is_empty()) else {
         return;
     };
@@ -252,9 +337,13 @@ fn filter_projects_by_query(projects: &mut Vec<ProjectSummary>, query: Option<&s
 fn map_project_row(row: &crate::db::DbRow) -> ProjectSummary {
     let platforms: Option<String> = row.get("platforms");
     let status: Option<String> = row.get("status");
+    // organizations.name is nullable; the slug is NOT NULL, so it is the fallback label.
+    let org_name: Option<String> = row.get("org_name");
     ProjectSummary {
         project_id: row.get::<i64, _>("project_id") as u64,
         name: row.get("name"),
+        org_id: row.get("org_id"),
+        org_name: org_name.unwrap_or_else(|| row.get("org_slug")),
         archived: status
             .and_then(|s| s.parse::<ProjectStatus>().ok())
             .is_some_and(|s| s.is_archived()),
@@ -1000,6 +1089,100 @@ mod tests {
     const ORG_A: i64 = 1;
     const ORG_B: i64 = 2;
 
+    // The membership-set key makes the live key space per-entitlement rather than
+    // per-org, so expiry alone no longer bounds it; the cap has to actually cap.
+    #[test]
+    fn evict_to_cap_drops_oldest_first() {
+        let cache: ProjectListCache = Default::default();
+        for i in 0..10i64 {
+            cache.insert(
+                (OrgScope::orgs(vec![i]), None, None),
+                (Vec::new(), Instant::now()),
+            );
+        }
+        assert_eq!(cache.len(), 10);
+
+        evict_to_cap(&cache, 4);
+        assert_eq!(cache.len(), 4, "must evict down to the cap");
+        // Insertion order is ascending, so the survivors are the newest keys.
+        for i in 6..10i64 {
+            assert!(
+                cache.contains_key(&(OrgScope::orgs(vec![i]), None, None)),
+                "newest entries must survive"
+            );
+        }
+    }
+
+    #[test]
+    fn evict_to_cap_is_a_noop_under_the_cap() {
+        let cache: ProjectListCache = Default::default();
+        cache.insert(
+            (OrgScope::orgs(vec![1]), None, None),
+            (Vec::new(), Instant::now()),
+        );
+        evict_to_cap(&cache, 4);
+        assert_eq!(cache.len(), 1);
+    }
+
+    // Unknown sort values all fold to the same SQL ordering, so they must fold to the
+    // same cache key too, or an attacker-controlled `?sort=` re-runs the aggregation.
+    #[tokio::test]
+    async fn unknown_sorts_share_one_cache_entry() {
+        let pool = open_test_db().await;
+        let cache: ProjectListCache = Default::default();
+        set_project_org(&pool, 1, ORG_B).await;
+        let scope = OrgScope::orgs(vec![ORG_B]);
+
+        for s in ["aaa", "aab", "org", ""] {
+            list_projects_cached(&pool, &cache, scope.clone(), Some(s), None, None)
+                .await
+                .unwrap();
+        }
+        assert_eq!(cache.len(), 1, "unknown sorts must not each get a key");
+
+        list_projects_cached(&pool, &cache, scope, Some("issues"), None, None)
+            .await
+            .unwrap();
+        assert_eq!(cache.len(), 2, "a real sort still gets its own key");
+    }
+
+    #[test]
+    fn scope_for_superuser_is_all_orgs() {
+        use crate::orgs::extractor::ActiveOrg;
+        assert_eq!(scope_for(&ActiveOrg::bare(1, None)), OrgScope::All);
+    }
+
+    // A membership row for the system org must not surface every auto-provisioned,
+    // unassigned project; org 1 is superuser-only by construction.
+    #[test]
+    fn scope_for_drops_the_system_org() {
+        use crate::orgs::extractor::ActiveOrg;
+        use crate::orgs::{Role, SYSTEM_ORG_ID};
+
+        let active = ActiveOrg::with_memberships(
+            9,
+            Some(Role::Member),
+            vec![(SYSTEM_ORG_ID, Role::Owner), (9, Role::Member)],
+        );
+        assert_eq!(scope_for(&active), OrgScope::Orgs(vec![9]));
+    }
+
+    #[test]
+    fn scope_for_canonicalizes_and_fails_closed() {
+        use crate::orgs::extractor::ActiveOrg;
+        use crate::orgs::Role;
+
+        let active = ActiveOrg::with_memberships(
+            5,
+            Some(Role::Member),
+            vec![(9, Role::Member), (5, Role::Owner), (9, Role::Member)],
+        );
+        assert_eq!(scope_for(&active), OrgScope::Orgs(vec![5, 9]));
+
+        let orphan = ActiveOrg::with_memberships(5, Some(Role::Member), Vec::new());
+        assert_eq!(scope_for(&orphan), OrgScope::Orgs(Vec::new()));
+    }
+
     // Ensure the org row exists, then upsert the project with the given org_id.
     async fn set_project_org(pool: &crate::db::DbPool, project_id: i64, org_id: i64) {
         sqlx::query(sql!(
@@ -1191,6 +1374,131 @@ mod tests {
         let only_a = list_projects(&pool, ORG_A, None, None, None).await.unwrap();
         assert_eq!(only_a.len(), 1);
         assert_eq!(only_a[0].project_id, 1);
+        assert_eq!(only_a[0].org_id, ORG_A);
+    }
+
+    // The cross-org list is the union of the caller's orgs and nothing else.
+    #[tokio::test]
+    async fn list_projects_for_orgs_returns_the_union() {
+        let pool = open_test_db().await;
+        set_project_org(&pool, 1, ORG_A).await;
+        set_project_org(&pool, 2, ORG_B).await;
+        set_project_org(&pool, 3, 7).await;
+
+        let both = list_projects_for_orgs(&pool, vec![ORG_A, ORG_B], None, None, None)
+            .await
+            .unwrap();
+        let mut ids: Vec<u64> = both.iter().map(|p| p.project_id).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec![1, 2]);
+
+        // Duplicates and ordering in the input must not change the result.
+        let dup = list_projects_for_orgs(&pool, vec![ORG_B, ORG_A, ORG_A], None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(dup.len(), 2);
+    }
+
+    // Fail closed: no memberships must mean no projects, never every project.
+    #[tokio::test]
+    async fn list_projects_for_orgs_denies_on_empty_scope() {
+        let pool = open_test_db().await;
+        set_project_org(&pool, 1, ORG_A).await;
+        let none = list_projects_for_orgs(&pool, Vec::new(), None, None, None)
+            .await
+            .unwrap();
+        assert!(none.is_empty(), "an empty org set must list nothing");
+    }
+
+    // Exercises the generated `?1..?n` placeholders with the time filter binding at
+    // ?n+1. Wrong bind positions are invisible on SQLite and fatal on PostgreSQL.
+    #[tokio::test]
+    async fn list_projects_for_orgs_binds_since_after_the_org_ids() {
+        let pool = open_test_db().await;
+        let now = chrono::Utc::now().timestamp();
+        set_project_org(&pool, 1, ORG_A).await;
+        set_project_org(&pool, 2, ORG_B).await;
+        set_project_org(&pool, 3, 7).await;
+        insert_test_event(&pool, "recent", 1, now, Some("fp1"), Some("error"), None).await;
+        insert_test_event(
+            &pool,
+            "old",
+            2,
+            now - 86_400 * 30,
+            Some("fp2"),
+            Some("error"),
+            None,
+        )
+        .await;
+
+        let since = now - 86_400;
+        let listed = list_projects_for_orgs(&pool, vec![ORG_A, ORG_B, 7], None, None, Some(since))
+            .await
+            .unwrap();
+
+        // All three projects still appear (the list is driven from `projects`), but
+        // only the one with an in-window event carries a count.
+        assert_eq!(listed.len(), 3);
+        let p1 = listed.iter().find(|p| p.project_id == 1).unwrap();
+        let p2 = listed.iter().find(|p| p.project_id == 2).unwrap();
+        assert_eq!(p1.event_count, 1, "in-window event must be counted");
+        assert_eq!(p2.event_count, 0, "out-of-window event must not be counted");
+    }
+
+    // ORG_A is the system org, which migrations pre-seed with its own name, so this
+    // uses a helper-created org to prove the label comes from `organizations`.
+    #[tokio::test]
+    async fn list_projects_carries_the_org_label() {
+        let pool = open_test_db().await;
+        set_project_org(&pool, 1, ORG_B).await;
+        let listed = list_projects_for_orgs(&pool, vec![ORG_B], None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(listed[0].org_id, ORG_B);
+        assert_eq!(listed[0].org_name, format!("org-{ORG_B}"));
+    }
+
+    // Two callers whose entitlements differ must never share a cache entry, and two
+    // callers with the same entitlements (in any order) must share exactly one.
+    #[tokio::test]
+    async fn cache_key_isolates_distinct_membership_sets() {
+        let pool = open_test_db().await;
+        let cache: ProjectListCache = Default::default();
+        set_project_org(&pool, 1, ORG_A).await;
+        set_project_org(&pool, 2, ORG_B).await;
+
+        let a_only =
+            list_projects_cached(&pool, &cache, OrgScope::orgs(vec![ORG_A]), None, None, None)
+                .await
+                .unwrap();
+        let both = list_projects_cached(
+            &pool,
+            &cache,
+            OrgScope::orgs(vec![ORG_A, ORG_B]),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(a_only.len(), 1, "the narrower caller must not see org B");
+        assert_eq!(both.len(), 2);
+        assert_eq!(cache.len(), 2, "distinct scopes must not collide");
+
+        // Same set, different input order: canonicalization must hit the same entry.
+        let reordered = list_projects_cached(
+            &pool,
+            &cache,
+            OrgScope::orgs(vec![ORG_B, ORG_A]),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(reordered.len(), 2);
+        assert_eq!(cache.len(), 2, "reordered ids must reuse the cached entry");
     }
 
     #[cfg(feature = "sqlite")]

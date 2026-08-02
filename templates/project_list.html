@@ -43,6 +43,16 @@
       <option value="90d"{% if period == "90d" %} selected{% endif %}>{{ chrome.t("projects-period-90d") }}</option>
       <option value="365d"{% if period == "365d" %} selected{% endif %}>{{ chrome.t("projects-period-365d") }}</option>
     </select>
+    {%- if orgs.len() > 1 %}
+      <select class="select w-auto"
+              name="org"
+              aria-label="{{ chrome.t("projects-org-filter-label") }}">
+        <option value="">{{ chrome.t("projects-org-filter-all") }}</option>
+        {% for o in orgs %}
+          <option value="{{ o.0 }}"{% if org == o.0.to_string() %} selected{% endif %}>{{ o.1 }}</option>
+        {% endfor %}
+      </select>
+    {%- endif %}
     <button type="submit" class="btn btn-secondary">{{ chrome.t("projects-list-filter") }}</button>
   </form>
 
@@ -57,26 +67,30 @@
           <thead>
             <tr>
               <th>
-                <a href="/web/projects/?sort=project_id{% if !query.is_empty() %}&amp;query={{ query }}{% endif %}{% if !period.is_empty() %}&amp;period={{ period }}{% endif %}"
+                <a href="/web/projects/?sort=project_id{% if !query.is_empty() %}&amp;query={{ query }}{% endif %}{% if !period.is_empty() %}&amp;period={{ period }}{% endif %}{% if !org.is_empty() %}&amp;org={{ org }}{% endif %}"
                    {% if sort == "project_id" %}class="active-sort"{% endif %}>{{ chrome.t("projects-col-project") }}</a>
+              </th>
+              <th>
+                <a href="/web/projects/?sort=org{% if !query.is_empty() %}&amp;query={{ query }}{% endif %}{% if !period.is_empty() %}&amp;period={{ period }}{% endif %}{% if !org.is_empty() %}&amp;org={{ org }}{% endif %}"
+                   {% if sort == "org" %}class="active-sort"{% endif %}>{{ chrome.t("orgs-col-organization") }}</a>
               </th>
               <th>{{ chrome.t("projects-col-platforms") }}</th>
               <th>
-                <a href="/web/projects/?sort=issues{% if !query.is_empty() %}&amp;query={{ query }}{% endif %}{% if !period.is_empty() %}&amp;period={{ period }}{% endif %}"
+                <a href="/web/projects/?sort=issues{% if !query.is_empty() %}&amp;query={{ query }}{% endif %}{% if !period.is_empty() %}&amp;period={{ period }}{% endif %}{% if !org.is_empty() %}&amp;org={{ org }}{% endif %}"
                    {% if sort == "issues" %}class="active-sort"{% endif %}>{{ chrome.t("projects-col-issues") }}</a>
               </th>
               <th>
-                <a href="/web/projects/?sort=events{% if !query.is_empty() %}&amp;query={{ query }}{% endif %}{% if !period.is_empty() %}&amp;period={{ period }}{% endif %}"
+                <a href="/web/projects/?sort=events{% if !query.is_empty() %}&amp;query={{ query }}{% endif %}{% if !period.is_empty() %}&amp;period={{ period }}{% endif %}{% if !org.is_empty() %}&amp;org={{ org }}{% endif %}"
                    {% if sort == "events" %}class="active-sort"{% endif %}>{{ chrome.t("projects-col-events") }}</a>
               </th>
               <th class="hide-mobile">{{ chrome.t("projects-col-breakdown") }}</th>
               <th class="hide-mobile">{{ chrome.t("projects-col-release") }}</th>
               <th class="hide-mobile">
-                <a href="/web/projects/?sort=first_seen{% if !query.is_empty() %}&amp;query={{ query }}{% endif %}{% if !period.is_empty() %}&amp;period={{ period }}{% endif %}"
+                <a href="/web/projects/?sort=first_seen{% if !query.is_empty() %}&amp;query={{ query }}{% endif %}{% if !period.is_empty() %}&amp;period={{ period }}{% endif %}{% if !org.is_empty() %}&amp;org={{ org }}{% endif %}"
                    {% if sort == "first_seen" %}class="active-sort"{% endif %}>{{ chrome.t("projects-col-first-seen") }}</a>
               </th>
               <th>
-                <a href="/web/projects/?{% if !query.is_empty() %}query={{ query }}&amp;{% endif %}{% if !period.is_empty() %}period={{ period }}{% endif %}"
+                <a href="/web/projects/?{% if !query.is_empty() %}query={{ query }}&amp;{% endif %}{% if !period.is_empty() %}period={{ period }}{% endif %}{% if !org.is_empty() %}&amp;org={{ org }}{% endif %}"
                    {% if sort.is_empty() %}class="active-sort"{% endif %}>{{ chrome.t("projects-col-last-seen") }}</a>
               </th>
             </tr>
@@ -89,6 +103,9 @@
                      href="/web/projects/{{ p.project_id }}/?{% if !query.is_empty() %}query={{ query }}&amp;{% endif %}period={{ period }}">{% match p.name %}{% when Some with (n) %}<bdi>{{ n }}</bdi>{% when None %}{{ p.project_id }}{% endmatch %}</a>
                 {% if p.archived %}<span class="text-muted text-[12px]">{{ chrome.t("projects-settings-archived") }}</span>{% endif %}
                 <div class="text-muted text-[12px] text-mono mt-0.5">{{ chrome.t("common-id-prefix") }} {{ p.project_id }}</div>
+              </td>
+              <td>
+                <a class="text-[13px]" href="/web/projects/?org={{ p.org_id }}{% if !period.is_empty() %}&amp;period={{ period }}{% endif %}"><bdi>{{ p.org_name }}</bdi></a>
               </td>
               <td>
                 {% if !p.platforms.is_empty() %}

@@ -1,6 +1,6 @@
 ---
 source: src/html/project_list.rs
-expression: tmpl.render().unwrap()
+expression: "tmpl_for(\"en\").render().unwrap()"
 ---
 <!DOCTYPE html>
 <html lang="en" dir="ltr">

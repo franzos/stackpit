@@ -5,7 +5,7 @@ use serde::Deserialize;
 use crate::html::chrome::PageChrome;
 use crate::html::render_template;
 use crate::html::utils::Chrome;
-use crate::orgs::extractor::{require_owner, ActiveOrg};
+use crate::orgs::extractor::{require_org_owner, ActiveOrg};
 use crate::queries;
 use crate::server::AppState;
 
@@ -47,7 +47,7 @@ pub async fn create(
     active_org: ActiveOrg,
     Form(form): Form<CreateProjectForm>,
 ) -> axum::response::Response {
-    if let Err(resp) = require_owner(&active_org) {
+    if let Err(resp) = require_org_owner(&active_org) {
         return resp;
     }
 
@@ -66,7 +66,7 @@ pub async fn create(
 
     let result = queries::projects::create_project(
         &state.writer_pool,
-        active_org.org_id,
+        active_org.session_org_id,
         &name,
         if platform.is_empty() {
             None

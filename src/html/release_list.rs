@@ -46,12 +46,14 @@ pub async fn handler(
     let period_str = params.period.clone().unwrap_or_else(|| "7d".to_string());
 
     // Keep the project sidebar when scoped to a project the caller can access.
-    let project_nav = match params.project_id {
-        Some(pid)
-            if crate::orgs::extractor::require_project_scope(&active, &pool, pid as i64)
-                .await
-                .is_ok() =>
-        {
+    let project_scope = match params.project_id {
+        Some(pid) => crate::orgs::extractor::require_project_scope(&active, &pool, pid as i64)
+            .await
+            .ok(),
+        None => None,
+    };
+    let project_nav = match (params.project_id, &project_scope) {
+        (Some(pid), Some(_)) => {
             Some(queries::projects::nav_counts_cached(&pool, &state.nav_cache, pid).await)
         }
         _ => None,
@@ -65,10 +67,13 @@ pub async fn handler(
         sort: params.sort.filter(|s| !s.is_empty()),
     };
     let page = params.page.page();
+    // When scoped to a project the caller can reach, follow that project's org rather
+    // than the session's: a project in another of the caller's orgs is reachable from
+    // the cross-org list, and would otherwise render its rail over an empty table.
     let org_id = if active.role.is_none() {
         None
     } else {
-        Some(active.org_id)
+        Some(project_scope.map_or(active.session_org_id, |s| s.org_id))
     };
 
     let result =

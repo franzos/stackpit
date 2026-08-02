@@ -17,10 +17,12 @@ pub async fn list(
     ReadPool(pool): ReadPool,
     active_org: ActiveOrg,
 ) -> Result<impl IntoResponse, ApiError> {
+    // Cross-org, matching Sentry's equivalent endpoint: "projects available to the
+    // authenticated session", not the projects of one active org.
     let projects = queries::projects::list_projects_cached(
         &pool,
         &state.project_list_cache,
-        active_org.org_id,
+        queries::projects::scope_for(&active_org),
         None,
         None,
         None,

@@ -6,7 +6,7 @@ use crate::extractors::ProjectPath;
 use crate::html::chrome::PageChrome;
 use crate::html::render_template;
 use crate::html::utils::{self, Chrome};
-use crate::orgs::extractor::{require_owner, require_project_scope, ActiveOrg};
+use crate::orgs::extractor::{require_project_owner, require_project_scope, ActiveOrg};
 use crate::queries;
 use crate::queries::types::{Integration, ProjectIntegration};
 use crate::queries::ProjectNavCounts;
@@ -74,10 +74,11 @@ pub async fn handler(
     Chrome(chrome): Chrome,
     ProjectPath(project_id): ProjectPath,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    render_page(&state, project_id, None, &chrome, active.org_id).await
+    let scope = match require_project_scope(&active, &state.pool, project_id as i64).await {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    render_page(&state, project_id, None, &chrome, scope.org_id).await
 }
 
 #[derive(Deserialize)]
@@ -99,17 +100,15 @@ pub async fn activate(
     ProjectPath(project_id): ProjectPath,
     Form(form): Form<ActivateForm>,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    if let Err(r) = require_owner(&active) {
-        return r;
-    }
-    // Reject cross-org links: the integration must belong to the active org.
+    let scope = match require_project_owner(&active, &state.pool, project_id as i64).await {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    // Reject cross-org links: the integration must belong to the project's own org.
     match queries::integrations::get_integration(
         &state.pool,
         form.integration_id,
-        Some(active.org_id),
+        Some(scope.org_id),
     )
     .await
     {
@@ -120,7 +119,7 @@ pub async fn activate(
                 project_id,
                 Some(chrome.t("flash-integration-not-found")),
                 &chrome,
-                active.org_id,
+                scope.org_id,
             )
             .await;
         }
@@ -130,7 +129,7 @@ pub async fn activate(
                 project_id,
                 Some(chrome.err(e)),
                 &chrome,
-                active.org_id,
+                scope.org_id,
             )
             .await;
         }
@@ -143,14 +142,14 @@ pub async fn activate(
                 project_id,
                 Some(chrome.t(key)),
                 &chrome,
-                active.org_id,
+                scope.org_id,
             )
             .await
         }
     };
 
     let s = state.clone();
-    let org_id = active.org_id;
+    let org_id = scope.org_id;
     let success = chrome.t("flash-integration-activated");
     let render_chrome = chrome.clone();
     utils::query_then_render(
@@ -194,12 +193,10 @@ pub async fn update(
     Path((project_id, id)): Path<(u64, i64)>,
     Form(form): Form<UpdateForm>,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    if let Err(r) = require_owner(&active) {
-        return r;
-    }
+    let scope = match require_project_owner(&active, &state.pool, project_id as i64).await {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
     let config = match recipient_config(form.to_address) {
         Ok(c) => c,
         Err(key) => {
@@ -208,7 +205,7 @@ pub async fn update(
                 project_id,
                 Some(chrome.t(key)),
                 &chrome,
-                active.org_id,
+                scope.org_id,
             )
             .await
         }
@@ -238,7 +235,7 @@ pub async fn update(
         Ok(_) => chrome.t("flash-integration-updated"),
         Err(e) => chrome.err(e),
     };
-    render_page(&state, project_id, Some(msg), &chrome, active.org_id).await
+    render_page(&state, project_id, Some(msg), &chrome, scope.org_id).await
 }
 
 pub async fn deactivate(
@@ -247,12 +244,10 @@ pub async fn deactivate(
     Chrome(chrome): Chrome,
     Path((project_id, id)): Path<(u64, i64)>,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    if let Err(r) = require_owner(&active) {
-        return r;
-    }
+    let scope = match require_project_owner(&active, &state.pool, project_id as i64).await {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
     let msg = match queries::integrations::deactivate_project_integration(
         &state.writer_pool,
         project_id as i64,
@@ -268,7 +263,7 @@ pub async fn deactivate(
         Ok(_) => chrome.t("flash-integration-deactivated"),
         Err(e) => chrome.err(e),
     };
-    render_page(&state, project_id, Some(msg), &chrome, active.org_id).await
+    render_page(&state, project_id, Some(msg), &chrome, scope.org_id).await
 }
 
 /// Send a real test notification through one activated project integration.
@@ -280,12 +275,10 @@ pub async fn test(
     Chrome(chrome): Chrome,
     Path((project_id, id)): Path<(u64, i64)>,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    if let Err(r) = require_owner(&active) {
-        return r;
-    }
+    let scope = match require_project_owner(&active, &state.pool, project_id as i64).await {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
 
     let pis = match queries::integrations::list_project_integrations(&state.pool, project_id).await
     {
@@ -296,7 +289,7 @@ pub async fn test(
                 project_id,
                 Some(chrome.err(e)),
                 &chrome,
-                active.org_id,
+                scope.org_id,
             )
             .await
         }
@@ -307,7 +300,7 @@ pub async fn test(
             project_id,
             Some(chrome.t("flash-integration-not-found")),
             &chrome,
-            active.org_id,
+            scope.org_id,
         )
         .await;
     };
@@ -362,7 +355,7 @@ pub async fn test(
                     project_id,
                     Some(chrome.t("flash-integration-no-url")),
                     &chrome,
-                    active.org_id,
+                    scope.org_id,
                 )
                 .await
             }
@@ -371,7 +364,7 @@ pub async fn test(
         let resolved = match crate::util::ssrf::check_ssrf(url).await {
             Ok(r) => r,
             Err(msg) => {
-                return render_page(&state, project_id, Some(msg), &chrome, active.org_id).await
+                return render_page(&state, project_id, Some(msg), &chrome, scope.org_id).await
             }
         };
         let client = match reqwest::Client::builder()
@@ -388,7 +381,7 @@ pub async fn test(
                     project_id,
                     Some(chrome.tv1("flash-test-failed", "error", "internal error")),
                     &chrome,
-                    active.org_id,
+                    scope.org_id,
                 )
                 .await;
             }
@@ -407,7 +400,7 @@ pub async fn test(
         Ok(()) => chrome.t("flash-test-notification-sent"),
         Err(e) => chrome.tv1("flash-test-failed", "error", &e.to_string()),
     };
-    render_page(&state, project_id, Some(msg), &chrome, active.org_id).await
+    render_page(&state, project_id, Some(msg), &chrome, scope.org_id).await
 }
 
 #[derive(Deserialize)]
@@ -427,14 +420,12 @@ pub async fn set_target(
     Path((project_id, id)): Path<(u64, i64)>,
     Form(form): Form<TargetForm>,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    if let Err(r) = require_owner(&active) {
-        return r;
-    }
+    let scope = match require_project_owner(&active, &state.pool, project_id as i64).await {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
     // Reject cross-org targets: the integration must belong to the active org.
-    match queries::integrations::get_integration(&state.pool, id, Some(active.org_id)).await {
+    match queries::integrations::get_integration(&state.pool, id, Some(scope.org_id)).await {
         Ok(Some(_)) => {}
         Ok(None) => {
             return render_page(
@@ -442,7 +433,7 @@ pub async fn set_target(
                 project_id,
                 Some(chrome.t("flash-integration-not-found")),
                 &chrome,
-                active.org_id,
+                scope.org_id,
             )
             .await;
         }
@@ -452,7 +443,7 @@ pub async fn set_target(
                 project_id,
                 Some(chrome.err(e)),
                 &chrome,
-                active.org_id,
+                scope.org_id,
             )
             .await;
         }
@@ -491,7 +482,7 @@ pub async fn set_target(
         Ok(()) => chrome.t("flash-integration-target-saved"),
         Err(e) => chrome.err(e),
     };
-    render_page(&state, project_id, Some(msg), &chrome, active.org_id).await
+    render_page(&state, project_id, Some(msg), &chrome, scope.org_id).await
 }
 
 async fn render_page(

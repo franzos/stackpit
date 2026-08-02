@@ -54,10 +54,16 @@ where
             .map(|p| p.as_str())
             .unwrap_or("/web/projects/")
             .to_string();
+        let active_org = parts
+            .extensions
+            .get::<crate::orgs::extractor::ActiveOrg>()
+            .and_then(|a| a.org_name.clone());
         let state = AppState::from_ref(state);
         let status = state.license.status();
         Ok(Chrome(
-            PageChrome::new(csrf, locale, path).with_license_watermark(&status),
+            PageChrome::new(csrf, locale, path)
+                .with_license_watermark(&status)
+                .with_active_org(active_org),
         ))
     }
 }
@@ -132,6 +138,8 @@ pub struct ListParams {
     pub release: Option<String>,
     pub tag: Option<String>,
     pub period: Option<String>,
+    /// Org filter for the cross-org project list.
+    pub org: Option<String>,
     #[serde(default, deserialize_with = "empty_string_as_none")]
     pub project_id: Option<u64>,
     pub item_type: Option<String>,

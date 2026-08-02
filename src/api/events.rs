@@ -136,14 +136,10 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let member_a = ActiveOrg {
-            org_id: org_a,
-            role: Some(Role::Member),
-        };
-        let member_b = ActiveOrg {
-            org_id: org_b,
-            role: Some(Role::Member),
-        };
+        let member_a =
+            ActiveOrg::with_memberships(org_a, Some(Role::Member), vec![(org_a, Role::Member)]);
+        let member_b =
+            ActiveOrg::with_memberships(org_b, Some(Role::Member), vec![(org_b, Role::Member)]);
 
         assert!(require_project_scope(&member_a, &pool, pid).await.is_ok());
         assert!(require_project_scope(&member_b, &pool, pid).await.is_err());
@@ -162,10 +158,7 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let superuser = ActiveOrg {
-            org_id: 999,
-            role: None,
-        };
+        let superuser = ActiveOrg::bare(999, None);
         assert!(require_project_scope(&superuser, &pool, pid).await.is_ok());
     }
 

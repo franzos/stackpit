@@ -322,11 +322,8 @@ pub async fn toggle_discard(
         return html_error(StatusCode::NOT_FOUND, "Issue not found");
     }
     if let Err(r) =
-        crate::orgs::extractor::require_project_scope(&active, &state.pool, project_id as i64).await
+        crate::orgs::extractor::require_project_owner(&active, &state.pool, project_id as i64).await
     {
-        return r;
-    }
-    if let Err(r) = crate::orgs::extractor::require_owner(&active) {
         return r;
     }
 
@@ -371,11 +368,8 @@ pub async fn update_status(
         return html_error(StatusCode::NOT_FOUND, "Issue not found");
     }
     if let Err(r) =
-        crate::orgs::extractor::require_project_scope(&active, &state.pool, project_id as i64).await
+        crate::orgs::extractor::require_project_owner(&active, &state.pool, project_id as i64).await
     {
-        return r;
-    }
-    if let Err(r) = crate::orgs::extractor::require_owner(&active) {
         return r;
     }
 
@@ -450,25 +444,20 @@ pub async fn create_external_issue(
     if fp_project != project_id as i64 {
         return html_error(StatusCode::NOT_FOUND, "Issue not found");
     }
-    if let Err(r) =
-        crate::orgs::extractor::require_project_scope(&active, &state.pool, project_id as i64).await
+    let scope = match crate::orgs::extractor::require_project_owner(
+        &active,
+        &state.pool,
+        project_id as i64,
+    )
+    .await
     {
-        return r;
-    }
-    if let Err(r) = crate::orgs::extractor::require_owner(&active) {
-        return r;
-    }
+        Ok(s) => s,
+        Err(r) => return r,
+    };
 
     let redirect_url = format!("/web/projects/{project_id}/issues/{fingerprint}/");
 
-    // Derive the acting org from the project itself, not the session: for a
-    // superuser, require_project_scope above bypasses without checking that
-    // active.org_id even matches this project, so it can't be trusted here.
-    let org_id = match queries::orgs::org_of_project(&state.pool, project_id as i64).await {
-        Ok(Some(o)) => o,
-        Ok(None) => return html_error(StatusCode::NOT_FOUND, "Issue not found"),
-        Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
+    let org_id = scope.org_id;
 
     let integration = match queries::integrations::get_integration(
         &state.pool,

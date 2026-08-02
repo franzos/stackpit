@@ -9,7 +9,9 @@ use crate::forge;
 use crate::html::chrome::PageChrome;
 use crate::html::render_template;
 use crate::html::utils::{self, Chrome};
-use crate::orgs::extractor::{require_owner, require_project_scope, ActiveOrg};
+use crate::orgs::extractor::{
+    require_project_owner, require_project_scope, ActiveOrg, ProjectScope,
+};
 use crate::orgs::{Role, SYSTEM_ORG_ID};
 use crate::queries;
 use crate::queries::types::{ProjectKey, ProjectRepo};
@@ -50,18 +52,11 @@ pub async fn handler(
     Chrome(chrome): Chrome,
     ProjectPath(project_id): ProjectPath,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    render_general(
-        &state,
-        &active,
-        opt_auth.as_ref(),
-        project_id,
-        None,
-        &chrome,
-    )
-    .await
+    let scope = match require_project_scope(&active, &state.pool, project_id as i64).await {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    render_general(&state, &scope, opt_auth.as_ref(), project_id, None, &chrome).await
 }
 
 /// Resolve the calling user's id from the OIDC identity, or `None` for admin-token / anonymous callers.
@@ -114,20 +109,21 @@ fn owner_move_targets(
         .collect()
 }
 
-/// Orgs the caller may move this project into. Members of the active org get
-/// nothing (only owners/superusers may move); the split mirrors `require_owner`.
+/// Orgs the caller may move this project into. Members get nothing (only owners
+/// and superusers may move); the split mirrors `require_owner`. Both the role and
+/// the excluded "current" org come from the project's own org, not the session's.
 async fn move_targets_for(
     state: &AppState,
-    active: &ActiveOrg,
+    scope: &ProjectScope,
     opt_auth: Option<&Extension<AuthContext>>,
 ) -> Vec<MoveTarget> {
-    match active.role {
+    match scope.role {
         Some(Role::Member) => Vec::new(),
         None => superuser_move_targets(
             queries::orgs::list_all_orgs(&state.pool)
                 .await
                 .unwrap_or_default(),
-            active.org_id,
+            scope.org_id,
         ),
         Some(Role::Owner) => {
             let Some(user_id) = resolve_user_id(state, opt_auth).await else {
@@ -137,7 +133,7 @@ async fn move_targets_for(
                 queries::orgs::list_memberships(&state.pool, user_id)
                     .await
                     .unwrap_or_default(),
-                active.org_id,
+                scope.org_id,
             )
         }
     }
@@ -158,18 +154,16 @@ pub async fn set_name(
     ProjectPath(project_id): ProjectPath,
     Form(form): Form<SetNameForm>,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    if let Err(r) = require_owner(&active) {
-        return r;
-    }
+    let scope = match require_project_owner(&active, &state.pool, project_id as i64).await {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
 
     let name = form.name.trim().to_string();
     if name.len() > MAX_FIELD_LENGTH {
         return render_general(
             &state,
-            &active,
+            &scope,
             opt_auth.as_ref(),
             project_id,
             Some(chrome.tv1(
@@ -185,7 +179,7 @@ pub async fn set_name(
     let s = state.clone();
     let success = chrome.t("flash-project-name-updated");
     let render_chrome = chrome.clone();
-    let render_active = active.clone();
+    let render_active = scope.clone();
     let render_auth = opt_auth.clone();
     utils::query_then_render(
         queries::projects::set_project_name(&state.writer_pool, project_id, &name).await,
@@ -220,18 +214,16 @@ pub async fn add_repo(
     ProjectPath(project_id): ProjectPath,
     Form(form): Form<AddRepoForm>,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    if let Err(r) = require_owner(&active) {
-        return r;
-    }
+    let scope = match require_project_owner(&active, &state.pool, project_id as i64).await {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
 
     let repo_url = form.repo_url.trim().to_string();
     if repo_url.is_empty() {
         return render_general(
             &state,
-            &active,
+            &scope,
             opt_auth.as_ref(),
             project_id,
             Some(chrome.t("flash-repo-url-required")),
@@ -242,7 +234,7 @@ pub async fn add_repo(
     if repo_url.len() > 2048 {
         return render_general(
             &state,
-            &active,
+            &scope,
             opt_auth.as_ref(),
             project_id,
             Some(chrome.t("flash-repo-url-too-long")),
@@ -260,7 +252,7 @@ pub async fn add_repo(
     let s = state.clone();
     let success = chrome.t("flash-repo-added");
     let render_chrome = chrome.clone();
-    let render_active = active.clone();
+    let render_active = scope.clone();
     let render_auth = opt_auth.clone();
     utils::query_then_render(
         queries::projects::upsert_project_repo(
@@ -295,12 +287,10 @@ pub async fn delete_repo(
     Chrome(chrome): Chrome,
     Path((project_id, repo_id)): Path<(u64, i64)>,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    if let Err(r) = require_owner(&active) {
-        return r;
-    }
+    let scope = match require_project_owner(&active, &state.pool, project_id as i64).await {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
 
     let msg = match queries::projects::delete_project_repo(&state.writer_pool, project_id, repo_id)
         .await
@@ -315,7 +305,7 @@ pub async fn delete_repo(
     };
     render_general(
         &state,
-        &active,
+        &scope,
         opt_auth.as_ref(),
         project_id,
         Some(msg),
@@ -331,18 +321,16 @@ pub async fn archive_project(
     Chrome(chrome): Chrome,
     ProjectPath(project_id): ProjectPath,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    if let Err(r) = require_owner(&active) {
-        return r;
-    }
+    let scope = match require_project_owner(&active, &state.pool, project_id as i64).await {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
 
     match queries::projects::archive_project(&state.writer_pool, project_id).await {
         Ok(0) => {
             render_general(
                 &state,
-                &active,
+                &scope,
                 opt_auth.as_ref(),
                 project_id,
                 Some(format!(
@@ -363,7 +351,7 @@ pub async fn archive_project(
             );
             render_general(
                 &state,
-                &active,
+                &scope,
                 opt_auth.as_ref(),
                 project_id,
                 Some(chrome.t("flash-project-archived")),
@@ -374,7 +362,7 @@ pub async fn archive_project(
         Err(e) => {
             render_general(
                 &state,
-                &active,
+                &scope,
                 opt_auth.as_ref(),
                 project_id,
                 Some(chrome.err(e)),
@@ -392,12 +380,10 @@ pub async fn unarchive_project(
     Chrome(chrome): Chrome,
     ProjectPath(project_id): ProjectPath,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    if let Err(r) = require_owner(&active) {
-        return r;
-    }
+    let scope = match require_project_owner(&active, &state.pool, project_id as i64).await {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
 
     let msg = match queries::projects::unarchive_project(&state.writer_pool, project_id).await {
         Ok(0) => format!(
@@ -418,7 +404,7 @@ pub async fn unarchive_project(
     };
     render_general(
         &state,
-        &active,
+        &scope,
         opt_auth.as_ref(),
         project_id,
         Some(msg),
@@ -434,12 +420,10 @@ pub async fn delete_project(
     Chrome(chrome): Chrome,
     ProjectPath(project_id): ProjectPath,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    if let Err(r) = require_owner(&active) {
-        return r;
-    }
+    let scope = match require_project_owner(&active, &state.pool, project_id as i64).await {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
 
     match queries::projects::delete_project(&state.writer_pool, project_id).await {
         Ok(()) => {
@@ -454,7 +438,7 @@ pub async fn delete_project(
         Err(e) => {
             render_general(
                 &state,
-                &active,
+                &scope,
                 opt_auth.as_ref(),
                 project_id,
                 Some(chrome.err(e)),
@@ -479,17 +463,15 @@ pub async fn move_project(
     ProjectPath(project_id): ProjectPath,
     Form(form): Form<MoveForm>,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    if let Err(r) = require_owner(&active) {
-        return r;
-    }
+    let scope = match require_project_owner(&active, &state.pool, project_id as i64).await {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
 
     let render_err = |msg: String| {
         render_general(
             &state,
-            &active,
+            &scope,
             opt_auth.as_ref(),
             project_id,
             Some(msg),
@@ -515,7 +497,7 @@ pub async fn move_project(
         .filter(|n| !n.trim().is_empty())
         .unwrap_or_else(|| format!("Project {project_id}"));
 
-    if form.org_id == SYSTEM_ORG_ID || form.org_id == active.org_id {
+    if form.org_id == SYSTEM_ORG_ID || form.org_id == scope.org_id {
         return render_err(chrome.t("projects-move-err-invalid-target")).await;
     }
 
@@ -527,7 +509,7 @@ pub async fn move_project(
     // personal", and "not owned by me" collapse to one message so a non-owner
     // can't probe which orgs exist; a superuser sees the plain invalid-target.
     let actor_user_id = resolve_user_id(&state, opt_auth.as_ref()).await;
-    let target_ok = if active.role.is_none() {
+    let target_ok = if scope.role.is_none() {
         matches!(
             queries::orgs::get_org(&state.pool, form.org_id).await,
             Ok(Some(o)) if !o.is_personal
@@ -547,7 +529,7 @@ pub async fn move_project(
     };
 
     if !target_ok {
-        let key = if active.role.is_none() {
+        let key = if scope.role.is_none() {
             "projects-move-err-invalid-target"
         } else {
             "projects-move-err-denied"
@@ -558,7 +540,7 @@ pub async fn move_project(
     match queries::projects::move_project_to_org(
         &state.writer_pool,
         project_id as i64,
-        active.org_id,
+        scope.org_id,
         form.org_id,
     )
     .await
@@ -568,7 +550,7 @@ pub async fn move_project(
                 target: "stackpit::audit",
                 actor_user_id = ?actor_user_id,
                 project_id,
-                from_org = active.org_id,
+                from_org = scope.org_id,
                 to_org = form.org_id,
                 "project moved to another organization"
             );
@@ -581,7 +563,7 @@ pub async fn move_project(
 
 async fn render_general(
     state: &AppState,
-    active: &ActiveOrg,
+    scope: &ProjectScope,
     opt_auth: Option<&Extension<AuthContext>>,
     project_id: u64,
     message: Option<String>,
@@ -590,7 +572,7 @@ async fn render_general(
     let repos = queries::projects::get_project_repos(&state.pool, project_id)
         .await
         .unwrap_or_default();
-    let move_targets = move_targets_for(state, active, opt_auth).await;
+    let move_targets = move_targets_for(state, scope, opt_auth).await;
     let info = queries::projects::get_project_info(&state.pool, project_id)
         .await
         .ok()
@@ -663,10 +645,7 @@ pub async fn create_key(
     ProjectPath(project_id): ProjectPath,
     Form(form): Form<CreateKeyForm>,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    if let Err(r) = require_owner(&active) {
+    if let Err(r) = require_project_owner(&active, &state.pool, project_id as i64).await {
         return r;
     }
 
@@ -694,10 +673,7 @@ pub async fn delete_key(
     Chrome(chrome): Chrome,
     Path((project_id, public_key)): Path<(u64, String)>,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    if let Err(r) = require_owner(&active) {
+    if let Err(r) = require_project_owner(&active, &state.pool, project_id as i64).await {
         return r;
     }
 
@@ -799,10 +775,7 @@ pub async fn generate_sourcemap_key(
     Chrome(chrome): Chrome,
     ProjectPath(project_id): ProjectPath,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    if let Err(r) = require_owner(&active) {
+    if let Err(r) = require_project_owner(&active, &state.pool, project_id as i64).await {
         return r;
     }
 

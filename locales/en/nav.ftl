@@ -23,3 +23,5 @@ nav-integrations = Integrations
 nav-back-projects = Projects
 nav-aria-primary = Primary
 nav-aria-breadcrumb = Breadcrumb
+nav-active-org = Active:
+nav-aria-active-org = Active organization: { $org }

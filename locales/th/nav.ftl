@@ -22,3 +22,5 @@ nav-integrations = การเชื่อมต่อ
 nav-back-projects = โปรเจกต์
 nav-aria-primary = เมนูหลัก
 nav-aria-breadcrumb = เส้นทางนำทาง
+nav-active-org = ที่ใช้งาน:
+nav-aria-active-org = องค์กรที่ใช้งาน: { $org }

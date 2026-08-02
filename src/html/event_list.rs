@@ -63,10 +63,19 @@ pub async fn handler(
 
     let filter = event_filter_from_params(&params);
     let page = params.page.page();
+    // Same rule as the release list: when narrowed to a project the caller can reach,
+    // scope to that project's org so a project in another of the caller's orgs is not
+    // silently shown as empty.
+    let project_scope = match params.project_id {
+        Some(pid) => crate::orgs::extractor::require_project_scope(&active, &pool, pid as i64)
+            .await
+            .ok(),
+        None => None,
+    };
     let org_id = if active.role.is_none() {
         None
     } else {
-        Some(active.org_id)
+        Some(project_scope.map_or(active.session_org_id, |s| s.org_id))
     };
 
     let result = queries::events::list_all_events(&pool, &filter, &page, org_id).await?;

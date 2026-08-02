@@ -7,7 +7,7 @@ use crate::domain::IssueStatus;
 use crate::extractors::ProjectPath;
 use crate::html::html_error;
 use crate::html::utils::period_to_timestamp;
-use crate::orgs::extractor::{require_owner, require_project_scope, ActiveOrg};
+use crate::orgs::extractor::{require_org_owner, require_project_owner, ActiveOrg};
 use crate::queries;
 use crate::queries::types::{EventFilter, IssueFilter};
 use crate::server::AppState;
@@ -105,7 +105,7 @@ pub async fn events_bulk(
     active: ActiveOrg,
     body: Bytes,
 ) -> axum::response::Response {
-    if let Err(r) = require_owner(&active) {
+    if let Err(r) = require_org_owner(&active) {
         return r;
     }
 
@@ -119,7 +119,7 @@ pub async fn events_bulk(
     }
 
     // Scoped users (role Some) are constrained to their org; superusers (role None) are global.
-    let org_id = active.role.as_ref().map(|_| active.org_id);
+    let org_id = active.role.as_ref().map(|_| active.session_org_id);
 
     let (ids, filter) = resolve_targets(form, |form| EventFilter {
         level: opt(&form.level),
@@ -147,10 +147,7 @@ pub async fn issues_bulk(
     ProjectPath(project_id): ProjectPath,
     body: Bytes,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    if let Err(r) = require_owner(&active) {
+    if let Err(r) = require_project_owner(&active, &state.pool, project_id as i64).await {
         return r;
     }
     let form = match BulkForm::parse(&body) {
@@ -234,10 +231,7 @@ pub async fn user_reports_bulk(
     ProjectPath(project_id): ProjectPath,
     body: Bytes,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    if let Err(r) = require_owner(&active) {
+    if let Err(r) = require_project_owner(&active, &state.pool, project_id as i64).await {
         return r;
     }
     let form = match BulkForm::parse(&body) {
@@ -261,10 +255,7 @@ pub async fn client_reports_bulk(
     ProjectPath(project_id): ProjectPath,
     body: Bytes,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    if let Err(r) = require_owner(&active) {
+    if let Err(r) = require_project_owner(&active, &state.pool, project_id as i64).await {
         return r;
     }
     let form = match BulkForm::parse(&body) {
@@ -318,10 +309,7 @@ pub async fn monitor_checkins_bulk(
     Path((project_id, slug)): Path<(u64, String)>,
     body: Bytes,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    if let Err(r) = require_owner(&active) {
+    if let Err(r) = require_project_owner(&active, &state.pool, project_id as i64).await {
         return r;
     }
 

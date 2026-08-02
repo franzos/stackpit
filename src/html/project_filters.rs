@@ -9,7 +9,7 @@ use crate::filter::admin;
 use crate::html::chrome::PageChrome;
 use crate::html::render_template;
 use crate::html::utils::Chrome;
-use crate::orgs::extractor::{require_owner, require_project_scope, ActiveOrg};
+use crate::orgs::extractor::{require_project_owner, require_project_scope, ActiveOrg};
 use crate::queries;
 use crate::server::AppState;
 
@@ -237,10 +237,7 @@ pub async fn set_inbound_filters(
     ProjectPath(project_id): ProjectPath,
     Form(form): Form<InboundFilterForm>,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    if let Err(r) = require_owner(&active) {
+    if let Err(r) = require_project_owner(&active, &state.pool, project_id as i64).await {
         return r;
     }
     let browser = form.browser_extensions.is_some();
@@ -272,10 +269,7 @@ pub async fn add_message_filter(
     ProjectPath(project_id): ProjectPath,
     Form(form): Form<PatternForm>,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    if let Err(r) = require_owner(&active) {
+    if let Err(r) = require_project_owner(&active, &state.pool, project_id as i64).await {
         return r;
     }
     let pattern = match require_nonempty(
@@ -308,10 +302,7 @@ pub async fn delete_message_filter(
     Chrome(chrome): Chrome,
     Path((project_id, id)): Path<(u64, i64)>,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    if let Err(r) = require_owner(&active) {
+    if let Err(r) = require_project_owner(&active, &state.pool, project_id as i64).await {
         return r;
     }
     let result = queries::filters::delete_message_filter(&state.writer_pool, id, project_id).await;
@@ -333,10 +324,7 @@ pub async fn set_rate_limit(
     ProjectPath(project_id): ProjectPath,
     Form(form): Form<RateLimitForm>,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    if let Err(r) = require_owner(&active) {
+    if let Err(r) = require_project_owner(&active, &state.pool, project_id as i64).await {
         return r;
     }
     let result = queries::filters::set_rate_limit(
@@ -363,10 +351,7 @@ pub async fn add_environment_filter(
     ProjectPath(project_id): ProjectPath,
     Form(form): Form<EnvironmentForm>,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    if let Err(r) = require_owner(&active) {
+    if let Err(r) = require_project_owner(&active, &state.pool, project_id as i64).await {
         return r;
     }
     let env = match require_nonempty(
@@ -399,10 +384,7 @@ pub async fn delete_environment_filter(
     Chrome(chrome): Chrome,
     Path((project_id, id)): Path<(u64, i64)>,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    if let Err(r) = require_owner(&active) {
+    if let Err(r) = require_project_owner(&active, &state.pool, project_id as i64).await {
         return r;
     }
     let result =
@@ -425,10 +407,7 @@ pub async fn add_release_filter(
     ProjectPath(project_id): ProjectPath,
     Form(form): Form<PatternForm>,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    if let Err(r) = require_owner(&active) {
+    if let Err(r) = require_project_owner(&active, &state.pool, project_id as i64).await {
         return r;
     }
     let pattern = match require_nonempty(
@@ -461,10 +440,7 @@ pub async fn delete_release_filter(
     Chrome(chrome): Chrome,
     Path((project_id, id)): Path<(u64, i64)>,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    if let Err(r) = require_owner(&active) {
+    if let Err(r) = require_project_owner(&active, &state.pool, project_id as i64).await {
         return r;
     }
     let result = queries::filters::delete_release_filter(&state.writer_pool, id, project_id).await;
@@ -486,10 +462,7 @@ pub async fn add_ua_filter(
     ProjectPath(project_id): ProjectPath,
     Form(form): Form<PatternForm>,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    if let Err(r) = require_owner(&active) {
+    if let Err(r) = require_project_owner(&active, &state.pool, project_id as i64).await {
         return r;
     }
     let pattern = match require_nonempty(
@@ -522,10 +495,7 @@ pub async fn delete_ua_filter(
     Chrome(chrome): Chrome,
     Path((project_id, id)): Path<(u64, i64)>,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    if let Err(r) = require_owner(&active) {
+    if let Err(r) = require_project_owner(&active, &state.pool, project_id as i64).await {
         return r;
     }
     let result =
@@ -548,10 +518,7 @@ pub async fn add_filter_rule(
     ProjectPath(project_id): ProjectPath,
     Form(form): Form<RuleForm>,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    if let Err(r) = require_owner(&active) {
+    if let Err(r) = require_project_owner(&active, &state.pool, project_id as i64).await {
         return r;
     }
     use crate::filter::rules::{FilterAction, FilterField, FilterOperator};
@@ -611,10 +578,7 @@ pub async fn delete_filter_rule(
     Chrome(chrome): Chrome,
     Path((project_id, id)): Path<(u64, i64)>,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    if let Err(r) = require_owner(&active) {
+    if let Err(r) = require_project_owner(&active, &state.pool, project_id as i64).await {
         return r;
     }
     let result = queries::filters::delete_filter_rule(&state.writer_pool, id, project_id).await;
@@ -636,10 +600,7 @@ pub async fn add_ip_block(
     ProjectPath(project_id): ProjectPath,
     Form(form): Form<CidrForm>,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    if let Err(r) = require_owner(&active) {
+    if let Err(r) = require_project_owner(&active, &state.pool, project_id as i64).await {
         return r;
     }
     let cidr = match require_nonempty(
@@ -675,10 +636,7 @@ pub async fn delete_ip_block(
     Chrome(chrome): Chrome,
     Path((project_id, id)): Path<(u64, i64)>,
 ) -> axum::response::Response {
-    if let Err(r) = require_project_scope(&active, &state.pool, project_id as i64).await {
-        return r;
-    }
-    if let Err(r) = require_owner(&active) {
+    if let Err(r) = require_project_owner(&active, &state.pool, project_id as i64).await {
         return r;
     }
     let result = queries::filters::delete_ip_block(&state.writer_pool, id, project_id).await;

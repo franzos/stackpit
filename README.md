@@ -189,7 +189,7 @@ This project wouldn't be possible without [Sentry](https://sentry.io) and is not
 
 ## Building
 
-Requires Rust 1.88+.
+Requires Rust 1.94+ (sqlx 0.9's floor).
 
 ```bash
 cargo build --release

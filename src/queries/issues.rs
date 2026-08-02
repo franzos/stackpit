@@ -51,14 +51,14 @@ pub async fn list_issues(
     let sort = IssueSort::parse(filter.sort.as_deref());
 
     // Shared WHERE clause is built for both the count and select queries.
-    let mut count_qb: QueryBuilder<'_, crate::db::Db> =
+    let mut count_qb: QueryBuilder<crate::db::Db> =
         QueryBuilder::new("SELECT COUNT(*) FROM issues WHERE project_id = ");
     count_qb.push_bind(project_id as i64);
     push_issue_filter_conditions(&mut count_qb, filter, since);
 
     let total: i64 = count_qb.build_query_scalar().fetch_one(pool).await?;
 
-    let mut select_qb: QueryBuilder<'_, crate::db::Db> = QueryBuilder::new(
+    let mut select_qb: QueryBuilder<crate::db::Db> = QueryBuilder::new(
         "SELECT fingerprint, project_id, title, level, first_seen, last_seen, event_count, status, item_type, user_hll
          FROM issues WHERE project_id = ",
     );
@@ -79,9 +79,9 @@ pub async fn list_issues(
 
 /// Append filter conditions and their binds to an in-progress QueryBuilder.
 /// Caller must have already pushed `WHERE project_id = ` + bind before calling this.
-fn push_issue_filter_conditions<'args>(
-    qb: &mut sqlx::QueryBuilder<'args, crate::db::Db>,
-    filter: &'args IssueFilter,
+fn push_issue_filter_conditions(
+    qb: &mut sqlx::QueryBuilder<crate::db::Db>,
+    filter: &IssueFilter,
     since: Option<i64>,
 ) {
     if let Some(ref level) = filter.level {
@@ -182,7 +182,7 @@ pub async fn issue_sparklines(
 
     // bucket_secs is a server-computed integer, safe to inline; everything
     // caller-influenced is bound.
-    let mut qb: QueryBuilder<'_, crate::db::Db> =
+    let mut qb: QueryBuilder<crate::db::Db> =
         QueryBuilder::new("SELECT fingerprint, CAST((timestamp - ");
     qb.push_bind(start_ts);
     qb.push(format!(
@@ -343,8 +343,7 @@ pub async fn upsert_issue(
              status = CASE WHEN issues.status = 'resolved' THEN 'unresolved' ELSE issues.status END"
     );
 
-    let sql = crate::db::translate_sql(&sql);
-    sqlx::query(&sql)
+    sqlx::query(crate::db::dyn_sql(&sql))
         .bind(fingerprint)
         .bind(project_id as i64)
         .bind(title)

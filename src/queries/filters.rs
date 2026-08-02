@@ -22,8 +22,7 @@ async fn list_two_col(
     project_id: u64,
 ) -> Result<Vec<(i64, String)>> {
     let query = format!("SELECT id, {value_col} FROM {table} WHERE project_id = ?1 ORDER BY id");
-    let query = crate::db::translate_sql(&query);
-    let rows = sqlx::query(&query)
+    let rows = sqlx::query(crate::db::dyn_sql(&query))
         .bind(project_id as i64)
         .fetch_all(pool)
         .await?;
@@ -41,8 +40,7 @@ async fn delete_by_id_and_project(
     project_id: u64,
 ) -> Result<u64> {
     let query = format!("DELETE FROM {table} WHERE id = ?1 AND project_id = ?2");
-    let query = crate::db::translate_sql(&query);
-    let result = sqlx::query(&query)
+    let result = sqlx::query(crate::db::dyn_sql(&query))
         .bind(id)
         .bind(project_id as i64)
         .execute(pool)

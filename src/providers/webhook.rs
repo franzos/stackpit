@@ -1,6 +1,6 @@
 use crate::notify::NotificationEvent;
 use anyhow::Result;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 
 pub async fn send(

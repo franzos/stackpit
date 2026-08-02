@@ -201,12 +201,31 @@ async fn list_projects_inner(
          ORDER BY CASE WHEN fs.first_seen IS NULL THEN 1 ELSE 0 END, {order_expr} DESC, p.project_id DESC"
     );
 
-    let sql = crate::db::translate_sql(&sql);
     let rows = match (org_id, since) {
-        (Some(oid), Some(ts)) => sqlx::query(&sql).bind(oid).bind(ts).fetch_all(pool).await?,
-        (Some(oid), None) => sqlx::query(&sql).bind(oid).fetch_all(pool).await?,
-        (None, Some(ts)) => sqlx::query(&sql).bind(ts).fetch_all(pool).await?,
-        (None, None) => sqlx::query(&sql).fetch_all(pool).await?,
+        (Some(oid), Some(ts)) => {
+            sqlx::query(crate::db::dyn_sql(&sql))
+                .bind(oid)
+                .bind(ts)
+                .fetch_all(pool)
+                .await?
+        }
+        (Some(oid), None) => {
+            sqlx::query(crate::db::dyn_sql(&sql))
+                .bind(oid)
+                .fetch_all(pool)
+                .await?
+        }
+        (None, Some(ts)) => {
+            sqlx::query(crate::db::dyn_sql(&sql))
+                .bind(ts)
+                .fetch_all(pool)
+                .await?
+        }
+        (None, None) => {
+            sqlx::query(crate::db::dyn_sql(&sql))
+                .fetch_all(pool)
+                .await?
+        }
     };
 
     let mut projects: Vec<ProjectSummary> = rows.iter().map(map_project_row).collect();
@@ -894,8 +913,10 @@ pub async fn delete_project_in_tx(
 
     for table in PROJECT_SCOPED_TABLES {
         let raw = format!("DELETE FROM {table} WHERE project_id = ?1");
-        let stmt = crate::db::translate_sql(&raw);
-        sqlx::query(&stmt).bind(pid).execute(&mut **tx).await?;
+        sqlx::query(crate::db::dyn_sql(&raw))
+            .bind(pid)
+            .execute(&mut **tx)
+            .await?;
     }
 
     sqlx::query(sql!("DELETE FROM projects WHERE project_id = ?1"))
@@ -913,8 +934,8 @@ const DELETE_CHUNK_LIMIT: i64 = 5000;
 /// between chunks so a waiting writer can grab the DB write lock.
 async fn chunked_delete(
     pool: &crate::db::DbPool,
-    table: &str,
-    where_clause: &str,
+    table: &'static str,
+    where_clause: &'static str,
     pid: i64,
 ) -> Result<()> {
     #[cfg(feature = "sqlite")]
@@ -928,8 +949,7 @@ async fn chunked_delete(
                 SELECT {row_ref} FROM {table} WHERE {where_clause} LIMIT ?2
             )"
         );
-        let stmt = crate::db::translate_sql(&raw);
-        let deleted = sqlx::query(&stmt)
+        let deleted = sqlx::query(crate::db::dyn_sql(&raw))
             .bind(pid)
             .bind(DELETE_CHUNK_LIMIT)
             .execute(pool)
@@ -1462,10 +1482,11 @@ mod tests {
             "project_keys",
             "projects",
         ] {
-            let n: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+            let n: i64 =
+                sqlx::query_scalar(crate::db::dyn_sql(&format!("SELECT COUNT(*) FROM {table}")))
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
             assert_eq!(n, 0, "table `{table}` should be empty after delete_project");
         }
     }

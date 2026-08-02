@@ -2,6 +2,7 @@
 name = "stackpit"
 version = "0.3.22"
 edition = "2021"
+rust-version = "1.94"
 description = "Lightweight, self-hosted error tracking and event monitoring"
 authors = ["Franz Geffke <mail@gofranz.com>"]
 # src/commercial/ is governed by LICENSE-COMMERCIAL (LicenseRef-Stackpit-Commercial-1.0);
@@ -42,7 +43,7 @@ axum = { version = "0.8", features = ["multipart"] }
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 memchr = "2"
-sqlx = { version = "0.8", features = ["runtime-tokio", "chrono", "migrate", "macros"], default-features = false }
+sqlx = { version = "0.9", features = ["runtime-tokio", "chrono", "migrate", "macros"], default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
@@ -55,7 +56,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 zstd = "0.13"
 dashmap = "6"
 ipnet = "2"
-lru = "0.16"
+lru = "0.18"
 parking_lot = "0.12"
 arc-swap = "1"
 # Commercial license verification (src/commercial/): the OPLB/CBOR/Ed25519
@@ -74,15 +75,15 @@ polymail = { version = "0.1.6", default-features = false, features = [
     "sendgrid",
     "smtp",
 ] }
-aes-gcm = "0.10"
-base64 = "0.22"
+aes-gcm = "0.11"
+base64 = "0.23"
 email_address = "0.2"
 # OS-backed entropy for handles / nonces / CSRF tokens: every secret comes
 # straight from the OS RNG, never a userspace PRNG.
-getrandom = "0.3"
-hmac = "0.12"
-sha1 = "0.10"
-sha2 = "0.10"
+getrandom = "0.4"
+hmac = "0.13"
+sha1 = "0.11"
+sha2 = "0.11"
 hex = "0.4"
 subtle = "2"
 secrecy = { version = "0.10", features = ["serde"] }
@@ -98,15 +99,17 @@ openidconnect = { version = "4", default-features = false, features = ["reqwest"
 # both of which the spec forbids on logout tokens -- so we do it ourselves
 # with jsonwebtoken. RSA-only (RS256); the JWK conversion in oidc::logout
 # tracks Hydra's documented signing algorithm.
-jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
+jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto"] }
 url = "2"
 # i18n: Fluent loader (embeds locales/*.ftl at compile time), language
 # identifiers, and negotiation.
-fluent-templates = "0.14"
+fluent-templates = "0.15"
 unic-langid = { version = "0.9", features = ["macros"] }
+# Pinned to 0.13: 0.14 moved to unic-langid 0.10, whose LanguageIdentifier is a
+# different type from the one fluent-templates (unic-langid 0.9) hands us.
 fluent-langneg = "0.13"
 metrics = "0.24"
-metrics-exporter-prometheus = { version = "0.16", default-features = false }
+metrics-exporter-prometheus = { version = "0.18", default-features = false }
 
 [dev-dependencies]
 # loopback http only — no TLS feature needed.

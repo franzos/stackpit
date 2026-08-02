@@ -114,9 +114,11 @@ pub(crate) async fn incremental_vacuum(pool: &DbPool) -> Result<()> {
         if before == 0 {
             return Ok(());
         }
-        sqlx::query(&format!("PRAGMA incremental_vacuum({VACUUM_BATCH_PAGES})"))
-            .execute(pool)
-            .await?;
+        sqlx::query(crate::db::dyn_sql(&format!(
+            "PRAGMA incremental_vacuum({VACUUM_BATCH_PAGES})"
+        )))
+        .execute(pool)
+        .await?;
         let after: i64 = sqlx::query_scalar("PRAGMA freelist_count")
             .fetch_one(pool)
             .await?;

@@ -188,9 +188,7 @@ pub async fn list_transactions(
          FROM transaction_metrics \
          WHERE project_id = ?1 AND hour_bucket >= ?2"
     );
-    let query = crate::db::translate_sql(&raw);
-
-    let rows = sqlx::query(&query)
+    let rows = sqlx::query(crate::db::dyn_sql(&raw))
         .bind(project_id as i64)
         .bind(hour_floor)
         .fetch_all(pool)
@@ -244,9 +242,7 @@ pub async fn transaction_distribution(
          FROM transaction_metrics \
          WHERE project_id = ?1 AND hour_bucket >= ?2 AND transaction_name = ?3"
     );
-    let query = crate::db::translate_sql(&raw);
-
-    let rows = sqlx::query(&query)
+    let rows = sqlx::query(crate::db::dyn_sql(&raw))
         .bind(project_id as i64)
         .bind(hour_floor)
         .bind(name)

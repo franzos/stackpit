@@ -41,13 +41,13 @@ impl EventSort {
 /// Append event filter conditions and their binds to an in-progress QueryBuilder.
 /// Caller must have already pushed the base query (e.g. `SELECT ... FROM events`).
 /// If any filters are active, a `WHERE` keyword is emitted first.
-fn push_event_filter_conditions<'args>(
-    qb: &mut sqlx::QueryBuilder<'args, crate::db::Db>,
-    filter: &'args EventFilter,
+fn push_event_filter_conditions(
+    qb: &mut sqlx::QueryBuilder<crate::db::Db>,
+    filter: &EventFilter,
     org_id: Option<i64>,
 ) {
     let mut has_where = false;
-    let mut push_conjunction = |qb: &mut sqlx::QueryBuilder<'args, crate::db::Db>| {
+    let mut push_conjunction = |qb: &mut sqlx::QueryBuilder<crate::db::Db>| {
         if has_where {
             qb.push(" AND ");
         } else {
@@ -97,14 +97,14 @@ pub async fn list_all_events(
 
     let sort = EventSort::parse(filter.sort.as_deref());
 
-    let mut count_qb: QueryBuilder<'_, crate::db::Db> =
+    let mut count_qb: QueryBuilder<crate::db::Db> =
         QueryBuilder::new("SELECT COUNT(*) FROM events");
     push_event_filter_conditions(&mut count_qb, filter, org_id);
 
     let total: i64 = count_qb.build_query_scalar().fetch_one(pool).await?;
 
     // Join projects so the firehose shows names instead of bare numeric ids.
-    let mut select_qb: QueryBuilder<'_, crate::db::Db> = QueryBuilder::new(
+    let mut select_qb: QueryBuilder<crate::db::Db> = QueryBuilder::new(
         "SELECT events.event_id, events.item_type, events.project_id, p.name AS project_name, \
          events.fingerprint, events.timestamp, events.level, events.title, events.platform, \
          events.release, events.environment \
@@ -261,7 +261,7 @@ pub async fn project_event_histogram(
 
     // bucket_secs is a server-computed integer, safe to inline; everything
     // caller-influenced is bound.
-    let mut qb: QueryBuilder<'_, crate::db::Db> = QueryBuilder::new("SELECT CAST((timestamp - ");
+    let mut qb: QueryBuilder<crate::db::Db> = QueryBuilder::new("SELECT CAST((timestamp - ");
     qb.push_bind(start_ts);
     qb.push(format!(
         ") / {bucket_secs} AS BIGINT) AS bucket, COUNT(*) FROM events WHERE project_id = "
@@ -295,10 +295,7 @@ pub async fn project_event_histogram(
 /// Translate an [`IssueFilter`] onto the `events` table for the histogram.
 /// `level`, `title` and `release` live on the event row itself; `status` and the
 /// tag facet only exist per issue, so they go through the fingerprint.
-fn push_issue_filter_on_events<'args>(
-    qb: &mut sqlx::QueryBuilder<'args, crate::db::Db>,
-    filter: &'args IssueFilter,
-) {
+fn push_issue_filter_on_events(qb: &mut sqlx::QueryBuilder<crate::db::Db>, filter: &IssueFilter) {
     if let Some(ref item_type) = filter.item_type {
         qb.push(" AND item_type = ");
         qb.push_bind(item_type.as_str());

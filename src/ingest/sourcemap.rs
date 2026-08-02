@@ -302,7 +302,7 @@ fn extract_context(source: &str, line_idx: usize) -> (Option<String>, Vec<String
 
 // DB helpers
 
-use crate::db::{sql, translate_sql, DbPool};
+use crate::db::{sql, DbPool};
 use sqlx::Row;
 
 /// Store a sourcemap entry (zstd-compressed) in the database.
@@ -361,9 +361,7 @@ pub async fn find_missing_chunks(
         "SELECT checksum FROM upload_chunks WHERE project_id = ?{pid_idx} AND checksum IN ({})",
         placeholders.join(", ")
     );
-    let query = translate_sql(&query);
-
-    let mut q = sqlx::query_scalar::<_, String>(&query);
+    let mut q = sqlx::query_scalar::<_, String>(crate::db::dyn_sql(&query));
     for cs in checksums {
         q = q.bind(cs.clone());
     }
@@ -483,9 +481,7 @@ pub async fn load_sourcemaps(
         "SELECT debug_id, data FROM sourcemaps WHERE project_id = ?{pid_idx} AND debug_id IN ({})",
         placeholders.join(", ")
     );
-    let query = translate_sql(&query);
-
-    let mut q = sqlx::query(&query);
+    let mut q = sqlx::query(crate::db::dyn_sql(&query));
     for id in debug_ids {
         q = q.bind(id.clone());
     }

@@ -110,8 +110,7 @@ pub async fn list_project_integrations(
     project_id: u64,
 ) -> Result<Vec<ProjectIntegration>> {
     let sql = format!("{PROJECT_INTEGRATION_SELECT} WHERE pi.project_id = ?1 ORDER BY i.name");
-    let sql = crate::db::translate_sql(&sql);
-    let rows = sqlx::query(&sql)
+    let rows = sqlx::query(crate::db::dyn_sql(&sql))
         .bind(project_id as i64)
         .fetch_all(pool)
         .await?;
@@ -126,8 +125,7 @@ pub async fn get_active_for_project(
     let sql = format!(
         "{PROJECT_INTEGRATION_SELECT} WHERE pi.project_id = ?1 AND pi.enabled = TRUE ORDER BY i.name"
     );
-    let sql = crate::db::translate_sql(&sql);
-    let rows = sqlx::query(&sql)
+    let rows = sqlx::query(crate::db::dyn_sql(&sql))
         .bind(project_id as i64)
         .fetch_all(pool)
         .await?;
@@ -143,8 +141,10 @@ pub async fn list_active_for_org(pool: &DbPool, org_id: i64) -> Result<Vec<Proje
          WHERE p.org_id = ?1 AND pi.enabled = TRUE
          ORDER BY pi.project_id, i.name"
     );
-    let sql = crate::db::translate_sql(&sql);
-    let rows = sqlx::query(&sql).bind(org_id).fetch_all(pool).await?;
+    let rows = sqlx::query(crate::db::dyn_sql(&sql))
+        .bind(org_id)
+        .fetch_all(pool)
+        .await?;
     rows.iter().map(row_to_project_integration).collect()
 }
 

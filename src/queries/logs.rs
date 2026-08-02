@@ -5,10 +5,10 @@ use crate::db::DbRowExt;
 
 use super::types::{LogEntry, LogFilter, Page, PagedResult};
 
-fn push_log_filter_conditions<'args>(
-    qb: &mut sqlx::QueryBuilder<'args, crate::db::Db>,
+fn push_log_filter_conditions(
+    qb: &mut sqlx::QueryBuilder<crate::db::Db>,
     project_id: u64,
-    filter: &'args LogFilter,
+    filter: &LogFilter,
 ) {
     qb.push(" WHERE project_id = ");
     qb.push_bind(project_id as i64);
@@ -36,13 +36,12 @@ pub async fn list_logs(
 ) -> Result<PagedResult<LogEntry>> {
     use sqlx::QueryBuilder;
 
-    let mut count_qb: QueryBuilder<'_, crate::db::Db> =
-        QueryBuilder::new("SELECT COUNT(*) FROM logs");
+    let mut count_qb: QueryBuilder<crate::db::Db> = QueryBuilder::new("SELECT COUNT(*) FROM logs");
     push_log_filter_conditions(&mut count_qb, project_id, filter);
 
     let total: i64 = count_qb.build_query_scalar().fetch_one(pool).await?;
 
-    let mut select_qb: QueryBuilder<'_, crate::db::Db> = QueryBuilder::new(
+    let mut select_qb: QueryBuilder<crate::db::Db> = QueryBuilder::new(
         "SELECT id, project_id, timestamp, level, body, trace_id, span_id, release, environment, attributes FROM logs",
     );
     push_log_filter_conditions(&mut select_qb, project_id, filter);

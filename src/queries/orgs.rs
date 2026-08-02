@@ -55,12 +55,15 @@ pub async fn ensure_personal_org(pool: &DbPool, user_id: i64) -> Result<i64> {
     let base = format!("personal-{}", crate::util::crypto::random_hex::<3>());
 
     #[cfg(feature = "sqlite")]
-    let ins = "INSERT OR IGNORE INTO organizations (slug, name, created_by, is_personal) \
-               VALUES (?1, 'Personal', ?2, 1)";
+    let ins = sql!(
+        "INSERT OR IGNORE INTO organizations (slug, name, created_by, is_personal) \
+               VALUES (?1, 'Personal', ?2, 1)"
+    );
     #[cfg(not(feature = "sqlite"))]
-    let ins = "INSERT INTO organizations (slug, name, created_by, is_personal) \
-               VALUES (?1, 'Personal', ?2, TRUE) ON CONFLICT DO NOTHING";
-    let translated = crate::db::translate_sql(ins);
+    let ins = sql!(
+        "INSERT INTO organizations (slug, name, created_by, is_personal) \
+               VALUES (?1, 'Personal', ?2, TRUE) ON CONFLICT DO NOTHING"
+    );
 
     for attempt in 0u32..100 {
         let candidate = if attempt == 0 {
@@ -69,7 +72,7 @@ pub async fn ensure_personal_org(pool: &DbPool, user_id: i64) -> Result<i64> {
             format!("{base}-{attempt}")
         };
 
-        let result = sqlx::query(translated.as_ref())
+        let result = sqlx::query(ins)
             .bind(&candidate)
             .bind(user_id)
             .execute(pool)
@@ -216,15 +219,17 @@ pub async fn provision_forseti_org(
     }
 
     #[cfg(feature = "sqlite")]
-    let ins = "INSERT OR IGNORE INTO organizations \
+    let ins = sql!(
+        "INSERT OR IGNORE INTO organizations \
                (slug, name, ext_iss, ext_org_id, created_by, role_sync) \
-               VALUES (?1, ?2, ?3, ?4, ?5, 1)";
+               VALUES (?1, ?2, ?3, ?4, ?5, 1)"
+    );
     #[cfg(not(feature = "sqlite"))]
-    let ins = "INSERT INTO organizations \
+    let ins = sql!(
+        "INSERT INTO organizations \
                (slug, name, ext_iss, ext_org_id, created_by, role_sync) \
-               VALUES (?1, ?2, ?3, ?4, ?5, TRUE) ON CONFLICT (slug) DO NOTHING";
-
-    let translated = crate::db::translate_sql(ins);
+               VALUES (?1, ?2, ?3, ?4, ?5, TRUE) ON CONFLICT (slug) DO NOTHING"
+    );
 
     for attempt in 0u32..100 {
         let candidate = if attempt == 0 {
@@ -233,7 +238,7 @@ pub async fn provision_forseti_org(
             format!("{slug}-{attempt}")
         };
 
-        let result = sqlx::query(translated.as_ref())
+        let result = sqlx::query(ins)
             .bind(&candidate)
             .bind(name)
             .bind(ext_iss)
@@ -805,15 +810,17 @@ pub async fn create_native_org(
     name: &str,
 ) -> Result<i64> {
     #[cfg(feature = "sqlite")]
-    let ins = "INSERT OR IGNORE INTO organizations \
+    let ins = sql!(
+        "INSERT OR IGNORE INTO organizations \
                (slug, name, created_by, is_personal, role_sync) \
-               VALUES (?1, ?2, ?3, 0, 0)";
+               VALUES (?1, ?2, ?3, 0, 0)"
+    );
     #[cfg(not(feature = "sqlite"))]
-    let ins = "INSERT INTO organizations \
+    let ins = sql!(
+        "INSERT INTO organizations \
                (slug, name, created_by, is_personal, role_sync) \
-               VALUES (?1, ?2, ?3, FALSE, FALSE) ON CONFLICT (slug) DO NOTHING";
-
-    let translated = crate::db::translate_sql(ins);
+               VALUES (?1, ?2, ?3, FALSE, FALSE) ON CONFLICT (slug) DO NOTHING"
+    );
 
     for attempt in 0u32..100 {
         let candidate = if attempt == 0 {
@@ -822,7 +829,7 @@ pub async fn create_native_org(
             format!("{slug}-{attempt}")
         };
 
-        let result = sqlx::query(translated.as_ref())
+        let result = sqlx::query(ins)
             .bind(&candidate)
             .bind(name)
             .bind(created_by)
@@ -2187,10 +2194,11 @@ mod tests {
         assert!(matches!(outcome, DeleteOrgOutcome::Deleted(_)));
 
         for table in ["events", "attachments", "logs", "spans", "metrics"] {
-            let n: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+            let n: i64 =
+                sqlx::query_scalar(crate::db::dyn_sql(&format!("SELECT COUNT(*) FROM {table}")))
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
             assert_eq!(n, 0, "table `{table}` should be empty after org delete");
         }
     }

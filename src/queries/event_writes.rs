@@ -52,9 +52,9 @@ const EVENT_COLUMNS: &str = "event_id, item_type, payload, project_id, public_ke
 
 /// Push one event row's bind values in `EVENT_COLUMNS` order. Shared by the
 /// single-row and bulk insert paths so the column/bind order lives in one place.
-fn push_event_row<'a>(
-    mut b: sqlx::query_builder::Separated<'_, 'a, crate::db::Db, &'static str>,
-    event: &'a StorableEvent,
+fn push_event_row(
+    mut b: sqlx::query_builder::Separated<'_, crate::db::Db, &'static str>,
+    event: &StorableEvent,
 ) {
     b.push_bind(&event.event_id);
     b.push_bind(event.item_type.as_str());
@@ -90,7 +90,7 @@ where
     let dialect = insert_ignore("events", EVENT_COLUMNS, Some("event_id"));
 
     let mut builder = QueryBuilder::<crate::db::Db>::new(&dialect.prefix);
-    builder.push_values(std::iter::once(event), |b, event| push_event_row(b, event));
+    builder.push_values(std::iter::once(event), push_event_row);
     builder.push(&dialect.suffix);
 
     let result = builder.build().execute(executor).await?;

@@ -126,7 +126,7 @@ pub async fn get_replay_errors(
         return Ok(Vec::new());
     }
 
-    let mut qb: sqlx::QueryBuilder<'_, crate::db::Db> = sqlx::QueryBuilder::new(
+    let mut qb: sqlx::QueryBuilder<crate::db::Db> = sqlx::QueryBuilder::new(
         "SELECT event_id, fingerprint, title, level, timestamp FROM events WHERE project_id = ",
     );
     qb.push_bind(project_id as i64);

@@ -1,4 +1,4 @@
-use crate::db::{sql, translate_sql};
+use crate::db::sql;
 use crate::queries::event_writes;
 use anyhow::Result;
 use sqlx::QueryBuilder;
@@ -236,12 +236,13 @@ pub(super) async fn flush_aggregation_inner(
                 None => delta.hll.clone(),
             };
 
-            let sql = translate_sql("UPDATE issues SET user_hll = ?1 WHERE fingerprint = ?2");
-            sqlx::query(&sql)
-                .bind(merged.get_registers())
-                .bind(*fp)
-                .execute(&mut **tx)
-                .await?;
+            sqlx::query(sql!(
+                "UPDATE issues SET user_hll = ?1 WHERE fingerprint = ?2"
+            ))
+            .bind(merged.get_registers())
+            .bind(*fp)
+            .execute(&mut **tx)
+            .await?;
         }
     }
 

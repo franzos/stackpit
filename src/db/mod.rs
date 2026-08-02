@@ -87,6 +87,14 @@ pub fn translate_sql(s: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
+/// `translate_sql` plus sqlx 0.9's `SqlSafeStr` assertion, so the "this string
+/// is not attacker-shaped" claim lives in one place instead of at every
+/// `format!`ed call site. Callers must only interpolate `&'static str`
+/// fragments or server-computed integers; every caller-supplied value is bound.
+pub fn dyn_sql(s: &str) -> sqlx::AssertSqlSafe<String> {
+    sqlx::AssertSqlSafe(translate_sql(s).into_owned())
+}
+
 #[cfg(feature = "postgres")]
 pub use pool::create_bg_pool;
 #[cfg(feature = "postgres")]
@@ -96,7 +104,7 @@ pub use pool::create_write_pool as create_writer_pool;
 
 /// Run a PRAGMA on a SQLite pool. No-op for PostgreSQL.
 #[cfg(feature = "sqlite")]
-pub async fn sqlite_pragma(pool: &DbPool, pragma: &str) -> Result<()> {
+pub async fn sqlite_pragma(pool: &DbPool, pragma: &'static str) -> Result<()> {
     #[cfg(not(feature = "postgres"))]
     {
         sqlx::query(pragma).execute(pool).await?;
@@ -195,7 +203,8 @@ pub async fn open_test_pool() -> DbPool {
                 .map(|t| format!("\"{t}\""))
                 .collect::<Vec<_>>()
                 .join(", ");
-            sqlx::query(&format!("TRUNCATE {list} CASCADE"))
+            // `list` is quoted table names straight out of pg_catalog, not caller input.
+            sqlx::query(dyn_sql(&format!("TRUNCATE {list} CASCADE")))
                 .execute(&pool)
                 .await
                 .unwrap();

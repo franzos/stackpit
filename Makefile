@@ -33,13 +33,15 @@ TAILWIND_RUN := guix shell glibc gcc-toolchain -- bash -c \
   'export LD_LIBRARY_PATH=$$LIBRARY_PATH:$$LD_LIBRARY_PATH; exec "$$0" "$$@"' $(TAILWIND)
 endif
 
-# Cargo wrapper. On GUIX, supply rust + gcc + OpenSSL; bare cargo otherwise.
+# Cargo wrapper. On GUIX, supply gcc + OpenSSL and keep whatever cargo is on
+# PATH: Guix's rust is 1.93, below the 1.94 sqlx 0.9 needs, so the toolchain
+# comes from rustup. `--preserve` keeps PATH so that cargo survives the shell.
 # The trailing `cargo` token is $0 for `bash -c`; real args arrive as "$@".
 ifeq ($(shell command -v guix 2>/dev/null),)
 CARGO := cargo
 else
-CARGO := guix shell rust rust:cargo gcc-toolchain openssl pkg-config -- \
-  bash -c 'export CC=gcc; export OPENSSL_DIR=$$(dirname $$(dirname $$(realpath $$(which openssl)))); exec cargo "$$@"' cargo
+CARGO := guix shell --preserve=^PATH$$ gcc-toolchain openssl pkg-config -- \
+  bash -c 'export CC=gcc; export OPENSSL_DIR=$$(dirname $$(dirname $$(realpath $$(which openssl)))); export RUSTFLAGS="$$RUSTFLAGS -C linker=gcc -C linker-features=-lld"; exec cargo "$$@"' cargo
 endif
 
 # Runtime wrapper for the built binary (sqlite + libgcc on LD_LIBRARY_PATH).

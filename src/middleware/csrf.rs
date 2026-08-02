@@ -1,7 +1,7 @@
 use axum::extract::State;
 use axum::middleware::Next;
 use axum::response::IntoResponse;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 

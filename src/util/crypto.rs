@@ -144,6 +144,25 @@ mod tests {
         assert_eq!(decrypted, plaintext);
     }
 
+    /// GCM spec test case 16 (AES-256). Pins the at-rest blob layout
+    /// (`nonce || ciphertext || tag`) against a known-answer vector so a
+    /// future aes-gcm/aead bump can't silently change what's on disk.
+    #[test]
+    fn decrypts_known_answer_vector() {
+        let key = hex::decode("feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308")
+            .unwrap();
+        let enc = SecretEncryptor {
+            cipher: Aes256Gcm::new_from_slice(&key).unwrap(),
+        };
+        let mut blob = hex::decode("cafebabefacedbaddecaf888").unwrap();
+        blob.extend_from_slice(&hex::decode("522dc1f099567d07f47f37a32a84427d643a8cdcbfe5c0c97598a2bd2555d1aa8cb08e48590dbb3da7b08b1056828838c5f61e6393ba7a0abcc9f66276fc6ece0f4e1768cddf8853bb2d551b").unwrap());
+        let aad = hex::decode("feedfacedeadbeeffeedfacedeadbeefabaddad2").unwrap();
+
+        let plaintext = enc.decrypt_bytes_with_aad(&blob, &aad).unwrap();
+        assert_eq!(hex::encode(plaintext), "d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39");
+        assert!(enc.decrypt_bytes_with_aad(&blob, b"wrong-aad").is_none());
+    }
+
     #[test]
     fn decrypt_garbage_returns_none() {
         let enc = test_encryptor();

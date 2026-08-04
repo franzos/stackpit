@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.26] - 2026-08-04
+
+### Changed
+- Errors differing only by an id, hash or `key=123` value now group together
+
 ## [0.3.25] - 2026-08-04
 
 ### Fixed

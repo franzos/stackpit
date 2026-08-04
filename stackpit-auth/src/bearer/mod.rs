@@ -663,6 +663,21 @@ mod tests {
         assert!(matches!(outcome, BearerAuthOutcome::InvalidToken));
     }
 
+    /// `jsonwebtoken` only compares `aud` when the claim is present, so an
+    /// aud-less token from the right issuer would otherwise be accepted at a
+    /// resource server that requires an audience (RFC 9068 §2.2, §4).
+    #[tokio::test]
+    async fn jwt_absent_audience_rejected() {
+        let gate = base_gate(|_| {});
+        let jwt = issue_jwt(json!({
+            "iss": "https://hydra.example.com",
+            "sub": "alice",
+            "exp": now() + 300,
+        }));
+        let outcome = gate.authorize(Some(&jwt), "").await;
+        assert!(matches!(outcome, BearerAuthOutcome::InvalidToken));
+    }
+
     #[tokio::test]
     async fn jwt_expired_rejected() {
         let gate = base_gate(|_| {});

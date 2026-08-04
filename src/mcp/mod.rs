@@ -147,6 +147,10 @@ impl ResourceMetadata {
             "resource": audience,
             "authorization_servers": [authorization_server],
             "scopes_supported": [
+                // OIDC Core §5.3.1: userinfo requires `openid`, and principal
+                // resolution goes through userinfo. Hydra doesn't enforce it;
+                // Keycloak and Okta do, so omitting it breaks them outright.
+                "openid",
                 SCOPE_EVENTS_READ,
                 SCOPE_PROJECTS_READ,
                 "offline_access",
@@ -355,7 +359,12 @@ mod tests {
         let (_, _, body) = well_known(WELL_KNOWN_PATH).await;
         assert_eq!(
             body["scopes_supported"],
-            json!([SCOPE_EVENTS_READ, SCOPE_PROJECTS_READ, "offline_access"]),
+            json!([
+                "openid",
+                SCOPE_EVENTS_READ,
+                SCOPE_PROJECTS_READ,
+                "offline_access"
+            ]),
         );
     }
 

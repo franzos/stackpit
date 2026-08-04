@@ -85,10 +85,14 @@ impl BearerGate {
         validation.set_issuer(&[expected_iss]);
         if !self.inner.audience.is_empty() {
             validation.set_audience(&[self.inner.audience.as_str()]);
+            // `set_audience` only compares when the claim is present, so an
+            // aud-less token would sail through (RFC 9068 §2.2 makes it REQUIRED).
+            validation.set_required_spec_claims(&["exp", "aud", "iss"]);
         } else {
             // jsonwebtoken validates aud by default; turn it off explicitly.
             validation.validate_aud = false;
         }
+        validation.validate_nbf = true;
         validation.leeway = JWT_LEEWAY_SECS;
 
         let data = match decode::<serde_json::Value>(token, &key, &validation) {

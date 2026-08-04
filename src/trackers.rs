@@ -295,6 +295,16 @@ mod tests {
     #[tokio::test]
     async fn an_integration_in_another_org_is_not_found() {
         let pool = crate::db::open_test_pool().await;
+        // Only org 1 comes from migrations; postgres enforces the FK, sqlite doesn't.
+        sqlx::query(crate::db::sql!(
+            "INSERT INTO organizations (org_id, slug, name) VALUES (?1, ?2, ?2)
+             ON CONFLICT(org_id) DO NOTHING"
+        ))
+        .bind(2i64)
+        .bind("org-2")
+        .execute(&pool)
+        .await
+        .unwrap();
         let id = integration(&pool, 2, "gh-other", "github", Some("https://git.test")).await;
         issue(&pool, "fp-org", 1).await;
 

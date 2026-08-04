@@ -1,7 +1,9 @@
 //! MCP endpoint: Streamable HTTP transport, bearer-only auth.
-//! Transport framing lives in [`transport`]; identity and per-tool
-//! authorization in [`principal`]; the tool table in [`tools`].
+//! Transport wiring lives in [`transport`]; the rmcp server in [`handler`];
+//! identity and per-tool authorization in [`principal`]; the tool table in
+//! [`tools`].
 
+mod handler;
 pub mod principal;
 mod tools;
 mod transport;
@@ -14,12 +16,11 @@ use axum::extract::{FromRef, State};
 use axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::routing::{get, post};
+use axum::routing::get;
 use axum::{Json, Router};
 use lru::LruCache;
 use parking_lot::Mutex;
 use serde_json::{json, Value};
-use stackpit_auth::axum_ext::mcp::{mcp_auth_middleware, McpAuthLayerState};
 use stackpit_auth::bearer::UserProvisioner;
 use stackpit_auth::BearerGate;
 
@@ -34,11 +35,34 @@ pub use transport::OriginPolicy;
 
 pub const SCOPE_EVENTS_READ: &str = "stackpit:events:read";
 pub const SCOPE_PROJECTS_READ: &str = "stackpit:projects:read";
-/// Never advertised in `scopes_supported`: a client that sees no `scope` in the
-/// challenge asks for everything published there, so listing these would make
-/// every first connect prompt for write and admin. They arrive by 403 step-up.
 pub const SCOPE_PROJECTS_WRITE: &str = "stackpit:projects:write";
+/// Never advertised in `scopes_supported`: a client that sees no `scope` in the
+/// challenge asks for everything published there, so listing this would make
+/// every first connect prompt to create and archive projects. It arrives by
+/// 403 step-up, which not every client implements -- Claude Code 2.1.220 does
+/// not, so the two tools behind it are unreachable there by design.
 pub const SCOPE_ADMIN: &str = "stackpit:admin";
+
+/// The one set published to clients: `scopes_supported` in the RFC 9728
+/// document and `scope` in the 401 challenge both read from here, so the two
+/// surfaces cannot drift.
+///
+/// `openid` because OIDC Core §5.3.1 requires it for userinfo, and principal
+/// resolution goes through userinfo -- Hydra doesn't enforce it, Keycloak and
+/// Okta do. `offline_access` is the OIDC standard name; publishing Hydra's
+/// `offline` alias instead breaks the client's refresh-token grant.
+///
+/// Issue triage (`SCOPE_PROJECTS_WRITE`) is published because it is the point
+/// of the server, and step-up cannot deliver it to a client that doesn't
+/// implement step-up. Project creation and archival stay behind
+/// [`SCOPE_ADMIN`], so the destructive pair still costs a second consent.
+pub const ADVERTISED_SCOPES: &[&str] = &[
+    "openid",
+    SCOPE_EVENTS_READ,
+    SCOPE_PROJECTS_READ,
+    SCOPE_PROJECTS_WRITE,
+    "offline_access",
+];
 
 /// RFC 9728 §3.3: a metadata document whose `resource` does not match the
 /// identifier implied by its own URL MUST be discarded, so the path suffix has
@@ -99,22 +123,7 @@ impl FromRef<AppState> for McpState {
 
 /// Well-known is public; `/mcp` requires a bearer token.
 pub fn routes(runtime: &McpRuntime) -> Router<AppState> {
-    // Authentication only. Every scope check is per-tool: gating the route on
-    // one scope would stop a token holding just `projects:write` or `admin`
-    // from even completing the handshake.
-    let auth = axum::middleware::from_fn_with_state(
-        McpAuthLayerState {
-            gate: runtime.gate.clone(),
-            required_scope: String::new(),
-        },
-        mcp_auth_middleware,
-    );
-
-    let authenticated = Router::<AppState>::new()
-        .route(transport::MCP_PATH, post(transport::post_handler))
-        .layer(auth);
-
-    well_known_routes().merge(transport::routes(runtime.origins.clone(), authenticated))
+    well_known_routes().merge(transport::routes(runtime))
 }
 
 fn well_known_routes<S>() -> Router<S>
@@ -141,20 +150,10 @@ impl ResourceMetadata {
     /// listing the write and admin scopes would make every first connect prompt
     /// for admin; those arrive through 403 step-up instead.
     pub fn new(audience: &str, authorization_server: &str) -> Self {
-        // `offline_access` (OIDC standard, not Hydra's `offline` alias).
-        // Publishing `offline` breaks the DCR client's refresh-token grant.
         let body = json!({
             "resource": audience,
             "authorization_servers": [authorization_server],
-            "scopes_supported": [
-                // OIDC Core §5.3.1: userinfo requires `openid`, and principal
-                // resolution goes through userinfo. Hydra doesn't enforce it;
-                // Keycloak and Okta do, so omitting it breaks them outright.
-                "openid",
-                SCOPE_EVENTS_READ,
-                SCOPE_PROJECTS_READ,
-                "offline_access",
-            ],
+            "scopes_supported": ADVERTISED_SCOPES,
             "bearer_methods_supported": ["header"],
         });
         Self { body }
@@ -252,6 +251,7 @@ pub(crate) mod test_support {
             introspection_url: None,
             audience: TEST_AUDIENCE.to_string(),
             resource_metadata_url: TEST_METADATA_URL.to_string(),
+            challenge_scope: ADVERTISED_SCOPES.join(" "),
             realm: "stackpit".to_string(),
             expected_issuer: Some(TEST_ISSUER.to_string()),
             client_id: String::new(),
@@ -273,6 +273,19 @@ pub(crate) mod test_support {
         .expect("test HTTP client builds")
     }
 
+    pub fn runtime() -> Arc<McpRuntime> {
+        Arc::new(McpRuntime {
+            metadata: Arc::new(ResourceMetadata::new(TEST_AUDIENCE, TEST_ISSUER)),
+            gate: gate(),
+            origins: Arc::new(OriginPolicy::new(
+                Some("https://stackpit.example.com/"),
+                TEST_AUDIENCE,
+                &["https://claude.ai".to_string()],
+            )),
+            principals: Arc::new(PrincipalCache::new()),
+        })
+    }
+
     /// No OIDC client, so principal resolution fails closed; the transport and
     /// discovery tests never need one.
     pub async fn state() -> McpState {
@@ -289,12 +302,7 @@ pub(crate) mod test_support {
             auth_cache: AuthCache::default(),
             negative_auth_cache: NegativeAuthCache::default(),
             web_base: "https://stackpit.example.com".to_string(),
-            runtime: Some(Arc::new(McpRuntime {
-                metadata: Arc::new(ResourceMetadata::new(TEST_AUDIENCE, TEST_ISSUER)),
-                gate: gate(),
-                origins: Arc::new(OriginPolicy::new(None, TEST_AUDIENCE, &[])),
-                principals: Arc::new(PrincipalCache::new()),
-            })),
+            runtime: Some(runtime()),
         }
     }
 }
@@ -355,7 +363,7 @@ mod tests {
     // here, so advertising the write or admin scope would make every first
     // connect prompt for admin.
     #[tokio::test]
-    async fn advertised_scopes_are_read_only() {
+    async fn the_admin_scope_is_never_advertised() {
         let (_, _, body) = well_known(WELL_KNOWN_PATH).await;
         assert_eq!(
             body["scopes_supported"],
@@ -363,8 +371,13 @@ mod tests {
                 "openid",
                 SCOPE_EVENTS_READ,
                 SCOPE_PROJECTS_READ,
+                SCOPE_PROJECTS_WRITE,
                 "offline_access"
             ]),
+        );
+        assert!(
+            !ADVERTISED_SCOPES.contains(&SCOPE_ADMIN),
+            "advertising admin makes every first connect an admin consent",
         );
     }
 

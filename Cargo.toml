@@ -43,6 +43,13 @@ axum = { version = "0.8", features = ["multipart"] }
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 memchr = "2"
+# MCP transport + tool model. `auth` and the client/reqwest features stay off:
+# rmcp's OAuth is client-side only and its reqwest is 0.13 against our 0.12.
+rmcp = { version = "3.1", default-features = false, features = [
+    "server",
+    "transport-streamable-http-server",
+    "tower",
+] }
 sqlx = { version = "0.9", features = ["runtime-tokio", "chrono", "migrate", "macros"], default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

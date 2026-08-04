@@ -676,6 +676,36 @@ mod tests {
         );
     }
 
+    fn loopback_mcp_enabled(audience: &str) -> Config {
+        let mut cfg = loopback_oauth_enabled();
+        cfg.auth.mcp.audience = Some(audience.to_string());
+        cfg.auth.mcp.jwks_cache_ttl_secs = default_jwks_cache_ttl();
+        cfg
+    }
+
+    // An unparseable audience seeds an empty `/mcp` origin allow-list, which
+    // reads as "allow every origin".
+    #[test]
+    fn an_mcp_audience_that_is_not_an_absolute_url_is_rejected() {
+        for audience in ["", "stackpit-mcp", "//stackpit.example.com/mcp"] {
+            let err = loopback_mcp_enabled(audience)
+                .validate()
+                .expect_err("a non-URL MCP audience must fail");
+            let msg = format!("{err:#}");
+            assert!(
+                msg.contains("auth.mcp.audience"),
+                "error should name the field; got: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_absolute_mcp_audience_validates() {
+        loopback_mcp_enabled("https://stackpit.example.com/mcp")
+            .validate()
+            .expect("an absolute https audience passes");
+    }
+
     #[test]
     fn populated_web_audience_validates() {
         let mut cfg = loopback_oauth_enabled();

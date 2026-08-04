@@ -6,7 +6,7 @@ use crate::filter::FilterEngine;
 use crate::html;
 use crate::ingest::auth::{AuthCache, NegativeAuthCache, ProjectCountCache};
 use crate::ingest::failure_limiter::{new_failure_limiter, SharedFailureLimiter};
-use crate::mcp::{McpRuntime, ResourceMetadata};
+use crate::mcp::{McpRuntime, ResourceMetadata, ADVERTISED_SCOPES};
 use crate::middleware;
 use crate::oidc::client::OidcClient;
 use crate::queries::filters::load_filter_data;
@@ -712,6 +712,7 @@ fn build_mcp_runtime(
             introspection_url,
             audience: audience.clone(),
             resource_metadata_url,
+            challenge_scope: ADVERTISED_SCOPES.join(" "),
             realm: "stackpit".to_string(),
             expected_issuer: Some(issuer.clone()),
             // Empty disables the opaque arm's `client_id` fallback: accepting
@@ -806,6 +807,7 @@ fn build_web_bearer_gate(
             introspection_url,
             audience: config.auth.oauth.web_audience.clone(),
             resource_metadata_url: String::new(),
+            challenge_scope: String::new(),
             realm: String::new(),
             expected_issuer: Some(issuer),
             client_id,

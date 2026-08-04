@@ -122,6 +122,8 @@ struct Inner {
     negative_cache: Mutex<LruCache<[u8; 32], Instant>>,
     /// Advertised in 401 WWW-Authenticate. Empty for non-MCP callers.
     resource_metadata_url: String,
+    /// Space-delimited `scope` for the 401 challenge. Empty omits it.
+    challenge_scope: String,
     realm: String,
     provisioner: Option<Arc<dyn UserProvisioner>>,
     revocation: Option<Arc<dyn RevocationStore>>,
@@ -204,6 +206,10 @@ pub struct BearerGateConfig {
     pub introspection_url: Option<String>,
     pub audience: String,
     pub resource_metadata_url: String,
+    /// Space-delimited scopes a token-less caller should request. Must be the
+    /// set the resource metadata advertises; empty omits `scope` from the
+    /// challenge.
+    pub challenge_scope: String,
     pub realm: String,
     pub expected_issuer: Option<String>,
     /// Empty disables the opaque arm's `client_id` fallback.
@@ -278,6 +284,7 @@ impl BearerGate {
                         .expect("NEGATIVE_CACHE_CAPACITY > 0"),
                 )),
                 resource_metadata_url: cfg.resource_metadata_url,
+                challenge_scope: cfg.challenge_scope,
                 realm: cfg.realm,
                 provisioner: cfg.provisioner,
                 revocation: cfg.revocation,
@@ -425,6 +432,11 @@ impl BearerGate {
     pub fn resource_metadata_url(&self) -> &str {
         &self.inner.resource_metadata_url
     }
+
+    /// What a caller holding no usable token should ask the IdP for.
+    pub fn challenge_scope(&self) -> &str {
+        &self.inner.challenge_scope
+    }
 }
 
 /// Returns `None` if missing/malformed/empty. Guards against
@@ -487,6 +499,7 @@ mod tests {
             introspection_url: None,
             audience: "https://mcp.example.com".to_string(),
             resource_metadata_url: String::new(),
+            challenge_scope: String::new(),
             realm: "test".to_string(),
             expected_issuer: Some("https://hydra.example.com".to_string()),
             client_id: "stackpit-mcp".to_string(),

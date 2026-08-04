@@ -18,6 +18,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use rmcp::model::{object, CallToolResult, ContentBlock, Tool, ToolAnnotations};
 use serde_json::{json, Value};
 use stackpit_auth::GrantedScopes;
 
@@ -395,12 +396,11 @@ pub(super) fn find(name: &str) -> Option<&'static ToolDef> {
 /// hides the write tools, the client never calls one, and the 403 that would
 /// prompt the step-up never happens. Listing them and refusing at call time is
 /// what makes the scope reachable.
-pub(super) fn list_result(scopes: &GrantedScopes) -> Value {
-    let tools: Vec<Value> = TOOLS.iter().map(|t| descriptor(t, scopes)).collect();
-    json!({ "tools": tools })
+pub(super) fn list(scopes: &GrantedScopes) -> Vec<Tool> {
+    TOOLS.iter().map(|t| descriptor(t, scopes)).collect()
 }
 
-fn descriptor(tool: &ToolDef, scopes: &GrantedScopes) -> Value {
+pub(super) fn descriptor(tool: &ToolDef, scopes: &GrantedScopes) -> Tool {
     let granted = tool.permission.scope.is_empty() || scopes.has(tool.permission.scope);
     let scope_note = if granted {
         String::new()
@@ -410,18 +410,18 @@ fn descriptor(tool: &ToolDef, scopes: &GrantedScopes) -> Value {
             tool.permission.scope
         )
     };
-    json!({
-        "name": tool.name,
-        "title": tool.title,
-        "description": format!("{}{}{}", tool.description, ORG_REACH, scope_note),
-        "inputSchema": (tool.input_schema)(),
-        "outputSchema": (tool.output_schema)(),
-        "annotations": {
-            "title": tool.title,
-            "readOnlyHint": tool.read_only,
-            "destructiveHint": tool.destructive,
-        },
-    })
+    Tool::new(
+        tool.name,
+        format!("{}{}{}", tool.description, ORG_REACH, scope_note),
+        object((tool.input_schema)()),
+    )
+    .with_title(tool.title)
+    .with_raw_output_schema(Arc::new(object((tool.output_schema)())))
+    .with_annotations(
+        ToolAnnotations::with_title(tool.title)
+            .read_only(tool.read_only)
+            .destructive(tool.destructive),
+    )
 }
 
 /// Resolve the target, authorize, run. The only caller of [`authorize_tool`].
@@ -431,11 +431,6 @@ pub(super) async fn invoke(
     principal: Arc<McpPrincipal>,
     args: &Value,
 ) -> Result<Value, ToolError> {
-    if !args.is_object() && !args.is_null() {
-        return Err(ToolError::Invalid(
-            "arguments must be a JSON object".to_string(),
-        ));
-    }
     let ctx = ToolCtx::new(state, principal);
 
     let target = (tool.target)(&ctx, args).await?;
@@ -474,20 +469,20 @@ fn audit(ctx: &ToolCtx, tool: &str, target: Target, result: &Result<Value, ToolE
 
 /// Both a text block and `structuredContent`: the text copy is what a client
 /// that predates structured output still renders.
-pub(super) fn success(structured: Value) -> Value {
+pub(super) fn success(structured: Value) -> CallToolResult {
     let text = serde_json::to_string_pretty(&structured).unwrap_or_else(|_| "{}".to_string());
-    json!({
-        "content": [{ "type": "text", "text": text }],
-        "structuredContent": structured,
-        "isError": false,
-    })
+    let mut result = CallToolResult::success(vec![ContentBlock::text(text)]);
+    result.structured_content = Some(structured);
+    result
 }
 
-pub(super) fn failure(err: &ToolError) -> Value {
-    json!({
-        "content": [{ "type": "text", "text": err.message() }],
-        "isError": true,
-    })
+pub(super) fn failure(err: &ToolError) -> CallToolResult {
+    CallToolResult::error(vec![ContentBlock::text(err.message())])
+}
+
+/// The one argument mistake no input schema can describe.
+pub(super) fn non_object_arguments() -> ToolError {
+    ToolError::Invalid("arguments must be a JSON object".to_string())
 }
 
 // Shared argument handling
@@ -635,10 +630,9 @@ mod tests {
     #[test]
     fn every_description_states_the_org_wide_reach() {
         for tool in TOOLS {
-            let text = descriptor(tool, &GrantedScopes::default())["description"]
-                .as_str()
-                .unwrap()
-                .to_string();
+            let text = descriptor(tool, &GrantedScopes::default())
+                .description
+                .unwrap_or_default();
             assert!(
                 text.contains("no per-project access control"),
                 "{} hides its reach",
@@ -648,12 +642,17 @@ mod tests {
     }
 
     fn listed_names(scopes: &GrantedScopes) -> Vec<String> {
-        list_result(scopes)["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|t| t["name"].as_str().unwrap().to_string())
-            .collect()
+        list(scopes).iter().map(|t| t.name.to_string()).collect()
+    }
+
+    fn listed_description(scopes: &GrantedScopes, name: &str) -> String {
+        list(scopes)
+            .into_iter()
+            .find(|t| t.name == name)
+            .expect("tool is listed")
+            .description
+            .unwrap_or_default()
+            .into_owned()
     }
 
     /// Hiding the write tools from a read token would strand them: the client
@@ -692,55 +691,33 @@ mod tests {
     #[test]
     fn an_ungranted_tool_names_the_scope_it_needs() {
         let scopes = GrantedScopes::parse(Some("stackpit:events:read stackpit:projects:read"));
-        let listed = list_result(&scopes);
-        let by_name = |name: &str| {
-            listed["tools"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|t| t["name"] == name)
-                .unwrap()["description"]
-                .as_str()
-                .unwrap()
-                .to_string()
-        };
-        let ungranted = by_name("create_project");
+        let ungranted = listed_description(&scopes, "create_project");
         assert!(ungranted.contains("stackpit:admin"), "{ungranted}");
         assert!(ungranted.contains("403"), "{ungranted}");
         assert!(
-            !by_name("list_issues").contains("403"),
+            !listed_description(&scopes, "list_issues").contains("403"),
             "a granted tool must not carry the step-up note",
         );
     }
 
     #[test]
     fn each_descriptor_carries_its_schema_and_hints() {
-        let listed = list_result(&GrantedScopes::default());
-        let whoami = &listed["tools"][0];
+        let listed: Vec<Value> = list(&GrantedScopes::default())
+            .into_iter()
+            .map(|t| serde_json::to_value(t).unwrap())
+            .collect();
+        let whoami = &listed[0];
         assert_eq!(whoami["name"], "whoami");
+        assert_eq!(whoami["title"], "Who am I");
         assert_eq!(whoami["annotations"]["readOnlyHint"], true);
+        assert_eq!(whoami["annotations"]["destructiveHint"], false);
+        assert!(whoami["inputSchema"].is_object());
         assert!(whoami["outputSchema"].is_object());
-        let write = listed["tools"]
-            .as_array()
-            .unwrap()
+        let write = listed
             .iter()
             .find(|t| t["name"] == "update_issue_status")
             .unwrap();
         assert_eq!(write["annotations"]["readOnlyHint"], false);
-    }
-
-    #[tokio::test]
-    async fn a_non_object_arguments_value_is_a_tool_error() {
-        let pool = crate::db::open_test_pool().await;
-        let err = call(
-            &pool,
-            McpPrincipal::for_test("", Vec::new()),
-            "whoami",
-            json!([1, 2]),
-        )
-        .await
-        .expect_err("array arguments are rejected");
-        assert!(matches!(err, ToolError::Invalid(_)));
     }
 
     #[tokio::test]
@@ -777,13 +754,14 @@ mod tests {
 
     #[test]
     fn a_result_carries_both_a_text_block_and_structured_content() {
-        let result = success(json!({ "ok": true }));
+        let result = serde_json::to_value(success(json!({ "ok": true }))).unwrap();
         assert_eq!(result["structuredContent"]["ok"], true);
+        assert_eq!(result["content"][0]["type"], "text");
         let text = result["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("\"ok\""), "got {text}");
         assert_eq!(result["isError"], false);
 
-        let failed = failure(&ToolError::Invalid("bad".to_string()));
+        let failed = serde_json::to_value(failure(&ToolError::Invalid("bad".to_string()))).unwrap();
         assert_eq!(failed["isError"], true);
         assert_eq!(failed["content"][0]["text"], "bad");
         assert!(failed.get("structuredContent").is_none());

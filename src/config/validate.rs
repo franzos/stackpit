@@ -299,13 +299,10 @@ impl Config {
             );
         }
 
-        if self.auth.mcp.is_enabled() && self.auth.mcp.audience.as_deref() == Some("") {
-            tracing::warn!(
-                "auth.mcp.audience is set to an empty string -- effectively disables audience \
-                 binding for MCP tokens. Set it to the public MCP URL (matches Hydra's audience \
-                 allowlist on the client)."
-            );
-        }
+        // The audience is both the token binding and the seed for the `/mcp`
+        // origin allow-list; an unparseable one empties the latter, which reads
+        // as "allow every origin".
+        validate_absolute_http_url("auth.mcp.audience", self.auth.mcp.audience.as_deref())?;
 
         Ok(())
     }

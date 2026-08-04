@@ -74,16 +74,22 @@ pub async fn mcp_auth_middleware(
 /// RFC 9728: status + `WWW-Authenticate` header + JSON body containing the
 /// same error class plus the protected-resource-metadata URL.
 pub fn render_rejection(gate: &BearerGate, outcome: BearerAuthOutcome) -> Option<Response> {
+    // MCP authorization 2025-11-25: the challenge should name the scopes the
+    // client is meant to request, which is the set the resource metadata
+    // advertises. Empty for the web callers, and then omitted.
+    let scope = Some(gate.challenge_scope()).filter(|s| !s.is_empty());
     match outcome {
         BearerAuthOutcome::Ok(_) => None,
+        // RFC 6750 §3.3 registers no "missing_token"; §3.1 omits `error`
+        // entirely when the request presented no credential.
         BearerAuthOutcome::MissingToken => Some(json_error(
             gate,
             StatusCode::UNAUTHORIZED,
             None,
             BearerErrorBody {
-                error: "missing_token",
+                error: "invalid_request",
                 error_description: "Authorization header required",
-                scope: None,
+                scope,
                 resource_metadata: gate.resource_metadata_url(),
             },
         )),
@@ -94,7 +100,7 @@ pub fn render_rejection(gate: &BearerGate, outcome: BearerAuthOutcome) -> Option
             BearerErrorBody {
                 error: "invalid_token",
                 error_description: "Authorization header required",
-                scope: None,
+                scope,
                 resource_metadata: gate.resource_metadata_url(),
             },
         )),
@@ -123,18 +129,17 @@ fn json_error(
     challenge_error: Option<&str>,
     body: BearerErrorBody<'_>,
 ) -> Response {
+    let challenge = challenge_value(gate, challenge_error, body.scope);
     let mut resp = (status, Json(body)).into_response();
-    resp.headers_mut().insert(
-        axum::http::header::WWW_AUTHENTICATE,
-        challenge_value(gate, challenge_error),
-    );
+    resp.headers_mut()
+        .insert(axum::http::header::WWW_AUTHENTICATE, challenge);
     resp
 }
 
-fn challenge_value(gate: &BearerGate, error: Option<&str>) -> HeaderValue {
+fn challenge_value(gate: &BearerGate, error: Option<&str>, scope: Option<&str>) -> HeaderValue {
     // Header values are guaranteed ASCII here (URL + ASCII identifiers),
     // so the parse never fails in practice.
-    HeaderValue::from_str(&gate.challenge_header(error, None))
+    HeaderValue::from_str(&gate.challenge_header(error, scope))
         .unwrap_or_else(|_| HeaderValue::from_static("Bearer"))
 }
 
@@ -144,12 +149,15 @@ mod tests {
     use crate::bearer::{BearerGateConfig, JwtVerifierConfig};
     use crate::jwks::JwksCache;
 
+    const TEST_CHALLENGE_SCOPE: &str = "openid stackpit:events:read";
+
     fn build_gate() -> BearerGate {
         BearerGate::new(BearerGateConfig {
             introspection_url: None,
             audience: "https://mcp.example.com".to_string(),
             resource_metadata_url:
                 "https://stackpit.example.com/.well-known/oauth-protected-resource".to_string(),
+            challenge_scope: TEST_CHALLENGE_SCOPE.to_string(),
             realm: "stackpit".to_string(),
             expected_issuer: Some("https://hydra.example.com".to_string()),
             client_id: "stackpit-mcp".to_string(),
@@ -187,6 +195,7 @@ mod tests {
             audience: "https://mcp.example.com".to_string(),
             resource_metadata_url:
                 "https://stackpit.example.com/.well-known/oauth-protected-resource/mcp".to_string(),
+            challenge_scope: TEST_CHALLENGE_SCOPE.to_string(),
             realm: "stackpit".to_string(),
             expected_issuer: Some("https://hydra.example.com".to_string()),
             client_id: String::new(),
@@ -310,8 +319,16 @@ mod tests {
         assert!(www.starts_with("Bearer "), "got {www}");
         assert!(www.contains("realm=\"stackpit\""), "got {www}");
         assert!(www.contains("resource_metadata="), "got {www}");
+        // No credential was presented, so RFC 6750 §3.1 omits `error` but the
+        // client still needs to know what to ask the IdP for.
+        assert!(!www.contains("error="), "got {www}");
+        assert!(
+            www.contains(&format!("scope=\"{TEST_CHALLENGE_SCOPE}\"")),
+            "got {www}"
+        );
         let json = body_json(resp).await;
-        assert_eq!(json["error"], "missing_token");
+        assert_eq!(json["error"], "invalid_request");
+        assert_eq!(json["scope"], TEST_CHALLENGE_SCOPE);
         assert_eq!(json["error_description"], "Authorization header required");
         assert_eq!(
             json["resource_metadata"],
@@ -332,8 +349,13 @@ mod tests {
             .unwrap()
             .to_string();
         assert!(www.contains("error=\"invalid_token\""), "got {www}");
+        assert!(
+            www.contains(&format!("scope=\"{TEST_CHALLENGE_SCOPE}\"")),
+            "got {www}"
+        );
         let json = body_json(resp).await;
         assert_eq!(json["error"], "invalid_token");
+        assert_eq!(json["scope"], TEST_CHALLENGE_SCOPE);
         assert_eq!(
             json["resource_metadata"],
             "https://stackpit.example.com/.well-known/oauth-protected-resource"

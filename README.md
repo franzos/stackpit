@@ -33,10 +33,28 @@ I got tired of paying for Sentry on smaller projects and self-hosting the offici
 - **Source maps** — upload via `sentry-cli` so minified traces resolve to original source.
 - **Monitors** — cron check-in tracking via Sentry's protocol.
 - **Auth your way** — a shared admin token for solo use, or OAuth/OIDC SSO for teams.
-- **MCP endpoint** — point Claude Code (or any MCP client) at `/mcp` and ask it why production is broken. OAuth-gated, scoped to your orgs, with read, write and admin tool tiers.
+- **[MCP endpoint](#mcp-hand-it-to-your-assistant)** — point Claude Code (or any MCP client) at `/mcp` and ask it why production is broken. OAuth-gated, scoped to your orgs, with read, write and admin tool tiers.
 - **Organizations & roles.** Every user gets a personal org and can create more, invite others as owners or members, and manage membership and org slugs from the UI; data is scoped per org, mutations are owner-gated, and if your IdP emits org claims (Forseti-style), those orgs and roles map straight in.
 - **Migrate in** — pull historical events, issues, and releases from an existing Sentry instance.
 - **Observability (commercial)** — a token-gated Prometheus `/metrics` endpoint on the admin listener: HTTP request rates and latency, plus ingestion accept/reject/drop counters. Requires a license; see [OSS vs Commercial](#oss-vs-commercial) below.
+
+## MCP: hand it to your assistant
+
+Debugging with an assistant usually goes the same way: find the issue in the UI, copy the stacktrace, paste it into a chat window, repeat for the next event. Stackpit speaks [MCP](https://modelcontextprotocol.io) at `POST /mcp`, so the assistant can go read the data itself.
+
+```sh
+claude mcp add --transport http stackpit https://stackpit.example.com/mcp
+```
+
+The client discovers the authorization server, registers itself, and sends you through your normal SSO login. From there it gets 17 tools: list and search issues and events, pull a full event with its stacktrace, walk a trace's spans, check releases and crash-free rates, and - with the right scopes - resolve an issue, file a tracker issue, or create a project. "Why did checkout start failing after yesterday's release?" turns into a question it can actually answer, with real event IDs attached.
+
+It's bearer-only: no cookies, no admin token (deliberately), only access tokens your IdP issued for this exact resource. Access follows your organization membership and is re-read from the IdP on every request, so a demotion upstream lands within the minute. Scopes come in tiers - `events:read`, `projects:read`, `projects:write`, `admin` - and calling a tool you don't have the scope for returns a `403` naming the one you're missing, which a client with incremental consent turns into a prompt for exactly that scope.
+
+**The catch:** there's no per-project access control yet. Authorizing a client grants it every project in every org you belong to. Worth knowing before you click Allow on a shared instance.
+
+**On the IdP side:** this needs an authorization server that binds the RFC 8707 `resource` parameter into the token's `aud`, and not all of them do. Ory Hydra ignores `resource` and derives the audience from its own parameter, which MCP clients don't send; tokens then arrive with `aud: []` and every call 401s. [Forseti](https://github.com/franzos/forseti) bridges that - list the resource once and it binds - and it's the same IdP that emits the `orgs` claim Stackpit maps organizations and roles from, so it's the combination this is built against.
+
+Setup, scopes, and the audience gotcha in full are in the [operator guide](docs/operator-guide.md#mcp-endpoint).
 
 ## OSS vs Commercial
 

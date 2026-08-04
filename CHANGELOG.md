@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.25] - 2026-08-04
+
+### Fixed
+- MCP: bearer tokens without an audience claim were accepted
+- MCP: token not-before (`nbf`) was not validated
+- MCP: `openid` was missing from the advertised scopes
+
 ## [0.3.24] - 2026-08-04
 
 ### Added

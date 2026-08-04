@@ -1,6 +1,6 @@
 [package]
 name = "stackpit"
-version = "0.3.24"
+version = "0.3.25"
 edition = "2021"
 rust-version = "1.94"
 description = "Lightweight, self-hosted error tracking and event monitoring"

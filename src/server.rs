@@ -657,14 +657,6 @@ fn build_mcp_runtime(
             anyhow::anyhow!("auth.oauth.issuer_url is required when auth.mcp is enabled")
         })?
         .to_string();
-    let client_id = oauth
-        .client_id
-        .as_deref()
-        .ok_or_else(|| {
-            anyhow::anyhow!("auth.oauth.client_id is required when auth.mcp is enabled")
-        })?
-        .to_string();
-
     // Precedence: explicit `auth.mcp.introspection_url` → discovery → none.
     let introspection_url = mcp
         .introspection_url
@@ -699,7 +691,16 @@ fn build_mcp_runtime(
         .as_deref()
         .map(|s| s.trim_end_matches('/').to_string())
         .unwrap_or_else(|| audience.trim_end_matches('/').to_string());
-    let resource_metadata_url = format!("{resource_base}/.well-known/oauth-protected-resource");
+    let resource_metadata_url = format!("{resource_base}{}", crate::mcp::WELL_KNOWN_PATH);
+    // RFC 9728 3.3: the document's `resource` must match the identifier implied
+    // by the URL it is served from, and that URL is fixed at `/mcp` here.
+    if !audience.trim_end_matches('/').ends_with("/mcp") {
+        tracing::warn!(
+            audience = %audience,
+            "auth.mcp.audience does not end in /mcp; conformant clients will discard the \
+             protected-resource metadata served at /.well-known/oauth-protected-resource/mcp"
+        );
+    }
 
     // Same `users` table for MCP + browser-OIDC.
     let provisioner: Arc<dyn stackpit_auth::UserProvisioner> =
@@ -713,9 +714,13 @@ fn build_mcp_runtime(
             resource_metadata_url,
             realm: "stackpit".to_string(),
             expected_issuer: Some(issuer.clone()),
-            client_id,
-            // Break-glass so operators can poke /mcp without an OAuth client.
-            admin_token: config.server.admin_token.clone(),
+            // Empty disables the opaque arm's `client_id` fallback: accepting
+            // the *web* client here would make every web-session token a valid
+            // /mcp credential the moment introspection is configured.
+            client_id: String::new(),
+            // MCP accepts only tokens the authorization server issued for this
+            // resource; a static config secret is not one.
+            admin_token: None,
             introspection_client_id: mcp.introspection_client_id.clone(),
             introspection_client_secret: mcp.introspection_client_secret.clone(),
             cache_ttl_secs: mcp.effective_cache_ttl_secs(),
@@ -726,8 +731,18 @@ fn build_mcp_runtime(
         },
     );
     let metadata = Arc::new(ResourceMetadata::new(&audience, &issuer));
+    let origins = Arc::new(crate::mcp::OriginPolicy::new(
+        config.server.external_url.as_deref(),
+        &audience,
+        &mcp.allowed_origins,
+    ));
 
-    Ok(Some(Arc::new(McpRuntime { metadata, gate })))
+    Ok(Some(Arc::new(McpRuntime {
+        metadata,
+        gate,
+        origins,
+        principals: Arc::new(crate::mcp::PrincipalCache::new()),
+    })))
 }
 
 /// Validates the access token from the grant vault per request. Prefers local

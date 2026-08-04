@@ -31,10 +31,8 @@ impl OrgScope {
     /// Canonicalizing constructor. Sorting and deduping here is what makes the cache
     /// key sound: the key is the literal id list, never a hash, so a collision cannot
     /// serve one caller another's projects.
-    pub fn orgs(mut ids: Vec<i64>) -> Self {
-        ids.sort_unstable();
-        ids.dedup();
-        OrgScope::Orgs(ids)
+    pub fn orgs(ids: Vec<i64>) -> Self {
+        OrgScope::Orgs(super::canonical_org_ids(ids))
     }
 
     fn single(org_id: i64) -> Self {

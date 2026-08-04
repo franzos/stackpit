@@ -15,7 +15,7 @@ use crate::util::crypto::SecretEncryptor;
 /// opens a project belonging to another of their orgs, which is the normal case once
 /// the project list spans orgs. Project-scoped handlers must key their queries on
 /// `ProjectScope::org_id`, never on `ActiveOrg::session_org_id`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectScope {
     pub org_id: i64,
     /// None on the admin-token and loopback paths (no org-scoped role).
@@ -31,6 +31,21 @@ pub fn require_owner(scope: &ProjectScope) -> Result<(), Response> {
         Some(Role::Member) => Err(StatusCode::FORBIDDEN.into_response()),
         _ => Ok(()),
     }
+}
+
+/// The caller's role in a named org, or `None` when they are not a member.
+/// The org-scoped counterpart to [`require_project_scope`] for callers that have
+/// no session org to read a role from (MCP), where the org is an argument.
+pub fn role_in_org(memberships: &[(i64, Role)], org_id: i64) -> Option<Role> {
+    // Auto-provisioned projects land in the system org; a membership row for it
+    // must not confer access, same rule as `require_project_scope`.
+    if org_id == SYSTEM_ORG_ID {
+        return None;
+    }
+    memberships
+        .iter()
+        .find(|(id, _)| *id == org_id)
+        .map(|(_, r)| *r)
 }
 
 /// [`require_owner`] for org-scoped pages that have no project in play, where the
@@ -162,6 +177,19 @@ impl ActiveOrg {
             role,
             org_name: None,
             memberships: Vec::new(),
+        }
+    }
+
+    /// Caller resolved from memberships alone, with no browser session: the MCP
+    /// bearer path. `role` is `Some` unconditionally because
+    /// [`require_project_scope`] reads `None` as superuser, and `session_org_id`
+    /// is 0 (not an org id) so a stray read of it can only fail closed.
+    pub fn from_memberships(memberships: Vec<(i64, Role)>) -> Self {
+        Self {
+            session_org_id: 0,
+            role: Some(Role::Member),
+            org_name: None,
+            memberships,
         }
     }
 

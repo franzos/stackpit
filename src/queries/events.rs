@@ -44,7 +44,7 @@ impl EventSort {
 fn push_event_filter_conditions(
     qb: &mut sqlx::QueryBuilder<crate::db::Db>,
     filter: &EventFilter,
-    org_id: Option<i64>,
+    org_ids: Option<&[i64]>,
 ) {
     let mut has_where = false;
     let mut push_conjunction = |qb: &mut sqlx::QueryBuilder<crate::db::Db>| {
@@ -77,11 +77,9 @@ fn push_event_filter_conditions(
         qb.push("events.item_type = ");
         qb.push_bind(item_type.as_str());
     }
-    if let Some(oid) = org_id {
+    if let Some(ids) = org_ids {
         push_conjunction(qb);
-        qb.push("events.project_id IN (SELECT project_id FROM projects WHERE org_id = ");
-        qb.push_bind(oid);
-        qb.push(")");
+        super::push_org_scope_predicate(qb, "events.project_id", ids);
     }
 }
 
@@ -93,13 +91,41 @@ pub async fn list_all_events(
     page: &Page,
     org_id: Option<i64>,
 ) -> Result<PagedResult<EventSummary>> {
+    let one: Option<Vec<i64>> = org_id.map(|id| vec![id]);
+    list_all_events_inner(pool, filter, page, one.as_deref()).await
+}
+
+/// List events across every org the caller belongs to. An empty list entitles
+/// the caller to nothing, which is not the same as the superuser's "all orgs".
+pub async fn list_all_events_for_orgs(
+    pool: &crate::db::DbPool,
+    filter: &EventFilter,
+    page: &Page,
+    org_ids: Vec<i64>,
+) -> Result<PagedResult<EventSummary>> {
+    let ids = super::canonical_org_ids(org_ids);
+    list_all_events_inner(pool, filter, page, Some(&ids)).await
+}
+
+async fn list_all_events_inner(
+    pool: &crate::db::DbPool,
+    filter: &EventFilter,
+    page: &Page,
+    org_ids: Option<&[i64]>,
+) -> Result<PagedResult<EventSummary>> {
     use sqlx::QueryBuilder;
+
+    // `IN ()` is not valid SQL on either backend, so an empty scope has to
+    // short-circuit rather than fall through to an unscoped query.
+    if org_ids.is_some_and(<[i64]>::is_empty) {
+        return Ok(PagedResult::from_page(Vec::new(), 0, page));
+    }
 
     let sort = EventSort::parse(filter.sort.as_deref());
 
     let mut count_qb: QueryBuilder<crate::db::Db> =
         QueryBuilder::new("SELECT COUNT(*) FROM events");
-    push_event_filter_conditions(&mut count_qb, filter, org_id);
+    push_event_filter_conditions(&mut count_qb, filter, org_ids);
 
     let total: i64 = count_qb.build_query_scalar().fetch_one(pool).await?;
 
@@ -110,7 +136,7 @@ pub async fn list_all_events(
          events.release, events.environment \
          FROM events LEFT JOIN projects p ON p.project_id = events.project_id",
     );
-    push_event_filter_conditions(&mut select_qb, filter, org_id);
+    push_event_filter_conditions(&mut select_qb, filter, org_ids);
     select_qb.push(" ORDER BY ");
     select_qb.push(sort.as_sql_ident());
     select_qb.push(" LIMIT ");

@@ -48,6 +48,14 @@ impl Aud {
             Aud::Many(v) => v.iter().any(|a| a == expected),
         }
     }
+
+    fn is_empty(&self) -> bool {
+        match self {
+            Aud::None => true,
+            Aud::One(s) => s.is_empty(),
+            Aud::Many(v) => v.iter().all(String::is_empty),
+        }
+    }
 }
 
 impl BearerGate {
@@ -85,9 +93,13 @@ impl BearerGate {
         }
 
         // Some Hydra opaque tokens omit `aud`; accept `client_id` match instead.
+        // Only when the response carried no audience at all: a token bound to a
+        // *different* resource must never pass just because the same client
+        // minted it (that turns every web-session token into a /mcp credential).
         if !self.inner.audience.is_empty() {
             let aud_match = body.aud.contains(&self.inner.audience);
-            let client_id_match = !self.inner.client_id.is_empty()
+            let client_id_match = body.aud.is_empty()
+                && !self.inner.client_id.is_empty()
                 && body
                     .client_id
                     .as_deref()
@@ -96,6 +108,7 @@ impl BearerGate {
             if !aud_match && !client_id_match {
                 tracing::warn!(
                     expected_aud = %self.inner.audience,
+                    got_aud = ?body.aud,
                     expected_client = %self.inner.client_id,
                     "bearer rejected: opaque aud/client_id mismatch",
                 );
@@ -164,6 +177,7 @@ impl BearerGate {
             sub: sub.clone(),
             sid: body.sid.clone(),
             scope: body.scope.clone(),
+            client_id: body.client_id.clone(),
         };
 
         if self.is_revoked_cached(&iss, &cached).await {

@@ -33,6 +33,7 @@ I got tired of paying for Sentry on smaller projects and self-hosting the offici
 - **Source maps** — upload via `sentry-cli` so minified traces resolve to original source.
 - **Monitors** — cron check-in tracking via Sentry's protocol.
 - **Auth your way** — a shared admin token for solo use, or OAuth/OIDC SSO for teams.
+- **MCP endpoint** — point Claude Code (or any MCP client) at `/mcp` and ask it why production is broken. OAuth-gated, scoped to your orgs, with read, write and admin tool tiers.
 - **Organizations & roles.** Every user gets a personal org and can create more, invite others as owners or members, and manage membership and org slugs from the UI; data is scoped per org, mutations are owner-gated, and if your IdP emits org claims (Forseti-style), those orgs and roles map straight in.
 - **Migrate in** — pull historical events, issues, and releases from an existing Sentry instance.
 - **Observability (commercial)** — a token-gated Prometheus `/metrics` endpoint on the admin listener: HTTP request rates and latency, plus ingestion accept/reject/drop counters. Requires a license; see [OSS vs Commercial](#oss-vs-commercial) below.
@@ -179,6 +180,7 @@ Everything past first boot — the full `stackpit.toml` reference, PostgreSQL, a
 
 - [Configuration](docs/operator-guide.md#configuration) — the full config reference, filter modes, [PostgreSQL](docs/operator-guide.md#postgresql), [ingestion tuning](docs/operator-guide.md#ingestion-tuning)
 - [Authentication](docs/operator-guide.md#authentication) — admin token, OAuth/SSO (OIDC), [secret encryption](docs/operator-guide.md#secret-encryption)
+- [MCP endpoint](docs/operator-guide.md#mcp-endpoint) — connecting an AI assistant, scopes, and what an authorized client can reach
 - [Connecting SDKs](docs/operator-guide.md#connecting-sdks) — supported SDKs and DSN format
 - [Notifications & Alerts](docs/operator-guide.md#notifications--alerts), [Source Maps](docs/operator-guide.md#source-maps), [Monitors](docs/operator-guide.md#monitors), [Web UI](docs/operator-guide.md#web-ui)
 - [Syncing from Sentry](docs/operator-guide.md#syncing-from-sentry), [CLI tools](docs/operator-guide.md#cli-tools)

@@ -49,6 +49,9 @@ struct Inner {
     /// RFC 7662 discovery field. MCP gate falls back to this when
     /// `auth.mcp.introspection_url` is unset.
     introspection_endpoint: Option<String>,
+    /// OIDC Core 1.0 §5.3. The MCP path re-reads the `orgs` claim from here per
+    /// request, since a bearer caller never runs the browser callback.
+    userinfo_endpoint: Option<String>,
     /// Hydra binds this as the token's `aud`; sent as the non-standard
     /// `audience=` authorization param. Empty = omit it.
     web_audience: String,
@@ -150,6 +153,7 @@ impl OidcClient {
                     jwks_uri: format!("{}/.well-known/jwks.json", issuer.trim_end_matches('/')),
                     end_session_endpoint: None,
                     introspection_endpoint: None,
+                    userinfo_endpoint: None,
                 }
             });
 
@@ -213,6 +217,7 @@ impl OidcClient {
                 jwks_cache,
                 end_session_endpoint: endpoints.end_session_endpoint,
                 introspection_endpoint: endpoints.introspection_endpoint,
+                userinfo_endpoint: endpoints.userinfo_endpoint,
                 web_audience: cfg.web_audience.clone(),
                 organization_id: cfg.organization_id.clone().unwrap_or_default(),
             }),
@@ -239,6 +244,52 @@ impl OidcClient {
     /// falls back to this when `auth.mcp.introspection_url` is unset.
     pub fn introspection_endpoint(&self) -> Option<&str> {
         self.inner.introspection_endpoint.as_deref()
+    }
+
+    pub fn userinfo_endpoint(&self) -> Option<&str> {
+        self.inner.userinfo_endpoint.as_deref()
+    }
+
+    /// Read the `orgs` claim for the holder of `access_token` (OIDC Core 1.0
+    /// §5.3). The MCP path calls this per request: a bearer caller never runs
+    /// the browser callback, so this is the only place an IdP-side demotion can
+    /// reach Stackpit.
+    pub async fn fetch_userinfo_orgs(
+        &self,
+        access_token: &str,
+    ) -> Result<OrgsClaim, UserinfoError> {
+        let url = self
+            .inner
+            .userinfo_endpoint
+            .as_deref()
+            .ok_or(UserinfoError::NotConfigured)?;
+
+        let resp = self
+            .inner
+            .http
+            .get(url)
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .map_err(|e| {
+                tracing::warn!(error = %e, "userinfo request failed");
+                UserinfoError::Unavailable
+            })?;
+
+        let status = resp.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            return Err(UserinfoError::TokenRejected);
+        }
+        if !status.is_success() {
+            tracing::warn!(%status, "userinfo returned non-2xx");
+            return Err(UserinfoError::Unavailable);
+        }
+
+        let json: serde_json::Value = resp.json().await.map_err(|e| {
+            tracing::warn!(error = %e, "userinfo returned unparseable JSON");
+            UserinfoError::Unavailable
+        })?;
+        Ok(parse_orgs_claim(&json))
     }
 
     pub fn jwks_cache(&self) -> &JwksCache {
@@ -515,6 +566,24 @@ pub struct OrgClaim {
     pub name: Option<String>,
 }
 
+/// The `orgs` claim as [`reconcile`](crate::orgs::reconcile::reconcile) wants
+/// it. `orgs: None` = claim absent (zero authority, no removals); `Some(empty)`
+/// = granted, no orgs.
+#[derive(Debug, Default)]
+pub struct OrgsClaim {
+    pub orgs: Option<Vec<OrgClaim>>,
+    pub truncated: bool,
+}
+
+/// Why a userinfo call failed. Callers fail closed on all three, but only
+/// `TokenRejected` means the credential itself is dead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UserinfoError {
+    TokenRejected,
+    Unavailable,
+    NotConfigured,
+}
+
 // None = claim absent (zero authority, no removals); Some(empty) = granted, no orgs. Truncation from flag only.
 fn extract_orgs(id_token_jwt: &str) -> (Option<Vec<OrgClaim>>, bool) {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -528,12 +597,21 @@ fn extract_orgs(id_token_jwt: &str) -> (Option<Vec<OrgClaim>>, bool) {
     let Ok(json) = serde_json::from_slice::<serde_json::Value>(&decoded) else {
         return (None, false);
     };
+    let claim = parse_orgs_claim(&json);
+    (claim.orgs, claim.truncated)
+}
+
+/// Shared by the id_token path (browser login) and the userinfo path (MCP).
+fn parse_orgs_claim(json: &serde_json::Value) -> OrgsClaim {
     let truncated = json
         .get("orgs_truncated")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
     let Some(arr) = json.get("orgs").and_then(|v| v.as_array()) else {
-        return (None, truncated);
+        return OrgsClaim {
+            orgs: None,
+            truncated,
+        };
     };
     let orgs = arr
         .iter()
@@ -554,7 +632,10 @@ fn extract_orgs(id_token_jwt: &str) -> (Option<Vec<OrgClaim>>, bool) {
             })
         })
         .collect::<Vec<_>>();
-    (Some(orgs), truncated)
+    OrgsClaim {
+        orgs: Some(orgs),
+        truncated,
+    }
 }
 
 fn extract_sid(id_token_jwt: &str) -> Option<String> {
@@ -570,6 +651,7 @@ struct DiscoveryEndpoints {
     jwks_uri: String,
     end_session_endpoint: Option<String>,
     introspection_endpoint: Option<String>,
+    userinfo_endpoint: Option<String>,
 }
 
 /// Pluck endpoints openidconnect's typed metadata doesn't surface.
@@ -635,10 +717,24 @@ async fn fetch_endpoint_urls(
                 None
             }
         });
+    let userinfo_endpoint = json
+        .get("userinfo_endpoint")
+        .and_then(|v| v.as_str())
+        .and_then(|raw| match validate_discovery_url(raw, allow_http) {
+            Some(url) => Some(url),
+            None => {
+                tracing::warn!(
+                    raw = %raw,
+                    "discovery: userinfo_endpoint is not an absolute https URL or contains userinfo -- dropping"
+                );
+                None
+            }
+        });
     Ok(DiscoveryEndpoints {
         jwks_uri,
         end_session_endpoint,
         introspection_endpoint,
+        userinfo_endpoint,
     })
 }
 
@@ -821,6 +917,7 @@ impl OidcClient {
                 jwks_cache,
                 end_session_endpoint: None,
                 introspection_endpoint: None,
+                userinfo_endpoint: None,
                 web_audience: String::new(),
                 organization_id: String::new(),
             }),

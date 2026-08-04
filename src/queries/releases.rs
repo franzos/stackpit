@@ -409,6 +409,36 @@ pub async fn list_all_releases(
     adoption_since: Option<i64>,
     org_id: Option<i64>,
 ) -> Result<PagedResult<ReleaseSummary>> {
+    let one: Option<Vec<i64>> = org_id.map(|id| vec![id]);
+    list_all_releases_inner(pool, filter, page, adoption_since, one.as_deref()).await
+}
+
+/// List releases across every org the caller belongs to. An empty list entitles
+/// the caller to nothing, which is not the same as the superuser's "all orgs".
+pub async fn list_all_releases_for_orgs(
+    pool: &DbPool,
+    filter: &ReleaseFilter,
+    page: &Page,
+    adoption_since: Option<i64>,
+    org_ids: Vec<i64>,
+) -> Result<PagedResult<ReleaseSummary>> {
+    let ids = super::canonical_org_ids(org_ids);
+    list_all_releases_inner(pool, filter, page, adoption_since, Some(&ids)).await
+}
+
+async fn list_all_releases_inner(
+    pool: &DbPool,
+    filter: &ReleaseFilter,
+    page: &Page,
+    adoption_since: Option<i64>,
+    org_ids: Option<&[i64]>,
+) -> Result<PagedResult<ReleaseSummary>> {
+    // `IN ()` is not valid SQL on either backend, so an empty scope has to
+    // short-circuit rather than fall through to an unscoped query.
+    if org_ids.is_some_and(<[i64]>::is_empty) {
+        return Ok(PagedResult::from_page(Vec::new(), 0, page));
+    }
+
     let adoption_since_ts =
         adoption_since.unwrap_or_else(|| chrono::Utc::now().timestamp() - 86400);
 
@@ -424,10 +454,9 @@ pub async fn list_all_releases(
         count_qb.push_bind(super::like_contains(query));
         count_qb.push(" ESCAPE '\\'");
     }
-    if let Some(oid) = org_id {
-        count_qb.push(" AND r.project_id IN (SELECT project_id FROM projects WHERE org_id = ");
-        count_qb.push_bind(oid);
-        count_qb.push(")");
+    if let Some(ids) = org_ids {
+        count_qb.push(" AND ");
+        super::push_org_scope_predicate(&mut count_qb, "r.project_id", ids);
     }
 
     let total: i64 = count_qb.build().fetch_one(pool).await?.get(0);
@@ -447,10 +476,9 @@ pub async fn list_all_releases(
         qb.push(" AND project_id = ");
         qb.push_bind(project_id as i64);
     }
-    if let Some(oid) = org_id {
-        qb.push(" AND project_id IN (SELECT project_id FROM projects WHERE org_id = ");
-        qb.push_bind(oid);
-        qb.push(")");
+    if let Some(ids) = org_ids {
+        qb.push(" AND ");
+        super::push_org_scope_predicate(&mut qb, "project_id", ids);
     }
     qb.push(
         "
@@ -485,10 +513,9 @@ pub async fn list_all_releases(
         qb.push_bind(super::like_contains(query));
         qb.push(" ESCAPE '\\'");
     }
-    if let Some(oid) = org_id {
-        qb.push(" AND project_id IN (SELECT project_id FROM projects WHERE org_id = ");
-        qb.push_bind(oid);
-        qb.push(")");
+    if let Some(ids) = org_ids {
+        qb.push(" AND ");
+        super::push_org_scope_predicate(&mut qb, "project_id", ids);
     }
     qb.push(
         "
@@ -524,10 +551,9 @@ pub async fn list_all_releases(
         qb.push_bind(super::like_contains(query));
         qb.push(" ESCAPE '\\'");
     }
-    if let Some(oid) = org_id {
-        qb.push(" AND r.project_id IN (SELECT project_id FROM projects WHERE org_id = ");
-        qb.push_bind(oid);
-        qb.push(")");
+    if let Some(ids) = org_ids {
+        qb.push(" AND ");
+        super::push_org_scope_predicate(&mut qb, "r.project_id", ids);
     }
 
     qb.push(" ORDER BY ");

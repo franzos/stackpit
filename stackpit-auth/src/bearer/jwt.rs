@@ -3,6 +3,7 @@
 //! to introspection.
 
 use base64::Engine;
+use jsonwebtoken::errors::ErrorKind;
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 
 use super::cache::hash_token;
@@ -93,7 +94,17 @@ impl BearerGate {
         let data = match decode::<serde_json::Value>(token, &key, &validation) {
             Ok(d) => d,
             Err(err) => {
-                tracing::warn!(error = %err, "bearer rejected: JWT signature/claim verification failed");
+                // An audience mismatch is otherwise indistinguishable from a
+                // JWKS problem in the logs, which is a long wrong turn.
+                if matches!(err.kind(), ErrorKind::InvalidAudience) {
+                    tracing::warn!(
+                        expected_aud = %self.inner.audience,
+                        got_aud = %unverified_aud(token).unwrap_or_else(|| "<none>".to_string()),
+                        "bearer rejected: JWT audience does not contain this resource",
+                    );
+                } else {
+                    tracing::warn!(error = %err, "bearer rejected: JWT signature/claim verification failed");
+                }
                 return BearerAuthOutcome::InvalidToken;
             }
         };
@@ -111,8 +122,9 @@ impl BearerGate {
             .get("sid")
             .and_then(|v| v.as_str())
             .map(str::to_string);
-        let scope = claims
-            .get("scope")
+        let scope = scope_claim(&claims);
+        let client_id = claims
+            .get("client_id")
             .and_then(|v| v.as_str())
             .map(str::to_string);
         let exp = claims.get("exp").and_then(|v| v.as_i64());
@@ -122,6 +134,7 @@ impl BearerGate {
             sub: sub.clone(),
             sid,
             scope,
+            client_id,
         };
 
         if self.is_revoked_cached(&iss, &cached).await {
@@ -155,8 +168,44 @@ pub(super) fn looks_like_jwt(token: &str) -> bool {
     parts.len() == 3 && parts.iter().all(|p| !p.is_empty())
 }
 
+/// Granted scopes as a space-delimited string. RFC 9068 spells the claim
+/// `scope`, but Ory Hydra emits `scp` as a JSON array and no `scope` at all,
+/// so a gate that reads only the former sees no scopes on any Hydra token.
+fn scope_claim(claims: &serde_json::Value) -> Option<String> {
+    for key in ["scope", "scp"] {
+        match claims.get(key) {
+            Some(serde_json::Value::String(s)) => return Some(s.clone()),
+            Some(serde_json::Value::Array(items)) => {
+                let joined = items
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                if !joined.is_empty() {
+                    return Some(joined);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Used only to pick the validator; signature verification re-checks `iss`.
 fn unverified_iss(token: &str) -> Option<String> {
+    unverified_claims(token)?
+        .get("iss")?
+        .as_str()
+        .map(str::to_string)
+}
+
+/// Diagnostics only: rendered into the rejection log after the validator has
+/// already refused the token.
+fn unverified_aud(token: &str) -> Option<String> {
+    Some(unverified_claims(token)?.get("aud")?.to_string())
+}
+
+fn unverified_claims(token: &str) -> Option<serde_json::Value> {
     let mut parts = token.split('.');
     let _header = parts.next()?;
     let payload_b64 = parts.next()?;
@@ -167,6 +216,29 @@ fn unverified_iss(token: &str) -> Option<String> {
     let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(payload_b64)
         .ok()?;
-    let json: serde_json::Value = serde_json::from_slice(&payload).ok()?;
-    json.get("iss")?.as_str().map(str::to_string)
+    serde_json::from_slice(&payload).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scope_claim;
+    use serde_json::json;
+
+    #[test]
+    fn reads_rfc_9068_scope_and_hydras_scp_array() {
+        assert_eq!(
+            scope_claim(&json!({ "scope": "openid stackpit:events:read" })).as_deref(),
+            Some("openid stackpit:events:read"),
+        );
+        assert_eq!(
+            scope_claim(&json!({ "scp": ["openid", "stackpit:events:read"] })).as_deref(),
+            Some("openid stackpit:events:read"),
+        );
+        assert_eq!(
+            scope_claim(&json!({ "scp": "openid stackpit:admin" })).as_deref(),
+            Some("openid stackpit:admin"),
+        );
+        assert_eq!(scope_claim(&json!({ "scp": [] })), None);
+        assert_eq!(scope_claim(&json!({ "sub": "alice" })), None);
+    }
 }

@@ -79,7 +79,7 @@ async fn static_assets_serve_with_correct_types() {
         );
     }
 
-    for path in ["/web/_assets/style.css", "/web/_assets/icon.svg"] {
+    for path in ["/web/_assets/style.css", "/web/_assets/icon.png"] {
         let status = c
             .get(format!("{}{}", common::admin_url(), path))
             .send()

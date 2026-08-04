@@ -16,8 +16,9 @@ pub mod jwks;
 
 pub use admin_token::{AdminSessionStore, ADMIN_SESSION_TTL_SECS};
 pub use bearer::{
-    extract_bearer, BackendError, BearerAuthOutcome, BearerGate, BearerGateConfig,
-    JwtVerifierConfig, ProvisionResult, RevocationStore, UserProvisioner,
+    extract_bearer, BackendError, BearerAuthOutcome, BearerGate, BearerGateConfig, BearerGrant,
+    GrantedScopes, JwtVerifierConfig, ProvisionResult, RevocationStore, TokenClientId,
+    UserProvisioner,
 };
 pub use context::{AuthContext, AuthSource, PrincipalId};
 pub use jwks::{JwksCache, JwksError, VerifyError};

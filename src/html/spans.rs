@@ -82,7 +82,7 @@ pub async fn trace_detail_handler(
         .await
         .map_err(|_| HtmlError(axum::http::StatusCode::NOT_FOUND, "Not found".into()))?;
     let (spans, errors, root) = tokio::join!(
-        queries::spans::get_trace_spans(&pool, &trace_id),
+        queries::spans::get_trace_spans_for_project(&pool, project_id, &trace_id),
         queries::spans::get_trace_errors(&pool, project_id, &trace_id),
         queries::spans::get_trace_root(&pool, project_id, &trace_id),
     );

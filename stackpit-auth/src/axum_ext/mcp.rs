@@ -48,16 +48,20 @@ pub async fn mcp_auth_middleware(
         .authorize_headers(req.headers(), &state.required_scope)
         .await;
     match outcome {
-        BearerAuthOutcome::Ok(ctx) => {
+        BearerAuthOutcome::Ok(grant) => {
             // Tag the audit/tracing surface with which flow produced the
             // identity so MCP bearer auth is distinguishable from a web
             // session for the same `sub`.
             tracing::debug!(
                 target: "stackpit::auth",
-                auth_source = %ctx.source(),
+                auth_source = %grant.ctx.source(),
+                client_id = grant.client_id.0.as_deref().unwrap_or("-"),
                 "mcp bearer authenticated",
             );
-            req.extensions_mut().insert(ctx);
+            let ext = req.extensions_mut();
+            ext.insert(grant.ctx);
+            ext.insert(grant.scopes);
+            ext.insert(grant.client_id);
             next.run(req).await
         }
         other => render_rejection(&state.gate, other)
@@ -95,16 +99,7 @@ pub fn render_rejection(gate: &BearerGate, outcome: BearerAuthOutcome) -> Option
             },
         )),
         BearerAuthOutcome::InsufficientScope { required } => {
-            // Custom challenge for the scope variant: RFC 6750 §3 says the
-            // `scope` parameter belongs on the challenge when the gate knows
-            // which scope was insufficient. The body echoes it for clients
-            // that don't read response headers.
-            let challenge = format!(
-                "Bearer realm=\"{}\", error=\"insufficient_scope\", scope=\"{}\", resource_metadata=\"{}\"",
-                gate.realm(),
-                required,
-                gate.resource_metadata_url(),
-            );
+            let challenge = gate.challenge_header(Some("insufficient_scope"), Some(&required));
             let body = BearerErrorBody {
                 error: "insufficient_scope",
                 error_description: "The access token does not carry the required scope",
@@ -139,7 +134,7 @@ fn json_error(
 fn challenge_value(gate: &BearerGate, error: Option<&str>) -> HeaderValue {
     // Header values are guaranteed ASCII here (URL + ASCII identifiers),
     // so the parse never fails in practice.
-    HeaderValue::from_str(&gate.challenge_header(error))
+    HeaderValue::from_str(&gate.challenge_header(error, None))
         .unwrap_or_else(|_| HeaderValue::from_static("Bearer"))
 }
 
@@ -181,6 +176,123 @@ mod tests {
             .await
             .expect("body collects");
         serde_json::from_slice(&body).expect("response body is JSON")
+    }
+
+    /// Same primed-JWKS setup as the bearer tests; the layer needs a token it
+    /// can actually validate.
+    fn gate_with_primed_jwks() -> BearerGate {
+        const TEST_JWKS_JSON: &str = include_str!("../testdata/test_jwks.json");
+        BearerGate::new(BearerGateConfig {
+            introspection_url: None,
+            audience: "https://mcp.example.com".to_string(),
+            resource_metadata_url:
+                "https://stackpit.example.com/.well-known/oauth-protected-resource/mcp".to_string(),
+            realm: "stackpit".to_string(),
+            expected_issuer: Some("https://hydra.example.com".to_string()),
+            client_id: String::new(),
+            admin_token: None,
+            introspection_client_id: None,
+            introspection_client_secret: None,
+            cache_ttl_secs: 0,
+            cache_max_ttl_secs: 30,
+            provisioner: None,
+            revocation: None,
+            jwt: Some(JwtVerifierConfig {
+                jwks: {
+                    let cache = JwksCache::new(
+                        reqwest::Client::new(),
+                        "http://127.0.0.1:0/jwks".to_string(),
+                        60,
+                    );
+                    cache._prime(serde_json::from_str(TEST_JWKS_JSON).expect("test JWKS parses"));
+                    cache
+                },
+            }),
+        })
+        .expect("test HTTP client builds")
+    }
+
+    fn issue_jwt(claims: serde_json::Value) -> String {
+        const TEST_PRIVATE_DER: &[u8] = include_bytes!("../testdata/test_rsa_priv.der");
+        let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256);
+        header.kid = Some("test-key-1".to_string());
+        jsonwebtoken::encode(
+            &header,
+            &claims,
+            &jsonwebtoken::EncodingKey::from_rsa_der(TEST_PRIVATE_DER),
+        )
+        .expect("sign JWT")
+    }
+
+    /// Empty `required_scope` authenticates only. A token holding just the write
+    /// scope must still complete the MCP handshake; every scope check is
+    /// per-tool, which a route-level gate would pre-empt.
+    #[tokio::test]
+    async fn empty_required_scope_authenticates_and_plumbs_the_token_facts() {
+        use axum::body::Body;
+        use axum::routing::get;
+        use axum::{Extension, Router};
+        use tower::ServiceExt;
+
+        let exp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 300;
+        let jwt = issue_jwt(serde_json::json!({
+            "iss": "https://hydra.example.com",
+            "sub": "alice",
+            "aud": ["https://mcp.example.com"],
+            "scope": "stackpit:projects:write",
+            "client_id": "mcp-client",
+            "exp": exp,
+        }));
+
+        async fn echo(
+            Extension(ctx): Extension<crate::AuthContext>,
+            Extension(scopes): Extension<crate::GrantedScopes>,
+            Extension(client_id): Extension<crate::TokenClientId>,
+        ) -> String {
+            let sub = match ctx {
+                crate::AuthContext::User { sub, .. } => sub,
+                crate::AuthContext::Admin => "admin".to_string(),
+            };
+            format!(
+                "{sub}|{}|{}",
+                scopes.as_slice().join(","),
+                client_id.0.unwrap_or_default()
+            )
+        }
+
+        let app =
+            Router::new()
+                .route("/mcp", get(echo))
+                .layer(axum::middleware::from_fn_with_state(
+                    McpAuthLayerState {
+                        gate: gate_with_primed_jwks(),
+                        required_scope: String::new(),
+                    },
+                    mcp_auth_middleware,
+                ));
+
+        let resp = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/mcp")
+                    .header("authorization", format!("Bearer {jwt}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            String::from_utf8(body.to_vec()).unwrap(),
+            "alice|stackpit:projects:write|mcp-client",
+        );
     }
 
     #[tokio::test]

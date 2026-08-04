@@ -12,11 +12,10 @@ use crate::html::chrome::PageChrome;
 use crate::html::render_template;
 use crate::html::utils::Chrome;
 use crate::orgs::extractor::ActiveOrg;
-use crate::providers::tracker::{create_issue, issue_api_url, NewExternalIssue, TrackerTarget};
 use crate::queries;
 use crate::queries::types::{AttachmentInfo, EventNav, PagedResult, Pagination, TagFacet};
 use crate::server::AppState;
-use crate::util::ssrf::{build_pinned_client, check_ssrf};
+use crate::trackers::{LinkError, LinkRequest};
 
 use crate::queries::event_supplements;
 
@@ -400,34 +399,6 @@ pub async fn update_status(
     Redirect::to(&redirect_url).into_response()
 }
 
-/// Resolves the tracker target: each field (owner, repo, project_id) is taken
-/// from the per-project override if present there, otherwise falls back to the
-/// integration's default target; base_url always comes from `integrations.url`,
-/// not from either target object.
-pub fn resolve_target(
-    base_url: &str,
-    default_target: &serde_json::Value,
-    project_override: Option<&serde_json::Value>,
-) -> TrackerTarget {
-    let field_str = |key: &str| {
-        project_override
-            .and_then(|o| o.get(key))
-            .and_then(|v| v.as_str())
-            .or_else(|| default_target.get(key).and_then(|v| v.as_str()))
-            .map(String::from)
-    };
-    let project_id = project_override
-        .and_then(|o| o.get("project_id"))
-        .and_then(|v| v.as_i64())
-        .or_else(|| default_target.get("project_id").and_then(|v| v.as_i64()));
-    TrackerTarget {
-        base_url: base_url.to_string(),
-        owner: field_str("owner"),
-        repo: field_str("repo"),
-        project_id,
-    }
-}
-
 pub async fn create_external_issue(
     active: ActiveOrg,
     State(state): State<AppState>,
@@ -456,178 +427,42 @@ pub async fn create_external_issue(
     };
 
     let redirect_url = format!("/web/projects/{project_id}/issues/{fingerprint}/");
+    let issue_url = format!("{}{redirect_url}", state.config.server.web_base());
 
-    let org_id = scope.org_id;
-
-    let integration = match queries::integrations::get_integration(
+    let outcome = crate::trackers::link_issue(
         &state.pool,
-        form.integration_id,
-        Some(org_id),
-    )
-    .await
-    {
-        Ok(Some(i)) if i.kind.is_tracker() => i,
-        Ok(_) => return html_error(StatusCode::NOT_FOUND, "Integration not found"),
-        Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
-
-    match queries::issue_links::link_exists(&state.pool, &fingerprint, integration.id).await {
-        Ok(true) => return Redirect::to(&redirect_url).into_response(),
-        Ok(false) => {}
-        Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    }
-
-    let token = match (&integration.secret, integration.encrypted, &state.encryptor) {
-        (Some(s), true, Some(enc)) => enc.decrypt(s),
-        (Some(s), false, _) => Some(s.clone()),
-        _ => None,
-    };
-    let Some(token) = token else {
-        return Redirect::to(&format!("{redirect_url}?tracker_flash=config")).into_response();
-    };
-
-    let Some(base_url) = integration.url.as_deref() else {
-        return Redirect::to(&format!("{redirect_url}?tracker_flash=config")).into_response();
-    };
-
-    let default_target: serde_json::Value = integration
-        .config
-        .as_deref()
-        .and_then(|c| serde_json::from_str(c).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
-
-    let project_override = match queries::tracker_targets::get_override(
-        &state.pool,
-        project_id as i64,
-        integration.id,
-    )
-    .await
-    {
-        Ok(v) => v,
-        Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
-
-    let target = resolve_target(base_url, &default_target, project_override.as_ref());
-    let kind = integration.kind;
-
-    let url = match issue_api_url(kind, &target) {
-        Ok(u) => u,
-        Err(_) => {
-            return Redirect::to(&format!("{redirect_url}?tracker_flash=config")).into_response()
-        }
-    };
-
-    let resolved = match check_ssrf(&url).await {
-        Ok(r) => r,
-        Err(msg) => return html_error(StatusCode::BAD_REQUEST, &msg),
-    };
-
-    let client = match build_pinned_client(&resolved) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!("create_external_issue: failed to build pinned client: {e}");
-            return html_error(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
-        }
-    };
-
-    let issue = match queries::issues::get_issue(&state.pool, &fingerprint).await {
-        Ok(Some(i)) => i,
-        Ok(None) => return html_error(StatusCode::NOT_FOUND, "Issue not found"),
-        Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
-    let title = issue.title.unwrap_or_else(|| fingerprint.clone());
-    let deep_link = format!("{}{redirect_url}", state.config.server.web_base());
-    let body = format!("{title}\n\n{deep_link}");
-
-    // Status only in the flash/log below: the tracker response body can
-    // reflect submitted input, so it never surfaces past this point.
-    let created = match create_issue(
-        &client,
-        kind,
-        &target,
-        &token,
-        &NewExternalIssue {
-            title: &title,
-            body: &body,
+        &state.writer_pool,
+        state.encryptor.as_deref(),
+        &LinkRequest {
+            org_id: scope.org_id,
+            project_id: project_id as i64,
+            fingerprint: &fingerprint,
+            integration_id: form.integration_id,
+            issue_url: &issue_url,
         },
     )
-    .await
-    {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!("create_external_issue: tracker create_issue failed: {e}");
-            return Redirect::to(&format!("{redirect_url}?tracker_flash=create-failed"))
-                .into_response();
+    .await;
+
+    match outcome {
+        Ok(_) => Redirect::to(&redirect_url).into_response(),
+        Err(LinkError::IssueNotFound) => html_error(StatusCode::NOT_FOUND, "Issue not found"),
+        Err(LinkError::IntegrationNotFound) => {
+            html_error(StatusCode::NOT_FOUND, "Integration not found")
         }
-    };
-
-    let now = chrono::Utc::now().timestamp();
-    if let Err(e) = queries::issue_links::insert_link(
-        &state.writer_pool,
-        project_id as i64,
-        &fingerprint,
-        integration.id,
-        &created.external_id,
-        &created.external_url,
-        now,
-    )
-    .await
-    {
-        // A concurrent request may have already won the insert; that's fine.
-        tracing::warn!("create_external_issue: failed to store link: {e}");
-    }
-
-    Redirect::to(&redirect_url).into_response()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn resolve_target_prefers_project_override() {
-        let default_cfg = serde_json::json!({ "owner": "acme", "repo": "default" });
-        let override_tgt = serde_json::json!({ "owner": "acme", "repo": "frontend" });
-        let t = resolve_target("https://api.github.com", &default_cfg, Some(&override_tgt));
-        assert_eq!(t.repo.as_deref(), Some("frontend"));
-        assert_eq!(t.base_url, "https://api.github.com");
-
-        let t2 = resolve_target("https://api.github.com", &default_cfg, None);
-        assert_eq!(t2.repo.as_deref(), Some("default"));
-    }
-
-    #[test]
-    fn resolve_target_merges_partial_override_with_default() {
-        let default_cfg = serde_json::json!({ "owner": "acme", "repo": "default" });
-        let repo_only_override = serde_json::json!({ "repo": "frontend" });
-        let t = resolve_target(
-            "https://api.github.com",
-            &default_cfg,
-            Some(&repo_only_override),
-        );
-        assert_eq!(t.owner.as_deref(), Some("acme"));
-        assert_eq!(t.repo.as_deref(), Some("frontend"));
-    }
-
-    #[test]
-    fn resolve_target_empty_override_yields_full_default() {
-        let default_cfg = serde_json::json!({ "owner": "acme", "repo": "default" });
-        let empty_override = serde_json::json!({});
-        let t = resolve_target(
-            "https://api.github.com",
-            &default_cfg,
-            Some(&empty_override),
-        );
-        assert_eq!(t.owner.as_deref(), Some("acme"));
-        assert_eq!(t.repo.as_deref(), Some("default"));
-    }
-
-    #[test]
-    fn resolve_target_full_override_wins() {
-        let default_cfg = serde_json::json!({ "owner": "acme", "repo": "default" });
-        let full_override = serde_json::json!({ "owner": "other", "repo": "frontend" });
-        let t = resolve_target("https://api.github.com", &default_cfg, Some(&full_override));
-        assert_eq!(t.owner.as_deref(), Some("other"));
-        assert_eq!(t.repo.as_deref(), Some("frontend"));
+        Err(LinkError::Misconfigured(msg)) => {
+            tracing::warn!("create_external_issue: {msg}");
+            Redirect::to(&format!("{redirect_url}?tracker_flash=config")).into_response()
+        }
+        Err(LinkError::Blocked(msg)) => html_error(StatusCode::BAD_REQUEST, &msg),
+        // Status only in the log: the tracker response body can reflect
+        // submitted input, so it never surfaces on the page.
+        Err(e @ (LinkError::Rejected(_) | LinkError::Unavailable(_))) => {
+            tracing::warn!("create_external_issue: tracker call failed: {e}");
+            Redirect::to(&format!("{redirect_url}?tracker_flash=create-failed")).into_response()
+        }
+        Err(LinkError::Internal(e)) => {
+            tracing::error!("create_external_issue: {e:#}");
+            html_error(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
+        }
     }
 }

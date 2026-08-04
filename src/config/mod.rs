@@ -4,7 +4,7 @@ use secrecy::SecretString;
 use serde::Deserialize;
 use std::path::Path;
 
-mod url;
+pub(crate) mod url;
 mod validate;
 
 pub const DEFAULT_CONFIG_PATH: &str = "stackpit.toml";
@@ -310,6 +310,10 @@ pub struct McpConfig {
     /// disables; startup rejects values above 300.
     #[serde(default = "default_bearer_cache_max_ttl")]
     pub cache_max_ttl_secs: u64,
+    /// Browser origins allowed to call `/mcp`, on top of `server.external_url`
+    /// and the audience. A request carrying any other `Origin` gets 403.
+    #[serde(default)]
+    pub allowed_origins: Vec<String>,
 }
 
 const DEFAULT_BIND: &str = "127.0.0.1:3000";

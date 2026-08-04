@@ -64,18 +64,24 @@ rate_limit = 300
 #
 # MCP endpoint at POST /mcp. Requires [auth.oauth] above.
 #
-# Token validation order:
-#   1. admin_token break-glass (server.admin_token if set; constant-time eq)
-#   2. JWT access tokens — RS256 against the IdP's JWKS (recommended;
+# Token validation order (the admin token is NOT accepted here: MCP requires a
+# token the authorization server issued for this resource):
+#   1. JWT access tokens — RS256 against the IdP's JWKS (recommended;
 #      Hydra's default since the JWT-by-default flip)
-#   3. Opaque tokens — RFC 7662 introspection (admin URL preferred;
+#   2. Opaque tokens — RFC 7662 introspection (admin URL preferred;
 #      discovery's `introspection_endpoint` as fallback)
 #
 # At least one of (JWKS reachable) or (introspection URL set) or
 # (discovery exposes `introspection_endpoint`) is required at startup.
 #
+# `audience` is the canonical URI of the MCP endpoint itself: clients send it as
+# the RFC 8707 `resource` parameter and it must come back in the token's `aud`.
+# Hydra ignores `resource` and binds `aud` from its own `audience=` parameter,
+# so behind Forseti the same URI must appear in [oauth].allowed_resource_audiences.
+#
 # [auth.mcp]
-# audience            = "https://stackpit.example.com"
+# audience            = "https://stackpit.example.com/mcp"
+# # allowed_origins   = ["https://claude.ai"]  # browser clients; the CLI sends no Origin
 # # introspection_url = "https://hydra-admin.internal:4445/admin/oauth2/introspect"
 # # jwks_url          = "..."           # override; defaults to discovery's jwks_uri
 # # jwks_cache_ttl_secs = 86400         # 24h; refetch on kid miss regardless

@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.24] - 2026-08-04
+
+### Added
+- MCP endpoint at `POST /mcp` with 17 read, write and admin tools
+- OAuth scopes for MCP: events read, projects read/write, admin
+- Incremental scope consent: 403 names the scope a client needs
+- `[auth.mcp]` config, and MCP setup in the operator guide
+
+### Fixed
+- Trace spans were readable across organisations with a known trace id
+- Access tokens carrying Hydra's `scp` claim were treated as unscoped
+
 ## [0.3.23] - 2026-08-02
 
 ### Added

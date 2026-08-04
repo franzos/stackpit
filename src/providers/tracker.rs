@@ -14,6 +14,32 @@ pub struct TrackerTarget {
     pub project_id: Option<i64>,
 }
 
+/// Why a tracker call did not produce an issue. Split by who can fix it: a
+/// caller can correct [`Rejected`](TrackerError::Rejected) and
+/// [`Config`](TrackerError::Config); the others are the tracker's problem.
+#[derive(Debug)]
+pub enum TrackerError {
+    /// The tracker refused the request as sent (4xx).
+    Rejected(reqwest::StatusCode),
+    /// Unreachable, timed out, or failing on its side.
+    Unavailable(String),
+    /// The target is incomplete for this kind, or the kind is not a tracker.
+    Config(String),
+    /// The tracker answered with something unusable.
+    BadResponse(String),
+}
+
+impl std::fmt::Display for TrackerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TrackerError::Rejected(status) => write!(f, "tracker rejected the request: {status}"),
+            TrackerError::Unavailable(m) => write!(f, "tracker unavailable: {m}"),
+            TrackerError::Config(m) => write!(f, "tracker misconfigured: {m}"),
+            TrackerError::BadResponse(m) => write!(f, "unusable tracker response: {m}"),
+        }
+    }
+}
+
 pub struct NewExternalIssue<'a> {
     pub title: &'a str,
     pub body: &'a str,
@@ -25,30 +51,30 @@ pub struct CreatedExternalIssue {
     pub external_url: String,
 }
 
-pub fn issue_api_url(kind: IntegrationKind, target: &TrackerTarget) -> anyhow::Result<String> {
+pub fn issue_api_url(
+    kind: IntegrationKind,
+    target: &TrackerTarget,
+) -> Result<String, TrackerError> {
     let base = target.base_url.trim_end_matches('/');
+    let missing = |field: &str| TrackerError::Config(format!("missing {field}"));
     match kind {
         IntegrationKind::GitHub | IntegrationKind::Forgejo => {
-            let owner = target
-                .owner
-                .as_deref()
-                .ok_or_else(|| anyhow::anyhow!("missing owner"))?;
-            let repo = target
-                .repo
-                .as_deref()
-                .ok_or_else(|| anyhow::anyhow!("missing repo"))?;
+            let owner = target.owner.as_deref().ok_or_else(|| missing("owner"))?;
+            let repo = target.repo.as_deref().ok_or_else(|| missing("repo"))?;
             Ok(format!("{base}/repos/{owner}/{repo}/issues"))
         }
         IntegrationKind::GitLab => {
-            let project_id = target
-                .project_id
-                .ok_or_else(|| anyhow::anyhow!("missing project_id"))?;
+            let project_id = target.project_id.ok_or_else(|| missing("project_id"))?;
             Ok(format!("{base}/api/v4/projects/{project_id}/issues"))
         }
         IntegrationKind::Webhook | IntegrationKind::Slack | IntegrationKind::Email => {
-            anyhow::bail!("not a tracker kind")
+            Err(not_a_tracker(kind))
         }
     }
+}
+
+fn not_a_tracker(kind: IntegrationKind) -> TrackerError {
+    TrackerError::Config(format!("{kind} is not a tracker kind"))
 }
 
 fn capped_title(title: &str) -> String {
@@ -61,7 +87,7 @@ pub async fn create_issue(
     target: &TrackerTarget,
     token: &str,
     issue: &NewExternalIssue<'_>,
-) -> anyhow::Result<CreatedExternalIssue> {
+) -> Result<CreatedExternalIssue, TrackerError> {
     let url = issue_api_url(kind, target)?;
     let title = capped_title(issue.title);
     let req = match kind {
@@ -75,33 +101,47 @@ pub async fn create_issue(
             .header("PRIVATE-TOKEN", token)
             .json(&serde_json::json!({ "title": title, "description": issue.body })),
         IntegrationKind::Webhook | IntegrationKind::Slack | IntegrationKind::Email => {
-            anyhow::bail!("not a tracker kind")
+            return Err(not_a_tracker(kind))
         }
     };
 
     // Own send/status-check here (not send_and_check, which discards the body
     // we need). Status only in errors, never the body -- a 4xx can reflect
     // submitted input, so keep it out of the error message.
-    let resp = req.send().await?;
-    if !resp.status().is_success() {
-        anyhow::bail!("tracker.create_issue returned {}", resp.status());
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| TrackerError::Unavailable(e.to_string()))?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(if status.is_client_error() {
+            TrackerError::Rejected(status)
+        } else {
+            TrackerError::Unavailable(format!("tracker returned {status}"))
+        });
     }
     let body = read_capped(resp, MAX_TRACKER_RESP).await?;
     parse_created(kind, &body)
 }
 
-async fn read_capped(mut resp: reqwest::Response, max: usize) -> anyhow::Result<String> {
+async fn read_capped(mut resp: reqwest::Response, max: usize) -> Result<String, TrackerError> {
     let mut buf: Vec<u8> = Vec::new();
-    while let Some(chunk) = resp.chunk().await? {
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|e| TrackerError::Unavailable(e.to_string()))?
+    {
         buf.extend_from_slice(&chunk);
         if buf.len() > max {
-            anyhow::bail!("tracker response exceeded {max} bytes");
+            return Err(TrackerError::BadResponse(format!(
+                "response exceeded {max} bytes"
+            )));
         }
     }
-    Ok(String::from_utf8(buf)?)
+    String::from_utf8(buf).map_err(|e| TrackerError::BadResponse(e.to_string()))
 }
 
-fn parse_created(kind: IntegrationKind, body: &str) -> anyhow::Result<CreatedExternalIssue> {
+fn parse_created(kind: IntegrationKind, body: &str) -> Result<CreatedExternalIssue, TrackerError> {
     let created = match kind {
         IntegrationKind::GitHub | IntegrationKind::Forgejo => {
             #[derive(Deserialize)]
@@ -109,7 +149,8 @@ fn parse_created(kind: IntegrationKind, body: &str) -> anyhow::Result<CreatedExt
                 number: i64,
                 html_url: String,
             }
-            let r: Resp = serde_json::from_str(body)?;
+            let r: Resp =
+                serde_json::from_str(body).map_err(|e| TrackerError::BadResponse(e.to_string()))?;
             CreatedExternalIssue {
                 external_id: r.number.to_string(),
                 external_url: r.html_url,
@@ -121,14 +162,15 @@ fn parse_created(kind: IntegrationKind, body: &str) -> anyhow::Result<CreatedExt
                 iid: i64,
                 web_url: String,
             }
-            let r: Resp = serde_json::from_str(body)?;
+            let r: Resp =
+                serde_json::from_str(body).map_err(|e| TrackerError::BadResponse(e.to_string()))?;
             CreatedExternalIssue {
                 external_id: r.iid.to_string(),
                 external_url: r.web_url,
             }
         }
         IntegrationKind::Webhook | IntegrationKind::Slack | IntegrationKind::Email => {
-            anyhow::bail!("not a tracker kind")
+            return Err(not_a_tracker(kind))
         }
     };
 
@@ -138,7 +180,9 @@ fn parse_created(kind: IntegrationKind, body: &str) -> anyhow::Result<CreatedExt
     let scheme_ok =
         created.external_url.starts_with("https://") || created.external_url.starts_with("http://");
     if !scheme_ok {
-        anyhow::bail!("tracker returned a non-http(s) issue url");
+        return Err(TrackerError::BadResponse(
+            "tracker returned a non-http(s) issue url".to_string(),
+        ));
     }
     Ok(created)
 }
@@ -350,12 +394,64 @@ mod tests {
     }
 
     fn http_response(body: &str) -> Vec<u8> {
+        http_response_with_status("201 Created", body)
+    }
+
+    fn http_response_with_status(status: &str, body: &str) -> Vec<u8> {
         format!(
-            "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(),
             body
         )
         .into_bytes()
+    }
+
+    async fn create_against(status: &str, body: &str) -> TrackerError {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback listener");
+        let addr = listener.local_addr().expect("local_addr");
+        tokio::spawn(respond_once(
+            listener,
+            http_response_with_status(status, body),
+        ));
+
+        let target = TrackerTarget {
+            base_url: format!("http://{addr}"),
+            owner: Some("acme".into()),
+            repo: Some("backend".into()),
+            project_id: None,
+        };
+        create_issue(
+            &reqwest::Client::new(),
+            IntegrationKind::GitHub,
+            &target,
+            "tok",
+            &NewExternalIssue {
+                title: "Boom",
+                body: "see stackpit",
+            },
+        )
+        .await
+        .expect_err("a non-2xx status must not yield an issue")
+    }
+
+    // The split the callers key on: a 4xx is the caller's to fix, a 5xx is not.
+    #[tokio::test]
+    async fn a_client_error_is_rejected_and_a_server_error_is_unavailable() {
+        let rejected = create_against("422 Unprocessable Entity", r#"{"message":"secret"}"#).await;
+        assert!(
+            matches!(rejected, TrackerError::Rejected(s) if s.as_u16() == 422),
+            "got {rejected:?}"
+        );
+        // A 4xx body can reflect submitted input; it must not travel with the error.
+        assert!(!rejected.to_string().contains("secret"));
+
+        let unavailable = create_against("503 Service Unavailable", "{}").await;
+        assert!(
+            matches!(unavailable, TrackerError::Unavailable(_)),
+            "got {unavailable:?}"
+        );
     }
 
     #[tokio::test]

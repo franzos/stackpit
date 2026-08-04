@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 /// Extract `scheme://host[:port]` from an absolute http(s) URL.
-pub(super) fn url_origin(value: &str) -> Option<String> {
+pub(crate) fn url_origin(value: &str) -> Option<String> {
     let trimmed = value.trim();
     let (scheme, rest) = if let Some(r) = trimmed.strip_prefix("https://") {
         ("https", r)

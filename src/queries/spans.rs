@@ -132,29 +132,38 @@ pub async fn aggregate_spans(pool: &crate::db::DbPool, project_id: u64) -> Resul
     Ok(SpanAggregation { groups, truncated })
 }
 
-pub async fn get_trace_spans(pool: &crate::db::DbPool, trace_id: &str) -> Result<Vec<TraceSpan>> {
+/// A trace id is shared across projects in a distributed trace, so every read
+/// is project-scoped: a caller entitled to one project must not reach another's
+/// spans by presenting its id.
+pub async fn get_trace_spans_for_project(
+    pool: &crate::db::DbPool,
+    project_id: u64,
+    trace_id: &str,
+) -> Result<Vec<TraceSpan>> {
     let rows = sqlx::query(sql!(
         "SELECT span_id, parent_span_id, op, description, status, duration_ms, start_ms
-         FROM spans WHERE trace_id = ?1
+         FROM spans WHERE project_id = ?1 AND trace_id = ?2
          ORDER BY timestamp
          LIMIT 10000"
     ))
+    .bind(project_id as i64)
     .bind(trace_id)
     .fetch_all(pool)
     .await?;
 
-    Ok(rows
-        .iter()
-        .map(|row| TraceSpan {
-            span_id: row.get("span_id"),
-            parent_span_id: row.get("parent_span_id"),
-            op: row.get("op"),
-            description: row.get("description"),
-            status: row.get("status"),
-            duration_ms: row.get("duration_ms"),
-            start_ms: row.get("start_ms"),
-        })
-        .collect())
+    Ok(rows.iter().map(map_trace_span).collect())
+}
+
+fn map_trace_span(row: &crate::db::DbRow) -> TraceSpan {
+    TraceSpan {
+        span_id: row.get("span_id"),
+        parent_span_id: row.get("parent_span_id"),
+        op: row.get("op"),
+        description: row.get("description"),
+        status: row.get("status"),
+        duration_ms: row.get("duration_ms"),
+        start_ms: row.get("start_ms"),
+    }
 }
 
 /// Error events sharing this trace_id (LIMIT 50, newest first).
@@ -1266,5 +1275,51 @@ mod tests {
         let errors = get_trace_errors(&pool, 1, "t1").await.unwrap();
         let ids: Vec<&str> = errors.iter().map(|e| e.event_id.as_str()).collect();
         assert_eq!(ids, vec!["e4", "e1"]); // newest first, only event/trace/project match
+    }
+
+    /// A trace id is shared across projects in a distributed trace. The web
+    /// trace view authorized the project but read spans by trace id alone, so a
+    /// known id exposed another org's spans.
+    #[tokio::test]
+    async fn trace_spans_never_cross_a_project_boundary() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        insert_span(
+            &pool,
+            "mine",
+            "shared-trace",
+            None,
+            1,
+            100,
+            0,
+            100,
+            Some("http.server"),
+            Some("GET /mine"),
+        )
+        .await;
+        insert_span(
+            &pool,
+            "theirs",
+            "shared-trace",
+            None,
+            2,
+            100,
+            0,
+            100,
+            Some("http.server"),
+            Some("GET /theirs"),
+        )
+        .await;
+
+        let mine = get_trace_spans_for_project(&pool, 1, "shared-trace")
+            .await
+            .unwrap();
+        assert_eq!(mine.len(), 1, "only the caller's project");
+        assert_eq!(mine[0].span_id, "mine");
+
+        let theirs = get_trace_spans_for_project(&pool, 2, "shared-trace")
+            .await
+            .unwrap();
+        assert_eq!(theirs.len(), 1);
+        assert_eq!(theirs[0].span_id, "theirs");
     }
 }

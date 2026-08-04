@@ -42,6 +42,32 @@ pub(crate) fn like_contains(needle: &str) -> String {
     format!("%{escaped}%")
 }
 
+/// Canonical form of an org-id list: sorted and deduped, so two callers with the
+/// same entitlements produce the same key and the same SQL.
+pub(crate) fn canonical_org_ids(mut ids: Vec<i64>) -> Vec<i64> {
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+/// Push `<column> IN (SELECT project_id FROM projects WHERE org_id IN (...))`,
+/// binding every id. The caller supplies its own `WHERE`/`AND`, and must have
+/// short-circuited an empty list: `IN ()` is invalid SQL on both backends.
+pub(crate) fn push_org_scope_predicate(
+    qb: &mut sqlx::QueryBuilder<crate::db::Db>,
+    project_column: &str,
+    org_ids: &[i64],
+) {
+    debug_assert!(!org_ids.is_empty(), "an empty org list must short-circuit");
+    qb.push(project_column);
+    qb.push(" IN (SELECT project_id FROM projects WHERE org_id IN (");
+    let mut sep = qb.separated(", ");
+    for id in org_ids {
+        sep.push_bind(*id);
+    }
+    qb.push("))");
+}
+
 #[cfg(test)]
 pub(crate) mod test_helpers {
     use crate::db::{self, sql, DbPool};

@@ -137,12 +137,55 @@ struct CachedResponse {
     /// Needed for sid-scoped revocation when the IdP emits it.
     sid: Option<String>,
     scope: Option<String>,
+    /// OAuth client that presented the token. Join key for per-client policy
+    /// and the "which app did this" field in audit events.
+    client_id: Option<String>,
+}
+
+/// Scopes carried by the presented token, already split. Inserted as a request
+/// extension by [`mcp_auth_middleware`](crate::mcp_auth_middleware); the cookie
+/// path never has one.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GrantedScopes(Vec<String>);
+
+impl GrantedScopes {
+    pub fn parse(raw: Option<&str>) -> Self {
+        Self(
+            raw.unwrap_or_default()
+                .split_ascii_whitespace()
+                .map(str::to_string)
+                .collect(),
+        )
+    }
+
+    pub fn has(&self, scope: &str) -> bool {
+        self.0.iter().any(|s| s == scope)
+    }
+
+    pub fn as_slice(&self) -> &[String] {
+        &self.0
+    }
+}
+
+/// OAuth `client_id` of the token presenter. Request extension. `None` when the
+/// credential names no client: the admin-token break-glass, or an introspection
+/// response that omits the field.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TokenClientId(pub Option<String>);
+
+/// An authenticated bearer plus the token facts a resource server needs to
+/// authorize per-tool. [`AuthContext`] stays narrow because the cookie path
+/// shares it and scopes are meaningless there.
+pub struct BearerGrant {
+    pub ctx: AuthContext,
+    pub scopes: GrantedScopes,
+    pub client_id: TokenClientId,
 }
 
 /// Bearer validation outcome. MCP wrapper renders 401/403; web wrapper
 /// clears the grant cookie and redirects to /web/login.
 pub enum BearerAuthOutcome {
-    Ok(AuthContext),
+    Ok(BearerGrant),
     MissingToken,
     InvalidToken,
     InsufficientScope { required: String },
@@ -262,7 +305,11 @@ impl BearerGate {
                 .into()
             {
                 self.log_admin_break_glass();
-                return BearerAuthOutcome::Ok(AuthContext::Admin);
+                return BearerAuthOutcome::Ok(BearerGrant {
+                    ctx: AuthContext::Admin,
+                    scopes: GrantedScopes::default(),
+                    client_id: TokenClientId(None),
+                });
             }
         }
 
@@ -312,12 +359,16 @@ impl BearerGate {
         }
 
         tracing::debug!(sub = %cached.sub, "bearer accepted");
-        BearerAuthOutcome::Ok(AuthContext::User {
-            iss,
-            sub: cached.sub,
-            // MCP: per-request correlation only. Web middleware swaps for
-            // `PrincipalId::Session` carrying the stable grant handle.
-            principal_id: PrincipalId::Request(Uuid::new_v4()),
+        BearerAuthOutcome::Ok(BearerGrant {
+            ctx: AuthContext::User {
+                iss,
+                sub: cached.sub,
+                // MCP: per-request correlation only. Web middleware swaps for
+                // `PrincipalId::Session` carrying the stable grant handle.
+                principal_id: PrincipalId::Request(Uuid::new_v4()),
+            },
+            scopes: GrantedScopes::parse(cached.scope.as_deref()),
+            client_id: TokenClientId(cached.client_id),
         })
     }
 
@@ -349,18 +400,22 @@ impl BearerGate {
         }
     }
 
-    /// MCP transport only; web path never calls this.
-    pub fn challenge_header(&self, error: Option<&str>) -> String {
-        match error {
-            Some(err) => format!(
-                "Bearer realm=\"{}\", error=\"{}\", resource_metadata=\"{}\"",
-                self.inner.realm, err, self.inner.resource_metadata_url
-            ),
-            None => format!(
-                "Bearer realm=\"{}\", resource_metadata=\"{}\"",
-                self.inner.realm, self.inner.resource_metadata_url
-            ),
+    /// MCP transport only; web path never calls this. RFC 6750 §3: `scope`
+    /// belongs on the challenge whenever the gate knows which scope was
+    /// insufficient -- it is what tells the client what to step up to.
+    pub fn challenge_header(&self, error: Option<&str>, scope: Option<&str>) -> String {
+        let mut challenge = format!("Bearer realm=\"{}\"", self.inner.realm);
+        if let Some(err) = error {
+            challenge.push_str(&format!(", error=\"{err}\""));
         }
+        if let Some(scope) = scope.filter(|s| !s.is_empty()) {
+            challenge.push_str(&format!(", scope=\"{scope}\""));
+        }
+        challenge.push_str(&format!(
+            ", resource_metadata=\"{}\"",
+            self.inner.resource_metadata_url
+        ));
+        challenge
     }
 
     pub fn realm(&self) -> &str {
@@ -484,8 +539,23 @@ mod tests {
             base_gate(|c| c.admin_token = Some(SecretString::from("supersecret".to_string())));
         let outcome = gate.authorize(Some("supersecret"), "anything").await;
         match outcome {
-            BearerAuthOutcome::Ok(AuthContext::Admin) => {}
+            BearerAuthOutcome::Ok(BearerGrant {
+                ctx: AuthContext::Admin,
+                ..
+            }) => {}
             _ => panic!("expected admin"),
+        }
+    }
+
+    /// `build_mcp_runtime` leaves `admin_token` unset so `/mcp` honours MCP's
+    /// rule that a resource server accepts only tokens its authorization server
+    /// issued for it. Without the break-glass wired in there is no admin arm.
+    #[tokio::test]
+    async fn no_admin_token_configured_leaves_no_break_glass_arm() {
+        let gate = base_gate(|c| c.admin_token = None);
+        match gate.authorize(Some("supersecret"), "anything").await {
+            BearerAuthOutcome::InvalidToken => {}
+            _ => panic!("expected InvalidToken"),
         }
     }
 
@@ -502,12 +572,69 @@ mod tests {
         }));
         let outcome = gate.authorize(Some(&jwt), "stackpit:events:read").await;
         match outcome {
-            BearerAuthOutcome::Ok(AuthContext::User { sub, iss, .. }) => {
+            BearerAuthOutcome::Ok(BearerGrant { ctx, scopes, .. }) => {
+                let AuthContext::User { sub, iss, .. } = ctx else {
+                    panic!("expected user")
+                };
                 assert_eq!(sub, "alice");
                 assert_eq!(iss, "https://hydra.example.com");
+                assert!(scopes.has("stackpit:events:read"));
             }
             _ => panic!("expected user"),
         }
+    }
+
+    // The join key for per-client policy and for "which app did this" in an
+    // audit line; Hydra sets it and the extractor used to drop it.
+    #[tokio::test]
+    async fn jwt_carries_the_client_id_through() {
+        let gate = base_gate(|_| {});
+        let jwt = issue_jwt(json!({
+            "iss": "https://hydra.example.com",
+            "sub": "alice",
+            "aud": ["https://mcp.example.com"],
+            "scope": "stackpit:events:read",
+            "client_id": "mcp-client",
+            "exp": now() + 300,
+        }));
+        match gate.authorize(Some(&jwt), "").await {
+            BearerAuthOutcome::Ok(grant) => {
+                assert_eq!(grant.client_id.0.as_deref(), Some("mcp-client"));
+            }
+            _ => panic!("expected user"),
+        }
+
+        // Absent is the normal case on other paths and must not fail the token.
+        let anonymous = issue_jwt(json!({
+            "iss": "https://hydra.example.com",
+            "sub": "alice",
+            "aud": ["https://mcp.example.com"],
+            "exp": now() + 300,
+        }));
+        match gate.authorize(Some(&anonymous), "").await {
+            BearerAuthOutcome::Ok(grant) => assert_eq!(grant.client_id.0, None),
+            _ => panic!("expected user"),
+        }
+    }
+
+    #[test]
+    fn challenge_carries_the_scope_only_when_there_is_one() {
+        let gate = base_gate(|c| {
+            c.resource_metadata_url = "https://sp.example.com/.well-known/x".to_string()
+        });
+        let stepped_up = gate.challenge_header(Some("insufficient_scope"), Some("stackpit:admin"));
+        assert_eq!(
+            stepped_up,
+            "Bearer realm=\"test\", error=\"insufficient_scope\", scope=\"stackpit:admin\", \
+             resource_metadata=\"https://sp.example.com/.well-known/x\"",
+        );
+        assert_eq!(
+            gate.challenge_header(None, None),
+            "Bearer realm=\"test\", resource_metadata=\"https://sp.example.com/.well-known/x\"",
+        );
+        assert!(!gate
+            .challenge_header(Some("invalid_token"), Some(""))
+            .contains("scope="));
     }
 
     #[tokio::test]
@@ -640,6 +767,7 @@ mod tests {
             sub: "alice".to_string(),
             sid: None,
             scope: None,
+            client_id: None,
         };
         let now = now_secs();
         for i in 0..CACHE_CAPACITY {
@@ -684,6 +812,7 @@ mod tests {
             sub: "alice".to_string(),
             sid: None,
             scope: None,
+            client_id: None,
         };
         let now = now_secs();
         gate.cache_store(key, &response, "iss", Some(now + 3600), now);
@@ -708,6 +837,7 @@ mod tests {
             sub: "alice".to_string(),
             sid: None,
             scope: None,
+            client_id: None,
         };
         let now = now_secs();
         gate.cache_store(key, &response, "iss", Some(now + 3600), now);
@@ -818,7 +948,10 @@ mod tests {
 
         for _ in 0..2 {
             match gate.authorize(Some(token), "stackpit:events:read").await {
-                BearerAuthOutcome::Ok(AuthContext::User { sub, .. }) => assert_eq!(sub, "alice"),
+                BearerAuthOutcome::Ok(BearerGrant {
+                    ctx: AuthContext::User { sub, .. },
+                    ..
+                }) => assert_eq!(sub, "alice"),
                 _ => panic!("expected user"),
             }
         }
@@ -834,6 +967,36 @@ mod tests {
         );
     }
 
+    // The `client_id` fallback exists for Hydra responses that omit `aud`. It
+    // must not rescue a token that names a *different* resource: that would
+    // turn every web-session token into a valid /mcp credential.
+    #[tokio::test]
+    async fn opaque_client_id_does_not_override_a_foreign_audience() {
+        let body = format!(
+            r#"{{"active":true,"sub":"alice","aud":["https://web.example.com"],"client_id":"stackpit-web","iss":"https://hydra.example.com","scope":"openid","exp":{}}}"#,
+            now() + 300
+        );
+        let (addr, _) = spawn_introspection_server(body);
+        let gate = base_gate(|c| {
+            c.introspection_url = Some(format!("http://{addr}/introspect"));
+            c.client_id = "stackpit-web".to_string();
+        });
+        let outcome = gate.authorize(Some("opaque-web-session-token"), "").await;
+        assert!(matches!(outcome, BearerAuthOutcome::InvalidToken));
+    }
+
+    #[tokio::test]
+    async fn opaque_client_id_still_rescues_an_absent_audience() {
+        let body = format!(
+            r#"{{"active":true,"sub":"alice","client_id":"stackpit-mcp","iss":"https://hydra.example.com","scope":"openid","exp":{}}}"#,
+            now() + 300
+        );
+        let (addr, _) = spawn_introspection_server(body);
+        let gate = base_gate(|c| c.introspection_url = Some(format!("http://{addr}/introspect")));
+        let outcome = gate.authorize(Some("opaque-no-aud-token"), "").await;
+        assert!(matches!(outcome, BearerAuthOutcome::Ok(_)));
+    }
+
     #[tokio::test]
     async fn revocation_negative_cached_within_ttl() {
         let counter = Arc::new(CountingRevocation {
@@ -847,6 +1010,7 @@ mod tests {
             sub: "alice".to_string(),
             sid: None,
             scope: None,
+            client_id: None,
         };
         let _ = gate.is_revoked_cached("iss", &response).await;
         let _ = gate.is_revoked_cached("iss", &response).await;

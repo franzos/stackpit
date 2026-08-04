@@ -8,6 +8,7 @@ Everything beyond getting the binary and starting it: the full configuration ref
 - [PostgreSQL](#postgresql)
 - [Ingestion tuning](#ingestion-tuning)
 - [Authentication](#authentication)
+- [MCP endpoint](#mcp-endpoint)
 - [Organizations & Roles](#organizations--roles)
 - [Secret encryption](#secret-encryption)
 - [Metrics / Observability](#metrics--observability)
@@ -184,6 +185,55 @@ User rows are provisioned just-in-time on first login, linked by the OIDC `(iss,
 A "Sign in with SSO" button appears on `/web/login` whenever `[auth.oauth]` is configured. The admin_token path keeps working alongside as a break-glass.
 
 The full set of OAuth knobs (`post_logout_redirect_uri`, `access_token_max_ttl_secs`, `introspection_cache_ttl_secs`, `session_max_ttl_secs`, etc.) is documented inline in the config that `stackpit init` writes — read that file for the authoritative reference.
+
+## MCP endpoint
+
+stackpit speaks [MCP](https://modelcontextprotocol.io) at `POST /mcp`, so an AI assistant can read your errors, issues, releases and traces — and, with the right scopes, resolve issues or create projects. It's bearer-only: no cookies, no admin token, only access tokens your IdP issued for this resource.
+
+Requires `[auth.oauth]`. Add an audience and it turns on:
+
+```toml
+[auth.mcp]
+# The canonical URI of the MCP endpoint. This is what clients send as the
+# RFC 8707 `resource` parameter, and what must appear in the token's `aud`.
+audience = "https://stackpit.example.com/mcp"
+# Browser-based clients only; the CLI sends no Origin and is always allowed.
+# allowed_origins = ["https://claude.ai"]
+```
+
+**The catch:** the audience has to survive the round-trip through your IdP, and not every IdP binds it the way the spec assumes. Ory Hydra ignores RFC 8707 `resource` entirely and derives the audience only from its own `audience=` parameter — which MCP clients don't send. Tokens then arrive with `aud: []` and every call 401s. If you front Hydra with [Forseti](https://git.gofranz.com/franz/forseti), list the resource there and it bridges the two:
+
+```toml
+[oauth]
+allowed_resource_audiences = ["https://stackpit.example.com/mcp"]
+```
+
+Behind a reverse proxy, **both** `/mcp` and `/.well-known/oauth-protected-resource` have to reach the admin listener. The well-known one is easy to forget, and when it's missing the failure looks like a broken MCP server rather than a misrouted path — OAuth discovery starts there.
+
+### Scopes
+
+| Scope | Unlocks |
+| --- | --- |
+| `stackpit:events:read` | Issues, events, traces, releases, release health |
+| `stackpit:projects:read` | Project list and metadata |
+| `stackpit:projects:write` | Resolve/ignore issues, rename projects, file tracker issues |
+| `stackpit:admin` | Create and archive projects |
+
+Only the two read scopes are advertised in the protected-resource metadata, deliberately: a client that sees no `scope` in the challenge asks for everything advertised, so publishing `stackpit:admin` there would make every first connect an admin prompt. Write and admin scopes are granted later — call a tool you don't have the scope for and stackpit answers `403` with a `WWW-Authenticate` header naming it, which a client that supports incremental consent uses to ask for exactly that scope.
+
+### What an authorized client can see
+
+Everything you can. Access follows your organization membership, refreshed from the IdP on each request, so a demotion upstream takes effect within a minute. There's no per-project access control yet: authorizing an MCP client grants it every project in every org you belong to. Each tool's description says so, and it's worth knowing before you click Allow on a shared instance.
+
+The admin token does **not** work here, by design.
+
+### Connecting
+
+```sh
+claude mcp add --transport http stackpit https://stackpit.example.com/mcp
+```
+
+The client discovers the authorization server, registers itself, and sends you through your normal login. Call `whoami` first when something refuses — it reports the subject, OAuth client, granted scopes and reachable orgs, which is usually enough to see what's missing.
 
 ## Organizations & Roles
 

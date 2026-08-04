@@ -2,6 +2,7 @@
 
 use crate::ingest::models::ItemType;
 use serde_json::Value;
+use std::borrow::Cow;
 
 /// FNV-1a 64-bit: fast, deterministic, sufficient for fingerprinting.
 pub(crate) fn fnv1a_64(data: &[u8]) -> u64 {
@@ -19,6 +20,90 @@ pub(crate) fn fnv1a_64(data: &[u8]) -> u64 {
 /// Zero-padded 16-char hex string from a 64-bit hash.
 fn format_hash(hash: u64) -> String {
     format!("{:016x}", hash)
+}
+
+// U+0001 so a literal "<uuid>" in attacker-supplied text can't forge a group; 0x00 is the field separator.
+const UUID_PLACEHOLDER: &str = "\u{1}uuid\u{1}";
+const HEX_PLACEHOLDER: &str = "\u{1}hex\u{1}";
+const NUM_PLACEHOLDER: &str = "\u{1}num\u{1}";
+
+/// Identifier char: a run touching one of these is part of a name, not a value.
+fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+fn run_len(bytes: &[u8], from: usize, pred: fn(&u8) -> bool) -> usize {
+    bytes[from..].iter().take_while(|b| pred(b)).count()
+}
+
+fn is_uuid_at(bytes: &[u8], from: usize) -> bool {
+    let mut at = from;
+    for (i, group) in [8usize, 4, 4, 4, 12].into_iter().enumerate() {
+        if i > 0 {
+            if bytes.get(at) != Some(&b'-') {
+                return false;
+            }
+            at += 1;
+        }
+        if run_len(bytes, at, u8::is_ascii_hexdigit) != group {
+            return false;
+        }
+        at += group;
+    }
+    true
+}
+
+fn normalize_for_grouping(input: &str) -> Cow<'_, str> {
+    let bytes = input.as_bytes();
+    let mut out: Option<String> = None;
+    let mut copied = 0;
+    let mut at = 0;
+
+    while at < bytes.len() {
+        // Only measured where a run can start, so every byte is looked at a bounded number of times.
+        let after_ident = at > 0 && is_ident_byte(bytes[at - 1]);
+        let hex_len = if after_ident {
+            0
+        } else {
+            run_len(bytes, at, u8::is_ascii_hexdigit)
+        };
+        // A bare number is usually meaningful (status code, signal, line); only `key=NNN` is an interpolated value.
+        let digits = if at > 0 && bytes[at - 1] == b'=' {
+            run_len(bytes, at, u8::is_ascii_digit)
+        } else {
+            0
+        };
+
+        // Order matters: a UUID contains hex, which contains digits.
+        let hit = if !after_ident && is_uuid_at(bytes, at) {
+            Some((36, UUID_PLACEHOLDER))
+        } else if hex_len >= 16 {
+            Some((hex_len, HEX_PLACEHOLDER))
+        } else if digits > 0 {
+            Some((digits, NUM_PLACEHOLDER))
+        } else {
+            None
+        };
+
+        match hit {
+            Some((len, placeholder)) => {
+                let buf = out.get_or_insert_with(|| String::with_capacity(input.len()));
+                buf.push_str(&input[copied..at]);
+                buf.push_str(placeholder);
+                at += len;
+                copied = at;
+            }
+            None => at += 1,
+        }
+    }
+
+    match out {
+        Some(mut buf) => {
+            buf.push_str(&input[copied..]);
+            Cow::Owned(buf)
+        }
+        None => Cow::Borrowed(input),
+    }
 }
 
 /// Fingerprint from an already-parsed JSON value.
@@ -92,7 +177,7 @@ fn compute_fingerprint_inner(project_id: u64, json: &Value) -> Option<String> {
         input.push(0x00);
         input.extend_from_slice(exc_type.as_bytes());
         input.push(0x00);
-        input.extend_from_slice(exc_value.as_bytes());
+        input.extend_from_slice(normalize_for_grouping(&exc_value).as_bytes());
         return Some(format_hash(fnv1a_64(&input)));
     }
 
@@ -101,7 +186,7 @@ fn compute_fingerprint_inner(project_id: u64, json: &Value) -> Option<String> {
         let mut input = Vec::new();
         input.extend_from_slice(project_id.to_string().as_bytes());
         input.push(0x00);
-        input.extend_from_slice(msg.as_bytes());
+        input.extend_from_slice(normalize_for_grouping(&msg).as_bytes());
         return Some(format_hash(fnv1a_64(&input)));
     }
 
@@ -332,6 +417,219 @@ mod tests {
         let payload_custom_only = br#"{"fingerprint":["custom"]}"#;
         let fp_custom = compute_fingerprint(1, &ItemType::Event, payload_custom_only).unwrap();
         assert_eq!(fp, fp_custom);
+    }
+
+    #[test]
+    fn normalize_leaves_untouched_text_borrowed() {
+        assert!(matches!(
+            normalize_for_grouping("plain failure, no values"),
+            Cow::Borrowed(_)
+        ));
+    }
+
+    #[test]
+    fn normalize_replaces_values_in_order() {
+        assert_eq!(
+            normalize_for_grouping("user c202a250-f4a1-4820-9d30-0178cb91d67f gone"),
+            format!("user {UUID_PLACEHOLDER} gone")
+        );
+        assert_eq!(
+            normalize_for_grouping("token deadbeefcafebabe1234 rejected"),
+            format!("token {HEX_PLACEHOLDER} rejected")
+        );
+        assert_eq!(
+            normalize_for_grouping("done_in=136 ms"),
+            format!("done_in={NUM_PLACEHOLDER} ms")
+        );
+    }
+
+    #[test]
+    fn normalize_keeps_digits_that_belong_to_names() {
+        // utf8 / v2 / sha256 are names, not interpolated values.
+        assert_eq!(
+            normalize_for_grouping("utf8 decode failed on /api/v2 via sha256"),
+            "utf8 decode failed on /api/v2 via sha256"
+        );
+    }
+
+    #[test]
+    fn num_only_fires_on_key_value_form() {
+        assert_eq!(
+            normalize_for_grouping("done_in=136 ms"),
+            format!("done_in={NUM_PLACEHOLDER} ms")
+        );
+        // In `key=value` a unit suffix belongs to the value.
+        assert_eq!(
+            normalize_for_grouping("done_in=136ms"),
+            format!("done_in={NUM_PLACEHOLDER}ms")
+        );
+        assert_eq!(
+            normalize_for_grouping("attempt=3"),
+            format!("attempt={NUM_PLACEHOLDER}")
+        );
+
+        for unchanged in [
+            "HTTP 500 from upstream",
+            "HTTP 502 from upstream",
+            "killed by signal 9",
+            "exit code 1",
+            "code 137",
+            "panic at src/main.rs:42:9",
+            "SQLSTATE 23505",
+            "café123",
+        ] {
+            assert_eq!(normalize_for_grouping(unchanged), unchanged);
+        }
+    }
+
+    #[test]
+    fn status_codes_stay_separate() {
+        let a = br#"{"message":"HTTP 500 from upstream"}"#;
+        let b = br#"{"message":"HTTP 502 from upstream"}"#;
+        assert_ne!(
+            compute_fingerprint(1, &ItemType::Event, a).unwrap(),
+            compute_fingerprint(1, &ItemType::Event, b).unwrap()
+        );
+    }
+
+    #[test]
+    fn hex_needs_a_word_boundary() {
+        assert_eq!(
+            normalize_for_grouping("orderid123456789012345"),
+            "orderid123456789012345"
+        );
+        assert_eq!(
+            normalize_for_grouping("z0123456789abcdef done"),
+            "z0123456789abcdef done"
+        );
+        assert_eq!(
+            normalize_for_grouping("0123456789abcdef done"),
+            format!("{HEX_PLACEHOLDER} done")
+        );
+    }
+
+    #[test]
+    fn hex_threshold_is_sixteen() {
+        assert_eq!(normalize_for_grouping("0123456789abcde"), "0123456789abcde");
+        assert_eq!(normalize_for_grouping("0123456789abcdef"), HEX_PLACEHOLDER);
+        assert_eq!(normalize_for_grouping("0123456789abcdef0"), HEX_PLACEHOLDER);
+    }
+
+    #[test]
+    fn normalize_handles_multibyte_input() {
+        assert_eq!(normalize_for_grouping("café123"), "café123");
+        assert_eq!(
+            normalize_for_grouping("naïve retry done_in=42 ms"),
+            format!("naïve retry done_in={NUM_PLACEHOLDER} ms")
+        );
+        assert_eq!(
+            normalize_for_grouping("日本語 c202a250-f4a1-4820-9d30-0178cb91d67f 失敗"),
+            format!("日本語 {UUID_PLACEHOLDER} 失敗")
+        );
+    }
+
+    #[test]
+    fn normalize_handles_uuid_edges() {
+        assert_eq!(
+            normalize_for_grouping("C202A250-F4A1-4820-9D30-0178CB91D67F"),
+            UUID_PLACEHOLDER
+        );
+        assert_eq!(
+            normalize_for_grouping("c202a250-f4a1-4820-9d30-0178cb91d67f failed"),
+            format!("{UUID_PLACEHOLDER} failed")
+        );
+        assert_eq!(
+            normalize_for_grouping("failed for c202a250-f4a1-4820-9d30-0178cb91d67f"),
+            format!("failed for {UUID_PLACEHOLDER}")
+        );
+        assert_eq!(normalize_for_grouping(""), "");
+    }
+
+    #[test]
+    fn literal_placeholder_text_cannot_forge_a_group() {
+        assert_eq!(
+            normalize_for_grouping("user <uuid> gone"),
+            "user <uuid> gone"
+        );
+
+        let literal = br#"{"message":"user <uuid> gone"}"#;
+        let real = br#"{"message":"user c202a250-f4a1-4820-9d30-0178cb91d67f gone"}"#;
+        assert_ne!(
+            compute_fingerprint(1, &ItemType::Event, literal).unwrap(),
+            compute_fingerprint(1, &ItemType::Event, real).unwrap()
+        );
+    }
+
+    #[test]
+    fn interpolated_uuid_groups_together() {
+        let a = br#"{"message":"Failed to send push notification for user c202a250-f4a1-4820-9d30-0178cb91d67f"}"#;
+        let b = br#"{"message":"Failed to send push notification for user dd1ffcfa-765c-42bb-a576-ed3c1ea8177f"}"#;
+        assert_eq!(
+            compute_fingerprint(1, &ItemType::Event, a).unwrap(),
+            compute_fingerprint(1, &ItemType::Event, b).unwrap()
+        );
+    }
+
+    #[test]
+    fn interpolated_duration_groups_together() {
+        let a = br#"{"message":"Job Failed: (status 401 Unauthorized): Token is not active done_in=136 ms"}"#;
+        let b = br#"{"message":"Job Failed: (status 401 Unauthorized): Token is not active done_in=245 ms"}"#;
+        assert_eq!(
+            compute_fingerprint(1, &ItemType::Event, a).unwrap(),
+            compute_fingerprint(1, &ItemType::Event, b).unwrap()
+        );
+    }
+
+    #[test]
+    fn normalization_still_separates_different_status_codes() {
+        let a = br#"{"message":"Job Failed: (status 401 Unauthorized) done_in=136 ms"}"#;
+        let b = br#"{"message":"Job Failed: (status 403 Unauthorized) done_in=136 ms"}"#;
+        let c = br#"{"message":"Job Failed: (status 401 Unauthorized) done_in=245 ms"}"#;
+        assert_ne!(
+            compute_fingerprint(1, &ItemType::Event, a).unwrap(),
+            compute_fingerprint(1, &ItemType::Event, b).unwrap()
+        );
+        assert_eq!(
+            compute_fingerprint(1, &ItemType::Event, a).unwrap(),
+            compute_fingerprint(1, &ItemType::Event, c).unwrap()
+        );
+    }
+
+    #[test]
+    fn exception_value_normalizes_but_type_still_separates() {
+        let a = br#"{"exception":{"values":[{"type":"PushError","value":"no device for c202a250-f4a1-4820-9d30-0178cb91d67f"}]}}"#;
+        let b = br#"{"exception":{"values":[{"type":"PushError","value":"no device for dd1ffcfa-765c-42bb-a576-ed3c1ea8177f"}]}}"#;
+        assert_eq!(
+            compute_fingerprint(1, &ItemType::Event, a).unwrap(),
+            compute_fingerprint(1, &ItemType::Event, b).unwrap()
+        );
+
+        let c = br#"{"exception":{"values":[{"type":"SendError","value":"no device for c202a250-f4a1-4820-9d30-0178cb91d67f"}]}}"#;
+        assert_ne!(
+            compute_fingerprint(1, &ItemType::Event, a).unwrap(),
+            compute_fingerprint(1, &ItemType::Event, c).unwrap()
+        );
+    }
+
+    #[test]
+    fn client_fingerprint_array_is_not_normalized() {
+        // An SDK grouping key is deliberate: per-id groups stay per-id.
+        let a = br#"{"fingerprint":["push","c202a250-f4a1-4820-9d30-0178cb91d67f"]}"#;
+        let b = br#"{"fingerprint":["push","dd1ffcfa-765c-42bb-a576-ed3c1ea8177f"]}"#;
+        assert_ne!(
+            compute_fingerprint(1, &ItemType::Event, a).unwrap(),
+            compute_fingerprint(1, &ItemType::Event, b).unwrap()
+        );
+    }
+
+    #[test]
+    fn transaction_name_is_not_normalized() {
+        let a = br#"{"transaction":"/api/users/1234"}"#;
+        let b = br#"{"transaction":"/api/users/5678"}"#;
+        assert_ne!(
+            compute_fingerprint(1, &ItemType::Event, a).unwrap(),
+            compute_fingerprint(1, &ItemType::Event, b).unwrap()
+        );
     }
 
     #[test]

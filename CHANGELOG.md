@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.27] - 2026-08-04
+
+### Changed
+- MCP transport now runs on the official Rust MCP SDK
+- MCP: issue triage no longer needs a second consent
+- MCP: the 401 challenge names the scopes a client should request
+- MCP: unsupported protocol revisions are answered with the latest
+- `auth.mcp.audience` is rejected unless it's an absolute URL
+
 ## [0.3.26] - 2026-08-04
 
 ### Changed

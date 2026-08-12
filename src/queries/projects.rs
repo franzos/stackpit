@@ -962,6 +962,7 @@ const PROJECT_SCOPED_TABLES: &[&str] = &[
     "transaction_metrics",
     "issue_external_links",
     "project_tracker_targets",
+    "replay_metadata",
 ];
 
 /// Delete a project and all it owns, reusing the caller's transaction.

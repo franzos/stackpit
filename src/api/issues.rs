@@ -18,6 +18,7 @@ pub struct ListParams {
     pub status: Option<String>,
     pub level: Option<String>,
     pub query: Option<String>,
+    pub environment: Option<String>,
     #[serde(flatten)]
     pub page: Pagination,
 }
@@ -44,6 +45,7 @@ pub async fn list_for_project(
         sort: None,
         item_type: None,
         release: None,
+        environment: params.environment,
         tag: None,
     };
     let page = params.page.page();

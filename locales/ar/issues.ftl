@@ -39,15 +39,9 @@ issues-list-filter-level = ترشيح حسب المستوى
 issues-list-level-all = جميع المستويات
 issues-list-filter-release = ترشيح حسب الإصدار
 issues-list-release-all = جميع الإصدارات
+issues-list-filter-environment = ترشيح حسب البيئة
+issues-list-environment-all = جميع البيئات
 issues-period-label = النطاق الزمني
-issues-period-all = كل الوقت
-issues-period-1h = آخر ساعة
-issues-period-24h = آخر 24 ساعة
-issues-period-7d = آخر 7 أيام
-issues-period-14d = آخر 14 يومًا
-issues-period-30d = آخر 30 يومًا
-issues-period-90d = آخر 90 يومًا
-issues-period-365d = آخر 365 يومًا
 issues-list-filter-submit = ترشيح
 issues-list-empty = لا توجد مشكلات تطابق المرشّحات الحالية.
 issues-untitled = (بلا عنوان)
@@ -108,6 +102,18 @@ issue-detail-unhandled = غير مُعالَج
 issue-detail-in = في
 issue-detail-var-name = المتغيّر
 issue-detail-no-source = لا يتوفّر سياق المصدر
+issue-detail-in-app-only = إطارات التطبيق فقط
+issue-detail-reverse-order = عكس الترتيب
+issue-detail-copy = نسخ
+issue-detail-copy-frame = نسخ هذا الإطار
+issue-detail-library-frames = { $count ->
+    [zero] لا إطارات مكتبات
+    [one] إطار مكتبة واحد
+    [two] إطارا مكتبة
+    [few] { $count } إطارات مكتبات
+    [many] { $count } إطار مكتبة
+   *[other] { $count } إطار مكتبة
+}
 issue-detail-minified-hint = تبدو هذه الإطارات مصغّرة ولم تُطبَّق أي خريطة مصدر.
 issue-detail-minified-hint-link = رفع خرائط المصدر
 issue-detail-breadcrumbs = مسارات التنقّل
@@ -115,6 +121,8 @@ issue-detail-th-time = الوقت
 issue-detail-th-category = الفئة
 issue-detail-th-message = الرسالة
 issue-detail-crumb-data = بيانات
+issue-detail-crumb-filter = ترشيح فتات التنقّل حسب النوع
+issue-detail-crumb-filter-all = جميع الأنواع
 issue-detail-tags = الوسوم
 issue-detail-contexts = السياقات
 issue-detail-additional-data = بيانات إضافية

@@ -105,7 +105,6 @@ event-detail-user-ip = IP address
 # --- Client reports (dropped-event outcomes) ---
 # Reuses events-untitled and events-pagination-* (shared, same file).
 client-reports-title = Client Reports
-client-reports-heading = Client reports
 client-reports-dropped-heading = Dropped events
 client-reports-dropped-subtitle = What the SDKs discarded before sending, by category and reason.
 client-reports-th-category = Category

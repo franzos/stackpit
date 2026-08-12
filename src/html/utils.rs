@@ -136,6 +136,7 @@ pub struct ListParams {
     pub status: Option<String>,
     pub sort: Option<String>,
     pub release: Option<String>,
+    pub environment: Option<String>,
     pub tag: Option<String>,
     pub period: Option<String>,
     /// Org filter for the cross-org project list.
@@ -145,6 +146,10 @@ pub struct ListParams {
     pub item_type: Option<String>,
     #[serde(flatten)]
     pub page: Pagination,
+    /// Second pager, used only by the spans page's Traces table so it does not
+    /// fight the "All spans" pager on the same URL.
+    #[serde(flatten)]
+    pub trace_page: crate::queries::types::TracePagination,
 }
 
 /// Empty-string-to-`None` filtering shared by the list-page filter builders.
@@ -183,6 +188,7 @@ pub fn issue_filter_from_params(
         sort: non_empty(params.sort.clone()),
         item_type: Some(item_type.to_string()),
         release: non_empty(params.release.clone()),
+        environment: non_empty(params.environment.clone()),
         tag,
     }
 }
@@ -199,6 +205,36 @@ where
     match s.as_deref().map(str::trim) {
         None | Some("") => Ok(None),
         Some(v) => v.parse().map(Some).map_err(serde::de::Error::custom),
+    }
+}
+
+/// Org scope for the two cross-project list pages (`/web/events/`, `/web/releases/`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CrossOrgScope {
+    /// Superuser: no org predicate at all.
+    All,
+    /// Narrowed to a project the caller can reach — scope to the org that owns it,
+    /// which is not necessarily the session's org.
+    Project(i64),
+    /// Unscoped: every org the caller belongs to. Empty entitles them to nothing.
+    Memberships(Vec<i64>),
+}
+
+/// Decide which orgs a cross-project list may read from.
+///
+/// Shared by both pages because getting it wrong in one is an access-control bug,
+/// not a cosmetic difference. Superusers must land on [`CrossOrgScope::All`]: the
+/// `_for_orgs` queries read an empty list as *nothing*, not everything.
+pub fn cross_org_scope(
+    active: &crate::orgs::extractor::ActiveOrg,
+    project_scope: Option<&crate::orgs::extractor::ProjectScope>,
+) -> CrossOrgScope {
+    if active.role.is_none() {
+        return CrossOrgScope::All;
+    }
+    match project_scope {
+        Some(scope) => CrossOrgScope::Project(scope.org_id),
+        None => CrossOrgScope::Memberships(active.accessible_org_ids()),
     }
 }
 
@@ -306,4 +342,72 @@ pub fn defaults_redirect_url(
         format!("{qs}&{}", additions.join("&"))
     };
     Some(format!("{path}?{merged}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::orgs::extractor::{ActiveOrg, ProjectScope};
+    use crate::orgs::{Role, SYSTEM_ORG_ID};
+
+    #[test]
+    fn superuser_reads_every_org() {
+        let su = ActiveOrg::bare(1, None);
+        assert_eq!(cross_org_scope(&su, None), CrossOrgScope::All);
+        // Even narrowed to a project: the unscoped query already sees everything.
+        let scope = ProjectScope {
+            org_id: 42,
+            role: None,
+        };
+        assert_eq!(cross_org_scope(&su, Some(&scope)), CrossOrgScope::All);
+    }
+
+    // The bug this replaced: a member sitting in their personal org saw an empty
+    // page, because the fallback was `session_org_id` and a personal org owns no
+    // projects.
+    #[test]
+    fn unscoped_member_reads_all_their_orgs_not_just_the_session_one() {
+        let personal = 7;
+        let member = ActiveOrg::with_memberships(
+            personal,
+            Some(Role::Member),
+            vec![(personal, Role::Owner), (12, Role::Member)],
+        );
+        assert_eq!(
+            cross_org_scope(&member, None),
+            CrossOrgScope::Memberships(vec![personal, 12])
+        );
+    }
+
+    #[test]
+    fn unscoped_member_never_reads_the_system_org() {
+        let member = ActiveOrg::with_memberships(
+            9,
+            Some(Role::Member),
+            vec![(SYSTEM_ORG_ID, Role::Owner), (9, Role::Member)],
+        );
+        assert_eq!(
+            cross_org_scope(&member, None),
+            CrossOrgScope::Memberships(vec![9])
+        );
+    }
+
+    // Narrowing to a project follows the project's owning org, which is not
+    // necessarily the session's.
+    #[test]
+    fn project_scope_wins_over_the_session_org() {
+        let member = ActiveOrg::with_memberships(
+            9,
+            Some(Role::Member),
+            vec![(9, Role::Member), (12, Role::Member)],
+        );
+        let scope = ProjectScope {
+            org_id: 12,
+            role: Some(Role::Member),
+        };
+        assert_eq!(
+            cross_org_scope(&member, Some(&scope)),
+            CrossOrgScope::Project(12)
+        );
+    }
 }

@@ -34,6 +34,13 @@ spans-col-timestamp = Метка времени
 
 # --- Постраничная навигация (список спанов) ---
 spans-pagination-label = Постраничная навигация
+spans-traces-pagination-label = Постраничная навигация по трассам
+spans-traces-count = { $count ->
+    [one] { $count } трасса
+    [few] { $count } трассы
+    [many] { $count } трасс
+   *[other] { $count } трассы
+}
 spans-pagination-prev = « Назад
 spans-pagination-next = Вперёд »
 spans-count = { $count ->

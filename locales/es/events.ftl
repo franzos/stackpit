@@ -105,7 +105,6 @@ event-detail-user-ip = Dirección IP
 # --- Informes de cliente (eventos descartados) ---
 # Reutiliza events-untitled y events-pagination-* (compartidos, mismo archivo).
 client-reports-title = Informes de cliente
-client-reports-heading = Informes de cliente
 client-reports-dropped-heading = Eventos descartados
 client-reports-dropped-subtitle = Lo que los SDK descartaron antes de enviarlo, por categoría y motivo.
 client-reports-th-category = Categoría

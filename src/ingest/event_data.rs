@@ -224,6 +224,41 @@ pub fn extract_exceptions(
     result
 }
 
+/// Build a readable message for an `xhr`/`fetch` breadcrumb that carries none.
+///
+/// Browser SDKs put the request in `data` and leave `message` empty, so the
+/// message column renders blank for every network crumb. Degrades gracefully:
+/// any of method, url and status may be missing.
+fn synth_http_message(category: &str, data: Option<&serde_json::Value>) -> Option<String> {
+    if category != "xhr" && category != "fetch" {
+        return None;
+    }
+    let data = data?;
+    let method = data.get("method").and_then(|v| v.as_str());
+    let url = data.get("url").and_then(|v| v.as_str());
+    // SDKs send the status as a number or a string depending on the integration.
+    let status = data
+        .get("status_code")
+        .and_then(|v| {
+            v.as_i64()
+                .map(|n| n.to_string())
+                .or_else(|| v.as_str().map(str::to_string))
+        })
+        .filter(|s| !s.is_empty());
+
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(m) = method.filter(|s| !s.is_empty()) {
+        parts.push(m.to_string());
+    }
+    if let Some(u) = url.filter(|s| !s.is_empty()) {
+        parts.push(u.to_string());
+    }
+    if let Some(s) = status {
+        parts.push(format!("[{s}]"));
+    }
+    (!parts.is_empty()).then(|| parts.join(" "))
+}
+
 pub fn extract_breadcrumbs(payload: &serde_json::Value) -> Vec<Breadcrumb> {
     // SDKs send breadcrumbs as a top-level array; the Sentry store API nests
     // them under `breadcrumbs.values`. Accept both.
@@ -268,8 +303,10 @@ pub fn extract_breadcrumbs(payload: &serde_json::Value) -> Vec<Breadcrumb> {
             let message = crumb
                 .get("message")
                 .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .or_else(|| synth_http_message(&category, crumb.get("data")))
+                .unwrap_or_default();
             let data = crumb
                 .get("data")
                 .filter(|v| v.is_object() || v.is_array())
@@ -496,8 +533,7 @@ pub fn extract_trace_id(payload: &serde_json::Value) -> Option<String> {
         .and_then(|c| c.get("trace"))
         .and_then(|t| t.get("trace_id"))
         .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
+        .and_then(crate::ingest::ids::sanitize_id)
 }
 
 /// Format a metric number: integer when whole, else up to 3 decimals with
@@ -685,6 +721,62 @@ mod tests {
         assert_eq!(m.len(), 1);
         assert_eq!(m[0].label, "FRAMES_TOTAL");
         assert_eq!(m[0].value, "42 frame");
+    }
+
+    // Browser SDKs leave `message` empty on network crumbs and put the request
+    // in `data`, so the message column rendered blank for every one of them.
+    // The existing react-SDK fixture above has a populated `message`, so it does
+    // not exercise this path.
+    #[test]
+    fn xhr_crumb_without_a_message_gets_one_synthesised() {
+        let payload = json!({
+            "breadcrumbs": [{
+                "category": "xhr",
+                "level": "info",
+                "message": "",
+                "data": {"method": "GET", "url": "https://api.example.com/v1/things", "status_code": 200}
+            }]
+        });
+        let crumbs = extract_breadcrumbs(&payload);
+        assert_eq!(crumbs.len(), 1);
+        assert_eq!(
+            crumbs[0].message,
+            "GET https://api.example.com/v1/things [200]"
+        );
+    }
+
+    #[test]
+    fn synthesised_crumb_message_degrades_when_pieces_are_missing() {
+        let one = |data: serde_json::Value| {
+            let payload = json!({"breadcrumbs": [{"category": "fetch", "data": data}]});
+            extract_breadcrumbs(&payload).remove(0).message
+        };
+        assert_eq!(one(json!({"url": "/a"})), "/a");
+        assert_eq!(one(json!({"method": "POST"})), "POST");
+        // Some integrations send the status as a string.
+        assert_eq!(one(json!({"url": "/a", "status_code": "500"})), "/a [500]");
+        // Nothing usable stays empty rather than rendering stray brackets.
+        assert_eq!(one(json!({})), "");
+        assert_eq!(one(json!({"url": "", "method": ""})), "");
+    }
+
+    #[test]
+    fn synthesis_only_touches_http_crumbs_with_an_empty_message() {
+        // A real message is never overwritten.
+        let kept = json!({"breadcrumbs": [{
+            "category": "xhr",
+            "message": "PATCH /a/messages",
+            "data": {"method": "PATCH", "url": "/a/messages/1"}
+        }]});
+        assert_eq!(extract_breadcrumbs(&kept)[0].message, "PATCH /a/messages");
+
+        // A non-http category with an empty message stays empty.
+        let other = json!({"breadcrumbs": [{
+            "category": "ui.click",
+            "message": "",
+            "data": {"method": "GET", "url": "/a"}
+        }]});
+        assert_eq!(extract_breadcrumbs(&other)[0].message, "");
     }
 
     #[test]

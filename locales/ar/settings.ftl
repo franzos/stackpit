@@ -5,7 +5,6 @@
 
 # --- الإعدادات الافتراضية للمتصفّح ---
 defaults-page-title = الإعدادات الافتراضية للمتصفّح — Stackpit
-defaults-heading = الإعدادات الافتراضية للمتصفّح
 defaults-subtitle = اضبط قيم الترشيح الافتراضية لصفحات القوائم. تُخزَّن كملف تعريف ارتباط في المتصفّح.
 defaults-none = بلا افتراضي
 defaults-status-label = الحالة الافتراضية (المشكلات)
@@ -14,13 +13,6 @@ defaults-status-resolved = محلولة
 defaults-status-ignored = متجاهَلة
 defaults-level-label = المستوى الافتراضي
 defaults-period-label = النطاق الزمني الافتراضي
-defaults-period-1h = آخر ساعة
-defaults-period-24h = آخر 24 ساعة
-defaults-period-7d = آخر 7 أيام
-defaults-period-14d = آخر 14 يومًا
-defaults-period-30d = آخر 30 يومًا
-defaults-period-90d = آخر 90 يومًا
-defaults-period-365d = آخر 365 يومًا
 defaults-save = حفظ الإعدادات الافتراضية
 defaults-clear-confirm = هل تريد مسح جميع الإعدادات الافتراضية للمتصفّح؟
 defaults-clear = مسح جميع الإعدادات الافتراضية

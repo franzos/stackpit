@@ -56,6 +56,12 @@ pub fn routes() -> Router<AppState> {
             get(new_project::form).post(new_project::create),
         )
         .route("/web/projects/{project_id}/", get(issue_list::handler))
+        // Looks like the parent of the issue-detail route, so people trim the
+        // fingerprint off the URL and land on it. The issue stream lives one level up.
+        .route(
+            "/web/projects/{project_id}/issues/",
+            get(redirect_to_issue_stream),
+        )
         .route(
             "/web/projects/{project_id}/issues/{fingerprint}/",
             get(issue_detail::handler),
@@ -445,6 +451,17 @@ pub fn routes() -> Router<AppState> {
     router
 }
 
+async fn redirect_to_issue_stream(
+    project_id: Result<Path<u64>, axum::extract::rejection::PathRejection>,
+) -> axum::response::Response {
+    match project_id {
+        Ok(Path(id)) => {
+            axum::response::Redirect::permanent(&format!("/web/projects/{id}/")).into_response()
+        }
+        Err(_) => html_not_found(),
+    }
+}
+
 async fn redirect_old_project(
     project_id: Result<Path<u64>, axum::extract::rejection::PathRejection>,
 ) -> axum::response::Response {
@@ -506,6 +523,18 @@ static ASSET_TABLE: &[Asset] = &[
         path: "/web/_assets/confirm.js",
         content_type: JS_CONTENT_TYPE,
         body: include_bytes!("../../static/confirm.js"),
+        cache_control: CACHE_DAY,
+    },
+    Asset {
+        path: "/web/_assets/frames.js",
+        content_type: JS_CONTENT_TYPE,
+        body: include_bytes!("../../static/frames.js"),
+        cache_control: CACHE_DAY,
+    },
+    Asset {
+        path: "/web/_assets/select-all.js",
+        content_type: JS_CONTENT_TYPE,
+        body: include_bytes!("../../static/select-all.js"),
         cache_control: CACHE_DAY,
     },
     Asset {
@@ -692,6 +721,24 @@ mod tests {
         let err: HtmlError = db_error().into();
         assert_eq!(err.0, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(err.1, INTERNAL_ERROR_DETAIL);
+    }
+
+    // `/web/projects/{id}/issues/` looks like the parent of the issue-detail route
+    // and used to 404. It now lands on the issue stream one level up.
+    #[tokio::test]
+    async fn issues_path_redirects_to_the_issue_stream() {
+        use axum::response::IntoResponse;
+
+        let resp = redirect_to_issue_stream(Ok(Path(42))).await;
+        assert_eq!(resp.status(), axum::http::StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(
+            resp.headers().get(axum::http::header::LOCATION).unwrap(),
+            "/web/projects/42/"
+        );
+
+        // A non-numeric project id must not leak the extractor's parse error.
+        let bad = html_not_found().into_response();
+        assert_eq!(bad.status(), axum::http::StatusCode::NOT_FOUND);
     }
 
     #[test]

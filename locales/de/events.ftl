@@ -105,7 +105,6 @@ event-detail-user-ip = IP-Adresse
 # --- Client-Berichte (verworfene Events) ---
 # Nutzt events-untitled und events-pagination-* (gemeinsam, gleiche Datei).
 client-reports-title = Client-Berichte
-client-reports-heading = Client-Berichte
 client-reports-dropped-heading = Verworfene Events
 client-reports-dropped-subtitle = Was die SDKs vor dem Senden verworfen haben, nach Kategorie und Grund.
 client-reports-th-category = Kategorie

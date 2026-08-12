@@ -1,5 +1,32 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- Issue stream: filter by environment (also in the JSON API and MCP)
+- Transaction summary: span breakdown, related issues, and a percentile trend with regression markers
+- Replay list: duration, URL, user, browser/OS and error count
+- Traces table now pages past its first 25 rows
+- Stack traces: runs of library frames collapse behind one control, plus an in-app-only filter, order toggle and per-frame copy
+- Breadcrumbs: bounded scroll area and a category filter
+
+### Changed
+- Durations read `1.59s` and `484ms` instead of raw milliseconds
+- Every list page offers the same eight time ranges
+- Sidebar, heading and breadcrumb agree on each page's name; the core sections show on every project
+- Sortable columns now look sortable, and the active one is marked
+- `Delete all N` requires an explicit "select all N matching this filter" step
+- `xhr` and `fetch` breadcrumbs read `GET https://… [200]` instead of showing an empty message
+
+### Fixed
+- A multi-byte character in an event, trace or span id crashed the page it appeared on; ids are now validated at ingest
+- The "All events" and "All releases" pages were empty for users whose active organisation owns no projects
+- Trace waterfall drew the root span full-width regardless of its duration, and the header undercounted spans
+- Issue-stream chart labelled its most recent bucket with the previous day
+- `/web/projects/{id}/issues/` returned 404 instead of opening the issue stream
+- Long tag values ran underneath their count badge
+- Issues sharing an exception type were indistinguishable in the list
+
 ## [0.3.27] - 2026-08-04
 
 ### Changed

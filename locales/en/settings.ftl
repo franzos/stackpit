@@ -6,7 +6,6 @@
 
 # --- Browser defaults ---
 defaults-page-title = Browser defaults — Stackpit
-defaults-heading = Browser defaults
 defaults-subtitle = Set default filter values for list pages. Stored as a browser cookie.
 defaults-none = No default
 defaults-status-label = Default status (issues)
@@ -15,13 +14,6 @@ defaults-status-resolved = Resolved
 defaults-status-ignored = Ignored
 defaults-level-label = Default level
 defaults-period-label = Default time range
-defaults-period-1h = Last hour
-defaults-period-24h = Last 24h
-defaults-period-7d = Last 7 days
-defaults-period-14d = Last 14 days
-defaults-period-30d = Last 30 days
-defaults-period-90d = Last 90 days
-defaults-period-365d = Last 365 days
 defaults-save = Save defaults
 defaults-clear-confirm = Clear all browser defaults?
 defaults-clear = Clear all defaults

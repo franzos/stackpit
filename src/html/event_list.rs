@@ -6,7 +6,8 @@ use crate::extractors::{BrowserDefaults, ReadPool};
 use crate::html::chrome::PageChrome;
 use crate::html::render_template;
 use crate::html::utils::{
-    build_filter_qs, defaults_redirect_url, event_filter_from_params, Chrome, ListParams,
+    build_filter_qs, cross_org_scope, defaults_redirect_url, event_filter_from_params, Chrome,
+    CrossOrgScope, ListParams,
 };
 use crate::orgs::extractor::ActiveOrg;
 use crate::queries;
@@ -72,13 +73,18 @@ pub async fn handler(
             .ok(),
         None => None,
     };
-    let org_id = if active.role.is_none() {
-        None
-    } else {
-        Some(project_scope.map_or(active.session_org_id, |s| s.org_id))
+    // Unscoped, this used to fall back to the session's own org, which owns no
+    // projects for a user sitting in their personal org — so the whole cross-project
+    // view rendered empty.
+    let result = match cross_org_scope(&active, project_scope.as_ref()) {
+        CrossOrgScope::All => queries::events::list_all_events(&pool, &filter, &page, None).await?,
+        CrossOrgScope::Project(org_id) => {
+            queries::events::list_all_events(&pool, &filter, &page, Some(org_id)).await?
+        }
+        CrossOrgScope::Memberships(org_ids) => {
+            queries::events::list_all_events_for_orgs(&pool, &filter, &page, org_ids).await?
+        }
     };
-
-    let result = queries::events::list_all_events(&pool, &filter, &page, org_id).await?;
 
     let (base_qs, filter_qs) = build_filter_qs(
         &[

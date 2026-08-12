@@ -22,10 +22,15 @@ pub async fn list_replays(
     .await?
     .get::<i64, _>(0);
 
+    // LEFT JOIN: replays stored before migration 022 have no metadata row and
+    // render blanks rather than dropping out of the list.
     let rows = sqlx::query(sql!(
-        "SELECT event_id, project_id, timestamp, item_type, release, environment
-         FROM events WHERE project_id = ?1 AND item_type = 'replay_event'
-         ORDER BY timestamp DESC
+        "SELECT e.event_id, e.project_id, e.timestamp, e.item_type, e.release, e.environment,
+                m.duration_ms, m.url, m.user_label, m.browser, m.os, m.error_count
+         FROM events e
+         LEFT JOIN replay_metadata m ON m.event_id = e.event_id
+         WHERE e.project_id = ?1 AND e.item_type = 'replay_event'
+         ORDER BY e.timestamp DESC
          LIMIT ?2 OFFSET ?3"
     ))
     .bind(project_id as i64)
@@ -43,6 +48,12 @@ pub async fn list_replays(
             replay_type: row.get("item_type"),
             release: row.get("release"),
             environment: row.get("environment"),
+            duration_ms: row.get("duration_ms"),
+            url: row.get("url"),
+            user_label: row.get("user_label"),
+            browser: row.get("browser"),
+            os: row.get("os"),
+            error_count: row.get::<Option<i64>, _>("error_count").unwrap_or(0),
         })
         .collect();
 
@@ -99,7 +110,7 @@ pub async fn get_replay(
 /// Top-level `error_ids` from a decompressed replay payload. Defensive: empty
 /// when the key is absent, not an array, or holds no non-empty strings.
 /// Capped at [`MAX_REPLAY_ERROR_IDS`].
-fn extract_error_ids(payload: &serde_json::Value) -> Vec<String> {
+pub(crate) fn extract_error_ids(payload: &serde_json::Value) -> Vec<String> {
     payload
         .get("error_ids")
         .and_then(|v| v.as_array())

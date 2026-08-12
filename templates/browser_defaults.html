@@ -12,13 +12,13 @@
   <span class="breadcrumb-sep">/</span>
   <span class="breadcrumb-link">{{ chrome.t("nav-settings") }}</span>
   <span class="breadcrumb-sep">/</span>
-  <span class="breadcrumb-current">{{ chrome.t("defaults-heading") }}</span>
+  <span class="breadcrumb-current">{{ chrome.t("nav-defaults") }}</span>
 {% endblock %}
 
 {% block content %}
   <div class="page-header">
     <div>
-      <h1>{{ chrome.t("defaults-heading") }}</h1>
+      <h1>{{ chrome.t("nav-defaults") }}</h1>
       <p class="text-muted text-[13px] mt-1">{{ chrome.t("defaults-subtitle") }}</p>
     </div>
   </div>
@@ -53,14 +53,9 @@
     <div>
       <label class="field-label" for="default_period">{{ chrome.t("defaults-period-label") }}</label>
       <select class="select" id="default_period" name="period">
-        <option value="">{{ chrome.t("defaults-none") }}</option>
-        <option value="1h"{% if period == "1h" %} selected{% endif %}>{{ chrome.t("defaults-period-1h") }}</option>
-        <option value="24h"{% if period == "24h" %} selected{% endif %}>{{ chrome.t("defaults-period-24h") }}</option>
-        <option value="7d"{% if period == "7d" %} selected{% endif %}>{{ chrome.t("defaults-period-7d") }}</option>
-        <option value="14d"{% if period == "14d" %} selected{% endif %}>{{ chrome.t("defaults-period-14d") }}</option>
-        <option value="30d"{% if period == "30d" %} selected{% endif %}>{{ chrome.t("defaults-period-30d") }}</option>
-        <option value="90d"{% if period == "90d" %} selected{% endif %}>{{ chrome.t("defaults-period-90d") }}</option>
-        <option value="365d"{% if period == "365d" %} selected{% endif %}>{{ chrome.t("defaults-period-365d") }}</option>
+        {# blank means "no default", not "all time" — hence the label parameter #}
+        {% call m::period_options(chrome, period, chrome.t("defaults-none")) %}
+        {% endcall %}
       </select>
     </div>
     <div class="flex gap-2">

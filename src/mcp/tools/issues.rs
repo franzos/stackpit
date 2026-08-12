@@ -71,6 +71,10 @@ pub(super) fn list_input() -> Value {
             },
             "level": prop("string", "Only issues at this level, e.g. `error`."),
             "query": prop("string", "Substring match on the issue title."),
+            "environment": prop(
+                "string",
+                "Only issues with at least one event in this environment, e.g. `production`.",
+            ),
             "limit": {
                 "type": "integer",
                 "minimum": 1,
@@ -129,6 +133,7 @@ pub(super) async fn list_issues(
         sort: None,
         item_type: None,
         release: None,
+        environment: opt_str_arg(args, "environment")?.map(str::to_string),
         tag: None,
     };
     let limit = clamp_limit(opt_u64_arg(args, "limit")?);

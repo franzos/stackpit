@@ -138,68 +138,32 @@
                 {% when None %}{% endmatch %}
             </div>
           </div>
-          <div class="border border-outline-variant rounded overflow-hidden">
-            {% for frame in exc.frames %}
-              <details class="frame {% if frame.in_app %}in-app{% else %}library{% endif %}"
-                       {% if frame.in_app && frame.has_detail() %}open{% endif %}>
-                <summary class="frame-header">
-                  <span class="truncate">
-                    <span class="text-on-surface-variant"><bdi>{{ frame.filename }}</bdi>{% match frame.lineno %}{% when Some with (ln) %}:{{ ln }}{% match frame.colno %}{% when Some with (cn) %}:{{ cn }}{% when None %}{% endmatch %}{% when None %}{% endmatch %}</span>
-                {{ chrome.t("issue-detail-in") }} <strong class="text-on-surface">{{ frame.function }}</strong>
-              </span>
-              {% if !frame.source_links.is_empty() %}
-                <span class="ms-auto flex gap-2">
-                  {% for link in frame.source_links %}
-                    <a href="{{ link.url }}"
-                       target="_blank"
-                       rel="noopener"
-                       class="source-link"
-                       data-stop-propagation><bdi>{{ link.label }}</bdi></a>
-                  {% endfor %}
-                </span>
-              {% endif %}
-            </summary>
-            {% if frame.context_line.is_some() || !frame.pre_context.is_empty() || !frame.post_context.is_empty() %}
-              <div class="frame-context">
-                <ol start="{{ frame.context_start_line() }}">
-                  {% for line in frame.pre_context %}<li>{{ line }}</li>{% endfor %}
-                  {% match frame.context_line %}{% when Some with (cl) %}
-                  <li class="current-line">{{ cl }}</li>
-                  {% when None %}{% endmatch %}
-                {% for line in frame.post_context %}
-                  <li>{{ line }}</li>
+          <div class="flex gap-3 items-center mb-2 text-[12px] frame-controls">
+            <label class="select-all-gate">
+              <input type="checkbox" data-in-app-only>
+              <span>{{ chrome.t("issue-detail-in-app-only") }}</span>
+            </label>
+            <button type="button" class="btn btn-ghost text-[12px]" data-reverse-frames>
+              {{ chrome.t("issue-detail-reverse-order") }}
+            </button>
+          </div>
+          <div class="border border-outline-variant rounded overflow-hidden frame-list">
+            {% for group in exc.frame_groups() %}
+              {% match group %}
+              {% when FrameGroup::Single with (frame) %}
+              {% call m::stack_frame(chrome, frame) %}
+              {% endcall %}
+              {% when FrameGroup::LibraryRun with (frames) %}
+              <details class="frame-run">
+                <summary class="frame-run-header">{{ chrome.tv_count("issue-detail-library-frames", frames.len() as i64) }}</summary>
+                {% for frame in frames %}
+                  {% call m::stack_frame(chrome, frame) %}
+                  {% endcall %}
                 {% endfor %}
-              </ol>
-            </div>
-          {% endif %}
-          {% if !frame.vars.is_empty() %}
-            <div class="frame-vars">
-              <table class="w-full text-[11px]">
-                <thead>
-                  <tr>
-                    <th class="text-start text-on-surface-variant pb-1">{{ chrome.t("issue-detail-var-name") }}</th>
-                    <th class="text-start text-on-surface-variant pb-1">{{ chrome.t("issues-label-value") }}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {% for var in frame.vars %}
-                    <tr>
-                      <td class="pe-3 align-top">
-                        <code class="text-mono">{{ var.0 }}</code>
-                      </td>
-                      <td class="align-top">
-                        <code class="text-mono text-on-surface-variant break-all">{{ var.1 }}</code>
-                      </td>
-                    </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
-            </div>
-          {% endif %}
-          {% if !frame.has_detail() %}<div class="px-3 py-2 text-muted text-[11px]">{{ chrome.t("issue-detail-no-source") }}</div>{% endif %}
-        </details>
-      {% endfor %}
-    </div>
+              </details>
+            {% endmatch %}
+          {% endfor %}
+        </div>
     {% if exc.looks_minified() %}
       <p class="mt-2 text-[12px] text-muted">
         {{ chrome.t("issue-detail-minified-hint") }}
@@ -216,7 +180,17 @@
     <summary class="card-header cursor-pointer select-none">
       {{ chrome.t("issue-detail-breadcrumbs") }} <span class="text-muted text-[11px] ms-1">({{ breadcrumbs.len() }})</span>
     </summary>
-    <div class="table-wrap">
+    {% if breadcrumb_categories.len() > 1 %}
+      <div class="card-pad pt-0 pb-2">
+        <select class="select w-auto text-[12px]"
+                data-crumb-filter
+                aria-label="{{ chrome.t("issue-detail-crumb-filter") }}">
+          <option value="">{{ chrome.t("issue-detail-crumb-filter-all") }}</option>
+          {% for cat in breadcrumb_categories %}<option value="{{ cat }}">{{ cat }}</option>{% endfor %}
+        </select>
+      </div>
+    {% endif %}
+    <div class="table-wrap breadcrumb-scroll">
       <table class="breadcrumb-table">
         <thead>
           <tr>
@@ -228,7 +202,7 @@
         </thead>
         <tbody>
           {% for crumb in breadcrumbs %}
-            <tr>
+            <tr data-category="{{ crumb.category }}">
               <td class="text-muted nowrap">{{ crumb.timestamp }}</td>
               <td>
                 {% if !crumb.level.is_empty() %}<span class="badge badge-{{ crumb.level }}">{{ crumb.level }}</span>{% endif %}
@@ -630,4 +604,5 @@
 {% block scripts %}
   <script src="/web/_assets/chart.umd.min.js"></script>
   <script src="/web/_assets/charts.js"></script>
+  <script src="/web/_assets/frames.js" defer></script>
 {% endblock %}

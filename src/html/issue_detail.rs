@@ -7,6 +7,9 @@ use serde::Deserialize;
 use crate::domain::{
     Breadcrumb, ContextGroup, ExceptionData, IssueStatus, RequestInfo, SummaryTag, Tag, UserInfo,
 };
+// Matched on by name in issue_detail.html's stack-frame loop.
+#[allow(unused_imports)]
+use crate::domain::FrameGroup;
 use crate::extractors::ReadPool;
 use crate::html::chrome::PageChrome;
 use crate::html::render_template;
@@ -57,6 +60,8 @@ struct IssueDetailTemplate {
     summary_tags: Vec<SummaryTag>,
     exceptions: Vec<ExceptionData>,
     breadcrumbs: Vec<Breadcrumb>,
+    /// Option set for the breadcrumb type filter; derived from `breadcrumbs`.
+    breadcrumb_categories: Vec<String>,
     tags: Vec<Tag>,
     contexts: Vec<ContextGroup>,
     request: Option<RequestInfo>,
@@ -169,6 +174,7 @@ pub async fn handler(
             summary_tags: Vec::new(),
             exceptions: Vec::new(),
             breadcrumbs: Vec::new(),
+            breadcrumb_categories: Vec::new(),
             tags: Vec::new(),
             contexts: Vec::new(),
             request: None,
@@ -272,6 +278,8 @@ pub async fn handler(
         limit: 25,
     };
 
+    let breadcrumb_categories = crate::domain::breadcrumb_categories(&breadcrumbs);
+
     let tmpl = IssueDetailTemplate {
         issue,
         nav,
@@ -281,6 +289,7 @@ pub async fn handler(
         summary_tags,
         exceptions,
         breadcrumbs,
+        breadcrumb_categories,
         tags,
         contexts,
         request,

@@ -10,15 +10,15 @@
 
 {% block breadcrumbs %}
   <span class="breadcrumb-sep">/</span>
-  <span class="breadcrumb-current"><bdi>{{ nav.label }}</bdi></span>
+  <a class="breadcrumb-link" href="/web/projects/{{ project_id }}/"><bdi>{{ nav.label }}</bdi></a>
   <span class="breadcrumb-sep">/</span>
-  <span class="breadcrumb-link">{{ chrome.t("nav-issues") }}</span>
+  <span class="breadcrumb-current">{{ chrome.t("nav-issues") }}</span>
 {% endblock %}
 
 {% block content %}
   <div class="page-header">
     <div>
-      <h1><bdi>{{ nav.label }}</bdi></h1>
+      <h1>{{ chrome.t("nav-issues") }}</h1>
       <p class="text-muted text-[13px] mt-1">{{ chrome.t("issues-list-subtitle") }}</p>
     </div>
   </div>
@@ -81,17 +81,21 @@
         {% endfor %}
       </select>
     {% endif %}
+    {% if !environments.is_empty() %}
+      <select class="select w-auto"
+              name="environment"
+              aria-label="{{ chrome.t("issues-list-filter-environment") }}">
+        <option value="">{{ chrome.t("issues-list-environment-all") }}</option>
+        {% for e in environments %}
+          <option value="{{ e }}"{% if environment == *e %} selected{% endif %}>{{ e }}</option>
+        {% endfor %}
+      </select>
+    {% endif %}
     <select class="select w-auto"
             name="period"
             aria-label="{{ chrome.t("issues-period-label") }}">
-      <option value="">{{ chrome.t("issues-period-all") }}</option>
-      <option value="1h"{% if period == "1h" %} selected{% endif %}>{{ chrome.t("issues-period-1h") }}</option>
-      <option value="24h"{% if period == "24h" %} selected{% endif %}>{{ chrome.t("issues-period-24h") }}</option>
-      <option value="7d"{% if period == "7d" %} selected{% endif %}>{{ chrome.t("issues-period-7d") }}</option>
-      <option value="14d"{% if period == "14d" %} selected{% endif %}>{{ chrome.t("issues-period-14d") }}</option>
-      <option value="30d"{% if period == "30d" %} selected{% endif %}>{{ chrome.t("issues-period-30d") }}</option>
-      <option value="90d"{% if period == "90d" %} selected{% endif %}>{{ chrome.t("issues-period-90d") }}</option>
-      <option value="365d"{% if period == "365d" %} selected{% endif %}>{{ chrome.t("issues-period-365d") }}</option>
+      {% call m::period_options(chrome, period, chrome.t("common-period-all")) %}
+      {% endcall %}
     </select>
     <button class="btn btn-secondary" type="submit">{{ chrome.t("issues-list-filter-submit") }}</button>
   </form>
@@ -103,33 +107,43 @@
   {% else %}
 
     {% if result.total > 0 %}
-      <form class="flex gap-2 mb-3"
+      <form class="flex gap-2 mb-3 items-center flex-wrap"
             method="post"
             action="/web/projects/{{ project_id }}/bulk">
         <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
         <input type="hidden" name="mode" value="all_matching">
+        {# This form has no row checkboxes — it acts on the whole filter match, so
+           the affirmation is the selection. See static/select-all.js. #}
+        <label class="select-all-gate">
+          <input type="checkbox">
+          <span>{{ chrome.tv_count("common-select-all-matching", result.total as i64) }}</span>
+        </label>
         {% if !query.is_empty() %}
           <input type="hidden" name="query" value="{{ query }}">
         {% endif %}
         {% if !level.is_empty() %}<input type="hidden" name="level" value="{{ level }}">{% endif %}
         {% if !status.is_empty() %}<input type="hidden" name="status" value="{{ status }}">{% endif %}
         {% if !release.is_empty() %}<input type="hidden" name="release" value="{{ release }}">{% endif %}
+        {% if !environment.is_empty() %}<input type="hidden" name="environment" value="{{ environment }}">{% endif %}
         {% if !tag.is_empty() %}<input type="hidden" name="tag" value="{{ tag }}">{% endif %}
         {% if !period.is_empty() %}<input type="hidden" name="period" value="{{ period }}">{% endif %}
         <button type="submit"
                 name="action"
                 value="resolve"
                 class="btn btn-secondary"
+                disabled
                 data-confirm="{{ chrome.tv_count("issues-bulk-resolve-confirm", result.total as i64) }}">{{ chrome.tv_count("issues-bulk-resolve-all", result.total as i64) }}</button>
         <button type="submit"
                 name="action"
                 value="ignore"
                 class="btn btn-secondary"
+                disabled
                 data-confirm="{{ chrome.tv_count("issues-bulk-ignore-confirm", result.total as i64) }}">{{ chrome.tv_count("issues-bulk-ignore-all", result.total as i64) }}</button>
         <button type="submit"
                 name="action"
                 value="delete"
                 class="btn btn-danger"
+                disabled
                 data-confirm="{{ chrome.tv_count("issues-bulk-delete-all-confirm", result.total as i64) }}">
           {{ chrome.tv_count("issues-bulk-delete-all", result.total as i64) }}
         </button>
@@ -197,7 +211,7 @@
                      href="/web/projects/{{ project_id }}/issues/{{ issue.fingerprint }}/">{% match issue.title %}{% when Some with (t) %}{{ t|split_error_type }}{% when None %}{{ chrome.t("issues-untitled") }}{% endmatch %}</a>
               </div>
               {% match issue.title %}{% when Some with (t) %}
-              <div class="issue-title-msg">{{ t|split_error_message }}</div>
+              <div class="issue-title-msg">{{ t|split_error_message|truncate_middle(96) }}</div>
               {% when None %}{% endmatch %}
           </td>
           <td>

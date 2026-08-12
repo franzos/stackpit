@@ -6,12 +6,6 @@ transactions-title-suffix = — Stackpit
 
 # --- قائمة المعاملات ---
 transactions-time-range = النطاق الزمني
-transactions-period-1h = آخر ساعة
-transactions-period-24h = آخر 24 ساعة
-transactions-period-7d = آخر 7 أيام
-transactions-period-14d = آخر 14 يومًا
-transactions-period-30d = آخر 30 يومًا
-transactions-period-90d = آخر 90 يومًا
 transactions-filter-submit = ترشيح
 transactions-list-empty = لا توجد معاملات في هذه الفترة.
 transactions-col-name = المعاملة
@@ -28,6 +22,11 @@ transactions-detail-col-status = الحالة
 transactions-detail-col-trace = التتبّع
 transactions-detail-col-when = الوقت
 transactions-detail-distribution = توزيع المدة
+transactions-detail-spans = تفصيل المقاطع
+transactions-detail-issues = المشكلات ذات الصلة
+transactions-detail-instances = أبطأ الحالات
+transactions-detail-trend = اتجاه المئينات
+transactions-detail-trend-note = النقاط المميّزة هي التي تجاوز فيها p95 ضعف ونصف وسيط النقاط الخمس السابقة.
 
 # --- ترقيم الصفحات (تفاصيل المعاملة) ---
 transactions-pagination-label = ترقيم الصفحات

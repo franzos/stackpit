@@ -6,7 +6,6 @@
 
 # --- Valores predeterminados del navegador ---
 defaults-page-title = Valores predeterminados del navegador — Stackpit
-defaults-heading = Valores predeterminados del navegador
 defaults-subtitle = Define los valores de filtro predeterminados para las páginas de lista. Se guardan como una cookie del navegador.
 defaults-none = Sin predeterminado
 defaults-status-label = Estado predeterminado (problemas)
@@ -15,13 +14,6 @@ defaults-status-resolved = Resuelto
 defaults-status-ignored = Ignorado
 defaults-level-label = Nivel predeterminado
 defaults-period-label = Rango de tiempo predeterminado
-defaults-period-1h = Última hora
-defaults-period-24h = Últimas 24 h
-defaults-period-7d = Últimos 7 días
-defaults-period-14d = Últimos 14 días
-defaults-period-30d = Últimos 30 días
-defaults-period-90d = Últimos 90 días
-defaults-period-365d = Últimos 365 días
 defaults-save = Guardar valores predeterminados
 defaults-clear-confirm = ¿Borrar todos los valores predeterminados del navegador?
 defaults-clear = Borrar todos los predeterminados

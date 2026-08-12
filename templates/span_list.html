@@ -51,7 +51,7 @@
             </td>
             <td class="text-tabular">{{ trace.span_count }}</td>
             <td class="text-tabular">
-              {% match trace.total_duration_ms %}{% when Some with (ms) %}{{ ms }}ms{% when None %}<span class="text-muted">—</span>{% endmatch %}
+              {% match trace.total_duration_ms %}{% when Some with (ms) %}{{ ms|format_duration }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
           </td>
           <td class="text-muted">
             <time datetime="{{ trace.first_timestamp|format_ts }}"
@@ -67,6 +67,23 @@
   </table>
 </div>
 </div>
+
+{# Traces pages on `trace_offset`/`trace_limit`, keeping the "All spans" pager's
+   own `offset`/`limit` intact — the two tables share a URL and must not fight. #}
+<nav class="pagination"
+     aria-label="{{ chrome.t("spans-traces-pagination-label") }}">
+  <span>{{ chrome.tv_count("spans-traces-count", traces.total as i64) }}</span>
+  <span class="flex gap-2">
+    {% if traces.has_prev() %}
+      <a class="btn btn-ghost"
+         href="/web/projects/{{ project_id }}/spans/?trace_offset={{ traces.prev_offset() }}&amp;trace_limit={{ traces.limit }}&amp;offset={{ result.offset }}&amp;limit={{ result.limit }}">{{ chrome.t("spans-pagination-prev") }}</a>
+    {% endif %}
+    {% if traces.has_next() %}
+      <a class="btn btn-ghost"
+         href="/web/projects/{{ project_id }}/spans/?trace_offset={{ traces.next_offset() }}&amp;trace_limit={{ traces.limit }}&amp;offset={{ result.offset }}&amp;limit={{ result.limit }}">{{ chrome.t("spans-pagination-next") }}</a>
+    {% endif %}
+  </span>
+</nav>
 {% endif %}
 
 {% if result.items.is_empty() && traces.items.is_empty() %}
@@ -100,9 +117,9 @@
               {% match g.description %}{% when Some with (d) %}{{ d }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
           </td>
           <td class="text-tabular text-end">{{ g.count }}</td>
-          <td class="text-tabular text-end">{{ g.p50_ms }}ms</td>
-          <td class="text-tabular text-end">{{ g.p95_ms }}ms</td>
-          <td class="text-tabular text-end">{{ g.avg_ms }}ms</td>
+          <td class="text-tabular text-end">{{ g.p50_ms|format_duration }}</td>
+          <td class="text-tabular text-end">{{ g.p95_ms|format_duration }}</td>
+          <td class="text-tabular text-end">{{ g.avg_ms|format_duration }}</td>
         </tr>
       {% endfor %}
     </tbody>
@@ -147,7 +164,7 @@
               {% match span.description %}{% when Some with (d) %}{{ d }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
           </td>
           <td class="text-tabular">
-            {% match span.duration_ms %}{% when Some with (ms) %}{{ ms }}ms{% when None %}<span class="text-muted">—</span>{% endmatch %}
+            {% match span.duration_ms %}{% when Some with (ms) %}{{ ms|format_duration }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
         </td>
         <td class="text-muted">
           <time datetime="{{ span.timestamp|format_ts }}"
@@ -166,11 +183,11 @@
   <span class="flex gap-2">
     {% if result.has_prev() %}
       <a class="btn btn-ghost"
-         href="/web/projects/{{ project_id }}/spans/?offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}">{{ chrome.t("spans-pagination-prev") }}</a>
+         href="/web/projects/{{ project_id }}/spans/?offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}&amp;trace_offset={{ traces.offset }}&amp;trace_limit={{ traces.limit }}">{{ chrome.t("spans-pagination-prev") }}</a>
     {% endif %}
     {% if result.has_next() %}
       <a class="btn btn-ghost"
-         href="/web/projects/{{ project_id }}/spans/?offset={{ result.next_offset() }}&amp;limit={{ result.limit }}">{{ chrome.t("spans-pagination-next") }}</a>
+         href="/web/projects/{{ project_id }}/spans/?offset={{ result.next_offset() }}&amp;limit={{ result.limit }}&amp;trace_offset={{ traces.offset }}&amp;trace_limit={{ traces.limit }}">{{ chrome.t("spans-pagination-next") }}</a>
     {% endif %}
   </span>
 </nav>

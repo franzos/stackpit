@@ -14,18 +14,17 @@
        class="sidebar-link{% if active == "issues" %} sidebar-link-active{% endif %}">
       <span>{{ chrome.t("nav-issues") }}</span>
     </a>
-    {% if nav.transaction_count > 0 %}
-      <a href="/web/projects/{{ project_id }}/transactions/"
-         class="sidebar-link{% if active == "transactions" %} sidebar-link-active{% endif %}">
-        <span>{{ chrome.t("nav-transactions") }}</span><span class="sidebar-count">{{ nav.transaction_count }}</span>
-      </a>
-    {% endif %}
-    {% if nav.span_count > 0 %}
-      <a href="/web/projects/{{ project_id }}/spans/"
-         class="sidebar-link{% if active == "spans" %} sidebar-link-active{% endif %}">
-        <span>{{ chrome.t("nav-spans") }}</span><span class="sidebar-count">{{ nav.span_count }}</span>
-      </a>
-    {% endif %}
+    {# Core sections render on every project, with an empty state, so a project you
+       actually use looks the same everywhere. The count badge still only appears
+       once there is something to count. #}
+    <a href="/web/projects/{{ project_id }}/transactions/"
+       class="sidebar-link{% if active == "transactions" %} sidebar-link-active{% endif %}">
+      <span>{{ chrome.t("nav-transactions") }}</span>{% if nav.transaction_count > 0 %}<span class="sidebar-count">{{ nav.transaction_count }}</span>{% endif %}
+    </a>
+    <a href="/web/projects/{{ project_id }}/spans/"
+       class="sidebar-link{% if active == "spans" %} sidebar-link-active{% endif %}">
+      <span>{{ chrome.t("nav-spans") }}</span>{% if nav.span_count > 0 %}<span class="sidebar-count">{{ nav.span_count }}</span>{% endif %}
+    </a>
     {% if nav.log_count > 0 %}
       <a href="/web/projects/{{ project_id }}/logs/"
          class="sidebar-link{% if active == "logs" %} sidebar-link-active{% endif %}">
@@ -50,30 +49,24 @@
         <span>{{ chrome.t("nav-profiles") }}</span><span class="sidebar-count">{{ nav.profile_count }}</span>
       </a>
     {% endif %}
-    {% if nav.replay_count > 0 %}
-      <a href="/web/projects/{{ project_id }}/replays/"
-         class="sidebar-link{% if active == "replays" %} sidebar-link-active{% endif %}">
-        <span>{{ chrome.t("nav-replays") }}</span><span class="sidebar-count">{{ nav.replay_count }}</span>
-      </a>
-    {% endif %}
-    {% if nav.session_count > 0 %}
-      <a href="/web/projects/{{ project_id }}/health/"
-         class="sidebar-link{% if active == "health" %} sidebar-link-active{% endif %}">
-        <span>{{ chrome.t("nav-health") }}</span><span class="sidebar-count">{{ nav.session_count }}</span>
-      </a>
-    {% endif %}
+    <a href="/web/projects/{{ project_id }}/replays/"
+       class="sidebar-link{% if active == "replays" %} sidebar-link-active{% endif %}">
+      <span>{{ chrome.t("nav-replays") }}</span>{% if nav.replay_count > 0 %}<span class="sidebar-count">{{ nav.replay_count }}</span>{% endif %}
+    </a>
+    <a href="/web/projects/{{ project_id }}/health/"
+       class="sidebar-link{% if active == "health" %} sidebar-link-active{% endif %}">
+      <span>{{ chrome.t("nav-health") }}</span>{% if nav.session_count > 0 %}<span class="sidebar-count">{{ nav.session_count }}</span>{% endif %}
+    </a>
     {% if nav.user_report_count > 0 %}
       <a href="/web/projects/{{ project_id }}/user-reports/"
          class="sidebar-link{% if active == "user_reports" %} sidebar-link-active{% endif %}">
         <span>{{ chrome.t("nav-user-reports") }}</span><span class="sidebar-count">{{ nav.user_report_count }}</span>
       </a>
     {% endif %}
-    {% if nav.client_report_count > 0 %}
-      <a href="/web/projects/{{ project_id }}/client-reports/"
-         class="sidebar-link{% if active == "client_reports" %} sidebar-link-active{% endif %}">
-        <span>{{ chrome.t("nav-client-reports") }}</span><span class="sidebar-count">{{ nav.client_report_count }}</span>
-      </a>
-    {% endif %}
+    <a href="/web/projects/{{ project_id }}/client-reports/"
+       class="sidebar-link{% if active == "client_reports" %} sidebar-link-active{% endif %}">
+      <span>{{ chrome.t("nav-client-reports") }}</span>{% if nav.client_report_count > 0 %}<span class="sidebar-count">{{ nav.client_report_count }}</span>{% endif %}
+    </a>
     <a href="/web/projects/{{ project_id }}/settings/"
        class="sidebar-link{% if active == "settings" %} sidebar-link-active{% endif %}">
       <span>{{ chrome.t("nav-settings") }}</span>
@@ -123,4 +116,89 @@
       <span><span class="rtl-flip">&larr;</span> {{ chrome.t("nav-back-projects") }}</span>
     </a>
   </div>
+{% endmacro %}
+
+{# One stack frame. Extracted so the plain and collapsed-library-run branches of
+   the stack trace render identical rows. #}
+{% macro stack_frame(chrome, frame) %}
+  <details class="frame {% if frame.in_app %}in-app{% else %}library{% endif %}"
+           {% if frame.in_app && frame.has_detail() %}open{% endif %}>
+    <summary class="frame-header">
+      <span class="truncate">
+        <span class="text-on-surface-variant"><bdi>{{ frame.filename }}</bdi>{% match frame.lineno %}{% when Some with (ln) %}:{{ ln }}{% match frame.colno %}{% when Some with (cn) %}:{{ cn }}{% when None %}{% endmatch %}{% when None %}{% endmatch %}</span>
+        {{ chrome.t("issue-detail-in") }} <strong class="text-on-surface">{{ frame.function }}</strong>
+      </span>
+      <span class="ms-auto flex gap-2 items-center">
+        {% for link in frame.source_links %}
+          <a href="{{ link.url }}"
+             target="_blank"
+             rel="noopener"
+             class="source-link"
+             data-stop-propagation><bdi>{{ link.label }}</bdi></a>
+        {% endfor %}
+        <button type="button"
+                class="frame-copy"
+                data-copy="{{ frame.copy_line() }}"
+                title="{{ chrome.t("issue-detail-copy-frame") }}"
+                aria-label="{{ chrome.t("issue-detail-copy-frame") }}"
+                data-stop-propagation>{{ chrome.t("issue-detail-copy") }}</button>
+      </span>
+    </summary>
+    {% if frame.context_line.is_some() || !frame.pre_context.is_empty() || !frame.post_context.is_empty() %}
+      <div class="frame-context">
+        <ol start="{{ frame.context_start_line() }}">
+          {% for line in frame.pre_context %}<li>{{ line }}</li>{% endfor %}
+          {% match frame.context_line %}{% when Some with (cl) %}
+          <li class="current-line">{{ cl }}</li>
+          {% when None %}{% endmatch %}
+        {% for line in frame.post_context %}
+          <li>{{ line }}</li>
+        {% endfor %}
+      </ol>
+    </div>
+  {% endif %}
+  {% if !frame.vars.is_empty() %}
+    <div class="frame-vars">
+      <table class="w-full text-[11px]">
+        <thead>
+          <tr>
+            <th class="text-start text-on-surface-variant pb-1">{{ chrome.t("issue-detail-var-name") }}</th>
+            <th class="text-start text-on-surface-variant pb-1">{{ chrome.t("issues-label-value") }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for var in frame.vars %}
+            <tr>
+              <td class="pe-3 align-top">
+                <code class="text-mono">{{ var.0 }}</code>
+              </td>
+              <td class="align-top">
+                <code class="text-mono text-on-surface-variant break-all">{{ var.1 }}</code>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+  {% if !frame.has_detail() %}<div class="px-3 py-2 text-muted text-[11px]">{{ chrome.t("issue-detail-no-source") }}</div>{% endif %}
+</details>
+{% endmacro %}
+
+{# The canonical time-range option set, shared by every list page so they stop
+   drifting apart. Only the options: each caller keeps its own `<select>` so it
+   can carry its own id, classes and aria-label.
+
+   `blank_label` is a parameter because the empty value does not mean the same
+   thing everywhere: on a list page it is "all time", on browser defaults it is
+   "no default". #}
+{% macro period_options(chrome, current, blank_label) %}
+  <option value=""{% if current == "" %} selected{% endif %}>{{ blank_label }}</option>
+  <option value="1h"{% if current == "1h" %} selected{% endif %}>{{ chrome.t("common-period-1h") }}</option>
+  <option value="24h"{% if current == "24h" %} selected{% endif %}>{{ chrome.t("common-period-24h") }}</option>
+  <option value="7d"{% if current == "7d" %} selected{% endif %}>{{ chrome.t("common-period-7d") }}</option>
+  <option value="14d"{% if current == "14d" %} selected{% endif %}>{{ chrome.t("common-period-14d") }}</option>
+  <option value="30d"{% if current == "30d" %} selected{% endif %}>{{ chrome.t("common-period-30d") }}</option>
+  <option value="90d"{% if current == "90d" %} selected{% endif %}>{{ chrome.t("common-period-90d") }}</option>
+  <option value="365d"{% if current == "365d" %} selected{% endif %}>{{ chrome.t("common-period-365d") }}</option>
 {% endmacro %}

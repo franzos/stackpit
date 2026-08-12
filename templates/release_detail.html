@@ -50,15 +50,15 @@
       </div>
       <div>
         <dt>{{ chrome.t("release-health-col-crash-free-sessions") }}</dt>
-        <dd class="text-tabular font-semibold">{% match h.crash_free_sessions %}{% when Some with (cfs) %}<span class="{% if cfs.clone() >= 99.0 %}health-good{% else if cfs.clone() >= 95.0 %}health-warn{% else %}health-bad{% endif %}">{{ cfs }}%</span>{% when None %}<span class="text-muted">{{ chrome.t("release-health-na") }}</span>{% endmatch %}</dd>
+        <dd class="text-tabular font-semibold">{% match h.crash_free_sessions %}{% when Some with (cfs) %}<span class="{% if cfs.clone() >= 99.0 %}health-good{% else if cfs.clone() >= 95.0 %}health-warn{% else %}health-bad{% endif %}">{{ cfs|format_pct(2) }}</span>{% when None %}<span class="text-muted">{{ chrome.t("release-health-na") }}</span>{% endmatch %}</dd>
       </div>
       <div>
         <dt>{{ chrome.t("release-health-col-error-free-sessions") }}</dt>
-        <dd class="text-tabular font-semibold">{% match h.error_free_sessions %}{% when Some with (efs) %}<span class="{% if efs.clone() >= 99.0 %}health-good{% else if efs.clone() >= 95.0 %}health-warn{% else %}health-bad{% endif %}">{{ efs }}%</span>{% when None %}<span class="text-muted">{{ chrome.t("release-health-na") }}</span>{% endmatch %}</dd>
+        <dd class="text-tabular font-semibold">{% match h.error_free_sessions %}{% when Some with (efs) %}<span class="{% if efs.clone() >= 99.0 %}health-good{% else if efs.clone() >= 95.0 %}health-warn{% else %}health-bad{% endif %}">{{ efs|format_pct(2) }}</span>{% when None %}<span class="text-muted">{{ chrome.t("release-health-na") }}</span>{% endmatch %}</dd>
       </div>
       <div>
         <dt>{{ chrome.t("release-health-col-crash-free-users") }}</dt>
-        <dd class="text-tabular font-semibold">{% match h.crash_free_users %}{% when Some with (cfu) %}<span class="{% if cfu.clone() >= 99.0 %}health-good{% else if cfu.clone() >= 95.0 %}health-warn{% else %}health-bad{% endif %}">{{ cfu }}%</span>{% when None %}<span class="text-muted">{{ chrome.t("release-health-na") }}</span>{% endmatch %}</dd>
+        <dd class="text-tabular font-semibold">{% match h.crash_free_users %}{% when Some with (cfu) %}<span class="{% if cfu.clone() >= 99.0 %}health-good{% else if cfu.clone() >= 95.0 %}health-warn{% else %}health-bad{% endif %}">{{ cfu|format_pct(2) }}</span>{% when None %}<span class="text-muted">{{ chrome.t("release-health-na") }}</span>{% endmatch %}</dd>
       </div>
     </dl>
   </div>

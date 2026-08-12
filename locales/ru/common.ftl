@@ -15,6 +15,22 @@ common-time-day-ago = { $n ->
     [many] { $n } дней назад
    *[other] { $n } дня назад
 }
+common-period-all = За всё время
+common-period-1h = Последний час
+common-period-24h = Последние 24 часа
+common-period-7d = Последние 7 дней
+common-period-14d = Последние 14 дней
+common-period-30d = Последние 30 дней
+common-period-90d = Последние 90 дней
+common-period-365d = Последние 365 дней
+
+common-select-all-matching = { $count ->
+    [one] Выбрать { $count } строку, соответствующую фильтру
+    [few] Выбрать все { $count } строки, соответствующие фильтру
+    [many] Выбрать все { $count } строк, соответствующих фильтру
+   *[other] Выбрать все { $count } строки, соответствующие фильтру
+}
+
 test-count = { $count ->
     [one] { $count } элемент
     [few] { $count } элемента

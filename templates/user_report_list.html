@@ -85,14 +85,19 @@
 </form>
 
 {% if result.total > 0 %}
-  <form class="mt-3"
+  <form class="mt-3 flex gap-2 items-center flex-wrap"
         method="post"
         action="/web/projects/{{ project_id }}/user-reports/bulk">
     <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
     <input type="hidden" name="action" value="delete">
     <input type="hidden" name="mode" value="all_matching">
+    <label class="select-all-gate">
+      <input type="checkbox">
+      <span>{{ chrome.tv_count("common-select-all-matching", result.total as i64) }}</span>
+    </label>
     <button type="submit"
             class="btn btn-danger"
+            disabled
             data-confirm="{{ chrome.tv_count("user-reports-delete-all-confirm", result.total as i64) }}">{{ chrome.tv_count("user-reports-delete-all", result.total as i64) }}</button>
   </form>
 {% endif %}

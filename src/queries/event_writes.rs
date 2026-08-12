@@ -158,6 +158,20 @@ pub async fn insert_event_rows_bulk(
     let mut inserted_ids = HashSet::new();
     if !regular.is_empty() {
         inserted_ids = bulk_insert_events_table(tx, &regular).await?;
+        // Replay display metadata goes in its own table rather than as columns on
+        // `events`: six more binds per event would push a full BULK_CHUNK_SIZE
+        // chunk past SQLite's 32766 variable limit, and only under load. Filtered
+        // to replays so no other item type pays for it, and to rows that were
+        // genuinely inserted so a retried flush does not duplicate.
+        let replays: Vec<&&StorableEvent> = regular
+            .iter()
+            .filter(|e| e.item_type == ItemType::ReplayEvent)
+            .filter(|e| inserted_ids.contains(&e.event_id))
+            .copied()
+            .collect();
+        if !replays.is_empty() {
+            bulk_insert_replay_metadata(tx, &replays).await?;
+        }
     }
     if !spans.is_empty() {
         bulk_insert_spans_table(tx, &spans).await?;
@@ -246,6 +260,70 @@ fn span_row_from_fields(
         duration_ms: fields.duration_ms,
         start_ms: fields.start_ms,
     }
+}
+
+/// Max replay-metadata rows per chunk. 8 bind params per row;
+/// 32766 / 8 = 4095, use 4000 for margin.
+const REPLAY_META_CHUNK_SIZE: usize = 4000;
+
+const REPLAY_META_COLUMNS: &str =
+    "event_id, project_id, duration_ms, url, user_label, browser, os, error_count";
+
+/// A replay event's payload as JSON, whether or not it has been compressed yet.
+fn replay_payload_json(event: &StorableEvent) -> Option<serde_json::Value> {
+    if event.compressed {
+        super::events::decompress_payload(&event.payload).ok()
+    } else {
+        serde_json::from_slice(&event.payload).ok()
+    }
+}
+
+/// Populate `replay_metadata` for replays inserted in this transaction.
+///
+/// `error_count` comes from the pure `extract_error_ids`, **not** from
+/// `get_replay_errors`: that takes a `&DbPool` and would query a separate pooled
+/// connection, which cannot see this transaction's uncommitted inserts. A replay
+/// flushed alongside its own error events — the normal SDK pattern — would
+/// silently undercount.
+async fn bulk_insert_replay_metadata(
+    tx: &mut sqlx::Transaction<'_, crate::db::Db>,
+    replays: &[&&StorableEvent],
+) -> Result<()> {
+    let rows: Vec<(&str, i64, crate::ingest::replay_meta::ReplayMeta)> = replays
+        .iter()
+        .map(|event| {
+            let meta = match replay_payload_json(event) {
+                Some(json) => {
+                    let errors = super::replays::extract_error_ids(&json).len() as i64;
+                    crate::ingest::replay_meta::extract(&json, errors)
+                }
+                // An unparseable payload still gets a row, so the join is uniform.
+                None => crate::ingest::replay_meta::ReplayMeta::default(),
+            };
+            (event.event_id.as_str(), event.project_id as i64, meta)
+        })
+        .collect();
+
+    // A retried flush must not double-insert; the event_id primary key carries it.
+    let dialect = insert_ignore("replay_metadata", REPLAY_META_COLUMNS, Some("event_id"));
+
+    for chunk in rows.chunks(REPLAY_META_CHUNK_SIZE) {
+        let mut builder = QueryBuilder::<crate::db::Db>::new(&dialect.prefix);
+        builder.push_values(chunk.iter(), |mut b, (event_id, project_id, meta)| {
+            b.push_bind(*event_id);
+            b.push_bind(*project_id);
+            b.push_bind(meta.duration_ms);
+            b.push_bind(meta.url.as_deref());
+            b.push_bind(meta.user_label.as_deref());
+            b.push_bind(meta.browser.as_deref());
+            b.push_bind(meta.os.as_deref());
+            b.push_bind(meta.error_count);
+        });
+        builder.push(&dialect.suffix);
+        builder.build().execute(&mut **tx).await?;
+    }
+
+    Ok(())
 }
 
 async fn bulk_insert_spans_table(
@@ -801,5 +879,126 @@ mod tests {
             assert_eq!(a.timestamp, b.timestamp);
             assert_eq!(a.payload, b.payload);
         }
+    }
+
+    fn replay(event_id: &str, project_id: u64, errors: usize) -> StorableEvent {
+        let error_ids: Vec<String> = (0..errors).map(|i| format!("err{i}")).collect();
+        let payload = serde_json::json!({
+            "type": "replay_event",
+            "event_id": event_id,
+            "replay_start_timestamp": 1786290528.918_f64,
+            "timestamp": 1786290615.471_f64,
+            "urls": ["https://example.com/#/account"],
+            "user": {"username": "alice"},
+            "request": {"headers": {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"}},
+            "error_ids": error_ids,
+        });
+        StorableEvent::new(
+            event_id.to_string(),
+            ItemType::ReplayEvent,
+            serde_json::to_vec(&payload).unwrap(),
+            project_id,
+            "k".to_string(),
+        )
+    }
+
+    fn plain_event(event_id: &str, project_id: u64) -> StorableEvent {
+        StorableEvent::new(
+            event_id.to_string(),
+            ItemType::Event,
+            serde_json::to_vec(&serde_json::json!({"message": "hi"})).unwrap(),
+            project_id,
+            "k".to_string(),
+        )
+    }
+
+    async fn meta_rows(pool: &crate::db::DbPool) -> Vec<(String, Option<i64>, i64)> {
+        use sqlx::Row;
+        sqlx::query(sql!(
+            "SELECT event_id, duration_ms, error_count FROM replay_metadata ORDER BY event_id"
+        ))
+        .fetch_all(pool)
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| {
+            (
+                r.get::<String, _>("event_id"),
+                r.get::<Option<i64>, _>("duration_ms"),
+                r.get::<i64, _>("error_count"),
+            )
+        })
+        .collect()
+    }
+
+    async fn flush(pool: &crate::db::DbPool, events: &[&StorableEvent]) -> HashSet<String> {
+        let mut tx = pool.begin().await.unwrap();
+        let ids = insert_event_rows_bulk(&mut tx, events).await.unwrap();
+        tx.commit().await.unwrap();
+        ids
+    }
+
+    /// A mixed batch approaching BULK_CHUNK_SIZE must commit, and only the
+    /// replays may produce metadata rows — the whole point of the separate table
+    /// is that no other item type pays for it.
+    #[tokio::test]
+    async fn large_mixed_batch_commits_and_only_replays_get_metadata() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+
+        let mut owned: Vec<StorableEvent> = Vec::new();
+        for i in 0..BULK_CHUNK_SIZE - 3 {
+            owned.push(plain_event(&format!("e{i}"), 1));
+        }
+        owned.push(replay("r0", 1, 2));
+        owned.push(replay("r1", 1, 0));
+        owned.push(plain_event("tail", 1));
+        let refs: Vec<&StorableEvent> = owned.iter().collect();
+
+        let inserted = flush(&pool, &refs).await;
+        assert_eq!(inserted.len(), BULK_CHUNK_SIZE);
+
+        let rows = meta_rows(&pool).await;
+        assert_eq!(rows.len(), 2, "one metadata row per replay, and no others");
+        assert_eq!(rows[0].0, "r0");
+        // 1786290615.471 - 1786290528.918 = 86.553s
+        assert_eq!(rows[0].1, Some(86553));
+        assert_eq!(rows[0].2, 2);
+        assert_eq!(rows[1].2, 0);
+    }
+
+    /// The retry path: the writer replays a failed batch once, so a second flush
+    /// of the same events must not duplicate metadata or change it.
+    #[tokio::test]
+    async fn retried_flush_does_not_double_insert_metadata() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        let r = replay("r-retry", 1, 3);
+        let refs: Vec<&StorableEvent> = vec![&r];
+
+        let first = flush(&pool, &refs).await;
+        assert_eq!(first.len(), 1);
+
+        let second = flush(&pool, &refs).await;
+        assert!(
+            second.is_empty(),
+            "the duplicate event is dropped, so no metadata insert is even attempted"
+        );
+
+        let rows = meta_rows(&pool).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].2, 3);
+    }
+
+    /// `error_count` must come from the payload's own `error_ids`, not from a
+    /// query over a separate connection: the referenced error events are not yet
+    /// committed when the replay is written.
+    #[tokio::test]
+    async fn error_count_is_read_from_the_payload_not_the_database() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        // No error events exist at all, yet the count must still be 3.
+        let r = replay("r-iso", 1, 3);
+        let refs: Vec<&StorableEvent> = vec![&r];
+        flush(&pool, &refs).await;
+
+        assert_eq!(meta_rows(&pool).await[0].2, 3);
     }
 }

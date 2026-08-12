@@ -9,8 +9,8 @@ use crate::db::sql;
 use crate::ingest::models::HLL_REGISTER_COUNT;
 
 use super::types::{
-    DurationBucket, Page, PagedResult, TransactionDistribution, TransactionInstance,
-    TransactionSummary,
+    DurationBucket, Page, PagedResult, SpanAggregation, TransactionDistribution,
+    TransactionInstance, TransactionSummary, TransactionTrendPoint,
 };
 
 const NUM_BUCKETS: usize = 24;
@@ -267,6 +267,180 @@ pub async fn transaction_distribution(
     }))
 }
 
+/// Most trend points to plot. Beyond this the series is trimmed to the most
+/// recent points rather than compressed further, so a long-lived transaction
+/// still shows readable recent detail.
+const MAX_TREND_POINTS: i64 = 120;
+
+/// Candidate point widths in hours: hourly, quarter-day, half-day, daily, weekly.
+const TREND_STEPS_HOURS: [i64; 6] = [1, 3, 6, 12, 24, 168];
+
+/// Hours per trend point: the narrowest step that keeps the series under
+/// `MAX_TREND_POINTS`, so the x-axis stays legible without a per-period table.
+fn trend_bucket_hours(span_hours: i64) -> i64 {
+    TREND_STEPS_HOURS
+        .into_iter()
+        .find(|&step| span_hours / step <= MAX_TREND_POINTS)
+        .unwrap_or(TREND_STEPS_HOURS[TREND_STEPS_HOURS.len() - 1])
+}
+
+/// Ratio over the trailing median at which a point is called a regression.
+const REGRESSION_FACTOR: f64 = 1.5;
+/// Trailing points the median is taken over. The first `REGRESSION_WINDOW`
+/// points have no full window and are never marked.
+const REGRESSION_WINDOW: usize = 5;
+
+/// Flag each p95 that exceeds `REGRESSION_FACTOR` times the median of the five
+/// points before it.
+///
+/// Deliberately stateless and local to this page: it is a visual marker on a
+/// summary chart, unrelated to the issue-regression notifications in
+/// `src/notify/`. A zero trailing median (no traffic) never marks, so a
+/// transaction waking up after a quiet spell doesn't read as a regression.
+fn mark_regressions(p95: &[i64]) -> Vec<bool> {
+    p95.iter()
+        .enumerate()
+        .map(|(i, &value)| {
+            if i < REGRESSION_WINDOW {
+                return false;
+            }
+            let mut window: Vec<i64> = p95[i - REGRESSION_WINDOW..i].to_vec();
+            window.sort_unstable();
+            let median = window[REGRESSION_WINDOW / 2];
+            median > 0 && (value as f64) > REGRESSION_FACTOR * median as f64
+        })
+        .collect()
+}
+
+/// Caption for a trend point. Point widths below a day carry the hour, because
+/// several points then share one date and a bare date would repeat.
+fn trend_label(bucket: i64, bucket_hours: i64) -> String {
+    let Some(dt) = chrono::DateTime::from_timestamp(bucket, 0) else {
+        return String::new();
+    };
+    if bucket_hours < 24 {
+        dt.format("%b %d %H:%M").to_string()
+    } else {
+        dt.format("%b %d").to_string()
+    }
+}
+
+/// Percentiles over time for one transaction, folded out of the hourly
+/// `transaction_metrics` histograms. Point width adapts to the span actually
+/// present in the data rather than to the requested period, so an all-time view
+/// of a young transaction still plots hourly.
+pub async fn transaction_percentile_trend(
+    pool: &crate::db::DbPool,
+    project_id: u64,
+    name: &str,
+    since_ts: i64,
+) -> Result<Vec<TransactionTrendPoint>> {
+    let hour_floor = (since_ts / 3600) * 3600;
+
+    let bucket_cols: String = (0..NUM_BUCKETS)
+        .map(|i| format!("bucket_{i}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let raw = format!(
+        "SELECT hour_bucket, count, {bucket_cols} \
+         FROM transaction_metrics \
+         WHERE project_id = ?1 AND transaction_name = ?2 AND hour_bucket >= ?3 \
+         ORDER BY hour_bucket"
+    );
+    let rows = sqlx::query(crate::db::dyn_sql(&raw))
+        .bind(project_id as i64)
+        .bind(name)
+        .bind(hour_floor)
+        .fetch_all(pool)
+        .await?;
+
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let first_hour: i64 = rows[0].get("hour_bucket");
+    let last_hour: i64 = rows[rows.len() - 1].get("hour_bucket");
+    let bucket_hours = trend_bucket_hours((last_hour - first_hour) / 3600 + 1);
+    let width = bucket_hours * 3600;
+
+    // Rows arrive ordered by hour_bucket, so points accumulate in order and need
+    // no sort afterwards.
+    let mut points: Vec<(i64, u64, [u64; NUM_BUCKETS])> = Vec::new();
+    for row in &rows {
+        let hour: i64 = row.get("hour_bucket");
+        let bucket = hour.div_euclid(width) * width;
+        if points.last().map(|(b, _, _)| *b) != Some(bucket) {
+            points.push((bucket, 0, [0; NUM_BUCKETS]));
+        }
+        let (_, count, buckets) = points.last_mut().expect("just pushed");
+        *count += row.get::<i64, _>("count").max(0) as u64;
+        for (i, slot) in buckets.iter_mut().enumerate() {
+            *slot += row.get::<i64, _>(format!("bucket_{i}").as_str()).max(0) as u64;
+        }
+    }
+
+    if points.len() > MAX_TREND_POINTS as usize {
+        points.drain(..points.len() - MAX_TREND_POINTS as usize);
+    }
+
+    let p95: Vec<i64> = points
+        .iter()
+        .map(|(_, count, buckets)| percentile_from_buckets(buckets, *count, 0.95))
+        .collect();
+    let regressed = mark_regressions(&p95);
+
+    Ok(points
+        .into_iter()
+        .zip(p95)
+        .zip(regressed)
+        .map(
+            |(((bucket, count, buckets), p95_ms), regressed)| TransactionTrendPoint {
+                bucket,
+                label: trend_label(bucket, bucket_hours),
+                count,
+                p50_ms: percentile_from_buckets(&buckets, count, 0.50),
+                p95_ms,
+                regressed,
+            },
+        )
+        .collect())
+}
+
+/// Break one transaction's traces down by span (op, description), reusing the
+/// spans page's fold so both surfaces agree on percentiles, ordering and cap.
+///
+/// Membership is an EXISTS subquery rather than a join: several transaction
+/// events share one `trace_id` whenever a transaction is recorded more than
+/// once in the same trace, and a join would count each span once per match.
+pub async fn transaction_span_breakdown(
+    pool: &crate::db::DbPool,
+    project_id: u64,
+    name: &str,
+    since_ts: i64,
+) -> Result<SpanAggregation> {
+    let rows = sqlx::query(sql!(
+        "SELECT s.op AS op, s.description AS description, s.duration_ms AS duration_ms \
+         FROM spans s \
+         WHERE s.project_id = ?1 AND s.duration_ms IS NOT NULL AND s.trace_id IS NOT NULL \
+           AND EXISTS (SELECT 1 FROM events e \
+                       WHERE e.trace_id = s.trace_id AND e.project_id = ?2 \
+                         AND e.item_type = 'transaction' AND e.transaction_name = ?3 \
+                         AND e.timestamp >= ?4) \
+         ORDER BY s.timestamp DESC \
+         LIMIT ?5"
+    ))
+    .bind(project_id as i64)
+    .bind(project_id as i64)
+    .bind(name)
+    .bind(since_ts)
+    .bind(super::spans::SPAN_AGG_SCAN_LIMIT)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(super::spans::fold_span_rows(&rows))
+}
+
 /// List individual transaction events for a given name, slowest first.
 pub async fn list_transaction_instances(
     pool: &crate::db::DbPool,
@@ -391,6 +565,357 @@ mod tests {
 
         assert_eq!(result.items[1].status.as_deref(), Some("ok"));
         assert!(!result.items[1].is_failed());
+    }
+
+    async fn insert_txn_with_trace(
+        pool: &crate::db::DbPool,
+        event_id: &str,
+        project_id: i64,
+        name: &str,
+        trace_id: &str,
+        timestamp: i64,
+    ) {
+        let compressed = zstd::encode_all(b"{}".as_slice(), 3).unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, transaction_name, trace_id, received_at)
+             VALUES (?1, 'transaction', ?2, ?3, 'testkey', ?4, ?5, ?6, ?4)"
+        ))
+        .bind(event_id)
+        .bind(&compressed)
+        .bind(project_id)
+        .bind(timestamp)
+        .bind(name)
+        .bind(trace_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn insert_span(
+        pool: &crate::db::DbPool,
+        span_id: &str,
+        project_id: i64,
+        trace_id: &str,
+        op: &str,
+        duration_ms: i64,
+    ) {
+        let compressed = zstd::encode_all(b"{}".as_slice(), 3).unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO spans (span_id, payload, project_id, public_key, timestamp, trace_id, op, description, duration_ms)
+             VALUES (?1, ?2, ?3, 'testkey', 100, ?4, ?5, 'd', ?6)"
+        ))
+        .bind(span_id)
+        .bind(&compressed)
+        .bind(project_id)
+        .bind(trace_id)
+        .bind(op)
+        .bind(duration_ms)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn span_breakdown_groups_only_this_transactions_traces() {
+        let pool = open_test_db().await;
+        insert_txn_with_trace(&pool, "t1", 1, "/checkout", "trace-a", 100).await;
+        insert_txn_with_trace(&pool, "t2", 1, "/search", "trace-b", 100).await;
+
+        insert_span(&pool, "s1", 1, "trace-a", "db.query", 10).await;
+        insert_span(&pool, "s2", 1, "trace-a", "db.query", 30).await;
+        insert_span(&pool, "s3", 1, "trace-a", "http.client", 50).await;
+        // Belongs to a different transaction, and must not leak in.
+        insert_span(&pool, "s4", 1, "trace-b", "db.query", 90).await;
+
+        let agg = transaction_span_breakdown(&pool, 1, "/checkout", 0)
+            .await
+            .unwrap();
+        assert_eq!(agg.groups.len(), 2);
+        assert!(!agg.truncated);
+
+        let db = agg
+            .groups
+            .iter()
+            .find(|g| g.op.as_deref() == Some("db.query"))
+            .expect("db.query group");
+        assert_eq!(db.count, 2, "the /search span must not be counted");
+        assert_eq!(db.avg_ms, 20);
+
+        let http = agg
+            .groups
+            .iter()
+            .find(|g| g.op.as_deref() == Some("http.client"))
+            .expect("http.client group");
+        assert_eq!(http.count, 1);
+    }
+
+    #[tokio::test]
+    async fn span_breakdown_does_not_double_count_a_shared_trace() {
+        let pool = open_test_db().await;
+        // Two transaction rows recorded in the same trace: a join on trace_id
+        // would return each span twice.
+        insert_txn_with_trace(&pool, "t1", 1, "/checkout", "trace-a", 100).await;
+        insert_txn_with_trace(&pool, "t2", 1, "/checkout", "trace-a", 200).await;
+        insert_span(&pool, "s1", 1, "trace-a", "db.query", 10).await;
+
+        let agg = transaction_span_breakdown(&pool, 1, "/checkout", 0)
+            .await
+            .unwrap();
+        assert_eq!(agg.groups.len(), 1);
+        assert_eq!(agg.groups[0].count, 1);
+    }
+
+    #[tokio::test]
+    async fn span_breakdown_honours_the_period() {
+        let pool = open_test_db().await;
+        insert_txn_with_trace(&pool, "t1", 1, "/checkout", "trace-a", 100).await;
+        insert_span(&pool, "s1", 1, "trace-a", "db.query", 10).await;
+
+        assert_eq!(
+            transaction_span_breakdown(&pool, 1, "/checkout", 0)
+                .await
+                .unwrap()
+                .groups
+                .len(),
+            1
+        );
+        assert!(transaction_span_breakdown(&pool, 1, "/checkout", 500)
+            .await
+            .unwrap()
+            .groups
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn span_breakdown_is_project_scoped() {
+        let pool = open_test_db().await;
+        // Same trace id seen by two projects, as happens in a distributed trace.
+        insert_txn_with_trace(&pool, "t1", 1, "/checkout", "trace-a", 100).await;
+        insert_txn_with_trace(&pool, "t2", 2, "/checkout", "trace-a", 100).await;
+        insert_span(&pool, "s1", 2, "trace-a", "db.query", 10).await;
+
+        assert!(transaction_span_breakdown(&pool, 1, "/checkout", 0)
+            .await
+            .unwrap()
+            .groups
+            .is_empty());
+        assert_eq!(
+            transaction_span_breakdown(&pool, 2, "/checkout", 0)
+                .await
+                .unwrap()
+                .groups
+                .len(),
+            1
+        );
+    }
+
+    async fn insert_metric_hour(
+        pool: &crate::db::DbPool,
+        project_id: i64,
+        name: &str,
+        hour_bucket: i64,
+        count: i64,
+        bucket_index: usize,
+    ) {
+        let cols: String = (0..NUM_BUCKETS)
+            .map(|i| format!("bucket_{i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let vals: String = (0..NUM_BUCKETS)
+            .map(|i| {
+                if i == bucket_index {
+                    count.to_string()
+                } else {
+                    "0".to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let raw = format!(
+            "INSERT INTO transaction_metrics (project_id, transaction_name, hour_bucket, count, sum_duration_ms, failed_count, {cols}, first_seen, last_seen)
+             VALUES (?1, ?2, ?3, ?4, 0, 0, {vals}, ?3, ?3)"
+        );
+        sqlx::query(crate::db::dyn_sql(&raw))
+            .bind(project_id)
+            .bind(name)
+            .bind(hour_bucket)
+            .bind(count)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn percentile_trend_folds_hours_into_points() {
+        let pool = open_test_db().await;
+        // Three consecutive hours; the span is short, so points stay hourly.
+        // Bucket 6 is [64,128) ms, bucket 10 is [1024,2048) ms.
+        insert_metric_hour(&pool, 1, "/checkout", 3600, 4, 6).await;
+        insert_metric_hour(&pool, 1, "/checkout", 7200, 4, 6).await;
+        insert_metric_hour(&pool, 1, "/checkout", 10800, 4, 10).await;
+        // A different transaction and a different project must not leak in.
+        insert_metric_hour(&pool, 1, "/search", 3600, 99, 0).await;
+        insert_metric_hour(&pool, 2, "/checkout", 3600, 99, 0).await;
+
+        let trend = transaction_percentile_trend(&pool, 1, "/checkout", 0)
+            .await
+            .unwrap();
+        assert_eq!(trend.len(), 3);
+        assert_eq!(trend[0].bucket, 3600);
+        assert_eq!(trend[0].count, 4);
+        assert!((64..=128).contains(&trend[0].p95_ms), "{}", trend[0].p95_ms);
+        assert!(
+            (1024..=2048).contains(&trend[2].p95_ms),
+            "{}",
+            trend[2].p95_ms
+        );
+        // Points are ordered oldest first, and captions carry the hour at this width.
+        assert!(trend[0].bucket < trend[2].bucket);
+        assert!(trend[0].label.contains(':'), "{}", trend[0].label);
+        // Five points are needed before anything can be marked.
+        assert!(trend.iter().all(|p| !p.regressed));
+    }
+
+    #[tokio::test]
+    async fn percentile_trend_widens_points_over_a_long_span() {
+        let pool = open_test_db().await;
+        // 40 days spans 937 hours: too many to plot hourly, so the step widens to
+        // 12h (79 points). Several points then share a date, so captions keep the
+        // time-of-day.
+        for day in 0..40i64 {
+            insert_metric_hour(&pool, 1, "/checkout", day * 86_400, 1, 6).await;
+        }
+        let trend = transaction_percentile_trend(&pool, 1, "/checkout", 0)
+            .await
+            .unwrap();
+        assert!(trend.len() <= MAX_TREND_POINTS as usize, "{}", trend.len());
+        assert!(trend[0].label.contains(':'), "{}", trend[0].label);
+        let widths: Vec<i64> = trend
+            .windows(2)
+            .map(|w| w[1].bucket - w[0].bucket)
+            .collect();
+        assert!(
+            widths.iter().all(|&w| w % (12 * 3600) == 0),
+            "12h grid: {widths:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn percentile_trend_drops_the_hour_once_points_are_daily() {
+        let pool = open_test_db().await;
+        // 90 days spans 2137 hours, which lands on the 24h step.
+        for day in 0..90i64 {
+            insert_metric_hour(&pool, 1, "/checkout", day * 86_400, 1, 6).await;
+        }
+        let trend = transaction_percentile_trend(&pool, 1, "/checkout", 0)
+            .await
+            .unwrap();
+        assert_eq!(trend.len(), 90);
+        assert!(!trend[0].label.contains(':'), "{}", trend[0].label);
+    }
+
+    #[tokio::test]
+    async fn percentile_trend_keeps_the_most_recent_points_when_capped() {
+        let pool = open_test_db().await;
+        // 1000 weeks is past the coarsest step, so the series is trimmed rather
+        // than compressed further — and it is the recent end that survives.
+        for week in 0..1000i64 {
+            insert_metric_hour(&pool, 1, "/checkout", week * 7 * 86_400, 1, 6).await;
+        }
+        let trend = transaction_percentile_trend(&pool, 1, "/checkout", 0)
+            .await
+            .unwrap();
+        assert_eq!(trend.len(), MAX_TREND_POINTS as usize);
+        let last_week_start = 999 * 7 * 86_400;
+        assert!(
+            trend[trend.len() - 1].bucket + 168 * 3600 > last_week_start,
+            "the newest point must survive the trim"
+        );
+    }
+
+    #[tokio::test]
+    async fn percentile_trend_marks_a_spike() {
+        let pool = open_test_db().await;
+        // Six flat hours in bucket 6 [64,128), then a spike into bucket 12
+        // [4096,8192) — comfortably past 1.5x the trailing median.
+        for h in 1..=6i64 {
+            insert_metric_hour(&pool, 1, "/checkout", h * 3600, 10, 6).await;
+        }
+        insert_metric_hour(&pool, 1, "/checkout", 7 * 3600, 10, 12).await;
+
+        let trend = transaction_percentile_trend(&pool, 1, "/checkout", 0)
+            .await
+            .unwrap();
+        assert_eq!(trend.len(), 7);
+        assert!(
+            trend[..6].iter().all(|p| !p.regressed),
+            "the flat run and the ineligible first five must stay unmarked"
+        );
+        assert!(trend[6].regressed, "the spike must be marked");
+    }
+
+    #[tokio::test]
+    async fn percentile_trend_empty_without_rows() {
+        let pool = open_test_db().await;
+        assert!(transaction_percentile_trend(&pool, 1, "/checkout", 0)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn regression_marker_needs_a_full_trailing_window() {
+        // A spike inside the ineligible prefix is never marked.
+        let marks = mark_regressions(&[100, 100, 100, 100, 9999]);
+        assert_eq!(marks, vec![false; 5]);
+    }
+
+    #[test]
+    fn regression_marker_flags_a_spike_over_the_trailing_median() {
+        let marks = mark_regressions(&[100, 100, 100, 100, 100, 200, 100]);
+        assert_eq!(marks, vec![false, false, false, false, false, true, false]);
+    }
+
+    #[test]
+    fn regression_marker_ignores_growth_under_the_factor() {
+        // 1.5x exactly is not "exceeds", so 150 over a median of 100 stays clean.
+        let marks = mark_regressions(&[100, 100, 100, 100, 100, 150]);
+        assert!(!marks[5]);
+        assert!(mark_regressions(&[100, 100, 100, 100, 100, 151])[5]);
+    }
+
+    #[test]
+    fn regression_marker_survives_a_quiet_trailing_window() {
+        // No traffic for five points, then a real number: a zero median must not
+        // turn "any value at all" into a regression.
+        let marks = mark_regressions(&[0, 0, 0, 0, 0, 500]);
+        assert!(!marks[5]);
+    }
+
+    #[test]
+    fn regression_marker_median_resists_a_single_outlier() {
+        // One huge point in the window shifts the mean but not the median, so the
+        // point after a spike is still judged against the normal level.
+        let marks = mark_regressions(&[100, 9999, 100, 100, 100, 200]);
+        assert!(marks[5]);
+    }
+
+    #[test]
+    fn trend_step_widens_with_the_span() {
+        assert_eq!(trend_bucket_hours(24), 1);
+        assert_eq!(trend_bucket_hours(168), 3); // 7d
+        assert_eq!(trend_bucket_hours(720), 6); // 30d
+        assert_eq!(trend_bucket_hours(2160), 24); // 90d
+        assert_eq!(trend_bucket_hours(8760), 168); // 365d
+                                                   // Beyond the coarsest step it saturates rather than failing.
+        assert_eq!(trend_bucket_hours(876_000), 168);
+        // Every step keeps the series under the cap, except where it saturates.
+        for span in [1i64, 5, 100, 500, 5000, 20_000] {
+            assert!(
+                span / trend_bucket_hours(span) <= MAX_TREND_POINTS,
+                "{span}"
+            );
+        }
     }
 
     #[test]

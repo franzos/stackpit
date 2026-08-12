@@ -111,7 +111,6 @@ event-detail-user-ip = IP-адрес
 # --- Отчёты клиента (исходы отброшенных событий) ---
 # Использует events-untitled и events-pagination-* (общие, тот же файл).
 client-reports-title = Отчёты клиента
-client-reports-heading = Отчёты клиента
 client-reports-dropped-heading = Отброшенные события
 client-reports-dropped-subtitle = Что SDK отбросили перед отправкой, по категории и причине.
 client-reports-th-category = Категория

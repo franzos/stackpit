@@ -193,7 +193,16 @@
   }
   .table thead th a { color: inherit; }
   .table thead th a:hover { color: var(--color-on-surface); }
+  /* Every anchor in a table head is a sort control. They used to render exactly
+     like the non-sortable headers next to them, which is why several readers
+     concluded the lists had no sort controls at all. All sorts are descending;
+     the arrow marks "sortable", and full opacity marks "sorted by this". */
+  .table thead th a { display: inline-flex; align-items: center; gap: 0.2rem; }
+  .table thead th a::after { content: "\2193"; font-size: 9px; opacity: 0.3; transition: opacity 0.12s ease; }
+  .table thead th a:hover { color: var(--color-on-surface); }
+  .table thead th a:hover::after { opacity: 0.65; }
   .table thead th a.active-sort { color: var(--color-primary); }
+  .table thead th a.active-sort::after { opacity: 1; }
   .table tbody td {
     padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--color-outline-variant); vertical-align: top;
   }
@@ -358,6 +367,16 @@
   .active-filter a { color: var(--color-on-surface-variant); }
   .active-filter a:hover { color: var(--color-on-surface); }
 
+  /* Affirmation gate for the all-matching bulk forms. Sits above the buttons so
+     the count is read before the destructive action becomes reachable. */
+  .select-all-gate {
+    display: inline-flex; align-items: center; gap: 0.5rem;
+    font-size: 12px; color: var(--color-on-surface-variant);
+    cursor: pointer; user-select: none;
+  }
+  .select-all-gate:hover { color: var(--color-on-surface); }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
   /* bulk-select bar (toolbar shown when rows are checked) */
   .bulk-bar {
     display: none; align-items: center; gap: 0.5rem;
@@ -444,6 +463,36 @@
   .frame-context li::marker { color: var(--color-on-surface-variant); font-size: 11px; }
   .frame-context .current-line { background: color-mix(in srgb, var(--color-error) 18%, transparent); }
   .frame-vars { padding: 0.5rem 0.75rem; border-top: 1px solid var(--color-outline-variant); background: var(--color-surface-container-low); font-size: 11px; }
+
+  /* Runs of consecutive library frames collapse behind one control: an Android
+     ANR is otherwise forty framework rows with the app frame buried in them. */
+  .frame-run > summary {
+    list-style: none; cursor: pointer; user-select: none;
+    padding: 0.35rem 0.75rem; font-size: 11px;
+    color: var(--color-on-surface-variant);
+    background: var(--color-surface-container-low);
+    border-bottom: 1px solid var(--color-outline-variant);
+  }
+  .frame-run > summary::-webkit-details-marker { display: none; }
+  .frame-run > summary::before { content: "\25B8 "; }
+  .frame-run[open] > summary::before { content: "\25BE "; }
+  .frame-run > summary:hover { color: var(--color-on-surface); }
+
+  /* In-app-only filter: hides library frames and whole library runs. */
+  .frame-list.in-app-only .frame.library,
+  .frame-list.in-app-only .frame-run { display: none; }
+
+  .frame-copy {
+    font-size: 10px; padding: 0 0.3rem; border-radius: var(--radius);
+    color: var(--color-on-surface-variant); opacity: 0; transition: opacity 0.12s ease;
+    border: 1px solid var(--color-outline-variant);
+  }
+  .frame-header:hover .frame-copy, .frame-copy:focus { opacity: 1; }
+  .frame-copy:hover { color: var(--color-primary); }
+
+  /* A hundred breadcrumbs rendered inline pushes everything below them off the
+     page; bound the table and let it scroll in place. */
+  .breadcrumb-scroll { max-height: 26rem; overflow-y: auto; }
   .source-link { color: var(--color-on-surface-variant); margin-left: auto; font-size: 11px; }
   .source-link:hover { color: var(--color-primary); }
 
@@ -469,7 +518,9 @@
   }
   .tag-facet-row:hover .tag-facet-bar { background: color-mix(in srgb, var(--color-primary) 32%, transparent); }
   .tag-facet-row > *:not(.tag-facet-bar) { position: relative; z-index: 1; }
-  .tag-facet-value { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: color 0.12s ease; }
+  /* min-width:0 so the flex item may shrink below its content width; without it
+     the value overruns and slides under the count badge instead of clipping. */
+  .tag-facet-value { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: color 0.12s ease; }
   .tag-facet-row:hover .tag-facet-value { color: var(--color-primary); }
   .tag-facet-row .facet-count { margin-left: auto; color: var(--color-on-surface-variant); font-variant-numeric: tabular-nums; }
   .tag-facet-bar-stack { display: flex; height: 4px; border-radius: 9999px; overflow: hidden; margin-bottom: 0.5rem; }

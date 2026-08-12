@@ -6,7 +6,6 @@
 
 # --- Valeurs par défaut du navigateur ---
 defaults-page-title = Valeurs par défaut du navigateur — Stackpit
-defaults-heading = Valeurs par défaut du navigateur
 defaults-subtitle = Définissez les valeurs de filtre par défaut pour les pages de liste. Stockées dans un cookie du navigateur.
 defaults-none = Aucune valeur par défaut
 defaults-status-label = Statut par défaut (problèmes)
@@ -15,13 +14,6 @@ defaults-status-resolved = Résolu
 defaults-status-ignored = Ignoré
 defaults-level-label = Niveau par défaut
 defaults-period-label = Plage temporelle par défaut
-defaults-period-1h = Dernière heure
-defaults-period-24h = Dernières 24 h
-defaults-period-7d = 7 derniers jours
-defaults-period-14d = 14 derniers jours
-defaults-period-30d = 30 derniers jours
-defaults-period-90d = 90 derniers jours
-defaults-period-365d = 365 derniers jours
 defaults-save = Enregistrer les valeurs par défaut
 defaults-clear-confirm = Effacer toutes les valeurs par défaut du navigateur ?
 defaults-clear = Effacer toutes les valeurs par défaut

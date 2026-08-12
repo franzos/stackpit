@@ -9,6 +9,11 @@ replays-list-empty = ไม่พบรีเพลย์ เหตุการ�
 replays-col-event-id = รหัสเหตุการณ์
 replays-col-type = ประเภท
 replays-col-release = รีลีส
+replays-col-url = URL
+replays-col-user = ผู้ใช้
+replays-col-browser = เบราว์เซอร์
+replays-col-duration = ระยะเวลา
+replays-col-errors = ข้อผิดพลาด
 replays-col-environment = สภาพแวดล้อม
 replays-col-timestamp = ประทับเวลา
 

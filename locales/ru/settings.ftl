@@ -7,7 +7,6 @@
 
 # --- Значения по умолчанию для браузера ---
 defaults-page-title = Значения по умолчанию (браузер) — Stackpit
-defaults-heading = Значения по умолчанию для браузера
 defaults-subtitle = Задайте значения фильтров по умолчанию для страниц-списков. Хранятся как cookie браузера.
 defaults-none = Без значения по умолчанию
 defaults-status-label = Статус по умолчанию (ошибки)
@@ -16,13 +15,6 @@ defaults-status-resolved = Решено
 defaults-status-ignored = Проигнорировано
 defaults-level-label = Уровень по умолчанию
 defaults-period-label = Диапазон времени по умолчанию
-defaults-period-1h = Последний час
-defaults-period-24h = Последние 24 ч
-defaults-period-7d = Последние 7 дней
-defaults-period-14d = Последние 14 дней
-defaults-period-30d = Последние 30 дней
-defaults-period-90d = Последние 90 дней
-defaults-period-365d = Последние 365 дней
 defaults-save = Сохранить значения по умолчанию
 defaults-clear-confirm = Очистить все значения по умолчанию для браузера?
 defaults-clear = Очистить все значения по умолчанию

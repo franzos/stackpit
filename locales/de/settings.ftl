@@ -6,7 +6,6 @@
 
 # --- Browser-Standardwerte ---
 defaults-page-title = Browser-Standardwerte — Stackpit
-defaults-heading = Browser-Standardwerte
 defaults-subtitle = Standard-Filterwerte für Listenseiten festlegen. Wird als Browser-Cookie gespeichert.
 defaults-none = Kein Standard
 defaults-status-label = Standardstatus (Fehler)
@@ -15,13 +14,6 @@ defaults-status-resolved = Gelöst
 defaults-status-ignored = Ignoriert
 defaults-level-label = Standard-Level
 defaults-period-label = Standard-Zeitraum
-defaults-period-1h = Letzte Stunde
-defaults-period-24h = Letzte 24 h
-defaults-period-7d = Letzte 7 Tage
-defaults-period-14d = Letzte 14 Tage
-defaults-period-30d = Letzte 30 Tage
-defaults-period-90d = Letzte 90 Tage
-defaults-period-365d = Letzte 365 Tage
 defaults-save = Standardwerte speichern
 defaults-clear-confirm = Alle Browser-Standardwerte löschen?
 defaults-clear = Alle Standardwerte löschen

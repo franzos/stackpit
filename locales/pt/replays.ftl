@@ -10,6 +10,11 @@ replays-list-empty = Nenhum replay encontrado. Os eventos de replay aparecerão 
 replays-col-event-id = ID do evento
 replays-col-type = Tipo
 replays-col-release = Release
+replays-col-url = URL
+replays-col-user = Utilizador
+replays-col-browser = Navegador
+replays-col-duration = Duração
+replays-col-errors = Erros
 replays-col-environment = Ambiente
 replays-col-timestamp = Data/hora
 

@@ -5,7 +5,6 @@
 
 # --- ค่าเริ่มต้นของเบราว์เซอร์ ---
 defaults-page-title = ค่าเริ่มต้นของเบราว์เซอร์ — Stackpit
-defaults-heading = ค่าเริ่มต้นของเบราว์เซอร์
 defaults-subtitle = ตั้งค่าตัวกรองเริ่มต้นสำหรับหน้ารายการ เก็บเป็นคุกกี้ของเบราว์เซอร์
 defaults-none = ไม่มีค่าเริ่มต้น
 defaults-status-label = สถานะเริ่มต้น (ปัญหา)
@@ -14,13 +13,6 @@ defaults-status-resolved = แก้ไขแล้ว
 defaults-status-ignored = เพิกเฉย
 defaults-level-label = ระดับเริ่มต้น
 defaults-period-label = ช่วงเวลาเริ่มต้น
-defaults-period-1h = ชั่วโมงที่ผ่านมา
-defaults-period-24h = 24 ชม. ที่ผ่านมา
-defaults-period-7d = 7 วันที่ผ่านมา
-defaults-period-14d = 14 วันที่ผ่านมา
-defaults-period-30d = 30 วันที่ผ่านมา
-defaults-period-90d = 90 วันที่ผ่านมา
-defaults-period-365d = 365 วันที่ผ่านมา
 defaults-save = บันทึกค่าเริ่มต้น
 defaults-clear-confirm = ล้างค่าเริ่มต้นของเบราว์เซอร์ทั้งหมดหรือไม่
 defaults-clear = ล้างค่าเริ่มต้นทั้งหมด

@@ -51,7 +51,7 @@ pub fn parse(body: &[u8], project_id: u64, auth: &SentryAuth) -> Result<ParsedEn
             result.envelope_event_id = header
                 .get("event_id")
                 .and_then(|v| v.as_str())
-                .map(String::from);
+                .and_then(crate::ingest::ids::sanitize_id);
 
             // Clock drift correction: compare sent_at to server receive time.
             // SDKs send ISO 8601 timestamps like "2025-03-07T12:00:00Z".
@@ -277,7 +277,7 @@ fn extract_fields(
     let event_id = json
         .get("event_id")
         .and_then(|v| v.as_str())
-        .map(String::from);
+        .and_then(crate::ingest::ids::sanitize_id);
 
     // Magnitude distinguishes s / ms / us / ns, normalized to seconds:
     // seconds up to ~1e11 (year ~5138), milliseconds to 1e14, microseconds
@@ -741,6 +741,34 @@ mod tests {
         // Title comes from enrichment, not from parse
         crate::ingest::enrich::enrich_event(&mut result.events[0]);
         assert_eq!(result.events[0].title.as_deref(), Some("hello"));
+    }
+
+    /// An `event_id` that would split mid-char when a template truncates it is
+    /// dropped at ingest; the event still stores, under a generated id.
+    #[test]
+    fn parse_rejects_non_ascii_event_id() {
+        let event_json = r#"{"event_id":"aaaaaaaaaaaé","message":"hello"}"#;
+        let body = format!("{{}}\n{{\"type\":\"event\"}}\n{event_json}\n");
+
+        let result = parse(body.as_bytes(), 1, &test_auth()).unwrap();
+        assert_eq!(result.events.len(), 1);
+        let id = &result.events[0].event_id;
+        assert_ne!(id, "aaaaaaaaaaaé");
+        assert!(
+            uuid::Uuid::parse_str(id).is_ok(),
+            "expected a generated uuid"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_overlong_event_id() {
+        let long = "a".repeat(200);
+        let event_json = format!(r#"{{"event_id":"{long}","message":"hello"}}"#);
+        let body = format!("{{}}\n{{\"type\":\"event\"}}\n{event_json}\n");
+
+        let result = parse(body.as_bytes(), 1, &test_auth()).unwrap();
+        assert_eq!(result.events.len(), 1);
+        assert!(uuid::Uuid::parse_str(&result.events[0].event_id).is_ok());
     }
 
     #[test]

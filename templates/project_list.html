@@ -34,14 +34,8 @@
     <select class="select w-auto"
             name="period"
             aria-label="{{ chrome.t("projects-period-label") }}">
-      <option value="">{{ chrome.t("projects-period-all") }}</option>
-      <option value="1h"{% if period == "1h" %} selected{% endif %}>{{ chrome.t("projects-period-1h") }}</option>
-      <option value="24h"{% if period == "24h" %} selected{% endif %}>{{ chrome.t("projects-period-24h") }}</option>
-      <option value="7d"{% if period == "7d" %} selected{% endif %}>{{ chrome.t("projects-period-7d") }}</option>
-      <option value="14d"{% if period == "14d" %} selected{% endif %}>{{ chrome.t("projects-period-14d") }}</option>
-      <option value="30d"{% if period == "30d" %} selected{% endif %}>{{ chrome.t("projects-period-30d") }}</option>
-      <option value="90d"{% if period == "90d" %} selected{% endif %}>{{ chrome.t("projects-period-90d") }}</option>
-      <option value="365d"{% if period == "365d" %} selected{% endif %}>{{ chrome.t("projects-period-365d") }}</option>
+      {% call m::period_options(chrome, period, chrome.t("common-period-all")) %}
+      {% endcall %}
     </select>
     {%- if orgs.len() > 1 %}
       <select class="select w-auto"

@@ -40,15 +40,9 @@ issues-list-filter-level = Фильтр по уровню
 issues-list-level-all = Все уровни
 issues-list-filter-release = Фильтр по релизу
 issues-list-release-all = Все релизы
+issues-list-filter-environment = Фильтр по окружению
+issues-list-environment-all = Все окружения
 issues-period-label = Период времени
-issues-period-all = За всё время
-issues-period-1h = Последний час
-issues-period-24h = Последние 24 ч
-issues-period-7d = Последние 7 дней
-issues-period-14d = Последние 14 дней
-issues-period-30d = Последние 30 дней
-issues-period-90d = Последние 90 дней
-issues-period-365d = Последние 365 дней
 issues-list-filter-submit = Фильтровать
 issues-list-empty = Нет ошибок, соответствующих текущим фильтрам.
 issues-untitled = (без названия)
@@ -101,6 +95,16 @@ issue-detail-unhandled = не обработано
 issue-detail-in = в
 issue-detail-var-name = Переменная
 issue-detail-no-source = Контекст исходного кода недоступен
+issue-detail-in-app-only = Только кадры приложения
+issue-detail-reverse-order = Обратный порядок
+issue-detail-copy = Копировать
+issue-detail-copy-frame = Скопировать этот кадр
+issue-detail-library-frames = { $count ->
+    [one] { $count } библиотечный кадр
+    [few] { $count } библиотечных кадра
+    [many] { $count } библиотечных кадров
+   *[other] { $count } библиотечных кадра
+}
 issue-detail-minified-hint = Эти фреймы выглядят минифицированными, source map не применена.
 issue-detail-minified-hint-link = Загрузить source maps
 issue-detail-breadcrumbs = Хлебные крошки
@@ -108,6 +112,8 @@ issue-detail-th-time = Время
 issue-detail-th-category = Категория
 issue-detail-th-message = Сообщение
 issue-detail-crumb-data = данные
+issue-detail-crumb-filter = Фильтр хлебных крошек по типу
+issue-detail-crumb-filter-all = Все типы
 issue-detail-tags = Теги
 issue-detail-contexts = Контексты
 issue-detail-additional-data = Дополнительные данные

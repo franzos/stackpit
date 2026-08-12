@@ -18,7 +18,7 @@
 {% block content %}
   <div class="page-header">
     <div>
-      <h1>{{ chrome.t("release-health-heading") }}</h1>
+      <h1>{{ chrome.t("nav-health") }}</h1>
       <p class="text-muted text-[13px] mt-1">{{ chrome.t("release-health-subtitle") }}</p>
     </div>
   </div>
@@ -30,12 +30,8 @@
     <select class="select w-auto"
             name="period"
             aria-label="{{ chrome.t("release-health-period-label") }}">
-      <option value="1h"{% if period == "1h" %} selected{% endif %}>{{ chrome.t("release-health-period-1h") }}</option>
-      <option value="24h"{% if period == "24h" %} selected{% endif %}>{{ chrome.t("release-health-period-24h") }}</option>
-      <option value="7d"{% if period == "7d" %} selected{% endif %}>{{ chrome.t("release-health-period-7d") }}</option>
-      <option value="14d"{% if period == "14d" %} selected{% endif %}>{{ chrome.t("release-health-period-14d") }}</option>
-      <option value="30d"{% if period == "30d" %} selected{% endif %}>{{ chrome.t("release-health-period-30d") }}</option>
-      <option value="90d"{% if period == "90d" %} selected{% endif %}>{{ chrome.t("release-health-period-90d") }}</option>
+      {% call m::period_options(chrome, period, chrome.t("common-period-all")) %}
+      {% endcall %}
     </select>
     <button class="btn btn-secondary" type="submit">{{ chrome.t("releases-filter-submit") }}</button>
   </form>
@@ -101,13 +97,13 @@
                   {% endif %}
                 </td>
                 <td class="text-tabular font-semibold">
-                  {% match r.crash_free_sessions %}{% when Some with (cfs) %}<span class="{% if cfs.clone() >= 99.0 %}health-good{% else if cfs.clone() >= 95.0 %}health-warn{% else %}health-bad{% endif %}">{{ cfs }}%</span>{% when None %}<span class="text-muted">{{ chrome.t("release-health-na") }}</span>{% endmatch %}
+                  {% match r.crash_free_sessions %}{% when Some with (cfs) %}<span class="{% if cfs.clone() >= 99.0 %}health-good{% else if cfs.clone() >= 95.0 %}health-warn{% else %}health-bad{% endif %}">{{ cfs|format_pct(2) }}</span>{% when None %}<span class="text-muted">{{ chrome.t("release-health-na") }}</span>{% endmatch %}
               </td>
               <td class="text-tabular font-semibold">
-                {% match r.error_free_sessions %}{% when Some with (efs) %}<span class="{% if efs.clone() >= 99.0 %}health-good{% else if efs.clone() >= 95.0 %}health-warn{% else %}health-bad{% endif %}">{{ efs }}%</span>{% when None %}<span class="text-muted">{{ chrome.t("release-health-na") }}</span>{% endmatch %}
+                {% match r.error_free_sessions %}{% when Some with (efs) %}<span class="{% if efs.clone() >= 99.0 %}health-good{% else if efs.clone() >= 95.0 %}health-warn{% else %}health-bad{% endif %}">{{ efs|format_pct(2) }}</span>{% when None %}<span class="text-muted">{{ chrome.t("release-health-na") }}</span>{% endmatch %}
               </td>
               <td class="text-tabular font-semibold">
-                {% match r.crash_free_users %}{% when Some with (cfu) %}<span class="{% if cfu.clone() >= 99.0 %}health-good{% else if cfu.clone() >= 95.0 %}health-warn{% else %}health-bad{% endif %}">{{ cfu }}%</span>{% when None %}<span class="text-muted">{{ chrome.t("release-health-na") }}</span>{% endmatch %}
+                {% match r.crash_free_users %}{% when Some with (cfu) %}<span class="{% if cfu.clone() >= 99.0 %}health-good{% else if cfu.clone() >= 95.0 %}health-warn{% else %}health-bad{% endif %}">{{ cfu|format_pct(2) }}</span>{% when None %}<span class="text-muted">{{ chrome.t("release-health-na") }}</span>{% endmatch %}
             </td>
           </tr>
         {% endfor %}

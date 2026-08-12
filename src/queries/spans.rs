@@ -51,9 +51,9 @@ pub async fn list_spans(
 /// Bounds the read so a busy project can't force an unbounded table scan; the
 /// spans page has no period filter, so we cap on recency via the
 /// (project_id, timestamp) index.
-const SPAN_AGG_SCAN_LIMIT: i64 = 50_000;
+pub(crate) const SPAN_AGG_SCAN_LIMIT: i64 = 50_000;
 /// Most (op, description) groups to render; the tail is dropped and flagged.
-pub const MAX_SPAN_GROUPS: usize = 100;
+pub const MAX_SPAN_GROUPS: usize = 250;
 
 /// Exact nearest-rank percentile over a *sorted-ascending* slice. `p` is a
 /// fraction in 0.0..=1.0. Returns 0 for an empty slice.
@@ -92,26 +92,13 @@ fn build_span_agg(
     }
 }
 
-/// Aggregate the project's recent spans by (op, description), computing exact
-/// percentiles in Rust from raw `duration_ms`. Rows with NULL durations are
-/// skipped. Sorted by count desc (p95 desc tiebreak) and capped to
-/// `MAX_SPAN_GROUPS`.
-pub async fn aggregate_spans(pool: &crate::db::DbPool, project_id: u64) -> Result<SpanAggregation> {
-    let rows = sqlx::query(sql!(
-        "SELECT op, description, duration_ms
-         FROM spans
-         WHERE project_id = ?1 AND duration_ms IS NOT NULL
-         ORDER BY timestamp DESC
-         LIMIT ?2"
-    ))
-    .bind(project_id as i64)
-    .bind(SPAN_AGG_SCAN_LIMIT)
-    .fetch_all(pool)
-    .await?;
-
+/// Group raw `op`/`description`/`duration_ms` rows into sorted, capped
+/// aggregates. Shared by the spans page and the transaction summary, so both
+/// get the same ordering and `MAX_SPAN_GROUPS` truncation.
+pub(crate) fn fold_span_rows(rows: &[crate::db::DbRow]) -> SpanAggregation {
     let mut by_group: std::collections::HashMap<(Option<String>, Option<String>), Vec<i64>> =
         std::collections::HashMap::new();
-    for row in &rows {
+    for row in rows {
         let op: Option<String> = row.get("op");
         let description: Option<String> = row.get("description");
         by_group
@@ -129,7 +116,27 @@ pub async fn aggregate_spans(pool: &crate::db::DbPool, project_id: u64) -> Resul
     let truncated = groups.len() > MAX_SPAN_GROUPS;
     groups.truncate(MAX_SPAN_GROUPS);
 
-    Ok(SpanAggregation { groups, truncated })
+    SpanAggregation { groups, truncated }
+}
+
+/// Aggregate the project's recent spans by (op, description), computing exact
+/// percentiles in Rust from raw `duration_ms`. Rows with NULL durations are
+/// skipped. Sorted by count desc (p95 desc tiebreak) and capped to
+/// `MAX_SPAN_GROUPS`.
+pub async fn aggregate_spans(pool: &crate::db::DbPool, project_id: u64) -> Result<SpanAggregation> {
+    let rows = sqlx::query(sql!(
+        "SELECT op, description, duration_ms
+         FROM spans
+         WHERE project_id = ?1 AND duration_ms IS NOT NULL
+         ORDER BY timestamp DESC
+         LIMIT ?2"
+    ))
+    .bind(project_id as i64)
+    .bind(SPAN_AGG_SCAN_LIMIT)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(fold_span_rows(&rows))
 }
 
 /// A trace id is shared across projects in a distributed trace, so every read
@@ -404,6 +411,7 @@ pub fn build_waterfall(spans: &[SpanRow], root_duration_ms: i64) -> Waterfall {
     if spans.is_empty() {
         return Waterfall {
             total_ms: root_duration_ms.max(1),
+            root_width_pct: 100.0,
             ..Default::default()
         };
     }
@@ -504,10 +512,21 @@ pub fn build_waterfall(spans: &[SpanRow], root_duration_ms: i64) -> Waterfall {
         }
     }
 
+    // The root row starts at the trace origin; only its width varies. Drawn on the
+    // same compressed axis as the children, so it stays comparable to them.
+    let root_width_pct = if root_duration_ms > 0 {
+        timeline
+            .pct(trace_start.saturating_add(root_duration_ms))
+            .max(0.5)
+    } else {
+        100.0
+    };
+
     Waterfall {
         rows,
         total_ms,
         span_count,
+        root_width_pct,
         truncated,
         gaps: timeline.gaps,
         compressed: timeline.compressed,
@@ -959,6 +978,32 @@ mod tests {
         let spans = vec![span("a", None, Some(0), Some(2000))];
         let w = build_waterfall(&spans, 500);
         assert_eq!(w.total_ms, 2000);
+    }
+
+    // The root bar used to be hardcoded to `width: 100%` in the template, so a
+    // 500ms transaction under a 2000ms trace drew as wide as the whole axis.
+    #[test]
+    fn root_bar_scales_with_its_own_duration() {
+        // Root shorter than the child extent: a quarter of the axis.
+        let spans = vec![span("a", None, Some(0), Some(2000))];
+        let w = build_waterfall(&spans, 500);
+        assert!(
+            (w.root_width_pct - 25.0).abs() < 1e-9,
+            "got {}",
+            w.root_width_pct
+        );
+
+        // Root defines the axis: full width.
+        let spans = vec![span("a", None, Some(0), Some(50))];
+        let w = build_waterfall(&spans, 1000);
+        assert!((w.root_width_pct - 100.0).abs() < 1e-9);
+
+        // Unknown root duration keeps the old full-width behaviour.
+        let spans = vec![span("a", None, Some(0), Some(2000))];
+        assert!((build_waterfall(&spans, 0).root_width_pct - 100.0).abs() < 1e-9);
+
+        // No child spans at all: the root is the whole trace.
+        assert!((build_waterfall(&[], 300).root_width_pct - 100.0).abs() < 1e-9);
     }
 
     #[test]

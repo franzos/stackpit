@@ -34,6 +34,11 @@ spans-col-timestamp = Data/hora
 
 # --- Paginação (lista de spans) ---
 spans-pagination-label = Paginação
+spans-traces-pagination-label = Paginação de traces
+spans-traces-count = { $count ->
+    [one] { $count } trace
+   *[other] { $count } traces
+}
 spans-pagination-prev = « Anterior
 spans-pagination-next = Seguinte »
 spans-count = { $count ->

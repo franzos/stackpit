@@ -12,6 +12,19 @@ common-time-year-ago = { $n } ปีที่แล้ว
 common-time-day-ago = { $n ->
    *[other] { $n } วันที่แล้ว
 }
+common-period-all = ทั้งหมด
+common-period-1h = ชั่วโมงที่ผ่านมา
+common-period-24h = 24 ชั่วโมงที่ผ่านมา
+common-period-7d = 7 วันที่ผ่านมา
+common-period-14d = 14 วันที่ผ่านมา
+common-period-30d = 30 วันที่ผ่านมา
+common-period-90d = 90 วันที่ผ่านมา
+common-period-365d = 365 วันที่ผ่านมา
+
+common-select-all-matching = { $count ->
+   *[other] เลือกทั้งหมด { $count } แถวที่ตรงกับตัวกรองนี้
+}
+
 test-count = { $count ->
    *[other] { $count } รายการ
 }

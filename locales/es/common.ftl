@@ -10,6 +10,20 @@ common-time-week-ago = hace { $n } sem
 common-time-month-ago = hace { $n } mes
 common-time-year-ago = hace { $n } a
 common-time-day-ago = hace { $n } d
+common-period-all = Todo el tiempo
+common-period-1h = Última hora
+common-period-24h = Últimas 24 horas
+common-period-7d = Últimos 7 días
+common-period-14d = Últimos 14 días
+common-period-30d = Últimos 30 días
+common-period-90d = Últimos 90 días
+common-period-365d = Últimos 365 días
+
+common-select-all-matching = { $count ->
+    [one] Seleccionar la { $count } fila que coincide con este filtro
+   *[other] Seleccionar las { $count } filas que coinciden con este filtro
+}
+
 test-count = { $count ->
     [one] { $count } elemento
    *[other] { $count } elementos

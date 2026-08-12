@@ -106,6 +106,11 @@ fn push_issue_filter_conditions(
         qb.push_bind(release.as_str());
         qb.push(")");
     }
+    if let Some(ref environment) = filter.environment {
+        qb.push(" AND EXISTS (SELECT 1 FROM events e WHERE e.fingerprint = issues.fingerprint AND e.project_id = issues.project_id AND e.environment = ");
+        qb.push_bind(environment.as_str());
+        qb.push(")");
+    }
     if let Some((ref key, ref value)) = filter.tag {
         qb.push(" AND EXISTS (SELECT 1 FROM issue_tag_values itv WHERE itv.fingerprint = issues.fingerprint AND itv.tag_key = ");
         qb.push_bind(key.as_str());
@@ -117,6 +122,39 @@ fn push_issue_filter_conditions(
         qb.push(" AND last_seen >= ");
         qb.push_bind(ts);
     }
+}
+
+/// Issues whose events carry a given `transaction_name`, most recently seen
+/// first. Powers the related-issues panel on the transaction summary.
+///
+/// Only `ItemType::Event` fingerprints (`can_fingerprint`), so the transaction's
+/// own rows can never come back here — the match is on error events that were
+/// recorded while serving this transaction.
+pub async fn list_issues_for_transaction(
+    pool: &crate::db::DbPool,
+    project_id: u64,
+    transaction_name: &str,
+    since_ts: i64,
+    limit: u32,
+) -> Result<Vec<IssueSummary>> {
+    let rows = sqlx::query(sql!(
+        "SELECT fingerprint, project_id, title, level, first_seen, last_seen, event_count, status, item_type, user_hll \
+         FROM issues \
+         WHERE project_id = ?1 \
+           AND EXISTS (SELECT 1 FROM events e \
+                       WHERE e.fingerprint = issues.fingerprint AND e.project_id = issues.project_id \
+                         AND e.transaction_name = ?2 AND e.timestamp >= ?3) \
+         ORDER BY last_seen DESC \
+         LIMIT ?4"
+    ))
+    .bind(project_id as i64)
+    .bind(transaction_name)
+    .bind(since_ts)
+    .bind(limit as i64)
+    .fetch_all(pool)
+    .await?;
+
+    rows.iter().map(map_issue_row).collect()
 }
 
 /// Fetch a single issue by its fingerprint.
@@ -534,6 +572,252 @@ mod tests {
         let result = list_issues(&pool, 1, &filter, &page, None).await.unwrap();
         assert_eq!(result.total, 1);
         assert_eq!(result.items[0].fingerprint, "fp1");
+    }
+
+    // The environment filter mirrors `release`: an EXISTS over the issue's events,
+    // not a column on `issues`. An issue qualifies if *any* of its events landed in
+    // that environment.
+    #[tokio::test]
+    async fn list_issues_filter_environment() {
+        let pool = open_test_db().await;
+        for (fp, title) in [("fp1", "Error A"), ("fp2", "Error B")] {
+            insert_test_issue(
+                &pool,
+                fp,
+                1,
+                Some(title),
+                Some("error"),
+                100,
+                200,
+                1,
+                "unresolved",
+            )
+            .await;
+        }
+        // insert_test_event hard-codes environment 'production'; override per row.
+        crate::queries::test_helpers::insert_test_event(
+            &pool,
+            "e1",
+            1,
+            100,
+            Some("fp1"),
+            Some("error"),
+            Some("Error A"),
+        )
+        .await;
+        crate::queries::test_helpers::insert_test_event(
+            &pool,
+            "e2",
+            1,
+            150,
+            Some("fp2"),
+            Some("error"),
+            Some("Error B"),
+        )
+        .await;
+        sqlx::query(sql!(
+            "UPDATE events SET environment = 'staging' WHERE event_id = 'e2'"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let page = Page::new(None, None);
+
+        let prod = list_issues(
+            &pool,
+            1,
+            &IssueFilter {
+                environment: Some("production".to_string()),
+                ..Default::default()
+            },
+            &page,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(prod.total, 1);
+        assert_eq!(prod.items[0].fingerprint, "fp1");
+
+        let staging = list_issues(
+            &pool,
+            1,
+            &IssueFilter {
+                environment: Some("staging".to_string()),
+                ..Default::default()
+            },
+            &page,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(staging.total, 1);
+        assert_eq!(staging.items[0].fingerprint, "fp2");
+
+        // An environment nothing was sent to matches nothing, rather than everything.
+        let none = list_issues(
+            &pool,
+            1,
+            &IssueFilter {
+                environment: Some("nope".to_string()),
+                ..Default::default()
+            },
+            &page,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(none.total, 0);
+
+        // No filter: both issues.
+        let all = list_issues(&pool, 1, &IssueFilter::default(), &page, None)
+            .await
+            .unwrap();
+        assert_eq!(all.total, 2);
+    }
+
+    // Powers the transaction summary's related-issues panel: an issue qualifies
+    // when any of its events was recorded while serving that transaction.
+    #[tokio::test]
+    async fn issues_for_transaction_scope_by_transaction_name_and_period() {
+        let pool = open_test_db().await;
+        for (fp, title, last_seen) in [("fp1", "Error A", 200), ("fp2", "Error B", 300)] {
+            insert_test_issue(
+                &pool,
+                fp,
+                1,
+                Some(title),
+                Some("error"),
+                100,
+                last_seen,
+                1,
+                "unresolved",
+            )
+            .await;
+        }
+        // insert_test_event hard-codes transaction_name '/api/test'; repoint one.
+        crate::queries::test_helpers::insert_test_event(
+            &pool,
+            "e1",
+            1,
+            100,
+            Some("fp1"),
+            Some("error"),
+            Some("Error A"),
+        )
+        .await;
+        crate::queries::test_helpers::insert_test_event(
+            &pool,
+            "e2",
+            1,
+            150,
+            Some("fp2"),
+            Some("error"),
+            Some("Error B"),
+        )
+        .await;
+        sqlx::query(sql!(
+            "UPDATE events SET transaction_name = '/checkout' WHERE event_id = 'e2'"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let checkout = list_issues_for_transaction(&pool, 1, "/checkout", 0, 10)
+            .await
+            .unwrap();
+        assert_eq!(checkout.len(), 1);
+        assert_eq!(checkout[0].fingerprint, "fp2");
+
+        let api = list_issues_for_transaction(&pool, 1, "/api/test", 0, 10)
+            .await
+            .unwrap();
+        assert_eq!(api.len(), 1);
+        assert_eq!(api[0].fingerprint, "fp1");
+
+        // A transaction nothing was recorded against matches nothing.
+        assert!(list_issues_for_transaction(&pool, 1, "/nope", 0, 10)
+            .await
+            .unwrap()
+            .is_empty());
+
+        // Another project's issues never surface.
+        assert!(list_issues_for_transaction(&pool, 2, "/checkout", 0, 10)
+            .await
+            .unwrap()
+            .is_empty());
+
+        // The period bounds the *events*, not the issue's last_seen.
+        assert!(list_issues_for_transaction(&pool, 1, "/checkout", 200, 10)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn issues_for_transaction_orders_by_last_seen_and_honours_the_limit() {
+        let pool = open_test_db().await;
+        for (fp, last_seen) in [("fp1", 200), ("fp2", 400), ("fp3", 300)] {
+            insert_test_issue(
+                &pool,
+                fp,
+                1,
+                Some(fp),
+                Some("error"),
+                100,
+                last_seen,
+                1,
+                "unresolved",
+            )
+            .await;
+            crate::queries::test_helpers::insert_test_event(
+                &pool,
+                &format!("e-{fp}"),
+                1,
+                100,
+                Some(fp),
+                Some("error"),
+                Some(fp),
+            )
+            .await;
+        }
+
+        let all = list_issues_for_transaction(&pool, 1, "/api/test", 0, 10)
+            .await
+            .unwrap();
+        let order: Vec<&str> = all.iter().map(|i| i.fingerprint.as_str()).collect();
+        assert_eq!(order, ["fp2", "fp3", "fp1"]);
+
+        let capped = list_issues_for_transaction(&pool, 1, "/api/test", 0, 2)
+            .await
+            .unwrap();
+        assert_eq!(capped.len(), 2);
+        assert_eq!(capped[0].fingerprint, "fp2");
+    }
+
+    #[tokio::test]
+    async fn list_environments_for_project_is_distinct_and_skips_blanks() {
+        let pool = open_test_db().await;
+        for (id, ts) in [("v1", 100), ("v2", 150), ("v3", 200), ("v4", 250)] {
+            crate::queries::test_helpers::insert_test_event(&pool, id, 1, ts, None, None, None)
+                .await;
+        }
+        // v1 keeps the default 'production'; give the rest distinct/blank values.
+        for (id, env) in [("v2", "staging"), ("v3", "production"), ("v4", "")] {
+            sqlx::query(sql!(
+                "UPDATE events SET environment = ?1 WHERE event_id = ?2"
+            ))
+            .bind(env)
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let envs = crate::queries::events::list_environments_for_project(&pool, 1)
+            .await
+            .unwrap();
+        assert_eq!(envs, vec!["production".to_string(), "staging".to_string()]);
     }
 
     #[tokio::test]

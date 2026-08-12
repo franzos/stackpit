@@ -174,7 +174,43 @@ pub struct ExceptionData {
     pub frames: Vec<StackFrame>,
 }
 
+/// One entry in a grouped stack trace: either a frame shown on its own, or a
+/// run of consecutive library frames collapsed behind a single control.
+pub enum FrameGroup<'a> {
+    Single(&'a StackFrame),
+    LibraryRun(&'a [StackFrame]),
+}
+
 impl ExceptionData {
+    /// Group the frames so runs of two or more consecutive library frames
+    /// collapse behind one control, leaving in-app frames and lone library
+    /// frames as they are. Order is preserved.
+    ///
+    /// Without this an Android ANR renders forty `android::IPCThreadState` rows
+    /// with the one app frame buried among them.
+    pub fn frame_groups(&self) -> Vec<FrameGroup<'_>> {
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < self.frames.len() {
+            if self.frames[i].in_app {
+                out.push(FrameGroup::Single(&self.frames[i]));
+                i += 1;
+                continue;
+            }
+            let start = i;
+            while i < self.frames.len() && !self.frames[i].in_app {
+                i += 1;
+            }
+            let run = &self.frames[start..i];
+            if run.len() >= 2 {
+                out.push(FrameGroup::LibraryRun(run));
+            } else {
+                out.push(FrameGroup::Single(&run[0]));
+            }
+        }
+        out
+    }
+
     /// True when the stack looks like an un-symbolicated minified JS bundle:
     /// frames carry column numbers (a JS/minified tell) but no source context
     /// resolved, so no source map has been applied. Drives a hint linking to
@@ -224,6 +260,19 @@ impl StackFrame {
             .saturating_sub(self.pre_context.len() as u64)
             .max(1)
     }
+
+    /// One stack-trace line, in the shape people paste into a bug report:
+    /// `at function (file:line:col)`.
+    pub fn copy_line(&self) -> String {
+        let mut loc = self.filename.clone();
+        if let Some(ln) = self.lineno {
+            loc.push_str(&format!(":{ln}"));
+            if let Some(cn) = self.colno {
+                loc.push_str(&format!(":{cn}"));
+            }
+        }
+        format!("at {} ({})", self.function, loc)
+    }
 }
 
 #[derive(Debug)]
@@ -233,6 +282,17 @@ pub struct Breadcrumb {
     pub category: String,
     pub message: String,
     pub data: String,
+}
+
+/// Distinct, non-empty breadcrumb categories, sorted — the option set for the
+/// type filter above the crumb table.
+pub fn breadcrumb_categories(crumbs: &[Breadcrumb]) -> Vec<String> {
+    let set: std::collections::BTreeSet<&str> = crumbs
+        .iter()
+        .map(|c| c.category.as_str())
+        .filter(|c| !c.is_empty())
+        .collect();
+    set.into_iter().map(String::from).collect()
 }
 
 #[derive(Debug)]
@@ -313,6 +373,109 @@ mod tests {
             vars: Vec::new(),
             source_links: Vec::new(),
         }
+    }
+
+    fn lib_frame(filename: &str) -> StackFrame {
+        StackFrame {
+            in_app: false,
+            ..frame(filename, None, None)
+        }
+    }
+
+    /// `Single` if a lone frame, else the run length.
+    fn shape(e: &ExceptionData) -> Vec<Option<usize>> {
+        e.frame_groups()
+            .iter()
+            .map(|g| match g {
+                FrameGroup::Single(_) => None,
+                FrameGroup::LibraryRun(fs) => Some(fs.len()),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn frame_groups_collapses_runs_of_two_or_more() {
+        // app, lib, lib, lib, app -> single, run(3), single
+        let e = exc(vec![
+            frame("a.rs", None, None),
+            lib_frame("l1.rs"),
+            lib_frame("l2.rs"),
+            lib_frame("l3.rs"),
+            frame("b.rs", None, None),
+        ]);
+        assert_eq!(shape(&e), vec![None, Some(3), None]);
+    }
+
+    #[test]
+    fn frame_groups_leaves_lone_library_frames_alone() {
+        // A single library frame between app frames is not worth a control.
+        let e = exc(vec![
+            frame("a.rs", None, None),
+            lib_frame("l1.rs"),
+            frame("b.rs", None, None),
+        ]);
+        assert_eq!(shape(&e), vec![None, None, None]);
+    }
+
+    // The case the feature exists for: an ANR whose app frame is buried in
+    // framework rows. Exactly one collapsed run must render.
+    #[test]
+    fn frame_groups_anr_shape_collapses_to_one_control() {
+        let mut frames: Vec<StackFrame> = (0..40)
+            .map(|i| lib_frame(&format!("android::IPCThreadState{i}")))
+            .collect();
+        frames.insert(20, frame("com/app/Main.java", None, None));
+
+        let e = exc(frames);
+        let groups = e.frame_groups();
+        assert_eq!(groups.len(), 3, "run, app frame, run");
+        assert_eq!(shape(&e), vec![Some(20), None, Some(20)]);
+        assert_eq!(
+            e.frame_groups()
+                .iter()
+                .filter(|g| matches!(g, FrameGroup::Single(f) if f.in_app))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn frame_groups_preserves_order_and_covers_every_frame() {
+        let e = exc(vec![
+            lib_frame("l1.rs"),
+            lib_frame("l2.rs"),
+            frame("a.rs", None, None),
+            lib_frame("l3.rs"),
+        ]);
+        let seen: Vec<&str> = e
+            .frame_groups()
+            .iter()
+            .flat_map(|g| match g {
+                FrameGroup::Single(f) => vec![f.filename.as_str()],
+                FrameGroup::LibraryRun(fs) => fs.iter().map(|f| f.filename.as_str()).collect(),
+            })
+            .collect();
+        assert_eq!(seen, vec!["l1.rs", "l2.rs", "a.rs", "l3.rs"]);
+    }
+
+    #[test]
+    fn frame_groups_handles_empty_and_all_app() {
+        assert!(exc(Vec::new()).frame_groups().is_empty());
+        let all_app = exc(vec![frame("a.rs", None, None), frame("b.rs", None, None)]);
+        assert_eq!(shape(&all_app), vec![None, None]);
+    }
+
+    #[test]
+    fn copy_line_reads_like_a_stack_trace_line() {
+        let mut f = frame("src/main.rs", Some(9), None);
+        f.function = "handle".into();
+        assert_eq!(f.copy_line(), "at handle (src/main.rs:1:9)");
+
+        f.colno = None;
+        assert_eq!(f.copy_line(), "at handle (src/main.rs:1)");
+
+        f.lineno = None;
+        assert_eq!(f.copy_line(), "at handle (src/main.rs)");
     }
 
     fn exc(frames: Vec<StackFrame>) -> ExceptionData {

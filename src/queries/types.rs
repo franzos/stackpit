@@ -29,6 +29,23 @@ impl Pagination {
     }
 }
 
+/// A second, independent pager for a page that already spends `Pagination` on
+/// another table. The spans page shows Traces and "All spans" side by side; a
+/// single `offset`/`limit` pair would make the two fight.
+#[derive(Debug, Default, Deserialize)]
+pub struct TracePagination {
+    #[serde(default, deserialize_with = "opt_u64_from_str")]
+    pub trace_limit: Option<u64>,
+    #[serde(default, deserialize_with = "opt_u64_from_str")]
+    pub trace_offset: Option<u64>,
+}
+
+impl TracePagination {
+    pub fn page(&self) -> Page {
+        Page::new(self.trace_offset, self.trace_limit)
+    }
+}
+
 /// Parses an optional unsigned int from a (possibly flatten-buffered) string.
 /// A present value must parse; an absent one yields `None`.
 fn opt_u64_from_str<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
@@ -114,6 +131,7 @@ pub struct IssueFilter {
     pub sort: Option<String>,
     pub item_type: Option<String>,
     pub release: Option<String>,
+    pub environment: Option<String>,
     pub tag: Option<(String, String)>,
 }
 
@@ -592,6 +610,10 @@ pub struct Waterfall {
     pub rows: Vec<WaterfallRow>,
     pub total_ms: i64,
     pub span_count: usize,
+    /// Width of the root transaction's own bar, on the same (possibly compressed)
+    /// axis as the child rows. 100 when the root's duration is unknown or spans
+    /// the whole trace; less when child spans extend past it.
+    pub root_width_pct: f64,
     pub truncated: bool,
     /// Large idle gaps that were collapsed on the display axis.
     pub gaps: Vec<WaterfallGap>,
@@ -640,6 +662,20 @@ pub struct DurationBucket {
     pub label: String,
     pub count: u64,
     pub pct: f64,
+}
+
+/// One point on a transaction's percentile-over-time trend. `bucket` is the
+/// unix timestamp the point starts at; `label` is its pre-formatted caption.
+/// `regressed` is set by the trailing-median heuristic, not by the alerting
+/// subsystem — it is a visual marker on this page only.
+#[derive(Debug, Serialize)]
+pub struct TransactionTrendPoint {
+    pub bucket: i64,
+    pub label: String,
+    pub count: u64,
+    pub p50_ms: i64,
+    pub p95_ms: i64,
+    pub regressed: bool,
 }
 
 /// Duration histogram plus aggregate stats for a single transaction over the
@@ -716,6 +752,14 @@ pub struct ReplaySummary {
     pub replay_type: String,
     pub release: Option<String>,
     pub environment: Option<String>,
+    /// From `replay_metadata`, absent for replays stored before migration 022
+    /// (forward-only: there is no backfill).
+    pub duration_ms: Option<i64>,
+    pub url: Option<String>,
+    pub user_label: Option<String>,
+    pub browser: Option<String>,
+    pub os: Option<String>,
+    pub error_count: i64,
 }
 
 #[derive(Debug, Serialize)]

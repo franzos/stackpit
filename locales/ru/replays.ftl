@@ -10,6 +10,11 @@ replays-list-empty = Реплеи не найдены. События репле
 replays-col-event-id = ID события
 replays-col-type = Тип
 replays-col-release = Релиз
+replays-col-url = URL
+replays-col-user = Пользователь
+replays-col-browser = Браузер
+replays-col-duration = Длительность
+replays-col-errors = Ошибки
 replays-col-environment = Окружение
 replays-col-timestamp = Метка времени
 

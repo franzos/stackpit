@@ -109,7 +109,7 @@ pub(crate) fn extract_span_fields_from_value(v: &Value) -> SpanFields {
         span_id: v
             .get("span_id")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
+            .and_then(crate::ingest::ids::sanitize_id),
         trace_id: v
             .get("trace_id")
             .or_else(|| {
@@ -118,11 +118,11 @@ pub(crate) fn extract_span_fields_from_value(v: &Value) -> SpanFields {
                     .and_then(|t| t.get("trace_id"))
             })
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
+            .and_then(crate::ingest::ids::sanitize_id),
         parent_span_id: v
             .get("parent_span_id")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
+            .and_then(crate::ingest::ids::sanitize_id),
         op: v.get("op").and_then(|v| v.as_str()).map(|s| s.to_string()),
         description: v
             .get("description")

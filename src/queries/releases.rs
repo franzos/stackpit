@@ -1118,4 +1118,42 @@ mod tests {
         assert_eq!(scoped_b.total, 1);
         assert_eq!(scoped_b.items[0].version, "vB");
     }
+
+    // Three orgs, because a two-org fixture (or the single-org seed) passes even
+    // with the cross-project page scoped to one org. Both directions asserted:
+    // the caller's two orgs appear, the third does not.
+    #[tokio::test]
+    async fn list_all_releases_for_orgs_spans_memberships_and_excludes_others() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        let org_a = insert_org_rel(&pool, "relm-org-a").await;
+        let org_b = insert_org_rel(&pool, "relm-org-b").await;
+        let org_c = insert_org_rel(&pool, "relm-org-c").await;
+        insert_project_rel(&pool, 801, org_a).await;
+        insert_project_rel(&pool, 802, org_b).await;
+        insert_project_rel(&pool, 803, org_c).await;
+        insert_event_with_release(&pool, "rm1", 801, "vMineA").await;
+        insert_event_with_release(&pool, "rm2", 802, "vMineB").await;
+        insert_event_with_release(&pool, "rm3", 803, "vTheirs").await;
+
+        let filter = ReleaseFilter::default();
+        let page = Page::new(None, None);
+
+        let mine = list_all_releases_for_orgs(&pool, &filter, &page, None, vec![org_a, org_b])
+            .await
+            .unwrap();
+        let versions: Vec<&str> = mine.items.iter().map(|r| r.version.as_str()).collect();
+        assert_eq!(mine.total, 2);
+        assert!(versions.contains(&"vMineA") && versions.contains(&"vMineB"));
+        assert!(
+            !versions.contains(&"vTheirs"),
+            "another org's releases must not appear"
+        );
+
+        // An empty entitlement is *nothing*, not the superuser's "everything".
+        let none = list_all_releases_for_orgs(&pool, &filter, &page, None, vec![])
+            .await
+            .unwrap();
+        assert_eq!(none.total, 0);
+        assert!(none.items.is_empty());
+    }
 }

@@ -102,7 +102,6 @@ event-detail-user-ip = ที่อยู่ IP
 # --- รายงานจากไคลเอนต์ (เหตุการณ์ที่ถูกทิ้ง) ---
 # ใช้ events-untitled และ events-pagination-* (ร่วม ไฟล์เดียวกัน)
 client-reports-title = รายงานจากไคลเอนต์
-client-reports-heading = รายงานจากไคลเอนต์
 client-reports-dropped-heading = เหตุการณ์ที่ถูกทิ้ง
 client-reports-dropped-subtitle = สิ่งที่ SDK ทิ้งก่อนส่ง แยกตามหมวดหมู่และเหตุผล
 client-reports-th-category = หมวดหมู่

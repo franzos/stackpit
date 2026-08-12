@@ -33,6 +33,10 @@ spans-col-timestamp = ประทับเวลา
 
 # --- การแบ่งหน้า (รายการสแปน) ---
 spans-pagination-label = การแบ่งหน้า
+spans-traces-pagination-label = การแบ่งหน้าของเทรซ
+spans-traces-count = { $count ->
+   *[other] { $count } เทรซ
+}
 spans-pagination-prev = « ก่อนหน้า
 spans-pagination-next = ถัดไป »
 spans-count = { $count ->

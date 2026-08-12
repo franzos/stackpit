@@ -34,9 +34,11 @@ struct IssueListTemplate {
     status: String,
     sort: String,
     release: String,
+    environment: String,
     tag: String,
     period: String,
     releases: Vec<String>,
+    environments: Vec<String>,
     filter_qs: String,
     base_qs: String,
     nav: ProjectNavCounts,
@@ -85,6 +87,7 @@ async fn issue_or_transaction_handler(
     let status_str = params.status.clone().unwrap_or_default();
     let sort_str = params.sort.clone().unwrap_or_default();
     let release_str = params.release.clone().unwrap_or_default();
+    let environment_str = params.environment.clone().unwrap_or_default();
     let tag_str = params.tag.clone().unwrap_or_default();
     let period_str = params.period.clone().unwrap_or_else(|| "7d".to_string());
 
@@ -98,6 +101,10 @@ async fn issue_or_transaction_handler(
     let nav = queries::projects::nav_counts_cached(pool, cache, project_id).await;
 
     let releases = queries::releases::list_releases_for_project(pool, project_id)
+        .await
+        .unwrap_or_default();
+
+    let environments = queries::events::list_environments_for_project(pool, project_id)
         .await
         .unwrap_or_default();
 
@@ -144,6 +151,7 @@ async fn issue_or_transaction_handler(
             ("level", &level_str),
             ("status", &status_str),
             ("release", &release_str),
+            ("environment", &environment_str),
             ("tag", &tag_str),
             ("period", &period_str),
         ],
@@ -158,9 +166,11 @@ async fn issue_or_transaction_handler(
         status: status_str,
         sort: sort_str,
         release: release_str,
+        environment: environment_str,
         tag: tag_str,
         period: period_str,
         releases,
+        environments,
         filter_qs,
         base_qs,
         nav,
@@ -214,9 +224,11 @@ mod tests {
             status: String::new(),
             sort: String::new(),
             release: String::new(),
+            environment: String::new(),
             tag: String::new(),
             period: "7d".into(),
             releases: Vec::new(),
+            environments: vec!["production".into(), "staging".into()],
             filter_qs: String::new(),
             base_qs: String::new(),
             nav: ProjectNavCounts {

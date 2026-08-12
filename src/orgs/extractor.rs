@@ -193,6 +193,22 @@ impl ActiveOrg {
         }
     }
 
+    /// The orgs this caller may read from on a cross-org page, where no project
+    /// id resolves the scope. Mirrors `McpPrincipal::accessible_org_ids`: a
+    /// membership row for the system org confers nothing, the same rule
+    /// [`require_project_scope`] and [`role_in_org`] already apply.
+    ///
+    /// Meaningless for a superuser (`role: None`), who has no memberships and
+    /// whose scope is "every org" — callers must branch on `role` first, since
+    /// an empty list entitles the holder to nothing.
+    pub fn accessible_org_ids(&self) -> Vec<i64> {
+        self.memberships
+            .iter()
+            .map(|(id, _)| *id)
+            .filter(|id| *id != SYSTEM_ORG_ID)
+            .collect()
+    }
+
     /// Test/bootstrap constructor for a caller with known memberships.
     #[cfg(test)]
     pub fn with_memberships(
@@ -311,6 +327,30 @@ mod tests {
         .unwrap();
 
         (ids[0], ids[1])
+    }
+
+    // Mirrors `McpPrincipal`'s `principal_never_reaches_the_system_org`: the
+    // cross-org list pages read this list directly, and `push_org_scope_predicate`
+    // carries no system-org guard of its own.
+    #[test]
+    fn accessible_org_ids_never_includes_the_system_org() {
+        let system_member = ActiveOrg::with_memberships(
+            10,
+            Some(Role::Member),
+            vec![(SYSTEM_ORG_ID, Role::Owner), (10, Role::Member)],
+        );
+        assert_eq!(system_member.accessible_org_ids(), vec![10]);
+
+        let only_system =
+            ActiveOrg::with_memberships(1, Some(Role::Owner), vec![(SYSTEM_ORG_ID, Role::Owner)]);
+        assert!(
+            only_system.accessible_org_ids().is_empty(),
+            "a membership row for the system org must confer nothing"
+        );
+
+        // Superusers carry no memberships; callers must branch on `role` first,
+        // because an empty list means *nothing*, not everything.
+        assert!(ActiveOrg::bare(1, None).accessible_org_ids().is_empty());
     }
 
     #[tokio::test]

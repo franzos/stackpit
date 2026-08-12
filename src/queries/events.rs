@@ -258,6 +258,39 @@ pub async fn event_histogram(
     Ok(buckets)
 }
 
+/// Start instant of the first histogram bucket.
+///
+/// Daily and weekly buckets floor to UTC midnight (to the start of the ISO week for
+/// weekly), the same anchoring release health uses. Anchored to raw `now` instead,
+/// the final bucket spans e.g. `[Aug 09 23:23, Aug 10 23:23)` — it holds today's
+/// events but carries yesterday's label. Sub-day periods are genuinely rolling
+/// windows and stay anchored to `now`.
+///
+/// `now` is an argument rather than read inline so the boundary is testable at a
+/// fixed clock instead of only when CI happens to run near midnight.
+fn histogram_start(
+    now: chrono::DateTime<chrono::Utc>,
+    bucket_secs: i64,
+    bucket_count: usize,
+) -> chrono::DateTime<chrono::Utc> {
+    use chrono::{Datelike, Duration, NaiveTime};
+
+    let span = Duration::seconds(bucket_secs * bucket_count as i64);
+    if bucket_secs < 86400 {
+        return now - span;
+    }
+
+    let day = now.date_naive();
+    let anchor = if bucket_secs >= 86400 * 7 {
+        day - Duration::days(day.weekday().num_days_from_monday() as i64)
+    } else {
+        day
+    };
+    // The current day/week is the last full bucket, so the window ends where it ends.
+    let end = anchor.and_time(NaiveTime::MIN).and_utc() + Duration::seconds(bucket_secs);
+    end - span
+}
+
 /// Bucket event counts for a project's issue list histogram, narrowed by the same
 /// filter as the list underneath it so chart and table always agree.
 /// Adapts bucket size to the period: hourly for <=24h, daily otherwise.
@@ -282,7 +315,7 @@ pub async fn project_event_histogram(
         _ => return Ok(Vec::new()),         // "all time": skip chart
     };
 
-    let start = now - chrono::Duration::seconds(bucket_secs * bucket_count as i64);
+    let start = histogram_start(now, bucket_secs, bucket_count);
     let start_ts = start.timestamp();
 
     // bucket_secs is a server-computed integer, safe to inline; everything
@@ -339,6 +372,10 @@ fn push_issue_filter_on_events(qb: &mut sqlx::QueryBuilder<crate::db::Db>, filte
         qb.push(" AND release = ");
         qb.push_bind(release.as_str());
     }
+    if let Some(ref environment) = filter.environment {
+        qb.push(" AND environment = ");
+        qb.push_bind(environment.as_str());
+    }
     if let Some(ref status) = filter.status {
         qb.push(" AND EXISTS (SELECT 1 FROM issues i WHERE i.fingerprint = events.fingerprint AND i.project_id = events.project_id AND i.status = ");
         qb.push_bind(status.as_str());
@@ -351,6 +388,28 @@ fn push_issue_filter_on_events(qb: &mut sqlx::QueryBuilder<crate::db::Db>, filte
         qb.push_bind(value.as_str());
         qb.push(")");
     }
+}
+
+/// Distinct environments seen in a project, for the issue-stream filter dropdown.
+/// Mirrors `list_releases_for_project`: newest-looking first, capped, blanks dropped.
+pub async fn list_environments_for_project(
+    pool: &crate::db::DbPool,
+    project_id: u64,
+) -> Result<Vec<String>> {
+    let rows = sqlx::query(sql!(
+        "SELECT DISTINCT environment FROM events
+         WHERE project_id = ?1 AND environment IS NOT NULL AND environment <> ''
+         ORDER BY environment
+         LIMIT 50"
+    ))
+    .bind(project_id as i64)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| row.get::<String, _>(0))
+        .collect())
 }
 
 /// Grab the most recent event for an issue.
@@ -1000,5 +1059,95 @@ mod tests {
             .unwrap();
         assert_eq!(scoped_b.total, 1);
         assert_eq!(scoped_b.items[0].event_id, "ed1");
+    }
+
+    fn at(s: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(s).unwrap().to_utc()
+    }
+
+    // The defect: anchored to raw `now`, the last daily bucket spanned
+    // [Aug 09 23:23, Aug 10 23:23) — it held today's events under yesterday's
+    // label. Asserted at fixed instants because a real-clock assertion only
+    // catches it if CI happens to run near UTC midnight.
+    #[test]
+    fn daily_histogram_buckets_floor_to_utc_midnight() {
+        for now in ["2026-08-10T23:23:00Z", "2026-08-10T00:01:00Z"] {
+            let start = histogram_start(at(now), 86400, 7);
+            assert_eq!(
+                start,
+                at("2026-08-04T00:00:00Z"),
+                "7d window from {now} must start at a UTC midnight"
+            );
+            // Last bucket is today, and carries today's label.
+            let last = start + chrono::Duration::seconds(86400 * 6);
+            assert_eq!(last, at("2026-08-10T00:00:00Z"));
+            assert_eq!(last.format("%b %d").to_string(), "Aug 10");
+        }
+
+        // Same shape for the longer daily periods.
+        assert_eq!(
+            histogram_start(at("2026-08-10T23:23:00Z"), 86400, 30),
+            at("2026-07-12T00:00:00Z")
+        );
+    }
+
+    // 365d buckets weekly, so it floors to the start of the ISO week, not the day.
+    #[test]
+    fn weekly_histogram_buckets_floor_to_week_start() {
+        // 2026-08-10 is a Monday; 2026-08-13 a Thursday. Both sit in the same week
+        // and must produce the same window.
+        let from_monday = histogram_start(at("2026-08-10T09:00:00Z"), 86400 * 7, 52);
+        let from_thursday = histogram_start(at("2026-08-13T09:00:00Z"), 86400 * 7, 52);
+        assert_eq!(from_monday, from_thursday);
+        assert_eq!(from_monday, at("2025-08-18T00:00:00Z"));
+
+        let last = from_monday + chrono::Duration::seconds(86400 * 7 * 51);
+        assert_eq!(last, at("2026-08-10T00:00:00Z"), "last bucket is this week");
+    }
+
+    // 1h and 24h are genuinely rolling windows and must keep tracking `now`.
+    #[test]
+    fn intraday_histogram_buckets_stay_rolling() {
+        let now = at("2026-08-10T23:23:00Z");
+        assert_eq!(histogram_start(now, 3600, 24), at("2026-08-09T23:23:00Z"));
+        assert_eq!(histogram_start(now, 300, 12), at("2026-08-10T22:23:00Z"));
+    }
+
+    // Three orgs, because a two-org fixture (or the single-org seed) passes even
+    // with the cross-project page scoped to one org. Both directions asserted:
+    // the caller's two orgs appear, the third does not.
+    #[tokio::test]
+    async fn list_all_events_for_orgs_spans_memberships_and_excludes_others() {
+        let pool = open_test_db().await;
+        let org_a = insert_org(&pool, "evm-org-a").await;
+        let org_b = insert_org(&pool, "evm-org-b").await;
+        let org_c = insert_org(&pool, "evm-org-c").await;
+        insert_project(&pool, 301, org_a).await;
+        insert_project(&pool, 302, org_b).await;
+        insert_project(&pool, 303, org_c).await;
+        for (id, project, ts) in [("ma1", 301, 100), ("mb1", 302, 200), ("mc1", 303, 300)] {
+            insert_test_event(&pool, id, project, ts, Some(id), Some("error"), Some(id)).await;
+        }
+
+        let filter = EventFilter::default();
+        let page = Page::new(None, None);
+
+        let mine = list_all_events_for_orgs(&pool, &filter, &page, vec![org_a, org_b])
+            .await
+            .unwrap();
+        let ids: Vec<&str> = mine.items.iter().map(|e| e.event_id.as_str()).collect();
+        assert_eq!(mine.total, 2);
+        assert!(ids.contains(&"ma1") && ids.contains(&"mb1"));
+        assert!(
+            !ids.contains(&"mc1"),
+            "another org's events must not appear"
+        );
+
+        // An empty entitlement is *nothing*, not the superuser's "everything".
+        let none = list_all_events_for_orgs(&pool, &filter, &page, vec![])
+            .await
+            .unwrap();
+        assert_eq!(none.total, 0);
+        assert!(none.items.is_empty());
     }
 }

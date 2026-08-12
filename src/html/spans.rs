@@ -8,7 +8,7 @@ use crate::html::utils::{Chrome, ListParams};
 use crate::orgs::extractor::ActiveOrg;
 use crate::queries;
 use crate::queries::types::{
-    Page, PagedResult, SpanAggregation, SpanSummary, TraceError, TraceRoot, TraceSummary, Waterfall,
+    PagedResult, SpanAggregation, SpanSummary, TraceError, TraceRoot, TraceSummary, Waterfall,
 };
 use crate::queries::ProjectNavCounts;
 use crate::server::AppState;
@@ -36,6 +36,10 @@ struct TraceDetailTemplate {
     project_id: u64,
     trace_id: String,
     waterfall: Waterfall,
+    /// Spans in the trace, including the root transaction row.
+    span_total: usize,
+    /// Spans actually rendered, including the root row (differs when truncated).
+    span_shown: usize,
     root: Option<TraceRoot>,
     errors: Vec<TraceError>,
     nav: ProjectNavCounts,
@@ -47,7 +51,7 @@ pub async fn list_handler(
     Query(params): Query<ListParams>,
 ) -> Result<axum::response::Response, HtmlError> {
     let page = params.page.page();
-    let trace_page = Page::new(Some(0), Some(25));
+    let trace_page = params.trace_page.page();
 
     let (span_result, trace_result, agg_result) = tokio::join!(
         queries::spans::list_spans(&ctx.pool, ctx.project_id, &page),
@@ -94,12 +98,21 @@ pub async fn trace_detail_handler(
     let root_duration_ms = root.as_ref().and_then(|r| r.duration_ms).unwrap_or(0);
     let waterfall = queries::spans::build_waterfall(&span_rows, root_duration_ms);
 
+    // The root transaction renders as its own row above the child spans, and lives
+    // in `events` rather than the `spans` table, so `waterfall.span_count` — which
+    // counts only children — read one short of the rows on screen.
+    let root_row = usize::from(root.is_some());
+    let span_total = waterfall.span_count + root_row;
+    let span_shown = waterfall.rows.len() + root_row;
+
     let nav = state.nav_counts(project_id).await;
 
     let tmpl = TraceDetailTemplate {
         project_id,
         trace_id,
         waterfall,
+        span_total,
+        span_shown,
         root,
         errors,
         nav,

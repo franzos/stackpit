@@ -21,6 +21,7 @@ pub struct BulkForm {
     status: Option<String>,
     item_type: Option<String>,
     release: Option<String>,
+    environment: Option<String>,
     period: Option<String>,
 }
 
@@ -34,6 +35,7 @@ impl BulkForm {
         let mut status = None;
         let mut item_type = None;
         let mut release = None;
+        let mut environment = None;
         let mut period = None;
 
         for (key, val) in form_urlencoded::parse(body) {
@@ -51,6 +53,7 @@ impl BulkForm {
                 "status" => status = Some(val.into_owned()),
                 "item_type" => item_type = Some(val.into_owned()),
                 "release" => release = Some(val.into_owned()),
+                "environment" => environment = Some(val.into_owned()),
                 "period" => period = Some(val.into_owned()),
                 _ => {}
             }
@@ -65,6 +68,7 @@ impl BulkForm {
             status,
             item_type,
             release,
+            environment,
             period,
         })
     }
@@ -196,6 +200,7 @@ async fn handle_issue_bulk(
         sort: None,
         item_type: Some(item_type.to_string()),
         release: opt(&form.release),
+        environment: opt(&form.environment),
         tag: None,
     });
 

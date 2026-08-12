@@ -33,6 +33,15 @@ spans-col-timestamp = الطابع الزمني
 
 # --- ترقيم الصفحات (قائمة الامتدادات) ---
 spans-pagination-label = ترقيم الصفحات
+spans-traces-pagination-label = ترقيم صفحات التتبّعات
+spans-traces-count = { $count ->
+    [zero] لا تتبّعات
+    [one] تتبّع واحد
+    [two] تتبّعان
+    [few] { $count } تتبّعات
+    [many] { $count } تتبّعًا
+   *[other] { $count } تتبّع
+}
 spans-pagination-prev = « السابق
 spans-pagination-next = التالي »
 spans-count = { $count ->

@@ -115,7 +115,6 @@ event-detail-user-ip = عنوان IP
 
 # --- تقارير العميل (نتائج الأحداث المُسقَطة) ---
 client-reports-title = تقارير العميل
-client-reports-heading = تقارير العميل
 client-reports-dropped-heading = الأحداث المُسقَطة
 client-reports-dropped-subtitle = ما تجاهلته SDKs قبل الإرسال، حسب الفئة والسبب.
 client-reports-th-category = الفئة

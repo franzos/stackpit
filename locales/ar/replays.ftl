@@ -9,6 +9,11 @@ replays-list-empty = لم يُعثر على عمليات إعادة تشغيل. 
 replays-col-event-id = معرّف الحدث
 replays-col-type = النوع
 replays-col-release = الإصدار
+replays-col-url = الرابط
+replays-col-user = المستخدم
+replays-col-browser = المتصفّح
+replays-col-duration = المدّة
+replays-col-errors = الأخطاء
 replays-col-environment = البيئة
 replays-col-timestamp = الطابع الزمني
 

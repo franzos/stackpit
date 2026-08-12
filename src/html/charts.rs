@@ -1,4 +1,4 @@
-use crate::queries::types::DailySessions;
+use crate::queries::types::{DailySessions, TransactionTrendPoint};
 use serde::Serialize;
 
 /// Payload embedded on a `<canvas data-chart>` for the client-side Chart.js
@@ -39,6 +39,64 @@ pub fn session_chart_json(daily: &[DailySessions]) -> String {
         })
         .collect();
     chart_json(&buckets, "Sessions")
+}
+
+/// One line of a multi-series chart. `markers` are indices to call out — drawn
+/// as enlarged points in the error colour by `static/charts.js`.
+#[derive(Serialize)]
+struct ChartSeries<'a> {
+    name: &'a str,
+    values: Vec<f32>,
+    markers: Vec<usize>,
+}
+
+/// Payload for a multi-series line chart. The client branches on the presence of
+/// `series`, so this shape is additive: existing single-series bar charts keep
+/// emitting [`ChartData`] and render unchanged.
+#[derive(Serialize)]
+struct MultiSeriesChartData<'a> {
+    labels: Vec<&'a str>,
+    series: Vec<ChartSeries<'a>>,
+    /// Suffix the client appends in tooltips, so the axis numbers are not
+    /// unitless. Kept server-side rather than duplicating `format_duration` in JS.
+    unit: &'a str,
+}
+
+/// JSON for the transaction summary's percentile trend: p50 and p95 as two
+/// lines, with the regression-marked points flagged on the p95 series. Empty
+/// string when there is nothing to plot.
+pub fn trend_chart_json(
+    points: &[TransactionTrendPoint],
+    p50_name: &str,
+    p95_name: &str,
+) -> String {
+    if points.is_empty() {
+        return String::new();
+    }
+    let markers = points
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.regressed)
+        .map(|(i, _)| i)
+        .collect();
+
+    let data = MultiSeriesChartData {
+        labels: points.iter().map(|p| p.label.as_str()).collect(),
+        series: vec![
+            ChartSeries {
+                name: p50_name,
+                values: points.iter().map(|p| p.p50_ms as f32).collect(),
+                markers: Vec::new(),
+            },
+            ChartSeries {
+                name: p95_name,
+                values: points.iter().map(|p| p.p95_ms as f32).collect(),
+                markers,
+            },
+        ],
+        unit: "ms",
+    };
+    serde_json::to_string(&data).unwrap_or_default()
 }
 
 /// Tiny inline bar chart for an issue row's event trend. Hand-rolled SVG so it
@@ -102,6 +160,51 @@ mod tests {
     #[test]
     fn session_chart_json_blank_when_empty() {
         assert_eq!(session_chart_json(&[]), "");
+    }
+
+    fn point(label: &str, p50: i64, p95: i64, regressed: bool) -> TransactionTrendPoint {
+        TransactionTrendPoint {
+            bucket: 0,
+            label: label.to_string(),
+            count: 1,
+            p50_ms: p50,
+            p95_ms: p95,
+            regressed,
+        }
+    }
+
+    #[test]
+    fn trend_chart_json_blank_when_no_points() {
+        assert_eq!(trend_chart_json(&[], "p50", "p95"), "");
+    }
+
+    #[test]
+    fn trend_chart_json_emits_two_series_and_marks_only_p95() {
+        let json = trend_chart_json(
+            &[
+                point("Jul 20", 10, 20, false),
+                point("Jul 21", 12, 90, true),
+            ],
+            "p50",
+            "p95",
+        );
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["labels"], serde_json::json!(["Jul 20", "Jul 21"]));
+        assert_eq!(v["unit"], "ms");
+        assert_eq!(v["series"][0]["name"], "p50");
+        assert_eq!(v["series"][0]["values"], serde_json::json!([10.0, 12.0]));
+        // Markers ride on the p95 series only; p50 is never marked.
+        assert_eq!(v["series"][0]["markers"], serde_json::json!([]));
+        assert_eq!(v["series"][1]["name"], "p95");
+        assert_eq!(v["series"][1]["markers"], serde_json::json!([1]));
+    }
+
+    // The client branches on `series`, so the single-series shape must not grow it.
+    #[test]
+    fn single_series_payload_has_no_series_key() {
+        let json = chart_json(&[("Jul 20".to_string(), 3.0)], "Events");
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(v.get("series").is_none());
     }
 
     #[test]

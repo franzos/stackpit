@@ -23,9 +23,9 @@
       <h1 class="text-mono">{{ trace_id|truncate_id }}</h1>
       <p class="text-muted text-[13px] mt-1 text-mono break-all">
         {{ chrome.t("trace-detail-trace-id-label") }} {{ trace_id }} ·
-        {{- " " }}{{ chrome.tv_count("trace-detail-span-count", waterfall.span_count as i64) }}
-        {% if waterfall.span_count > 0 %}· {{ waterfall.total_ms }}ms {{ chrome.t("trace-detail-total") }}{% endif %}
-        {% if waterfall.truncated %}· {{ chrome.t("trace-detail-showing-first") }} {{ waterfall.rows.len() }} {{ chrome.t("trace-detail-of") }} {{ waterfall.span_count }}{% endif %}
+        {{- " " }}{{ chrome.tv_count("trace-detail-span-count", span_total as i64) }}
+        {% if span_total > 0 %}· {{ waterfall.total_ms|format_duration }} {{ chrome.t("trace-detail-total") }}{% endif %}
+        {% if waterfall.truncated %}· {{ chrome.t("trace-detail-showing-first") }} {{ span_shown }} {{ chrome.t("trace-detail-of") }} {{ span_total }}{% endif %}
       </p>
     </div>
   </div>
@@ -86,15 +86,15 @@
           {% if !waterfall.compressed %}
             <span class="absolute bottom-0 text-tabular normal-case"
                   style="left: 25%;
-                         transform: translateX(-50%)">{{ waterfall.total_ms / 4 }}ms</span>
+                         transform: translateX(-50%)">{{ (waterfall.total_ms / 4)|format_duration }}</span>
             <span class="absolute bottom-0 text-tabular normal-case"
                   style="left: 50%;
-                         transform: translateX(-50%)">{{ waterfall.total_ms / 2 }}ms</span>
+                         transform: translateX(-50%)">{{ (waterfall.total_ms / 2)|format_duration }}</span>
             <span class="absolute bottom-0 text-tabular normal-case"
                   style="left: 75%;
-                         transform: translateX(-50%)">{{ waterfall.total_ms * 3 / 4 }}ms</span>
+                         transform: translateX(-50%)">{{ (waterfall.total_ms * 3 / 4)|format_duration }}</span>
           {% endif %}
-          <span class="absolute bottom-0 text-tabular normal-case" style="right: 0">{{ waterfall.total_ms }}ms</span>
+          <span class="absolute bottom-0 text-tabular normal-case" style="right: 0">{{ waterfall.total_ms|format_duration }}</span>
         </div>
         <div class="shrink-0 text-end" style="width: 60px">{{ chrome.t("trace-detail-col-duration") }}</div>
       </div>
@@ -111,7 +111,7 @@
                     style="left: {{ gap.at_pct }}%;
                            transform: translateX(-50%);
                            padding: 0 3px;
-                           border-inline: 1px dashed var(--color-outline-variant)">{{ gap.real_ms }}ms</span>
+                           border-inline: 1px dashed var(--color-outline-variant)">{{ gap.real_ms|format_duration }}</span>
             {% endfor %}
           </div>
           <div class="shrink-0" style="width: 60px"></div>
@@ -138,14 +138,14 @@
              style="position: absolute;
                     top: 2px;
                     left: 0;
-                    width: 100%;
+                    width: {{ waterfall.root_width_pct }}%;
                     height: 16px;
                     background-color: var(--color-primary);
                     opacity: 0.85"></div>
     </div>
     <div class="shrink-0 text-end text-tabular text-[12px]"
          style="width: 60px">
-      {% match r.duration_ms %}{% when Some with (ms) %}{{ ms }}ms{% when None %}{{ waterfall.total_ms }}ms{% endmatch %}
+      {% match r.duration_ms %}{% when Some with (ms) %}{{ ms|format_duration }}{% when None %}{{ waterfall.total_ms|format_duration }}{% endmatch %}
   </div>
 </div>
 {% when None %}
@@ -173,7 +173,7 @@
                 background-image: linear-gradient(to right, var(--color-outline-variant) 1px, transparent 1px);
                 background-size: 25% 100%">
       <div class="rounded-sm"
-           title="{% match row.op %}{% when Some with (op) %}{{ op }}{% when None %}{{ chrome.t("trace-detail-span-fallback") }}{% endmatch %} · {% match row.duration_ms %}{% when Some with (ms) %}{{ ms }}ms{% when None %}?{% endmatch %}"
+           title="{% match row.op %}{% when Some with (op) %}{{ op }}{% when None %}{{ chrome.t("trace-detail-span-fallback") }}{% endmatch %} · {% match row.duration_ms %}{% when Some with (ms) %}{{ ms|format_duration }}{% when None %}?{% endmatch %}"
            style="position: absolute;
                   top: 2px;
                   left: {{ row.offset_pct }}%;
@@ -182,7 +182,7 @@
                   background-color: {{ row.bar_color() }}"></div>
   </div>
   <div class="shrink-0 text-end text-tabular text-muted" style="width: 60px">
-    {% match row.duration_ms %}{% when Some with (ms) %}{{ ms }}ms{% when None %}—{% endmatch %}
+    {% match row.duration_ms %}{% when Some with (ms) %}{{ ms|format_duration }}{% when None %}—{% endmatch %}
   </div>
 </summary>
 <div class="span-detail">
@@ -193,8 +193,8 @@
     {% match row.op %}{% when Some with (op) %}<dt>{{ chrome.t("spans-col-op") }}</dt><dd class="text-mono">{{ op }}</dd>{% when None %}{% endmatch %}
     {% match row.description %}{% when Some with (d) %}<dt>{{ chrome.t("spans-col-description") }}</dt><dd class="break-all">{{ d }}</dd>{% when None %}{% endmatch %}
     {% match row.status %}{% when Some with (st) %}<dt>{{ chrome.t("trace-detail-lbl-status") }}</dt><dd>{{ st }}</dd>{% when None %}{% endmatch %}
-    {% match row.start_offset_ms %}{% when Some with (ms) %}<dt>{{ chrome.t("trace-detail-lbl-start") }}</dt><dd class="text-tabular">+{{ ms }}ms</dd>{% when None %}{% endmatch %}
-    {% match row.duration_ms %}{% when Some with (ms) %}<dt>{{ chrome.t("spans-col-duration") }}</dt><dd class="text-tabular">{{ ms }}ms</dd>{% when None %}{% endmatch %}
+    {% match row.start_offset_ms %}{% when Some with (ms) %}<dt>{{ chrome.t("trace-detail-lbl-start") }}</dt><dd class="text-tabular">+{{ ms|format_duration }}</dd>{% when None %}{% endmatch %}
+    {% match row.duration_ms %}{% when Some with (ms) %}<dt>{{ chrome.t("spans-col-duration") }}</dt><dd class="text-tabular">{{ ms|format_duration }}</dd>{% when None %}{% endmatch %}
   </dl>
 </div>
 </details>

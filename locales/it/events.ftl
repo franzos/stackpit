@@ -105,7 +105,6 @@ event-detail-user-ip = Indirizzo IP
 # --- Report client (eventi scartati) ---
 # Usa events-untitled ed events-pagination-* (condivisi, stessa file).
 client-reports-title = Report client
-client-reports-heading = Report client
 client-reports-dropped-heading = Eventi scartati
 client-reports-dropped-subtitle = Ciò che gli SDK hanno scartato prima dell'invio, per categoria e motivo.
 client-reports-th-category = Categoria

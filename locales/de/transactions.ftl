@@ -7,12 +7,6 @@ transactions-title-suffix = — Stackpit
 
 # --- Transaktionsliste ---
 transactions-time-range = Zeitraum
-transactions-period-1h = Letzte Stunde
-transactions-period-24h = Letzte 24 Std.
-transactions-period-7d = Letzte 7 Tage
-transactions-period-14d = Letzte 14 Tage
-transactions-period-30d = Letzte 30 Tage
-transactions-period-90d = Letzte 90 Tage
 transactions-filter-submit = Filtern
 transactions-list-empty = Keine Transaktionen in diesem Zeitraum.
 transactions-col-name = Transaktion
@@ -29,6 +23,11 @@ transactions-detail-col-status = Status
 transactions-detail-col-trace = Trace
 transactions-detail-col-when = Wann
 transactions-detail-distribution = Dauerverteilung
+transactions-detail-spans = Span-Aufschlüsselung
+transactions-detail-issues = Zugehörige Probleme
+transactions-detail-instances = Langsamste Instanzen
+transactions-detail-trend = Perzentil-Verlauf
+transactions-detail-trend-note = Markierte Punkte sind Stellen, an denen p95 den Median der fünf vorherigen Punkte um mehr als das 1,5-Fache überschritten hat.
 
 # --- Seitennavigation (Transaktionsdetail) ---
 transactions-pagination-label = Seitennavigation

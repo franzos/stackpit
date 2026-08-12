@@ -6,12 +6,6 @@ transactions-title-suffix = — Stackpit
 
 # --- รายการทรานแซกชัน ---
 transactions-time-range = ช่วงเวลา
-transactions-period-1h = ชั่วโมงที่ผ่านมา
-transactions-period-24h = 24 ชม. ที่ผ่านมา
-transactions-period-7d = 7 วันที่ผ่านมา
-transactions-period-14d = 14 วันที่ผ่านมา
-transactions-period-30d = 30 วันที่ผ่านมา
-transactions-period-90d = 90 วันที่ผ่านมา
 transactions-filter-submit = กรอง
 transactions-list-empty = ไม่มีทรานแซกชันในช่วงเวลานี้
 transactions-col-name = ทรานแซกชัน
@@ -28,6 +22,11 @@ transactions-detail-col-status = สถานะ
 transactions-detail-col-trace = เทรซ
 transactions-detail-col-when = เมื่อ
 transactions-detail-distribution = การกระจายระยะเวลา
+transactions-detail-spans = รายละเอียดตามสแปน
+transactions-detail-issues = ปัญหาที่เกี่ยวข้อง
+transactions-detail-instances = อินสแตนซ์ที่ช้าที่สุด
+transactions-detail-trend = แนวโน้มเปอร์เซ็นไทล์
+transactions-detail-trend-note = จุดที่ทำเครื่องหมายคือจุดที่ p95 สูงกว่าค่ามัธยฐานของห้าจุดก่อนหน้าเกิน 1.5 เท่า
 
 # --- การแบ่งหน้า (รายละเอียดทรานแซกชัน) ---
 transactions-pagination-label = การแบ่งหน้า

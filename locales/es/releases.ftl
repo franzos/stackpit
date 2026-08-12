@@ -11,9 +11,6 @@ releases-list-search-label = Buscar releases
 releases-list-project-placeholder = ID de proyecto
 releases-list-project-label = Filtrar por proyecto
 releases-list-period-label = Periodo de adopción
-releases-list-period-24h = Últimas 24 h
-releases-list-period-7d = Últimos 7 días
-releases-list-period-30d = Últimos 30 días
 releases-filter-submit = Filtrar
 releases-list-empty = Aún no hay releases. Define un <code class="text-mono">release</code> en tu SDK y aparecerán aquí en cuanto lleguen eventos.
 releases-col-version = Versión
@@ -35,15 +32,8 @@ releases-count = { $count ->
 
 # --- Estado de release ---
 release-health-title = Estado de release
-release-health-heading = Estado de release
 release-health-sessions-heading = Sesiones a lo largo del tiempo
 release-health-period-label = Rango de tiempo
-release-health-period-1h = Última hora
-release-health-period-24h = Últimas 24 h
-release-health-period-7d = Últimos 7 días
-release-health-period-14d = Últimos 14 días
-release-health-period-30d = Últimos 30 días
-release-health-period-90d = Últimos 90 días
 release-health-empty = No hay datos de sesión disponibles. Los eventos de sesión con un campo <code class="text-mono">status</code> aparecerán aquí.
 release-health-col-release = Release
 release-health-col-sessions = Sesiones

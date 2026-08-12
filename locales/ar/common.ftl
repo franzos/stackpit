@@ -17,6 +17,24 @@ common-time-day-ago = { $n ->
     [many] منذ { $n } يومًا
    *[other] منذ { $n } يوم
 }
+common-period-all = كل الوقت
+common-period-1h = آخر ساعة
+common-period-24h = آخر 24 ساعة
+common-period-7d = آخر 7 أيام
+common-period-14d = آخر 14 يومًا
+common-period-30d = آخر 30 يومًا
+common-period-90d = آخر 90 يومًا
+common-period-365d = آخر 365 يومًا
+
+common-select-all-matching = { $count ->
+    [zero] لا صفوف مطابقة لهذا المرشّح
+    [one] تحديد الصف المطابق لهذا المرشّح
+    [two] تحديد الصفّين المطابقين لهذا المرشّح
+    [few] تحديد كل الصفوف الـ { $count } المطابقة لهذا المرشّح
+    [many] تحديد كل الصفوف الـ { $count } المطابقة لهذا المرشّح
+   *[other] تحديد كل الصفوف الـ { $count } المطابقة لهذا المرشّح
+}
+
 test-count = { $count ->
     [zero] لا عناصر
     [one] عنصر واحد

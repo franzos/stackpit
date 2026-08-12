@@ -48,9 +48,8 @@
     <select class="select w-auto"
             name="period"
             aria-label="{{ chrome.t("releases-list-period-label") }}">
-      <option value="24h"{% if period == "24h" %} selected{% endif %}>{{ chrome.t("releases-list-period-24h") }}</option>
-      <option value="7d"{% if period == "7d" %} selected{% endif %}>{{ chrome.t("releases-list-period-7d") }}</option>
-      <option value="30d"{% if period == "30d" %} selected{% endif %}>{{ chrome.t("releases-list-period-30d") }}</option>
+      {% call m::period_options(chrome, period, chrome.t("common-period-all")) %}
+      {% endcall %}
     </select>
     <button class="btn btn-secondary" type="submit">{{ chrome.t("releases-filter-submit") }}</button>
   </form>
@@ -106,7 +105,7 @@
               </td>
               <td class="text-tabular">{{ r.issue_count }}</td>
               <td class="text-tabular">{{ r.event_count }}</td>
-              <td class="text-tabular">{{ r.adoption }}%</td>
+              <td class="text-tabular">{{ r.adoption|format_pct(1) }}</td>
               <td class="hide-mobile text-muted">
                 <time datetime="{{ r.first_seen|format_ts }}"
                       title="{{ r.first_seen|format_ts }}">{{ chrome.rel_time(r.first_seen) }}</time>

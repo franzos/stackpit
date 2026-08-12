@@ -4,7 +4,9 @@ use axum::extract::{Query, State};
 use crate::extractors::ReadPool;
 use crate::html::chrome::PageChrome;
 use crate::html::render_template;
-use crate::html::utils::{build_filter_qs, period_to_timestamp, Chrome, ListParams};
+use crate::html::utils::{
+    build_filter_qs, cross_org_scope, period_to_timestamp, Chrome, CrossOrgScope, ListParams,
+};
 use crate::orgs::extractor::ActiveOrg;
 use crate::queries;
 use crate::queries::types::{PagedResult, ReleaseFilter};
@@ -59,7 +61,14 @@ pub async fn handler(
         _ => None,
     };
 
-    let adoption_since = period_to_timestamp(&period_str);
+    // The canonical option set added "All time" here. `list_all_releases` reads a
+    // `None` window as its own 24h default, so an explicit blank has to bind 0
+    // rather than fall through to that.
+    let adoption_since = if period_str.is_empty() {
+        Some(0)
+    } else {
+        period_to_timestamp(&period_str)
+    };
 
     let filter = ReleaseFilter {
         project_id: params.project_id,
@@ -67,17 +76,35 @@ pub async fn handler(
         sort: params.sort.filter(|s| !s.is_empty()),
     };
     let page = params.page.page();
-    // When scoped to a project the caller can reach, follow that project's org rather
-    // than the session's: a project in another of the caller's orgs is reachable from
-    // the cross-org list, and would otherwise render its rail over an empty table.
-    let org_id = if active.role.is_none() {
-        None
-    } else {
-        Some(project_scope.map_or(active.session_org_id, |s| s.org_id))
+    // Scoped to a project, follow that project's org, not the session's. Unscoped,
+    // this used to fall back to the session's own org, which owns no projects for a
+    // user sitting in their personal org — so the whole cross-project view was empty.
+    let result = match cross_org_scope(&active, project_scope.as_ref()) {
+        CrossOrgScope::All => {
+            queries::releases::list_all_releases(&pool, &filter, &page, adoption_since, None)
+                .await?
+        }
+        CrossOrgScope::Project(org_id) => {
+            queries::releases::list_all_releases(
+                &pool,
+                &filter,
+                &page,
+                adoption_since,
+                Some(org_id),
+            )
+            .await?
+        }
+        CrossOrgScope::Memberships(org_ids) => {
+            queries::releases::list_all_releases_for_orgs(
+                &pool,
+                &filter,
+                &page,
+                adoption_since,
+                org_ids,
+            )
+            .await?
+        }
     };
-
-    let result =
-        queries::releases::list_all_releases(&pool, &filter, &page, adoption_since, org_id).await?;
 
     let (base_qs, filter_qs) = build_filter_qs(
         &[

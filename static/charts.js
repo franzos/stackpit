@@ -30,12 +30,39 @@
     var grid = cssVar("--color-outline-variant", "#464554");
     var surface = cssVar("--color-surface-container-high", "#2a2a33");
     var onSurface = cssVar("--color-on-surface", "#e6e6e6");
+    var danger = cssVar("--color-error", "#ffb4ab");
 
-    var chart = new Chart(canvas.getContext("2d"), {
-      type: "bar",
-      data: {
-        labels: data.labels,
-        datasets: [
+    // Multi-series payloads render as lines; the single-series shape stays a bar
+    // chart, so existing callers are untouched.
+    var multi = Array.isArray(data.series);
+    var lineColors = [muted, primary];
+
+    var datasets = multi
+      ? data.series.map(function (s, i) {
+          var color = lineColors[i % lineColors.length];
+          var marks = {};
+          (s.markers || []).forEach(function (m) {
+            marks[m] = true;
+          });
+          return {
+            label: s.name || "",
+            data: s.values,
+            borderColor: color,
+            backgroundColor: color,
+            borderWidth: 2,
+            tension: 0.25,
+            pointRadius: s.values.map(function (_, j) {
+              return marks[j] ? 5 : 2;
+            }),
+            pointBackgroundColor: s.values.map(function (_, j) {
+              return marks[j] ? danger : color;
+            }),
+            pointBorderColor: s.values.map(function (_, j) {
+              return marks[j] ? danger : color;
+            }),
+          };
+        })
+      : [
           {
             label: data.name || "",
             data: data.values,
@@ -44,14 +71,23 @@
             borderRadius: 3,
             maxBarThickness: 46,
           },
-        ],
+        ];
+
+    var chart = new Chart(canvas.getContext("2d"), {
+      type: multi ? "line" : "bar",
+      data: {
+        labels: data.labels,
+        datasets: datasets,
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
         animation: { duration: 250 },
+        interaction: multi ? { mode: "index", intersect: false } : undefined,
         plugins: {
-          legend: { display: false },
+          legend: multi
+            ? { display: true, position: "bottom", labels: { color: muted, boxHeight: 2 } }
+            : { display: false },
           tooltip: {
             backgroundColor: surface,
             titleColor: onSurface,
@@ -59,7 +95,14 @@
             borderColor: grid,
             borderWidth: 1,
             padding: 8,
-            displayColors: false,
+            displayColors: multi,
+            callbacks: data.unit
+              ? {
+                  label: function (ctx) {
+                    return ctx.dataset.label + ": " + ctx.formattedValue + " " + data.unit;
+                  },
+                }
+              : {},
           },
         },
         scales: {

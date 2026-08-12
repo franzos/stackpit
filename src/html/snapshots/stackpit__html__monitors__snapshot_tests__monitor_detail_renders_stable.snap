@@ -23,6 +23,7 @@ expression: tmpl.render().unwrap()
     <link rel="icon" type="image/png" href="/web/_assets/icon.png">
     <script src="/web/_assets/bulk.js" defer></script>
     <script src="/web/_assets/confirm.js" defer></script>
+    <script src="/web/_assets/select-all.js" defer></script>
     <script src="/web/_assets/stop-propagation.js" defer></script>
   </head>
   <body class="min-h-screen">
@@ -49,15 +50,31 @@ expression: tmpl.render().unwrap()
       <span>Issues</span>
     </a>
     
+    <a href="/web/projects/42/transactions/"
+       class="sidebar-link">
+      <span>Transactions</span>
+    </a>
+    <a href="/web/projects/42/spans/"
+       class="sidebar-link">
+      <span>Spans</span>
+    </a>
     
     
     
     
+    <a href="/web/projects/42/replays/"
+       class="sidebar-link">
+      <span>Replays</span>
+    </a>
+    <a href="/web/projects/42/health/"
+       class="sidebar-link">
+      <span>Release health</span>
+    </a>
     
-    
-    
-    
-    
+    <a href="/web/projects/42/client-reports/"
+       class="sidebar-link">
+      <span>Client reports</span>
+    </a>
     <a href="/web/projects/42/settings/"
        class="sidebar-link">
       <span>Settings</span>
@@ -79,7 +96,7 @@ expression: tmpl.render().unwrap()
           <div class="border-t border-outline-variant py-2 px-2 space-y-0.5">
             <a href="/web/organizations" class="sidebar-link"><span>Organizations</span></a>
             <a href="/web/settings/integrations/" class="sidebar-link"><span>Settings</span></a>
-            <a href="/web/settings/defaults/" class="sidebar-link"><span>Defaults</span></a>
+            <a href="/web/settings/defaults/" class="sidebar-link"><span>Browser defaults</span></a>
             <details>
               <summary class="sidebar-link cursor-pointer select-none"><span>English</span></summary>
               <div class="mt-1 space-y-0.5">

@@ -28,8 +28,8 @@
     {% match distribution %}{% when Some with (dist) %}
     <p class="text-muted text-[13px] mt-1">
       {{ chrome.t("transactions-col-throughput") }} {{ dist.summary.throughput }} ·
-      {{- " " }}p50 {{ dist.summary.p50_ms }}ms · p75 {{ dist.summary.p75_ms }}ms · p95 {{ dist.summary.p95_ms }}ms ·
-      {{- " " }}{{ chrome.t("transactions-col-failure") }} {{ dist.summary.failure_rate }}% ·
+      {{- " " }}p50 {{ dist.summary.p50_ms|format_duration }} · p75 {{ dist.summary.p75_ms|format_duration }} · p95 {{ dist.summary.p95_ms|format_duration }} ·
+      {{- " " }}{{ chrome.t("transactions-col-failure") }} {{ dist.summary.failure_rate|format_pct(1) }} ·
       {{- " " }}{{ chrome.t("transactions-col-count") }} {{ dist.summary.count }} ·
       {{- " " }}{{ chrome.t("transactions-col-users") }} {{ dist.summary.users }}
     </p>
@@ -62,11 +62,100 @@
 {% endif %}
 {% when None %}{% endmatch %}
 
+{% if !trend_data.is_empty() %}
+  <div class="card card-pad mb-4">
+    <h2 class="text-[13px] font-semibold uppercase tracking-wide text-muted mb-3">{{ chrome.t("transactions-detail-trend") }}</h2>
+    <div class="event-chart" style="height: 220px">
+      <canvas data-chart="{{ trend_data }}"></canvas>
+    </div>
+    <p class="text-muted text-[12px] mt-2">{{ chrome.t("transactions-detail-trend-note") }}</p>
+  </div>
+{% endif %}
+
+{% if !spans.groups.is_empty() %}
+  <h2 class="page-h2 mb-3">{{ chrome.t("transactions-detail-spans") }}</h2>
+  <div class="card overflow-hidden mb-6">
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>{{ chrome.t("spans-col-op") }}</th>
+            <th>{{ chrome.t("spans-col-description") }}</th>
+            <th class="text-end">{{ chrome.t("spans-col-count") }}</th>
+            <th class="text-end">{{ chrome.t("spans-col-p50") }}</th>
+            <th class="text-end">{{ chrome.t("spans-col-p95") }}</th>
+            <th class="text-end">{{ chrome.t("spans-col-avg") }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for g in spans.groups %}
+            <tr>
+              <td class="text-mono">
+                {% match g.op %}{% when Some with (op) %}{{ op }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
+            </td>
+            <td class="truncate-cell text-mono">
+              {% match g.description %}{% when Some with (d) %}{{ d }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
+          </td>
+          <td class="text-tabular text-end">{{ g.count }}</td>
+          <td class="text-tabular text-end">{{ g.p50_ms|format_duration }}</td>
+          <td class="text-tabular text-end">{{ g.p95_ms|format_duration }}</td>
+          <td class="text-tabular text-end">{{ g.avg_ms|format_duration }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if spans.truncated %}
+  <p class="text-muted text-[13px] mt-2">{{ chrome.tv_count("spans-agg-truncated", span_cap as i64) }}</p>
+{% endif %}
+</div>
+{% endif %}
+
+{% if !issues.is_empty() %}
+  <h2 class="page-h2 mb-3">{{ chrome.t("transactions-detail-issues") }}</h2>
+  <div class="card overflow-hidden mb-6">
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th class="col-title">{{ chrome.t("issues-label-title") }}</th>
+            <th class="col-narrow">{{ chrome.t("issues-label-level") }}</th>
+            <th class="col-narrow text-end">{{ chrome.t("issues-label-events") }}</th>
+            <th class="col-narrow text-end">{{ chrome.t("issues-label-users") }}</th>
+            <th class="col-time">{{ chrome.t("issues-label-last-seen") }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for issue in issues %}
+            <tr>
+              <td class="col-title min-w-0"
+                  title="{% match issue.title %}{% when Some with (t) %}{{ t }}{% when None %}{{ chrome.t("issues-untitled") }}{% endmatch %}">
+              <a class="truncate"
+                 href="/web/projects/{{ project_id }}/issues/{{ issue.fingerprint }}/">{% match issue.title %}{% when Some with (t) %}{{ t|truncate_middle(96) }}{% when None %}{{ chrome.t("issues-untitled") }}{% endmatch %}</a>
+            </td>
+            <td>
+              {% match issue.level %}{% when Some with (lvl) %}<span class="badge badge-{{ lvl }}">{{ lvl }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
+          </td>
+          <td class="text-tabular text-end">{{ issue.event_count }}</td>
+          <td class="text-tabular text-end">{{ issue.user_count }}</td>
+          <td class="text-muted">
+            <time datetime="{{ issue.last_seen|format_ts }}"
+                  title="{{ issue.last_seen|format_ts }}">{{ chrome.rel_time(issue.last_seen) }}</time>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+</div>
+{% endif %}
+
 {% if result.items.is_empty() %}
   <div class="card">
     <p class="empty">{{ chrome.t("transactions-detail-empty") }}</p>
   </div>
 {% else %}
+  <h2 class="page-h2 mb-3">{{ chrome.t("transactions-detail-instances") }}</h2>
   <div class="card overflow-hidden">
     <div class="table-wrap">
       <table class="table">
@@ -81,7 +170,7 @@
         <tbody>
           {% for i in result.items %}
             <tr>
-              <td class="text-tabular">{% match i.duration_ms %}{% when Some with (d) %}<a href="/web/projects/{{ project_id }}/events/{{ i.event_id }}/">{{ d }}ms</a>{% when None %}<a class="text-muted"
+              <td class="text-tabular">{% match i.duration_ms %}{% when Some with (d) %}<a href="/web/projects/{{ project_id }}/events/{{ i.event_id }}/">{{ d|format_duration }}</a>{% when None %}<a class="text-muted"
    href="/web/projects/{{ project_id }}/events/{{ i.event_id }}/">—</a>{% endmatch %}</td>
             <td>
               {% match i.status %}
@@ -130,4 +219,9 @@
   </span>
 </nav>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+  <script src="/web/_assets/chart.umd.min.js"></script>
+  <script src="/web/_assets/charts.js"></script>
 {% endblock %}

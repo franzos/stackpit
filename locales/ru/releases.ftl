@@ -11,9 +11,6 @@ releases-list-search-label = Поиск релизов
 releases-list-project-placeholder = ID проекта
 releases-list-project-label = Фильтр по проекту
 releases-list-period-label = Период освоения
-releases-list-period-24h = Последние 24 ч
-releases-list-period-7d = Последние 7 дней
-releases-list-period-30d = Последние 30 дней
 releases-filter-submit = Фильтровать
 releases-list-empty = Релизов пока нет. Задайте <code class="text-mono">release</code> в своём SDK, и они появятся здесь, как только начнут поступать события.
 releases-col-version = Версия
@@ -37,15 +34,8 @@ releases-count = { $count ->
 
 # --- Состояние релиза ---
 release-health-title = Состояние релиза
-release-health-heading = Состояние релиза
 release-health-sessions-heading = Сессии во времени
 release-health-period-label = Период
-release-health-period-1h = Последний час
-release-health-period-24h = Последние 24 ч
-release-health-period-7d = Последние 7 дней
-release-health-period-14d = Последние 14 дней
-release-health-period-30d = Последние 30 дней
-release-health-period-90d = Последние 90 дней
 release-health-empty = Данные о сессиях недоступны. События сессий с полем <code class="text-mono">status</code> появятся здесь.
 release-health-col-release = Релиз
 release-health-col-sessions = Сессии

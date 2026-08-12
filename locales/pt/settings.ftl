@@ -7,7 +7,6 @@
 
 # --- Predefinições do navegador ---
 defaults-page-title = Predefinições do navegador — Stackpit
-defaults-heading = Predefinições do navegador
 defaults-subtitle = Defina valores de filtro predefinidos para as páginas de lista. Guardado como cookie do navegador.
 defaults-none = Sem predefinição
 defaults-status-label = Estado predefinido (problemas)
@@ -16,13 +15,6 @@ defaults-status-resolved = Resolvido
 defaults-status-ignored = Ignorado
 defaults-level-label = Nível predefinido
 defaults-period-label = Intervalo de tempo predefinido
-defaults-period-1h = Última hora
-defaults-period-24h = Últimas 24h
-defaults-period-7d = Últimos 7 dias
-defaults-period-14d = Últimos 14 dias
-defaults-period-30d = Últimos 30 dias
-defaults-period-90d = Últimos 90 dias
-defaults-period-365d = Últimos 365 dias
 defaults-save = Guardar predefinições
 defaults-clear-confirm = Limpar todas as predefinições do navegador?
 defaults-clear = Limpar todas as predefinições

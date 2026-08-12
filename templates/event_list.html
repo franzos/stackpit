@@ -152,15 +152,22 @@
 </form>
 
 {% if result.total > 0 %}
-  <form class="mt-3" method="post" action="/web/events/bulk">
+  <form class="mt-3 flex gap-2 items-center flex-wrap"
+        method="post"
+        action="/web/events/bulk">
     <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
     <input type="hidden" name="action" value="delete">
     <input type="hidden" name="mode" value="all_matching">
     {% if !query.is_empty() %}<input type="hidden" name="query" value="{{ query }}">{% endif %}
     {% if !level.is_empty() %}<input type="hidden" name="level" value="{{ level }}">{% endif %}
     {% if !item_type.is_empty() %}<input type="hidden" name="item_type" value="{{ item_type }}">{% endif %}
+    <label class="select-all-gate">
+      <input type="checkbox">
+      <span>{{ chrome.tv_count("common-select-all-matching", result.total as i64) }}</span>
+    </label>
     <button type="submit"
             class="btn btn-danger"
+            disabled
             data-confirm="{{ chrome.tv_count("events-bulk-delete-all-confirm", result.total as i64) }}">
       {{ chrome.tv_count("events-bulk-delete-all", result.total as i64) }}
     </button>

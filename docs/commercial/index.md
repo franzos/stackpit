@@ -1,13 +1,14 @@
 # Commercial Features
 
-Stackpit's core is everything you need to run a self-hosted, Sentry-compatible error tracker: ingestion, issue grouping, the web UI and JSON API, organizations, auth/OIDC, notifications, source maps, monitors, retention, all of it. A commercial license unlocks a small, separate set of features on top.
+Stackpit's core is everything you need to run a self-hosted, Sentry-compatible error tracker: ingestion, issue grouping, the web UI and JSON API, organizations, auth/OIDC, email alerting, source maps, monitors, retention, all of it. A commercial license unlocks a small, separate set of features on top.
 
 This page is the buyer/operator overview: what a license unlocks today, how the offline licensing model works, and where the free/paid line sits. For the operator detail of each feature, follow the links below.
 
 ## What a license unlocks today
 
-Exactly one feature is gated so far:
+Two features are gated so far:
 
+- **[Integrations](./integrations.md)**: Slack and webhook delivery for alerts, plus filing issues straight into GitHub, Forgejo, or GitLab. Email alerting is *not* gated — an unlicensed install still sends new-issue, regression, threshold, and digest mail.
 - **[Observability](./observability.md)**: a Prometheus `/metrics` endpoint on the admin listener, token-gated, exposing HTTP RED metrics (request counts, latency) plus bridged ingestion counters. A stock Prometheus, Grafana Agent, or OTel Collector scrapes it as-is.
 
 That's the whole list. Don't plan around anything else, there is nothing else shipped or gated yet.
@@ -30,10 +31,12 @@ A license can carry an expiry (lifetime licenses never expire). Stackpit checks 
 | State | What it means operationally |
 |---|---|
 | **Active** | Licensed and before expiry. The feature works normally. |
-| **Grace** | Past expiry but still inside the grace period. The feature keeps working read-only: for Observability specifically, the `/metrics` endpoint keeps serving. |
-| **Locked** | No license, the license doesn't include this feature, or the grace period has passed. The gated surface returns 404. |
+| **Grace** | Past expiry but still inside the grace period. The feature keeps working read-only: `/metrics` keeps serving, and existing Slack/webhook integrations keep delivering, but you can't add or edit an integration or file a new tracker issue. |
+| **Locked** | No license, the license doesn't include this feature, or the grace period has passed. `/metrics` returns 404; gated integrations stop delivering and the UI shows an upgrade prompt. |
 
-The grace period is a fixed **30 days**, not operator-configurable. It's a safety net so a forgotten renewal doesn't silently break a monitoring dashboard the moment a license expires.
+The grace period is a fixed **30 days**, not operator-configurable. It's a safety net so a forgotten renewal doesn't silently break a monitoring dashboard or stop your alerts the moment a license expires.
+
+Nothing is ever deleted by a lapse. An expired license stops *new* configuration and (past grace) stops delivery on gated channels; your integrations, their credentials, and your data stay exactly where they were and start working again the moment you activate a renewal.
 
 ## The MIT-core-vs-commercial split
 

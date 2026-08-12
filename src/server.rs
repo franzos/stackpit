@@ -346,6 +346,11 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
         .as_ref()
         .and_then(|client| build_web_bearer_gate(client, &config, revocation_store.clone()));
 
+    let grace_days = crate::commercial::GRACE_DAYS;
+    let initial_license = crate::commercial::store::load(&pool, grace_days).await;
+    let license = crate::commercial::LicenseHandle::new(initial_license, grace_days);
+    crate::commercial::spawn_reclassify(license.clone(), bg_cancel.child_token());
+
     {
         let notify_pool = pool.clone();
         let notify_encryptor = encryptor.clone();
@@ -360,13 +365,9 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
             notify_encryptor,
             notify_config,
             notify_rate_limiter,
+            license.clone(),
         );
     }
-
-    let grace_days = crate::commercial::GRACE_DAYS;
-    let initial_license = crate::commercial::store::load(&pool, grace_days).await;
-    let license = crate::commercial::LicenseHandle::new(initial_license, grace_days);
-    crate::commercial::spawn_reclassify(license.clone(), bg_cancel.child_token());
 
     let metrics_handle = crate::metrics::install_metrics_recorder();
     let metrics_scrape_token = std::env::var("STACKPIT_METRICS_TOKEN")

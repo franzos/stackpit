@@ -8,6 +8,7 @@ integrations-subtitle = Salidas de webhook, Slack y correo electrónico. El enru
 integrations-add-webhook = + Webhook
 integrations-add-slack = + Slack
 integrations-add-email = + Correo electrónico
+integrations-license-required-badge = Requiere licencia
 integrations-empty = Aún no hay integraciones. Añade una arriba para empezar a recibir notificaciones. Después de añadirla, actívala por proyecto en <strong>Configuración del proyecto → Integraciones</strong>.
 integrations-col-name = Nombre
 integrations-col-type = Tipo

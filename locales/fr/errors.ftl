@@ -69,6 +69,7 @@ flash-test-digest-sample = Aucune activité récente : un digest d'exemple étiq
 flash-test-digest-no-target = Aucune intégration n'a activé les digests pour le projet de cette planification.
 flash-url-required = L'URL est requise
 flash-secret-not-configured = Impossible d'enregistrer le secret : le chiffrement n'est pas configuré. Définissez STACKPIT_MASTER_KEY pour activer le stockage des secrets.
+flash-integration-license-required = Les intégrations Slack, webhook et gestionnaire de tickets nécessitent une licence commerciale active. Les notifications par e-mail restent disponibles sans licence.
 flash-integration-created = Intégration créée
 flash-integration-name-exists = Une intégration portant ce nom existe déjà.
 flash-integration-deleted = Intégration supprimée

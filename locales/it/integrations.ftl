@@ -7,6 +7,7 @@ integrations-subtitle = Output verso Webhook, Slack ed email. Il routing per pro
 integrations-add-webhook = + Webhook
 integrations-add-slack = + Slack
 integrations-add-email = + Email
+integrations-license-required-badge = Licenza richiesta
 integrations-empty = Ancora nessuna integrazione. Aggiungine una sopra per iniziare a ricevere notifiche. Dopo averla aggiunta, abilitala per ogni progetto in <strong>Impostazioni progetto → Integrazioni</strong>.
 integrations-col-name = Nome
 integrations-col-type = Tipo

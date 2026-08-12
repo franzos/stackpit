@@ -1,5 +1,6 @@
 pub mod rate_limit;
 
+use crate::commercial::LicenseHandle;
 use crate::config::Config;
 use crate::db::DbPool;
 use crate::providers;
@@ -185,10 +186,11 @@ pub fn spawn_dispatcher(
     encryptor: Option<Arc<SecretEncryptor>>,
     config: Arc<Config>,
     rate_limiter: Arc<NotifyRateLimiter>,
+    license: LicenseHandle,
 ) {
     crate::background::supervise(
         "notify_dispatcher",
-        run_dispatcher(rx, pool, encryptor, config, rate_limiter),
+        run_dispatcher(rx, pool, encryptor, config, rate_limiter, license),
     );
 }
 
@@ -198,6 +200,7 @@ pub async fn run_dispatcher(
     encryptor: Option<Arc<SecretEncryptor>>,
     config: Arc<Config>,
     rate_limiter: Arc<NotifyRateLimiter>,
+    license: LicenseHandle,
 ) {
     tracing::info!("notification dispatcher started");
 
@@ -258,6 +261,18 @@ pub async fn run_dispatcher(
                 continue;
             }
 
+            // Checked here as well as in `dispatch` so a lapsed license skips
+            // the DNS/client work and doesn't get retried, and so the reason is
+            // logged once per integration rather than dropped silently.
+            if !crate::commercial::providers::may_deliver(&license, pi.integration_kind) {
+                tracing::warn!(
+                    "notify: skipping {} ({}) — an active commercial license is required",
+                    pi.integration_name,
+                    pi.integration_kind
+                );
+                continue;
+            }
+
             let secret = match (&pi.integration_secret, pi.integration_encrypted, &encryptor) {
                 (Some(s), true, Some(enc)) => enc.decrypt(s),
                 (Some(s), false, _) => Some(s.clone()),
@@ -273,6 +288,7 @@ pub async fn run_dispatcher(
             let config = config.clone();
             let dispatch_limit = dispatch_limit.clone();
             let client_cache = client_cache.clone();
+            let license = license.clone();
 
             tokio::spawn(async move {
                 // Hold a permit for the task's lifetime so bursts queue rather
@@ -333,7 +349,7 @@ pub async fn run_dispatcher(
                 };
 
                 send_with_one_retry(&name, kind_label, || {
-                    providers::dispatch(&client, &kind, &url, secret.as_deref(), &event)
+                    providers::dispatch(&license, &client, &kind, &url, secret.as_deref(), &event)
                 })
                 .await;
             });

@@ -14,18 +14,23 @@ use chrono::{DateTime, Utc};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Feature {
     Observability,
+    /// Slack, generic webhooks, and the GitHub/Forgejo/GitLab issue trackers.
+    /// Email is deliberately outside this — it's the free baseline channel.
+    Integrations,
 }
 
 impl Feature {
     pub fn wire_name(self) -> &'static str {
         match self {
             Feature::Observability => "observability",
+            Feature::Integrations => "integrations",
         }
     }
     /// Reverse of [`Feature::wire_name`].
     pub fn from_wire(s: &str) -> Option<Self> {
         match s {
             "observability" => Some(Feature::Observability),
+            "integrations" => Some(Feature::Integrations),
             _ => None,
         }
     }
@@ -33,6 +38,7 @@ impl Feature {
     pub fn label(self) -> &'static str {
         match self {
             Feature::Observability => "Observability",
+            Feature::Integrations => "Integrations",
         }
     }
 }

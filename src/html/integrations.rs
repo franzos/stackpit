@@ -3,6 +3,7 @@ use axum::extract::{Form, Path, State};
 use axum::http::StatusCode;
 use serde::Deserialize;
 
+use crate::domain::IntegrationKind;
 use crate::html::chrome::PageChrome;
 use crate::html::render_template;
 use crate::html::utils::Chrome;
@@ -22,6 +23,9 @@ struct IntegrationsTemplate {
     integrations: Vec<Integration>,
     message: Option<String>,
     chrome: PageChrome,
+    /// Drives the upsell banner and the locked "add" buttons. False means the
+    /// gated kinds are visible but unusable, rather than silently missing.
+    integrations_licensed: bool,
 }
 
 pub async fn handler(
@@ -73,11 +77,20 @@ pub async fn create(
         .await;
     }
     let kind = form.kind.trim().to_string();
-    if !["webhook", "slack", "email", "github", "forgejo", "gitlab"].contains(&kind.as_str()) {
+    let Ok(parsed_kind) = kind.parse::<crate::domain::IntegrationKind>() else {
         return render_list(
             &state,
             org_filter,
             Some(chrome.t("flash-invalid-integration-kind")),
+            &chrome,
+        )
+        .await;
+    };
+    if !crate::commercial::providers::may_configure(&state.license, parsed_kind) {
+        return render_list(
+            &state,
+            org_filter,
+            Some(chrome.t("flash-integration-license-required")),
             &chrome,
         )
         .await;
@@ -390,6 +403,10 @@ pub async fn test_integration(
             Err(e) => return render_list(&state, org_filter, Some(chrome.err(e)), &chrome).await,
         };
 
+    if let Some(r) = license_wall(&state, &chrome, integration.kind).await {
+        return r;
+    }
+
     let secret = match (&integration.secret, integration.encrypted, &state.encryptor) {
         (Some(s), true, Some(enc)) => enc.decrypt(s),
         (Some(s), false, _) => Some(s.clone()),
@@ -470,7 +487,15 @@ pub async fn test_integration(
             }
         };
 
-        crate::providers::dispatch(&client, &integration.kind, url, secret.as_deref(), &event).await
+        crate::providers::dispatch(
+            &state.license,
+            &client,
+            &integration.kind,
+            url,
+            secret.as_deref(),
+            &event,
+        )
+        .await
     };
 
     match result {
@@ -501,7 +526,13 @@ struct NewWebhookTemplate {
     chrome: PageChrome,
 }
 
-pub async fn new_webhook(Chrome(chrome): Chrome) -> axum::response::Response {
+pub async fn new_webhook(
+    State(state): State<AppState>,
+    Chrome(chrome): Chrome,
+) -> axum::response::Response {
+    if let Some(r) = license_wall(&state, &chrome, IntegrationKind::Webhook).await {
+        return r;
+    }
     render_template(&NewWebhookTemplate { chrome })
 }
 
@@ -511,7 +542,13 @@ struct NewSlackTemplate {
     chrome: PageChrome,
 }
 
-pub async fn new_slack(Chrome(chrome): Chrome) -> axum::response::Response {
+pub async fn new_slack(
+    State(state): State<AppState>,
+    Chrome(chrome): Chrome,
+) -> axum::response::Response {
+    if let Some(r) = license_wall(&state, &chrome, IntegrationKind::Slack).await {
+        return r;
+    }
     render_template(&NewSlackTemplate { chrome })
 }
 
@@ -573,8 +610,36 @@ struct NewTrackerTemplate {
     chrome: PageChrome,
 }
 
-pub async fn new_tracker(Chrome(chrome): Chrome) -> axum::response::Response {
+pub async fn new_tracker(
+    State(state): State<AppState>,
+    Chrome(chrome): Chrome,
+) -> axum::response::Response {
+    // GitHub stands in for all three trackers; they share one feature.
+    if let Some(r) = license_wall(&state, &chrome, IntegrationKind::GitHub).await {
+        return r;
+    }
     render_template(&NewTrackerTemplate { chrome })
+}
+
+/// Sends an unlicensed operator back to the integrations list with an
+/// explanation instead of a form they can't submit. `None` means "carry on".
+async fn license_wall(
+    state: &AppState,
+    chrome: &PageChrome,
+    kind: IntegrationKind,
+) -> Option<axum::response::Response> {
+    if crate::commercial::providers::may_configure(&state.license, kind) {
+        return None;
+    }
+    Some(
+        render_list(
+            state,
+            None,
+            Some(chrome.t("flash-integration-license-required")),
+            chrome,
+        )
+        .await,
+    )
 }
 
 #[cfg(test)]
@@ -594,9 +659,18 @@ mod tests {
                     integrations: Vec::new(),
                     message: None,
                     chrome: chrome.clone(),
+                    integrations_licensed: true,
                 }
                 .render()
                 .expect("integrations list renders"),
+                IntegrationsTemplate {
+                    integrations: Vec::new(),
+                    message: None,
+                    chrome: chrome.clone(),
+                    integrations_licensed: false,
+                }
+                .render()
+                .expect("unlicensed integrations list renders"),
                 NewWebhookTemplate {
                     chrome: chrome.clone(),
                 }
@@ -643,6 +717,50 @@ mod tests {
                     "integrations ({locale}) leaked a missing localization key: {html}"
                 );
             }
+        }
+    }
+
+    // Unlicensed: the gated kinds stay visible (so the upsell lands) but their
+    // links are gone, while email is always reachable.
+    #[test]
+    fn unlicensed_list_hides_gated_links_but_keeps_email() {
+        let chrome = PageChrome::new("csrf".into(), langid!("en"), "/web/projects/".into());
+        let html = IntegrationsTemplate {
+            integrations: Vec::new(),
+            message: None,
+            chrome,
+            integrations_licensed: false,
+        }
+        .render()
+        .expect("renders");
+
+        for gated in ["new/webhook", "new/slack", "new/tracker"] {
+            assert!(
+                !html.contains(gated),
+                "unlicensed page still links to {gated}: {html}"
+            );
+        }
+        assert!(html.contains("/web/settings/integrations/new/email"));
+        assert!(html.contains("/web/admin/license"));
+    }
+
+    #[test]
+    fn licensed_list_links_every_kind() {
+        let chrome = PageChrome::new("csrf".into(), langid!("en"), "/web/projects/".into());
+        let html = IntegrationsTemplate {
+            integrations: Vec::new(),
+            message: None,
+            chrome,
+            integrations_licensed: true,
+        }
+        .render()
+        .expect("renders");
+
+        for kind in ["webhook", "slack", "email", "tracker"] {
+            assert!(
+                html.contains(&format!("/web/settings/integrations/new/{kind}")),
+                "licensed page is missing the {kind} link: {html}"
+            );
         }
     }
 
@@ -736,6 +854,11 @@ async fn render_list(
         integrations,
         message,
         chrome: chrome.clone(),
+        // Slack stands in for every gated kind; they share one feature.
+        integrations_licensed: crate::commercial::providers::may_configure(
+            &state.license,
+            IntegrationKind::Slack,
+        ),
     };
 
     render_template(&tmpl)

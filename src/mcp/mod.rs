@@ -96,6 +96,8 @@ pub struct McpState {
     pub oidc: Option<Arc<OidcClient>>,
     /// Decrypts integration secrets for the tracker tool.
     pub encryptor: Option<Arc<SecretEncryptor>>,
+    /// Gates the tracker tool behind `Feature::Integrations`.
+    pub license: crate::commercial::LicenseHandle,
     /// Ingest auth caches, flushed when a tool archives a project.
     pub auth_cache: AuthCache,
     pub negative_auth_cache: NegativeAuthCache,
@@ -113,6 +115,7 @@ impl FromRef<AppState> for McpState {
             writer_pool: state.writer_pool.clone(),
             oidc: state.oidc.clone(),
             encryptor: state.encryptor.clone(),
+            license: state.license.clone(),
             auth_cache: state.auth_cache.clone(),
             negative_auth_cache: state.negative_auth_cache.clone(),
             web_base: state.config.server.web_base(),
@@ -299,6 +302,7 @@ pub(crate) mod test_support {
             writer_pool: pool,
             oidc: None,
             encryptor: None,
+            license: crate::commercial::fully_licensed(),
             auth_cache: AuthCache::default(),
             negative_auth_cache: NegativeAuthCache::default(),
             web_base: "https://stackpit.example.com".to_string(),

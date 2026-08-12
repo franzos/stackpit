@@ -69,6 +69,7 @@ flash-test-digest-sample = لا يوجد نشاط حديث، لذا تم إدر�
 flash-test-digest-no-target = لا يوجد تكامل مفعّل به الملخصات لمشروع هذا الجدول.
 flash-url-required = عنوان URL مطلوب
 flash-secret-not-configured = تعذّر تخزين السر: التشفير غير مُهيّأ. اضبط STACKPIT_MASTER_KEY لتمكين تخزين الأسرار.
+flash-integration-license-required = تتطلب تكاملات Slack والويب هوك وأنظمة تتبّع المهام ترخيصًا تجاريًا ساريًا. تبقى إشعارات البريد الإلكتروني متاحة دون ترخيص.
 flash-integration-created = تم إنشاء التكامل
 flash-integration-name-exists = يوجد تكامل بهذا الاسم بالفعل.
 flash-integration-deleted = تم حذف التكامل

@@ -136,6 +136,12 @@ impl IntegrationKind {
     pub fn is_tracker(self) -> bool {
         matches!(self, Self::GitHub | Self::Forgejo | Self::GitLab)
     }
+
+    /// Whether this kind sits behind [`crate::commercial::license::Feature::Integrations`].
+    /// Email is the free baseline so an unlicensed install can still alert.
+    pub fn requires_license(self) -> bool {
+        !matches!(self, Self::Email)
+    }
 }
 
 impl std::fmt::Display for IntegrationKind {

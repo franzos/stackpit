@@ -112,7 +112,18 @@ pub async fn activate(
     )
     .await
     {
-        Ok(Some(_)) => {}
+        Ok(Some(i)) => {
+            if !crate::commercial::providers::may_configure(&state.license, i.kind) {
+                return render_page(
+                    &state,
+                    project_id,
+                    Some(chrome.t("flash-integration-license-required")),
+                    &chrome,
+                    scope.org_id,
+                )
+                .await;
+            }
+        }
         Ok(None) => {
             return render_page(
                 &state,
@@ -197,6 +208,48 @@ pub async fn update(
         Ok(s) => s,
         Err(r) => return r,
     };
+
+    // Editing routing is configuration, so grace doesn't cover it. Resolved the
+    // same way `test` does — `id` is the project_integrations row, not the
+    // integration, so the kind has to come off the joined list.
+    match queries::integrations::list_project_integrations(&state.pool, project_id).await {
+        Ok(pis) => match pis.into_iter().find(|p| p.id == id) {
+            Some(pi) => {
+                if !crate::commercial::providers::may_configure(&state.license, pi.integration_kind)
+                {
+                    return render_page(
+                        &state,
+                        project_id,
+                        Some(chrome.t("flash-integration-license-required")),
+                        &chrome,
+                        scope.org_id,
+                    )
+                    .await;
+                }
+            }
+            None => {
+                return render_page(
+                    &state,
+                    project_id,
+                    Some(chrome.t("flash-integration-not-found")),
+                    &chrome,
+                    scope.org_id,
+                )
+                .await;
+            }
+        },
+        Err(e) => {
+            return render_page(
+                &state,
+                project_id,
+                Some(chrome.err(e)),
+                &chrome,
+                scope.org_id,
+            )
+            .await;
+        }
+    }
+
     let config = match recipient_config(form.to_address) {
         Ok(c) => c,
         Err(key) => {
@@ -305,6 +358,17 @@ pub async fn test(
         .await;
     };
 
+    if !crate::commercial::providers::may_configure(&state.license, pi.integration_kind) {
+        return render_page(
+            &state,
+            project_id,
+            Some(chrome.t("flash-integration-license-required")),
+            &chrome,
+            scope.org_id,
+        )
+        .await;
+    }
+
     let secret = match (
         &pi.integration_secret,
         pi.integration_encrypted,
@@ -387,6 +451,7 @@ pub async fn test(
             }
         };
         crate::providers::dispatch(
+            &state.license,
             &client,
             &pi.integration_kind,
             url,
@@ -426,7 +491,19 @@ pub async fn set_target(
     };
     // Reject cross-org targets: the integration must belong to the active org.
     match queries::integrations::get_integration(&state.pool, id, Some(scope.org_id)).await {
-        Ok(Some(_)) => {}
+        Ok(Some(i)) => {
+            // Retargeting is editing, so grace doesn't cover it.
+            if !crate::commercial::providers::may_configure(&state.license, i.kind) {
+                return render_page(
+                    &state,
+                    project_id,
+                    Some(chrome.t("flash-integration-license-required")),
+                    &chrome,
+                    scope.org_id,
+                )
+                .await;
+            }
+        }
         Ok(None) => {
             return render_page(
                 &state,

@@ -93,6 +93,7 @@ fn resolve_tracker_flash(value: Option<&str>, chrome: &PageChrome) -> Option<Str
     match value {
         Some("create-failed") => Some(chrome.t("flash-tracker-create-failed")),
         Some("config") => Some(chrome.t("flash-tracker-config-incomplete")),
+        Some("license") => Some(chrome.t("flash-integration-license-required")),
         _ => None,
     }
 }
@@ -442,6 +443,7 @@ pub async fn create_external_issue(
         &state.pool,
         &state.writer_pool,
         state.encryptor.as_deref(),
+        &state.license,
         &LinkRequest {
             org_id: scope.org_id,
             project_id: project_id as i64,
@@ -463,6 +465,9 @@ pub async fn create_external_issue(
             Redirect::to(&format!("{redirect_url}?tracker_flash=config")).into_response()
         }
         Err(LinkError::Blocked(msg)) => html_error(StatusCode::BAD_REQUEST, &msg),
+        Err(LinkError::LicenseRequired) => {
+            Redirect::to(&format!("{redirect_url}?tracker_flash=license")).into_response()
+        }
         // Status only in the log: the tracker response body can reflect
         // submitted input, so it never surfaces on the page.
         Err(e @ (LinkError::Rejected(_) | LinkError::Unavailable(_))) => {

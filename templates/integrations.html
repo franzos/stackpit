@@ -22,14 +22,34 @@
       <p class="text-muted text-[13px] mt-1">{{ chrome.t("integrations-subtitle") }}</p>
     </div>
     <div class="page-actions">
-      <a href="/web/settings/integrations/new/webhook"
-         class="btn btn-secondary">{{ chrome.t("integrations-add-webhook") }}</a>
-      <a href="/web/settings/integrations/new/slack" class="btn btn-secondary">{{ chrome.t("integrations-add-slack") }}</a>
+      {% if integrations_licensed %}
+        <a href="/web/settings/integrations/new/webhook"
+           class="btn btn-secondary">{{ chrome.t("integrations-add-webhook") }}</a>
+        <a href="/web/settings/integrations/new/slack" class="btn btn-secondary">{{ chrome.t("integrations-add-slack") }}</a>
+      {% else %}
+        <span class="btn btn-ghost opacity-50 pointer-events-none"
+              title="{{ chrome.t("flash-integration-license-required") }}">{{ chrome.t("integrations-add-webhook") }}</span>
+        <span class="btn btn-ghost opacity-50 pointer-events-none"
+              title="{{ chrome.t("flash-integration-license-required") }}">{{ chrome.t("integrations-add-slack") }}</span>
+      {% endif %}
       <a href="/web/settings/integrations/new/email" class="btn btn-secondary">{{ chrome.t("integrations-add-email") }}</a>
-      <a href="/web/settings/integrations/new/tracker" class="btn btn-primary">{{ chrome.t("integrations-add-tracker") }}</a>
+      {% if integrations_licensed %}
+        <a href="/web/settings/integrations/new/tracker" class="btn btn-primary">{{ chrome.t("integrations-add-tracker") }}</a>
+      {% else %}
+        <span class="btn btn-ghost opacity-50 pointer-events-none"
+              title="{{ chrome.t("flash-integration-license-required") }}">{{ chrome.t("integrations-add-tracker") }}</span>
+      {% endif %}
     </div>
   </div>
 
+  {% if !integrations_licensed %}
+    <div class="card card-pad mb-4" style="border-color: var(--color-tertiary)">
+      <p class="text-[13px]">
+        {{ chrome.t("flash-integration-license-required") }}
+        <a href="/web/admin/license" class="link ms-1">{{ chrome.t("license-page-title") }}</a>
+      </p>
+    </div>
+  {% endif %}
 
   {% match message %}{% when Some with (msg) %}
   <div class="settings-message mb-4">{{ msg }}</div>
@@ -58,6 +78,10 @@
               <td class="font-semibold"><bdi>{{ i.name }}</bdi></td>
               <td>
                 <span class="badge badge-neutral">{{ i.kind }}</span>
+                {% if !integrations_licensed && i.kind != "email" %}
+                  <span class="badge badge-warning ms-1"
+                        title="{{ chrome.t("flash-integration-license-required") }}">{{ chrome.t("integrations-license-required-badge") }}</span>
+                {% endif %}
               </td>
               <td class="text-mono text-[12px]">
                 {% if i.kind == "email" %}

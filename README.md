@@ -29,13 +29,14 @@ I got tired of paying for Sentry on smaller projects and self-hosting the offici
 - **Server-rendered web UI** — browse issues, events, transactions, logs, traces, replays, monitors, and more.
 - **Performance & tracing** — transaction percentiles, throughput, and failure rates, span waterfalls across traces, Web Vitals, and release-health crash-free rates.
 - **JSON API** — query everything the UI shows.
-- **Notifications & alerts** — email (Lettermint, Postmark, SendGrid, or SMTP), Slack, and webhooks, with digests and threshold rules.
+- **Notifications & alerts** — email (Lettermint, Postmark, SendGrid, or SMTP) with digests and threshold rules. Slack and webhook delivery need a license; see [OSS vs Commercial](#oss-vs-commercial).
 - **Source maps** — upload via `sentry-cli` so minified traces resolve to original source.
 - **Monitors** — cron check-in tracking via Sentry's protocol.
 - **Auth your way** — a shared admin token for solo use, or OAuth/OIDC SSO for teams.
 - **[MCP endpoint](#mcp-hand-it-to-your-assistant)** — point Claude Code (or any MCP client) at `/mcp` and ask it why production is broken. OAuth-gated, scoped to your orgs, with read, write and admin tool tiers.
 - **Organizations & roles.** Every user gets a personal org and can create more, invite others as owners or members, and manage membership and org slugs from the UI; data is scoped per org, mutations are owner-gated, and if your IdP emits org claims (Forseti-style), those orgs and roles map straight in.
 - **Migrate in** — pull historical events, issues, and releases from an existing Sentry instance.
+- **Integrations (commercial)** — Slack and webhook delivery, plus filing issues straight into GitHub, Forgejo, or GitLab from an issue page or the MCP tool. Email alerting stays free.
 - **Observability (commercial)** — a token-gated Prometheus `/metrics` endpoint on the admin listener: HTTP request rates and latency, plus ingestion accept/reject/drop counters. Requires a license; see [OSS vs Commercial](#oss-vs-commercial) below.
 
 ## MCP: hand it to your assistant
@@ -46,7 +47,7 @@ Debugging with an assistant usually goes the same way: find the issue in the UI,
 claude mcp add --transport http stackpit https://stackpit.example.com/mcp
 ```
 
-The client discovers the authorization server, registers itself, and sends you through your normal SSO login. From there it gets 17 tools: list and search issues and events, pull a full event with its stacktrace, walk a trace's spans, check releases and crash-free rates, resolve an issue, file a tracker issue, and - behind a second consent - create or archive a project. "Why did checkout start failing after yesterday's release?" turns into a question it can actually answer, with real event IDs attached.
+The client discovers the authorization server, registers itself, and sends you through your normal SSO login. From there it gets 17 tools: list and search issues and events, pull a full event with its stacktrace, walk a trace's spans, check releases and crash-free rates, resolve an issue, file a tracker issue (the one tool that needs a license), and - behind a second consent - create or archive a project. "Why did checkout start failing after yesterday's release?" turns into a question it can actually answer, with real event IDs attached.
 
 It's bearer-only: no cookies, no admin token (deliberately), only access tokens your IdP issued for this exact resource. Access follows your organization membership and is re-read from the IdP on every request, so a demotion upstream lands within the minute. Scopes come in tiers - `stackpit:events:read`, `stackpit:projects:read`, `stackpit:projects:write`, `stackpit:admin`. The first three are what the resource metadata advertises, so one login covers browsing and triage; `stackpit:admin` is deliberately left out, which is what makes creating and archiving projects cost a separate, explicit consent. Call a tool you don't hold the scope for and you get a `403` naming the one you're missing, which a client with incremental consent turns into a prompt for exactly that scope - though not every client implements the step-up, and Claude Code currently doesn't, so the two admin tools are out of reach there.
 
@@ -58,7 +59,7 @@ Setup, scopes, and the audience gotcha in full are in the [operator guide](docs/
 
 ## OSS vs Commercial
 
-Stackpit's entire core is free and MIT-licensed: ingestion, grouping, the web UI and JSON API, organizations, auth/OIDC, notifications, retention, everything you need to run it in production. Exactly one feature is gated behind a commercial license today.
+Stackpit's core is free and MIT-licensed: ingestion, grouping, the web UI and JSON API, organizations, auth/OIDC, email alerting, retention, everything you need to run it in production. Two features are gated behind a commercial license today.
 
 | Capability | OSS (unlicensed) | Commercial |
 |------------|-------------------|------------|
@@ -66,11 +67,16 @@ Stackpit's entire core is free and MIT-licensed: ingestion, grouping, the web UI
 | Web UI + JSON API | Yes | Yes |
 | Organizations, roles, IdP claim mapping | Yes | Yes |
 | Auth: admin token, OAuth/OIDC SSO | Yes | Yes |
-| Notifications & alerts (email, Slack, webhooks) | Yes | Yes |
+| MCP endpoint | Yes | Yes |
+| Email alerts, digests, threshold rules | Yes | Yes |
 | Retention & syncing from Sentry | Yes | Yes |
+| Slack & webhook delivery (Integrations) | Unavailable | Yes |
+| Issue trackers: GitHub, Forgejo, GitLab (Integrations) | Unavailable | Yes |
 | Prometheus `/metrics` (Observability) | Unavailable (404) | Token-gated, on the admin listener |
 
-Licensing is offline (no phone-home, no host binding, no seat counting) and verified against a public key baked into the binary; see [`docs/commercial/index.md`](docs/commercial/index.md) for how it works and the reasoning behind the MIT-core / commercial-gate split.
+Alerting itself is never gated: an unlicensed install still sends email for new issues, regressions, thresholds, and digests. What a license adds is delivery into Slack and webhooks, and filing issues into a tracker.
+
+Licensing is offline (no phone-home, no host binding, no seat counting) and verified against a public key baked into the binary. Activate a license by pasting the blob at `/web/admin/license`; see [`docs/commercial/index.md`](docs/commercial/index.md) for how it works and the reasoning behind the MIT-core / commercial-gate split.
 
 ## Stackpit vs Sentry
 
@@ -89,7 +95,7 @@ Stackpit covers the everyday error-tracking workflow and a useful slice of perfo
 | Cron monitors | Yes | Yes |
 | Session replay | Stores/browses what the SDK sends | Full player |
 | Profiling | View-only | Full |
-| Alerts (email, Slack, webhook, digests, thresholds) | Yes | Yes |
+| Alerts (email, Slack, webhook, digests, thresholds) | Yes (Slack/webhook commercial) | Yes |
 | Auth / SSO | Admin token + OAuth/OIDC | Yes |
 | Organizations & roles | Self-serve orgs, per-org scoping, owner/member, invites, IdP claim mapping | Yes |
 | Deployment | Single binary, one SQLite file | Many services (PostgreSQL, ClickHouse, Kafka, Redis) |

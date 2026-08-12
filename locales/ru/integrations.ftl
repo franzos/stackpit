@@ -7,6 +7,7 @@ integrations-subtitle = Отправка через webhook, Slack и e-mail. М
 integrations-add-webhook = + Webhook
 integrations-add-slack = + Slack
 integrations-add-email = + E-mail
+integrations-license-required-badge = Нужна лицензия
 integrations-empty = Пока нет интеграций. Добавьте одну выше, чтобы начать получать уведомления. После добавления включите её для каждого проекта в разделе <strong>Настройки проекта → Интеграции</strong>.
 integrations-col-name = Название
 integrations-col-type = Тип

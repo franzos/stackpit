@@ -70,6 +70,7 @@ flash-test-digest-sample = ไม่มีกิจกรรมล่าสุ�
 flash-test-digest-no-target = ไม่มีการเชื่อมต่อใดที่เปิดใช้งานไดเจสต์สำหรับโปรเจกต์ของกำหนดการนี้
 flash-url-required = ต้องระบุ URL
 flash-secret-not-configured = ไม่สามารถเก็บ secret ได้: ยังไม่ได้ตั้งค่าการเข้ารหัส ตั้งค่า STACKPIT_MASTER_KEY เพื่อเปิดใช้งานการเก็บ secret
+flash-integration-license-required = การเชื่อมต่อ Slack เว็บฮุก และตัวติดตามปัญหา ต้องใช้ใบอนุญาตเชิงพาณิชย์ที่ยังใช้งานได้ การแจ้งเตือนทางอีเมลยังใช้งานได้โดยไม่ต้องมีใบอนุญาต
 flash-integration-created = สร้างการเชื่อมต่อแล้ว
 flash-integration-name-exists = มีการเชื่อมต่อที่ใช้ชื่อนี้อยู่แล้ว
 flash-integration-deleted = ลบการเชื่อมต่อแล้ว

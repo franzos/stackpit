@@ -67,6 +67,7 @@ flash-test-digest-sample = Keine aktuelle Aktivität, daher wurde ein als Beispi
 flash-test-digest-no-target = Keine Integration hat Digests für das Projekt dieses Zeitplans aktiviert.
 flash-url-required = URL ist erforderlich
 flash-secret-not-configured = Secret kann nicht gespeichert werden: Verschlüsselung ist nicht konfiguriert. Setze STACKPIT_MASTER_KEY, um die Speicherung von Secrets zu aktivieren.
+flash-integration-license-required = Slack-, Webhook- und Issue-Tracker-Integrationen erfordern eine aktive kommerzielle Lizenz. E-Mail-Benachrichtigungen bleiben auch ohne Lizenz verfügbar.
 flash-integration-created = Integration erstellt
 flash-integration-name-exists = Eine Integration mit diesem Namen existiert bereits.
 flash-integration-deleted = Integration gelöscht

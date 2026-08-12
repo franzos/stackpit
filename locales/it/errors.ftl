@@ -67,6 +67,7 @@ flash-test-digest-sample = Nessuna attività recente, quindi è stato messo in c
 flash-test-digest-no-target = Nessuna integrazione ha i digest abilitati per il progetto di questa pianificazione.
 flash-url-required = L'URL è obbligatorio
 flash-secret-not-configured = Impossibile salvare il secret: la crittografia non è configurata. Imposta STACKPIT_MASTER_KEY per abilitare l'archiviazione dei secret.
+flash-integration-license-required = Le integrazioni Slack, webhook e issue tracker richiedono una licenza commerciale attiva. Le notifiche via e-mail restano disponibili anche senza licenza.
 flash-integration-created = Integrazione creata
 flash-integration-name-exists = Esiste già un'integrazione con questo nome.
 flash-integration-deleted = Integrazione eliminata

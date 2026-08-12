@@ -77,6 +77,7 @@ pub(super) async fn create_tracker_issue(
         &ctx.pool,
         &ctx.writer_pool,
         ctx.encryptor.as_deref(),
+        &ctx.license,
         &LinkRequest {
             org_id,
             project_id,
@@ -136,6 +137,9 @@ fn tool_error(fingerprint: &str, integration_id: i64, err: LinkError) -> ToolErr
             "tracker integration {integration_id} points somewhere Stackpit will not call: {m}"
         )),
         LinkError::Rejected(m) => ToolError::Invalid(m),
+        LinkError::LicenseRequired => ToolError::Forbidden(
+            "issue trackers require an active Stackpit commercial license".to_string(),
+        ),
         LinkError::Unavailable(m) => {
             tracing::warn!(fingerprint, integration_id, "mcp create_tracker_issue: {m}");
             ToolError::Internal

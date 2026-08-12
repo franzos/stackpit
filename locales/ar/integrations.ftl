@@ -6,6 +6,7 @@ integrations-subtitle = مخرجات Webhook و Slack والبريد الإلك�
 integrations-add-webhook = + Webhook
 integrations-add-slack = + Slack
 integrations-add-email = + بريد إلكتروني
+integrations-license-required-badge = يتطلب ترخيصًا
 integrations-empty = لا توجد تكاملات بعد. أضف واحدًا أعلاه لبدء تلقّي الإشعارات. بعد الإضافة، فعّله لكل مشروع ضمن <strong>إعدادات المشروع ← التكاملات</strong>.
 integrations-col-name = الاسم
 integrations-col-type = النوع

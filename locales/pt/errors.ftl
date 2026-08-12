@@ -67,6 +67,7 @@ flash-test-digest-sample = Sem atividade recente, por isso foi colocado em fila 
 flash-test-digest-no-target = Nenhuma integração tem os resumos ativados para o projeto deste agendamento.
 flash-url-required = O URL é obrigatório
 flash-secret-not-configured = Não é possível guardar o segredo: a encriptação não está configurada. Defina STACKPIT_MASTER_KEY para ativar o armazenamento de segredos.
+flash-integration-license-required = As integrações do Slack, webhook e gestor de tarefas exigem uma licença comercial ativa. As notificações por e-mail continuam disponíveis sem licença.
 flash-integration-created = Integração criada
 flash-integration-name-exists = Já existe uma integração com esse nome.
 flash-integration-deleted = Integração eliminada

@@ -67,6 +67,7 @@ flash-test-digest-sample = Недавней активности нет, поэ�
 flash-test-digest-no-target = Ни в одной интеграции не включены сводки для проекта этого расписания.
 flash-url-required = URL обязателен
 flash-secret-not-configured = Не удаётся сохранить секрет: шифрование не настроено. Задайте STACKPIT_MASTER_KEY, чтобы включить хранение секретов.
+flash-integration-license-required = Интеграции Slack, вебхуков и трекеров задач требуют активной коммерческой лицензии. Уведомления по электронной почте остаются доступными без лицензии.
 flash-integration-created = Интеграция создана
 flash-integration-name-exists = Интеграция с таким именем уже существует.
 flash-integration-deleted = Интеграция удалена

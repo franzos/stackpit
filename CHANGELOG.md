@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Breaking
+- **Slack, webhook and issue-tracker integrations now require a commercial license.** Existing installs without one keep their configuration and credentials, but delivery through those channels stops on upgrade; each refusal is logged rather than dropped silently. Email alerting — new issues, regressions, thresholds and digests — stays free and is unaffected. A lapsed license keeps delivering for a 30-day grace window and only blocks adding, editing, enabling or testing an integration. Nothing is ever deleted, and everything resumes on renewal. See `docs/commercial/integrations.md`.
+
 ### Added
 - Issue stream: filter by environment (also in the JSON API and MCP)
 - Transaction summary: span breakdown, related issues, and a percentile trend with regression markers

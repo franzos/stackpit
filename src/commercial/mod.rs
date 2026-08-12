@@ -26,11 +26,13 @@
 //!    read-only for a fixed 30-day window ([`GRACE_DAYS`]) so a forgotten
 //!    renewal doesn't blow up production.
 //!
-//! Observability (the Prometheus `/metrics` endpoint) is the first gated
-//! feature. Adding another is just a new [`license::Feature`] variant plus its
-//! call-site gate.
+//! Two features are gated today: observability (the Prometheus `/metrics`
+//! endpoint) and integrations (Slack, webhooks, and the issue trackers, whose
+//! implementations live in [`providers`]). Adding another is a new
+//! [`license::Feature`] variant plus its call-site gate.
 
 pub mod license;
+pub mod providers;
 pub mod settings_page;
 pub mod store;
 pub mod verify;
@@ -106,6 +108,25 @@ impl LicenseHandle {
         self.swap(next);
         Some(label)
     }
+}
+
+/// A handle licensed for every [`Feature`], for tests whose subject isn't the
+/// license itself. Gate behaviour is tested directly in [`providers`].
+#[cfg(test)]
+pub fn fully_licensed() -> LicenseHandle {
+    use license::License;
+    LicenseHandle::new(
+        LicenseStatus::Active(License {
+            license_id: "test".into(),
+            customer: "Test Co".into(),
+            email: "t@example.com".into(),
+            issued_at: chrono::Utc::now(),
+            expires_at: Some(chrono::Utc::now() + chrono::Duration::days(365)),
+            features: vec![Feature::Observability, Feature::Integrations],
+            max_orgs: None,
+        }),
+        GRACE_DAYS,
+    )
 }
 
 use tokio_util::sync::CancellationToken;

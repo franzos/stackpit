@@ -6,6 +6,6 @@ These docs are split by what you're here to do:
 
 - [User guide](./user-guide.md) — for people browsing and triaging errors in the web UI.
 - [Operator guide](./operator-guide.md) — the full `stackpit.toml` reference, PostgreSQL, authentication and OIDC/SSO, connecting SDKs, notifications, source maps, monitors, syncing from Sentry, and the CLI.
-- [Commercial features](./commercial/index.md) — the MIT-core / commercial-gate split and observability.
+- [Commercial features](./commercial/index.md) — the MIT-core / commercial-gate split, integrations, and observability.
 
 The source lives on [GitHub](https://github.com/franzos/stackpit). Stackpit is MIT with a commercial option.

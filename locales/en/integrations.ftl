@@ -7,6 +7,7 @@ integrations-subtitle = Webhook, Slack and email outputs. Per-project routing is
 integrations-add-webhook = + Webhook
 integrations-add-slack = + Slack
 integrations-add-email = + Email
+integrations-license-required-badge = Needs license
 integrations-add-tracker = + Issue tracker
 integrations-empty = No integrations yet. Add one above to start receiving notifications. After adding, enable it per-project under <strong>Project settings → Integrations</strong>.
 integrations-col-name = Name

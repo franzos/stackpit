@@ -5,11 +5,12 @@
 //! here, so a fix lands once. How a failure is presented (flash message, tool
 //! error) stays with the caller.
 
-use crate::db::DbPool;
-use crate::domain::IntegrationKind;
-use crate::providers::tracker::{
+use crate::commercial::providers::tracker::{
     create_issue, issue_api_url, NewExternalIssue, TrackerError, TrackerTarget,
 };
+use crate::commercial::LicenseHandle;
+use crate::db::DbPool;
+use crate::domain::IntegrationKind;
 use crate::queries;
 use crate::util::crypto::SecretEncryptor;
 use crate::util::ssrf::{build_pinned_client, check_ssrf};
@@ -51,6 +52,8 @@ pub enum LinkError {
     Rejected(String),
     /// The tracker is unreachable, failing, or answered with nonsense.
     Unavailable(String),
+    /// Issue trackers are gated behind `Feature::Integrations`.
+    LicenseRequired,
     Internal(anyhow::Error),
 }
 
@@ -63,6 +66,9 @@ impl std::fmt::Display for LinkError {
             LinkError::Blocked(m) => write!(f, "tracker URL refused: {m}"),
             LinkError::Rejected(m) => write!(f, "{m}"),
             LinkError::Unavailable(m) => write!(f, "{m}"),
+            LinkError::LicenseRequired => {
+                f.write_str("issue trackers require an active commercial license")
+            }
             LinkError::Internal(e) => write!(f, "{e:#}"),
         }
     }
@@ -79,6 +85,7 @@ pub async fn link_issue(
     pool: &DbPool,
     writer_pool: &DbPool,
     encryptor: Option<&SecretEncryptor>,
+    license: &LicenseHandle,
     req: &LinkRequest<'_>,
 ) -> Result<LinkedIssue, LinkError> {
     let integration =
@@ -89,6 +96,11 @@ pub async fn link_issue(
         Some(i) if i.kind.is_tracker() => i,
         _ => return Err(LinkError::IntegrationNotFound),
     };
+    // Creating a remote issue is a hard POST with an external side effect, so
+    // grace doesn't cover it (see `FeatureStatus::GraceReadOnly`).
+    if !crate::commercial::providers::may_configure(license, integration.kind) {
+        return Err(LinkError::LicenseRequired);
+    }
 
     let existing = queries::issue_links::links_for_issue(pool, req.fingerprint)
         .await
@@ -279,13 +291,48 @@ mod tests {
         }
     }
 
+    fn licensed() -> LicenseHandle {
+        crate::commercial::fully_licensed()
+    }
+
+    // The gate sits ahead of every other failure mode, so an unlicensed install
+    // is refused before the tracker is ever contacted.
+    #[tokio::test]
+    async fn an_unlicensed_install_refuses_to_create_a_tracker_issue() {
+        let pool = crate::db::open_test_pool().await;
+        let id = integration(
+            &pool,
+            1,
+            "gh-unlicensed",
+            "github",
+            Some("https://git.test"),
+        )
+        .await;
+        issue(&pool, "fp-unlicensed", 1).await;
+
+        let unlicensed = LicenseHandle::new(
+            crate::commercial::LicenseStatus::Unlicensed,
+            crate::commercial::GRACE_DAYS,
+        );
+        let err = link_issue(
+            &pool,
+            &pool,
+            None,
+            &unlicensed,
+            &request(1, "fp-unlicensed", id),
+        )
+        .await
+        .expect_err("trackers are gated behind Feature::Integrations");
+        assert!(matches!(err, LinkError::LicenseRequired), "{err:?}");
+    }
+
     #[tokio::test]
     async fn a_non_tracker_integration_is_not_found() {
         let pool = crate::db::open_test_pool().await;
         let id = integration(&pool, 1, "hook", "webhook", Some("https://example.test")).await;
         issue(&pool, "fp-kind", 1).await;
 
-        let err = link_issue(&pool, &pool, None, &request(1, "fp-kind", id))
+        let err = link_issue(&pool, &pool, None, &licensed(), &request(1, "fp-kind", id))
             .await
             .expect_err("a webhook is not a tracker");
         assert!(matches!(err, LinkError::IntegrationNotFound), "{err:?}");
@@ -308,7 +355,7 @@ mod tests {
         let id = integration(&pool, 2, "gh-other", "github", Some("https://git.test")).await;
         issue(&pool, "fp-org", 1).await;
 
-        let err = link_issue(&pool, &pool, None, &request(1, "fp-org", id))
+        let err = link_issue(&pool, &pool, None, &licensed(), &request(1, "fp-org", id))
             .await
             .expect_err("a foreign org's integration is not reachable");
         assert!(matches!(err, LinkError::IntegrationNotFound), "{err:?}");
@@ -320,9 +367,15 @@ mod tests {
         let id = integration(&pool, 1, "gh-fp", "github", Some("https://git.test")).await;
         issue(&pool, "fp-elsewhere", 42).await;
 
-        let err = link_issue(&pool, &pool, None, &request(1, "fp-elsewhere", id))
-            .await
-            .expect_err("the fingerprint belongs to another project");
+        let err = link_issue(
+            &pool,
+            &pool,
+            None,
+            &licensed(),
+            &request(1, "fp-elsewhere", id),
+        )
+        .await
+        .expect_err("the fingerprint belongs to another project");
         assert!(matches!(err, LinkError::IssueNotFound), "{err:?}");
     }
 
@@ -332,7 +385,7 @@ mod tests {
         let id = integration(&pool, 1, "gh-nourl", "github", None).await;
         issue(&pool, "fp-nourl", 1).await;
 
-        let err = link_issue(&pool, &pool, None, &request(1, "fp-nourl", id))
+        let err = link_issue(&pool, &pool, None, &licensed(), &request(1, "fp-nourl", id))
             .await
             .expect_err("no base URL");
         assert!(matches!(err, LinkError::Misconfigured(_)), "{err:?}");
@@ -357,7 +410,7 @@ mod tests {
         .unwrap();
         issue(&pool, "fp-enc", 1).await;
 
-        let err = link_issue(&pool, &pool, None, &request(1, "fp-enc", id))
+        let err = link_issue(&pool, &pool, None, &licensed(), &request(1, "fp-enc", id))
             .await
             .expect_err("no encryptor to decrypt with");
         assert!(matches!(err, LinkError::Misconfigured(_)), "{err:?}");
@@ -382,9 +435,15 @@ mod tests {
         .unwrap();
         issue(&pool, "fp-notarget", 1).await;
 
-        let err = link_issue(&pool, &pool, None, &request(1, "fp-notarget", id))
-            .await
-            .expect_err("no owner/repo to address");
+        let err = link_issue(
+            &pool,
+            &pool,
+            None,
+            &licensed(),
+            &request(1, "fp-notarget", id),
+        )
+        .await
+        .expect_err("no owner/repo to address");
         assert!(matches!(err, LinkError::Misconfigured(_)), "{err:?}");
     }
 
@@ -407,7 +466,7 @@ mod tests {
         .await
         .unwrap();
 
-        let link = link_issue(&pool, &pool, None, &request(1, "fp-dup", id))
+        let link = link_issue(&pool, &pool, None, &licensed(), &request(1, "fp-dup", id))
             .await
             .expect("the existing link is the answer");
         assert!(!link.created);

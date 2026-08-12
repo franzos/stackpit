@@ -77,6 +77,7 @@ flash-url-required = URL is required
 flash-tracker-repo-required = Owner and repository are required
 flash-tracker-project-required = A numeric GitLab project ID is required
 flash-secret-not-configured = Cannot store secret: encryption is not configured. Set STACKPIT_MASTER_KEY to enable secret storage.
+flash-integration-license-required = Slack, webhook and issue-tracker integrations need an active commercial license. Email notifications stay available without one.
 flash-integration-created = Integration created
 flash-integration-name-exists = An integration with that name already exists.
 flash-integration-deleted = Integration deleted

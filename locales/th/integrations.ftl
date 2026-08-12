@@ -6,6 +6,7 @@ integrations-subtitle = ช่องทางส่งออกแบบ Webhook
 integrations-add-webhook = + Webhook
 integrations-add-slack = + Slack
 integrations-add-email = + อีเมล
+integrations-license-required-badge = ต้องมีใบอนุญาต
 integrations-empty = ยังไม่มีการเชื่อมต่อ เพิ่มด้านบนเพื่อเริ่มรับการแจ้งเตือน หลังจากเพิ่มแล้ว ให้เปิดใช้งานต่อโปรเจกต์ที่ <strong>การตั้งค่าโปรเจกต์ → การเชื่อมต่อ</strong>
 integrations-col-name = ชื่อ
 integrations-col-type = ประเภท

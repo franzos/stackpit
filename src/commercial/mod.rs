@@ -51,6 +51,14 @@ use arc_swap::ArcSwap;
 /// after rotation — there's no overlap window).
 pub const PUBLIC_KEY_BYTES: &[u8; 32] = include_bytes!("pubkey.bin");
 
+/// Second accepted key: the licence shop's *web* signing key. The shop at
+/// licenses.gofranz.com is internet-facing and signs with this one, while
+/// [`PUBLIC_KEY_BYTES`]'s private half stays offline for hand-issued licences.
+/// Both are accepted, so if the shop host is ever compromised the web key can
+/// be rotated and only web-sold licences need re-issuing — root-signed ones
+/// keep working. Rotating this one is cheap; rotating the root one is not.
+pub const WEB_PUBLIC_KEY_BYTES: &[u8; 32] = include_bytes!("web-pubkey.bin");
+
 /// Runtime handle. Wraps an [`ArcSwap`] so swaps (activate / deactivate) are
 /// atomic and reads are wait-free. Cheap to clone; lives on
 /// [`crate::server::AppState`].

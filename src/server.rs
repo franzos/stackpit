@@ -9,6 +9,7 @@ use crate::ingest::failure_limiter::{new_failure_limiter, SharedFailureLimiter};
 use crate::mcp::{McpRuntime, ResourceMetadata, ADVERTISED_SCOPES};
 use crate::middleware;
 use crate::oidc::client::OidcClient;
+use crate::oidc::discovery::{OidcReady, OidcSlot};
 use crate::queries::filters::load_filter_data;
 use crate::util::crypto::SecretEncryptor;
 use crate::util::stats::{DiscardStats, IngestStats};
@@ -60,10 +61,8 @@ pub struct AppState {
     pub ingest_stats: Arc<IngestStats>,
     /// Admin browser sessions (per-login random handles; dropped on restart).
     pub admin_sessions: Arc<stackpit_auth::AdminSessionStore>,
-    /// `Some` iff `[auth.oauth]` is configured and discovery succeeded.
-    pub oidc: Option<Arc<OidcClient>>,
-    /// Web gate: introspects the cookie-indexed grant's access token.
-    pub web_bearer_gate: Option<BearerGate>,
+    /// Browser OIDC surface (client + web gate); empty until discovery lands, which may be after startup.
+    pub oidc: OidcSlot,
     /// `Some` iff both `[auth.oauth]` and `[auth.mcp]` are configured.
     pub mcp: Option<Arc<McpRuntime>>,
     /// Short-TTL cache of per-project nav badge counts (display convenience).
@@ -72,6 +71,8 @@ pub struct AppState {
     pub project_list_cache: crate::queries::projects::ProjectListCache,
     /// Queues notifications to the dispatcher; used by the digest-test preview.
     pub notify_tx: tokio::sync::mpsc::Sender<crate::notify::NotificationEvent>,
+    /// Dispatch permits and client cache; shared so a queue replay doesn't double the outbound pressure.
+    pub notify_runtime: crate::notify::NotifyRuntime,
     /// Commercial license status (lock-free `ArcSwap`); gates commercial
     /// features such as Prometheus metrics scraping.
     pub license: crate::commercial::LicenseHandle,
@@ -84,6 +85,83 @@ impl AppState {
     pub async fn nav_counts(&self, project_id: u64) -> crate::queries::ProjectNavCounts {
         crate::queries::projects::nav_counts_cached(&self.pool, &self.nav_cache, project_id).await
     }
+
+    /// Delivery-queue context, so a UI replay takes the same path as the background drain.
+    pub fn drain_ctx(&self) -> crate::notify::queue::DrainCtx {
+        crate::notify::queue::DrainCtx {
+            pool: self.pool.clone(),
+            writer_pool: self.writer_pool.clone(),
+            encryptor: self.encryptor.clone(),
+            config: self.config.clone(),
+            license: self.license.clone(),
+            runtime: self.notify_runtime.clone(),
+        }
+    }
+
+    /// Minimal state for exercising a handler against a real pool.
+    #[cfg(test)]
+    pub fn for_test(pool: DbPool) -> (Self, TestChannels) {
+        use std::sync::atomic::AtomicUsize;
+
+        let (writer_tx, writer_rx) = tokio::sync::mpsc::channel(64);
+        let (notify_tx, notify_rx) = tokio::sync::mpsc::channel(64);
+        let ingest_stats = Arc::new(IngestStats::new());
+
+        let state = AppState {
+            config: Arc::new(Config::default()),
+            writer: WriterHandle::new(
+                vec![writer_tx],
+                ingest_stats.clone(),
+                Arc::new(AtomicUsize::new(0)),
+                CancellationToken::new(),
+            ),
+            pool: pool.clone(),
+            writer_pool: pool.clone(),
+            auth_pool: pool.clone(),
+            sourcemap_pool: pool.clone(),
+            filter_engine: Arc::new(FilterEngine::new(
+                Default::default(),
+                0,
+                Vec::new(),
+                Vec::new(),
+            )),
+            discard_stats: Arc::new(DiscardStats::new()),
+            auth_cache: Arc::new(dashmap::DashMap::new()),
+            negative_auth_cache: Arc::new(dashmap::DashMap::new()),
+            project_count_cache: Arc::new(parking_lot::Mutex::new(None)),
+            ingest_failure_limiter: new_failure_limiter(),
+            trusted_proxies: Arc::new(
+                crate::util::network::TrustedProxies::parse(&[]).expect("empty list parses"),
+            ),
+            encryptor: None,
+            ingest_stats,
+            admin_sessions: Arc::new(stackpit_auth::AdminSessionStore::new()),
+            oidc: OidcSlot::default(),
+            mcp: None,
+            nav_cache: Arc::new(dashmap::DashMap::new()),
+            project_list_cache: Arc::new(dashmap::DashMap::new()),
+            notify_tx,
+            notify_runtime: crate::notify::NotifyRuntime::new(),
+            license: crate::commercial::fully_licensed(),
+            metrics_handle: crate::metrics::install_metrics_recorder(),
+            metrics_scrape_token: None,
+        };
+        (
+            state,
+            TestChannels {
+                writer_rx,
+                notify_rx,
+            },
+        )
+    }
+}
+
+/// Receivers for the channels `AppState::for_test` hands out; drop it and every send fails.
+#[cfg(test)]
+pub struct TestChannels {
+    #[allow(dead_code)]
+    pub writer_rx: tokio::sync::mpsc::Receiver<crate::writer::WriteMsg>,
+    pub notify_rx: tokio::sync::mpsc::Receiver<crate::notify::NotificationEvent>,
 }
 
 // Static English-only landing page (no request context, no i18n chrome).
@@ -299,16 +377,23 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
         );
     }
 
-    // Discover at startup. Failure → admin-token-only unless `required=true`.
-    let oidc = if config.auth.oauth.is_enabled() {
-        // OAuth stores IdP tokens server-side; refuse without the master key.
-        if encryptor.is_none() {
-            anyhow::bail!(
-                "OAuth/OIDC is enabled but STACKPIT_MASTER_KEY is not set. \
-                 Server-side tokens must be encrypted at rest; \
-                 set STACKPIT_MASTER_KEY (64 hex chars) and restart."
-            );
-        }
+    let oauth_configured = config.auth.oauth.is_enabled();
+
+    // OAuth stores IdP tokens server-side; refuse without the master key.
+    if oauth_configured && encryptor.is_none() {
+        anyhow::bail!(
+            "OAuth/OIDC is enabled but STACKPIT_MASTER_KEY is not set. \
+             Server-side tokens must be encrypted at rest; \
+             set STACKPIT_MASTER_KEY (64 hex chars) and restart."
+        );
+    }
+
+    // Built from config, not from a successful discovery, so a later retry still has one.
+    let revocation_store = oauth_configured
+        .then(|| crate::oidc::revocations::SqliteRevocationStore::new(auth_pool.clone()));
+
+    // Discovery failure retries in the background unless `required=true`.
+    let boot_client = if oauth_configured {
         match OidcClient::discover(&config.auth.oauth, config.auth.mcp.jwks_cache_ttl_secs).await {
             Ok(c) => {
                 tracing::info!("OIDC client ready (issuer discovery succeeded)");
@@ -319,7 +404,9 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
             }
             Err(e) => {
                 tracing::error!(
-                    "OIDC discovery failed at startup: {e:#}. SSO disabled, admin-token only."
+                    "OIDC discovery failed at startup: {e:#}. Browser sign-in is down \
+                     (admin-token only) and will come up on its own once the issuer \
+                     answers; /mcp, if configured, stays down until a restart."
                 );
                 None
             }
@@ -328,29 +415,40 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
         None
     };
 
-    // Shared so back-channel logout evicts both surfaces in one write.
-    let revocation_store = oidc
-        .as_ref()
-        .map(|_| crate::oidc::revocations::SqliteRevocationStore::new(auth_pool.clone()));
-
-    // Built only when OAuth is live (same Hydra).
+    // Boot-only: `/mcp` routes mount from this runtime, so a later discovery can't bring them up.
     let mcp = build_mcp_runtime(
         &config,
-        oidc.as_ref(),
+        boot_client.as_ref(),
         mcp_writer_pool,
         revocation_store.clone(),
     )?;
 
     // Web gate: introspects the access token from the cookie-indexed grant row.
-    let web_bearer_gate = oidc
-        .as_ref()
-        .and_then(|client| build_web_bearer_gate(client, &config, revocation_store.clone()));
+    let oidc = match boot_client {
+        Some(client) => {
+            let web_gate = build_web_bearer_gate(&client, &config, revocation_store.clone());
+            OidcSlot::ready(OidcReady { client, web_gate })
+        }
+        None => {
+            let slot = OidcSlot::default();
+            if oauth_configured {
+                crate::oidc::discovery::spawn_retry(
+                    slot.clone(),
+                    bg_cancel.child_token(),
+                    config.clone(),
+                    revocation_store.clone(),
+                );
+            }
+            slot
+        }
+    };
 
     let grace_days = crate::commercial::GRACE_DAYS;
     let initial_license = crate::commercial::store::load(&pool, grace_days).await;
     let license = crate::commercial::LicenseHandle::new(initial_license, grace_days);
     crate::commercial::spawn_reclassify(license.clone(), bg_cancel.child_token());
 
+    let notify_runtime = crate::notify::NotifyRuntime::new();
     {
         let notify_pool = pool.clone();
         let notify_encryptor = encryptor.clone();
@@ -362,12 +460,26 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
         crate::notify::spawn_dispatcher(
             notify_rx,
             notify_pool,
+            bg_writer_pool.clone(),
             notify_encryptor,
             notify_config,
             notify_rate_limiter,
             license.clone(),
+            notify_runtime.clone(),
         );
     }
+
+    crate::notify::queue::spawn_notify_queue_drain(
+        crate::notify::queue::DrainCtx {
+            pool: pool.clone(),
+            writer_pool: bg_writer_pool.clone(),
+            encryptor: encryptor.clone(),
+            config: config.clone(),
+            license: license.clone(),
+            runtime: notify_runtime.clone(),
+        },
+        bg_cancel.child_token(),
+    );
 
     let metrics_handle = crate::metrics::install_metrics_recorder();
     let metrics_scrape_token = std::env::var("STACKPIT_METRICS_TOKEN")
@@ -393,11 +505,11 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
         ingest_stats,
         admin_sessions: Arc::new(stackpit_auth::AdminSessionStore::new()),
         oidc: oidc.clone(),
-        web_bearer_gate: web_bearer_gate.clone(),
         mcp: mcp.clone(),
         nav_cache: Arc::new(dashmap::DashMap::new()),
         project_list_cache: Arc::new(dashmap::DashMap::new()),
         notify_tx: web_notify_tx,
+        notify_runtime,
         license,
         metrics_handle,
         metrics_scrape_token,
@@ -751,7 +863,7 @@ fn build_mcp_runtime(
 /// JWKS validation (the IdP issues JWT access tokens by default), falling back
 /// to introspection for opaque-token deployments. `None` when neither is
 /// resolvable, or when no issuer is configured.
-fn build_web_bearer_gate(
+pub(crate) fn build_web_bearer_gate(
     oidc: &Arc<OidcClient>,
     config: &Config,
     revocation_store: Option<crate::oidc::revocations::SqliteRevocationStore>,

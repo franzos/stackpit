@@ -153,7 +153,15 @@ impl Default for FilterConfig {
     }
 }
 
-#[derive(Debug, Default, Deserialize)]
+fn default_queue_retention_days() -> i64 {
+    14
+}
+
+fn default_queue_max_per_integration() -> i64 {
+    500
+}
+
+#[derive(Debug, Deserialize)]
 pub struct NotificationsConfig {
     /// Max notifications per project per 60-second window. 0 = unlimited.
     #[serde(default)]
@@ -161,6 +169,24 @@ pub struct NotificationsConfig {
     /// Max total notifications per 60-second window. 0 = unlimited.
     #[serde(default)]
     pub rate_limit_global: u32,
+    /// Days a failed delivery is kept before the sweep drops it.
+    #[serde(default = "default_queue_retention_days")]
+    pub queue_retention_days: i64,
+    /// Rows kept per integration; the oldest go first.
+    #[serde(default = "default_queue_max_per_integration")]
+    pub queue_max_per_integration: i64,
+}
+
+// Manual: `derive(Default)` ignores serde field defaults and would zero both queue bounds.
+impl Default for NotificationsConfig {
+    fn default() -> Self {
+        Self {
+            rate_limit_per_project: 0,
+            rate_limit_global: 0,
+            queue_retention_days: default_queue_retention_days(),
+            queue_max_per_integration: default_queue_max_per_integration(),
+        }
+    }
 }
 
 /// Instance mail settings. The transport + credential come from polymail's
@@ -596,6 +622,30 @@ mod tests {
                 },
                 mcp: McpConfig::default(),
             },
+        }
+    }
+
+    #[test]
+    fn the_queue_bounds_reject_the_value_that_would_empty_the_queue() {
+        let cfg = loopback_oauth_enabled();
+        cfg.validate().expect("the defaults (14 and 500) validate");
+
+        for value in [0, -1] {
+            let mut cfg = loopback_oauth_enabled();
+            cfg.notifications.queue_retention_days = value;
+            let msg = format!("{:#}", cfg.validate().expect_err("must be rejected"));
+            assert!(
+                msg.contains("notifications.queue_retention_days"),
+                "the error must name the field; got: {msg}"
+            );
+
+            let mut cfg = loopback_oauth_enabled();
+            cfg.notifications.queue_max_per_integration = value;
+            let msg = format!("{:#}", cfg.validate().expect_err("must be rejected"));
+            assert!(
+                msg.contains("notifications.queue_max_per_integration"),
+                "the error must name the field; got: {msg}"
+            );
         }
     }
 

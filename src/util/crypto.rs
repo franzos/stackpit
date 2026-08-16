@@ -89,6 +89,14 @@ impl SecretEncryptor {
         Some(combined)
     }
 
+    /// Fixed all-zero key, so tests don't race on `STACKPIT_MASTER_KEY`.
+    #[cfg(test)]
+    pub(crate) fn for_tests() -> Self {
+        Self {
+            cipher: Aes256Gcm::new_from_slice(&[0u8; 32]).expect("fixed test key is 32 bytes"),
+        }
+    }
+
     /// Reverses [`Self::encrypt_bytes_with_aad`]. `aad` mismatch fails
     /// decryption (it's covered by the GCM tag).
     pub fn decrypt_bytes_with_aad(&self, blob: &[u8], aad: &[u8]) -> Option<Vec<u8>> {
@@ -128,10 +136,7 @@ mod tests {
     use super::*;
 
     fn test_encryptor() -> SecretEncryptor {
-        // All zeros -- fine for tests, obviously don't do this in prod
-        let key = [0u8; 32];
-        let cipher = Aes256Gcm::new_from_slice(&key).unwrap();
-        SecretEncryptor { cipher }
+        SecretEncryptor::for_tests()
     }
 
     #[test]

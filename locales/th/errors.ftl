@@ -99,3 +99,13 @@ flash-ip-block-removed = นำบล็อก IP ออกแล้ว
 
 # โปรเจกต์ใหม่
 flash-project-name-required = ต้องระบุชื่อโปรเจกต์
+flash-email-not-configured = ยังไม่ได้ตั้งค่าอีเมล เพิ่มส่วน [email] พร้อมผู้ให้บริการลงในไฟล์ตั้งค่าเซิร์ฟเวอร์
+flash-integration-saved = อัปเดตการเชื่อมต่อแล้ว
+flash-integration-global-not-for-trackers = ตัวติดตามปัญหาไม่ใช้การส่งทั่วทั้งองค์กร ปลายทางที่จะสร้างปัญหามาจากการตั้งค่าที่เก็บโค้ดของแต่ละโปรเจกต์
+flash-project-excluded = ยกเว้นโปรเจกต์นี้จากการเชื่อมต่อนี้แล้ว
+flash-project-included = ไม่ได้ยกเว้นโปรเจกต์นี้อีกต่อไป
+flash-global-email-needs-recipient = การเชื่อมต่ออีเมลทั่วทั้งองค์กรต้องมีผู้รับเริ่มต้น เพราะโปรเจกต์ที่ไม่เคยเปิดใช้จะไม่มีที่อยู่ของตัวเอง
+flash-queue-item-not-found = ไม่พบการแจ้งเตือนในคิว
+flash-queue-replayed = ส่งการแจ้งเตือนสำเร็จและนำออกจากคิวแล้ว
+flash-queue-replay-failed = ส่งซ้ำไม่สำเร็จ: { $error }
+flash-queue-cancelled = ทิ้งการแจ้งเตือนในคิวแล้ว

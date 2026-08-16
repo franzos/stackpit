@@ -534,6 +534,16 @@ pub(super) fn i64_arg(args: &Value, name: &str) -> Result<i64, ToolError> {
     }
 }
 
+pub(super) fn opt_i64_arg(args: &Value, name: &str) -> Result<Option<i64>, ToolError> {
+    match args.get(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v
+            .as_i64()
+            .map(Some)
+            .ok_or_else(|| ToolError::Invalid(format!("`{name}` must be an integer, got {v}"))),
+    }
+}
+
 pub(super) fn opt_u64_arg(args: &Value, name: &str) -> Result<Option<u64>, ToolError> {
     match args.get(name) {
         None | Some(Value::Null) => Ok(None),

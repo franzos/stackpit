@@ -4,6 +4,7 @@
 
 pub mod client;
 pub mod cookies;
+pub mod discovery;
 pub mod grants;
 pub mod login_state;
 pub mod logout;

@@ -241,8 +241,23 @@ pub struct ProjectRepo {
     pub id: i64,
     pub project_id: u64,
     pub repo_url: String,
+    /// Guessed from the hostname; read it through [`effective_forge_type`](ProjectRepo::effective_forge_type).
     pub forge_type: String,
+    /// Operator's correction for a host the heuristic can't name.
+    pub forge_type_override: Option<String>,
     pub url_template: Option<String>,
+    /// Frame filename prefix; once any repo in a project sets one, only prefix matching applies.
+    pub stack_path_prefix: Option<String>,
+}
+
+impl ProjectRepo {
+    /// The override if set, otherwise the detected guess.
+    pub fn effective_forge_type(&self) -> &str {
+        self.forge_type_override
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(&self.forge_type)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -319,6 +334,8 @@ pub struct Integration {
     pub encrypted: bool,
     pub config: Option<String>,
     pub created_at: i64,
+    /// Routes for every project in the org unless excluded; tracker kinds resolve by repo and ignore it.
+    pub is_global: bool,
 }
 
 impl Integration {
@@ -363,6 +380,8 @@ pub struct ProjectIntegration {
     pub enabled: bool,
     pub notify_threshold: bool,
     pub notify_digests: bool,
+    /// From the parent integration: if set, removing this row resumes org defaults rather than silencing.
+    pub integration_is_global: bool,
 }
 
 impl ProjectIntegration {
@@ -799,6 +818,7 @@ mod integration_tests {
             encrypted: false,
             config: config.map(String::from),
             created_at: 0,
+            is_global: false,
         }
     }
 

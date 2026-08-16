@@ -26,8 +26,8 @@ use stackpit_auth::read_cookie;
 /// `GET /web/auth/login` -- generate state/nonce/PKCE, stash in encrypted
 /// cookie, redirect to Hydra.
 pub async fn login(State(state): State<AppState>) -> Response {
-    let Some(oidc) = state.oidc.as_ref() else {
-        // OAuth not configured -- admin-token form is still there.
+    let Some(oidc) = state.oidc.client() else {
+        // Not configured, or discovery hasn't landed yet - the admin-token form still works.
         return Redirect::to("/web/login").into_response();
     };
     let Some(encryptor) = state.encryptor.as_ref() else {
@@ -39,11 +39,7 @@ pub async fn login(State(state): State<AppState>) -> Response {
     let start = oidc.start_login().await;
     let packed = match login_state::pack(
         encryptor,
-        &LoginState {
-            state: start.state.clone(),
-            nonce: start.nonce,
-            pkce_verifier: start.pkce_verifier,
-        },
+        &LoginState::new(start.state.clone(), start.nonce, start.pkce_verifier),
     ) {
         Some(s) => s,
         None => {
@@ -74,7 +70,7 @@ pub async fn callback(
     headers: HeaderMap,
     Query(q): Query<CallbackQuery>,
 ) -> Response {
-    let Some(oidc) = state.oidc.as_ref() else {
+    let Some(oidc) = state.oidc.client() else {
         return Redirect::to("/web/login").into_response();
     };
     let Some(encryptor) = state.encryptor.as_ref() else {
@@ -240,7 +236,7 @@ pub async fn backchannel_logout(
     State(state): State<AppState>,
     body: axum::body::Bytes,
 ) -> Response {
-    let Some(oidc) = state.oidc.as_ref() else {
+    let Some(oidc) = state.oidc.client() else {
         return axum::http::StatusCode::BAD_REQUEST.into_response();
     };
 
@@ -251,7 +247,7 @@ pub async fn backchannel_logout(
         return axum::http::StatusCode::BAD_REQUEST.into_response();
     };
 
-    let validation = logout::validate_logout_token(oidc, &token).await;
+    let validation = logout::validate_logout_token(&oidc, &token).await;
     let logout::LogoutValidation::Ok {
         iss,
         sub,

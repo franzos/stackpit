@@ -25,3 +25,4 @@ nav-aria-primary = Primary
 nav-aria-breadcrumb = Breadcrumb
 nav-active-org = Active:
 nav-aria-active-org = Active organization: { $org }
+nav-delivery-queue = Delivery queue

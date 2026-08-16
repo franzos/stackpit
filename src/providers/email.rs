@@ -95,6 +95,18 @@ fn resolve_provider(
     }
 }
 
+/// The project's recipient wins; the integration default backs it up so a global integration still delivers.
+fn resolve_recipient(
+    project_config: Option<&str>,
+    integration_default: Option<String>,
+) -> Option<String> {
+    project_config
+        .and_then(|c| serde_json::from_str::<serde_json::Value>(c).ok())
+        .and_then(|v| v.get("to").and_then(|f| f.as_str()).map(String::from))
+        .filter(|s| !s.trim().is_empty())
+        .or(integration_default)
+}
+
 pub async fn send(
     email_cfg: &EmailConfig,
     base_url: &str,
@@ -127,12 +139,11 @@ pub async fn send(
 
     let from = from.ok_or_else(|| anyhow::anyhow!("from address not configured"))?;
 
-    let to = project_config
-        .and_then(|c| serde_json::from_str::<serde_json::Value>(c).ok())
-        .and_then(|v| v.get("to").and_then(|f| f.as_str()).map(String::from))
-        .ok_or_else(|| {
-            anyhow::anyhow!("to address not configured in project integration config")
-        })?;
+    let to = resolve_recipient(project_config, int_str("to")).ok_or_else(|| {
+        anyhow::anyhow!(
+            "no recipient: set a To address on the project integration, or a default recipient on the integration"
+        )
+    })?;
 
     let base = base_url.trim_end_matches('/');
     let trigger_text = event.trigger.display_label();
@@ -303,6 +314,35 @@ mod tests {
             user: user.map(String::from),
             pass: user.map(|_| "pass".into()),
         }
+    }
+
+    #[test]
+    fn recipient_prefers_the_project_then_the_integration_default() {
+        let project = Some(r#"{"to":"team@example.com"}"#);
+        let default = || Some("ops@example.com".to_string());
+
+        assert_eq!(
+            resolve_recipient(project, default()).as_deref(),
+            Some("team@example.com"),
+        );
+        assert_eq!(
+            resolve_recipient(None, default()).as_deref(),
+            Some("ops@example.com"),
+            "a global integration has no per-project config to read",
+        );
+        assert_eq!(
+            resolve_recipient(Some(r#"{"min_level":"error"}"#), default()).as_deref(),
+            Some("ops@example.com"),
+        );
+        assert_eq!(
+            resolve_recipient(project, None).as_deref(),
+            Some("team@example.com")
+        );
+        assert_eq!(
+            resolve_recipient(None, None),
+            None,
+            "neither set is still an error"
+        );
     }
 
     #[test]

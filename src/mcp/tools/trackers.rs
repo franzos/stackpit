@@ -4,7 +4,7 @@
 use serde_json::{json, Value};
 
 use super::truncate::{truncation_schema, Report};
-use super::{i64_arg, internal, prop, schema_object, str_arg, ToolCtx, ToolError};
+use super::{i64_arg, internal, opt_i64_arg, prop, schema_object, str_arg, ToolCtx, ToolError};
 use crate::mcp::principal::Target;
 use crate::trackers::{link_issue, LinkError, LinkRequest};
 
@@ -16,6 +16,12 @@ pub(super) fn create_input() -> Value {
                 "integer",
                 "Tracker integration to use. Configured in the web UI under the organization's \
                  integrations; get_issue reports the ones already linked to an issue.",
+            ),
+            "repo_id": prop(
+                "integer",
+                "Which of the project's repositories to file into. Only needed when the \
+                 integration can reach more than one of them, in which case calling without it \
+                 fails with a message naming the candidates and their repo ids.",
             ),
         }),
         &["fingerprint", "integration_id"],
@@ -58,6 +64,7 @@ pub(super) async fn create_tracker_issue(
 ) -> Result<Value, ToolError> {
     let fingerprint = str_arg(args, "fingerprint")?;
     let integration_id = i64_arg(args, "integration_id")?;
+    let repo_id = opt_i64_arg(args, "repo_id")?;
     let Target::Project(project_id) = target else {
         return Err(internal("create_tracker_issue", "target is not a project"));
     };
@@ -83,6 +90,7 @@ pub(super) async fn create_tracker_issue(
             project_id,
             fingerprint,
             integration_id,
+            repo_id,
             issue_url: &issue_url,
         },
     )
@@ -133,6 +141,8 @@ fn tool_error(fingerprint: &str, integration_id: i64, err: LinkError) -> ToolErr
             "tracker integration {integration_id} cannot be used: {m}. Fix it in the web UI under \
              the organization's integrations."
         )),
+        // Passed through whole: it names the candidate repos, which nothing else reports.
+        LinkError::Ambiguous(m) => ToolError::Invalid(m),
         LinkError::Blocked(m) => ToolError::Invalid(format!(
             "tracker integration {integration_id} points somewhere Stackpit will not call: {m}"
         )),
@@ -187,13 +197,35 @@ mod tests {
             Some("tok"),
             Some(r#"{"owner":"acme","repo":"backend"}"#),
             false,
+            false,
         )
         .await
         .unwrap()
     }
 
-    async fn links(pool: &crate::db::DbPool, fingerprint: &str) -> usize {
-        crate::queries::issue_links::links_for_issue(pool, fingerprint)
+    async fn repo(pool: &crate::db::DbPool, project_id: i64, url: &str) -> i64 {
+        crate::queries::projects::upsert_project_repo(
+            pool,
+            project_id as u64,
+            url,
+            "github",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        crate::queries::projects::get_project_repos(pool, project_id as u64)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|r| r.repo_url == url)
+            .expect("just inserted")
+            .id
+    }
+
+    async fn links(pool: &crate::db::DbPool, project_id: i64, fingerprint: &str) -> usize {
+        crate::queries::issue_links::links_for_issue(pool, project_id, fingerprint)
             .await
             .unwrap()
             .len()
@@ -224,7 +256,7 @@ mod tests {
                 "{args} produced {err:?}"
             );
         }
-        assert_eq!(links(&pool, "fp-args").await, 0);
+        assert_eq!(links(&pool, 6001, "fp-args").await, 0);
     }
 
     // A misconfigured or absent integration is the caller's to fix, so it comes
@@ -262,6 +294,7 @@ mod tests {
             None,
             Some(r#"{"owner":"acme","repo":"backend"}"#),
             false,
+            false,
         )
         .await
         .unwrap();
@@ -276,7 +309,7 @@ mod tests {
         .await
         .expect_err("no stored credential");
         assert!(matches!(err, ToolError::Invalid(_)), "{err:?}");
-        assert_eq!(links(&pool, "fp-nocred").await, 0);
+        assert_eq!(links(&pool, 6020, "fp-nocred").await, 0);
     }
 
     // A tracker integration belongs to an org; one from another org must not be
@@ -298,7 +331,92 @@ mod tests {
         .await
         .expect_err("another org's integration");
         assert!(matches!(err, ToolError::Invalid(_)), "{err:?}");
-        assert_eq!(links(&pool, "fp-mine").await, 0);
+        assert_eq!(links(&pool, 6030, "fp-mine").await, 0);
+    }
+
+    #[tokio::test]
+    async fn an_ambiguous_call_names_the_candidate_repos() {
+        let pool = crate::db::open_test_pool().await;
+        let org = seed(&pool, "trk-amb", 6070, "fp-amb").await;
+        let integration = tracker(&pool, org, "gh-amb").await;
+        repo(&pool, 6070, "https://git.invalid/acme/api").await;
+        repo(&pool, 6070, "https://git.invalid/acme/web").await;
+
+        let owner = McpPrincipal::for_test(SCOPE_PROJECTS_WRITE, vec![(org, Role::Owner)]);
+        let err = call(
+            &pool,
+            owner,
+            "create_tracker_issue",
+            json!({ "fingerprint": "fp-amb", "integration_id": integration }),
+        )
+        .await
+        .expect_err("two candidates, none chosen");
+
+        match err {
+            ToolError::Invalid(m) => {
+                assert!(m.contains("acme/api"), "{m}");
+                assert!(m.contains("acme/web"), "{m}");
+                assert!(
+                    m.contains("repo_id"),
+                    "the message must name the argument: {m}"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(links(&pool, 6070, "fp-amb").await, 0);
+    }
+
+    /// Past target selection the call dies on the network, which is as far as a test can drive it.
+    #[tokio::test]
+    async fn a_repo_id_selects_among_the_candidates() {
+        let pool = crate::db::open_test_pool().await;
+        let org = seed(&pool, "trk-pick", 6071, "fp-pick").await;
+        let integration = tracker(&pool, org, "gh-pick").await;
+        repo(&pool, 6071, "https://git.invalid/acme/api").await;
+        let web = repo(&pool, 6071, "https://git.invalid/acme/web").await;
+
+        let owner = McpPrincipal::for_test(SCOPE_PROJECTS_WRITE, vec![(org, Role::Owner)]);
+        let err = call(
+            &pool,
+            owner,
+            "create_tracker_issue",
+            json!({
+                "fingerprint": "fp-pick",
+                "integration_id": integration,
+                "repo_id": web,
+            }),
+        )
+        .await
+        .expect_err("git.invalid does not resolve");
+
+        let msg = format!("{err:?}");
+        assert!(
+            !msg.contains("repo_id") && !msg.contains("several repositories"),
+            "the choice should have been accepted, got {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_ill_typed_repo_id_is_a_tool_error() {
+        let pool = crate::db::open_test_pool().await;
+        let org = seed(&pool, "trk-badrepo", 6072, "fp-badrepo").await;
+        let integration = tracker(&pool, org, "gh-badrepo").await;
+        repo(&pool, 6072, "https://git.invalid/acme/api").await;
+
+        let owner = McpPrincipal::for_test(SCOPE_PROJECTS_WRITE, vec![(org, Role::Owner)]);
+        let err = call(
+            &pool,
+            owner,
+            "create_tracker_issue",
+            json!({
+                "fingerprint": "fp-badrepo",
+                "integration_id": integration,
+                "repo_id": "one",
+            }),
+        )
+        .await
+        .expect_err("repo_id must be an integer");
+        assert!(matches!(err, ToolError::Invalid(_)), "{err:?}");
     }
 
     // Already linked: the existing link is the answer, and no second tracker
@@ -314,8 +432,11 @@ mod tests {
             6040,
             "fp-linked",
             integration,
+            "gh-linked",
+            "github",
             "11",
             "https://git.invalid/acme/backend/issues/11",
+            Some("open"),
             1_700_000_000,
         )
         .await
@@ -340,7 +461,7 @@ mod tests {
         assert_eq!(out["integration_kind"], "github");
         assert_eq!(out["project_id"], 6040);
         assert_eq!(out["truncation"]["truncated"], false);
-        assert_eq!(links(&pool, "fp-linked").await, 1);
+        assert_eq!(links(&pool, 6040, "fp-linked").await, 1);
     }
 
     // The web UI requires the owner role to link a tracker issue.
@@ -360,7 +481,11 @@ mod tests {
         .await
         .expect_err("members cannot link tracker issues");
         assert!(matches!(err, ToolError::Forbidden(_)), "{err:?}");
-        assert_eq!(links(&pool, "fp-member").await, 0, "no link was written");
+        assert_eq!(
+            links(&pool, 6050, "fp-member").await,
+            0,
+            "no link was written"
+        );
     }
 
     #[tokio::test]
@@ -380,7 +505,7 @@ mod tests {
         .await
         .expect_err("a foreign issue is not reachable");
         assert_eq!(err, ToolError::NotFound("not found".to_string()));
-        assert_eq!(links(&pool, "fp-foreign").await, 0);
+        assert_eq!(links(&pool, 6060, "fp-foreign").await, 0);
     }
 
     #[tokio::test]
@@ -404,6 +529,6 @@ mod tests {
                 required: SCOPE_PROJECTS_WRITE
             }
         );
-        assert_eq!(links(&pool, "fp-noscope").await, 0);
+        assert_eq!(links(&pool, 6070, "fp-noscope").await, 0);
     }
 }

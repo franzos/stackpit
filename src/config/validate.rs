@@ -204,6 +204,26 @@ impl Config {
             tracing::warn!("storage.retention_days is 0 -- data will never be cleaned up");
         }
 
+        // Rejected, not clamped: unlike the rate limits above, 0 empties the queue.
+        if self.notifications.queue_retention_days <= 0 {
+            anyhow::bail!(
+                "notifications.queue_retention_days is {} -- it must be at least 1. \
+                 0 purges every failed delivery on the next sweep rather than keeping \
+                 them forever; unlike the rate limits above it, this field has no \
+                 'unlimited' setting.",
+                self.notifications.queue_retention_days
+            );
+        }
+        if self.notifications.queue_max_per_integration <= 0 {
+            anyhow::bail!(
+                "notifications.queue_max_per_integration is {} -- it must be at least 1. \
+                 0 empties the whole delivery queue on the next sweep rather than lifting \
+                 the cap; unlike the rate limits above it, this field has no 'unlimited' \
+                 setting.",
+                self.notifications.queue_max_per_integration
+            );
+        }
+
         self.validate_auth()?;
 
         Ok(())

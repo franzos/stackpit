@@ -28,6 +28,7 @@ pub mod logs;
 pub mod metrics;
 pub mod monitors;
 pub mod new_project;
+pub mod notify_queue;
 pub mod orgs;
 pub mod profiles;
 pub mod project_filters;
@@ -77,6 +78,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/web/projects/{project_id}/issues/{fingerprint}/external",
             post(issue_detail::create_external_issue),
+        )
+        .route(
+            "/web/projects/{project_id}/issues/{fingerprint}/external/{link_id}/delete",
+            post(issue_detail::delete_external_link),
         )
         .route(
             "/web/projects/{project_id}/events/{event_id}/",
@@ -306,8 +311,34 @@ pub fn routes() -> Router<AppState> {
             post(integrations::delete),
         )
         .route(
+            "/web/settings/integrations/{id}/global",
+            post(integrations::set_global),
+        )
+        .route(
             "/web/settings/integrations/{id}/test",
             post(integrations::test_integration),
+        )
+        .route(
+            "/web/settings/integrations/{id}/",
+            get(integrations::detail),
+        )
+        .route(
+            "/web/settings/integrations/{id}/exclude",
+            post(integrations::exclude),
+        )
+        .route(
+            "/web/settings/integrations/{id}/include",
+            post(integrations::un_exclude),
+        )
+        // -- global settings: delivery queue --
+        .route("/web/settings/queue/", get(notify_queue::handler))
+        .route(
+            "/web/settings/queue/{id}/replay",
+            post(notify_queue::replay),
+        )
+        .route(
+            "/web/settings/queue/{id}/cancel",
+            post(notify_queue::cancel),
         )
         // -- global settings: browser defaults --
         .route(
@@ -367,10 +398,6 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/web/projects/{project_id}/settings/integrations/{id}/test",
             post(project_integrations::test),
-        )
-        .route(
-            "/web/projects/{project_id}/settings/integrations/{id}/target",
-            post(project_integrations::set_target),
         )
         // -- global views --
         .route("/web/events/", get(event_list::handler))

@@ -403,7 +403,8 @@ pub async fn get_project_repos(
     project_id: u64,
 ) -> Result<Vec<ProjectRepo>> {
     let rows = sqlx::query(sql!(
-        "SELECT id, project_id, repo_url, forge_type, url_template
+        "SELECT id, project_id, repo_url, forge_type, forge_type_override, url_template,
+                stack_path_prefix
          FROM project_repos WHERE project_id = ?1 ORDER BY id"
     ))
     .bind(project_id as i64)
@@ -417,7 +418,37 @@ pub async fn get_project_repos(
             project_id: row.get::<i64, _>("project_id") as u64,
             repo_url: row.get("repo_url"),
             forge_type: row.get("forge_type"),
+            forge_type_override: row.get("forge_type_override"),
             url_template: row.get("url_template"),
+            stack_path_prefix: row.get("stack_path_prefix"),
+        })
+        .collect())
+}
+
+/// Every repo across an org in one query, so a page covering all projects doesn't fan out per project.
+pub async fn get_org_repos(pool: &crate::db::DbPool, org_id: i64) -> Result<Vec<ProjectRepo>> {
+    let rows = sqlx::query(sql!(
+        "SELECT r.id, r.project_id, r.repo_url, r.forge_type, r.forge_type_override,
+                r.url_template, r.stack_path_prefix
+         FROM project_repos r
+         JOIN projects p ON p.project_id = r.project_id
+         WHERE p.org_id = ?1
+         ORDER BY r.project_id, r.id"
+    ))
+    .bind(org_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .iter()
+        .map(|row| ProjectRepo {
+            id: row.get("id"),
+            project_id: row.get::<i64, _>("project_id") as u64,
+            repo_url: row.get("repo_url"),
+            forge_type: row.get("forge_type"),
+            forge_type_override: row.get("forge_type_override"),
+            url_template: row.get("url_template"),
+            stack_path_prefix: row.get("stack_path_prefix"),
         })
         .collect())
 }
@@ -721,19 +752,27 @@ pub async fn upsert_project_repo(
     project_id: u64,
     repo_url: &str,
     forge_type: &str,
+    forge_type_override: Option<&str>,
     url_template: Option<&str>,
+    stack_path_prefix: Option<&str>,
 ) -> Result<()> {
     sqlx::query(sql!(
-        "INSERT INTO project_repos (project_id, repo_url, forge_type, url_template)
-         VALUES (?1, ?2, ?3, ?4)
+        "INSERT INTO project_repos
+             (project_id, repo_url, forge_type, forge_type_override, url_template,
+              stack_path_prefix)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
          ON CONFLICT(project_id, repo_url) DO UPDATE SET
              forge_type = excluded.forge_type,
-             url_template = excluded.url_template"
+             forge_type_override = excluded.forge_type_override,
+             url_template = excluded.url_template,
+             stack_path_prefix = excluded.stack_path_prefix"
     ))
     .bind(project_id as i64)
     .bind(repo_url)
     .bind(forge_type)
+    .bind(forge_type_override)
     .bind(url_template)
+    .bind(stack_path_prefix)
     .execute(pool)
     .await?;
     Ok(())
@@ -843,6 +882,21 @@ pub async fn move_project_to_org(
     // stops deliveries to it after the move (the new org re-adds its own).
     sqlx::query(sql!(
         "DELETE FROM project_integrations WHERE project_id = ?1"
+    ))
+    .bind(project_id)
+    .execute(&mut *tx)
+    .await?;
+
+    // Same for queued deliveries and exclusions: they name an integration the project can no longer reach.
+    sqlx::query(sql!(
+        "DELETE FROM notification_delivery_queue WHERE project_id = ?1"
+    ))
+    .bind(project_id)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(sql!(
+        "DELETE FROM integration_exclusions WHERE project_id = ?1"
     ))
     .bind(project_id)
     .execute(&mut *tx)
@@ -961,8 +1015,9 @@ const PROJECT_SCOPED_TABLES: &[&str] = &[
     "session_aggregates",
     "transaction_metrics",
     "issue_external_links",
-    "project_tracker_targets",
     "replay_metadata",
+    "integration_exclusions",
+    "notification_delivery_queue",
 ];
 
 /// Delete a project and all it owns, reusing the caller's transaction.
@@ -1110,6 +1165,68 @@ mod tests {
                 "newest entries must survive"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn project_repo_round_trips_prefix_and_forge_override() {
+        let pool = open_test_db().await;
+
+        upsert_project_repo(
+            &pool,
+            42,
+            "https://git.gofranz.com/franz/stackpit",
+            "unknown",
+            Some("gitea"),
+            None,
+            Some("services/api/"),
+        )
+        .await
+        .unwrap();
+
+        let repos = get_project_repos(&pool, 42).await.unwrap();
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].forge_type, "unknown");
+        assert_eq!(repos[0].forge_type_override.as_deref(), Some("gitea"));
+        assert_eq!(repos[0].stack_path_prefix.as_deref(), Some("services/api/"));
+
+        // The upsert must overwrite the new columns too, or clearing an override does nothing.
+        upsert_project_repo(
+            &pool,
+            42,
+            "https://git.gofranz.com/franz/stackpit",
+            "unknown",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let repos = get_project_repos(&pool, 42).await.unwrap();
+        assert_eq!(repos.len(), 1, "upsert must not create a second row");
+        assert!(repos[0].forge_type_override.is_none());
+        assert!(repos[0].stack_path_prefix.is_none());
+    }
+
+    #[test]
+    fn effective_forge_type_prefers_the_override() {
+        let mut repo = ProjectRepo {
+            id: 1,
+            project_id: 1,
+            repo_url: "https://git.gofranz.com/franz/stackpit".into(),
+            forge_type: "unknown".into(),
+            forge_type_override: Some("gitea".into()),
+            url_template: None,
+            stack_path_prefix: None,
+        };
+        assert_eq!(repo.effective_forge_type(), "gitea");
+
+        repo.forge_type_override = None;
+        assert_eq!(repo.effective_forge_type(), "unknown");
+
+        // "Detected automatically" submits an empty string, not NULL.
+        repo.forge_type_override = Some(String::new());
+        assert_eq!(repo.effective_forge_type(), "unknown");
     }
 
     #[test]
@@ -1581,6 +1698,22 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query(
+            "INSERT INTO integration_exclusions (org_id, integration_id, project_id) VALUES (?1, 1, 700)",
+        )
+        .bind(ORG_A)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO notification_delivery_queue \
+             (org_id, project_id, integration_id, payload, last_error, created_at, next_attempt_at) \
+             VALUES (?1, 700, 1, '{}', 'boom', 1000, 1000)",
+        )
+        .bind(ORG_A)
+        .execute(&pool)
+        .await
+        .unwrap();
 
         let moved = move_project_to_org(&pool, 700, ORG_A, ORG_B).await.unwrap();
         assert!(moved);
@@ -1610,6 +1743,23 @@ mod tests {
                 .unwrap()
                 .get(0);
         assert_eq!(pi, 0, "notification integrations must be unlinked on move");
+        let queued: i64 =
+            sqlx::query("SELECT COUNT(*) FROM notification_delivery_queue WHERE project_id = 700")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+                .get(0);
+        assert_eq!(
+            queued, 0,
+            "a queued delivery belongs to the org that no longer owns the project"
+        );
+        let excl: i64 =
+            sqlx::query("SELECT COUNT(*) FROM integration_exclusions WHERE project_id = 700")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+                .get(0);
+        assert_eq!(excl, 0, "exclusions name integrations the project has lost");
     }
 
     #[cfg(feature = "sqlite")]

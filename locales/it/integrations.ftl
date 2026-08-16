@@ -54,3 +54,42 @@ integrations-email-token-placeholder = Token API del provider
 integrations-email-from-label = Indirizzo mittente
 integrations-email-fromname-label = Nome mittente
 integrations-email-smtp-hint = SMTP usa la connessione [email] del server; non serve un token per integrazione.
+
+# Tracker di issue
+integrations-add-tracker = + Tracker di issue
+integrations-tracker-title = Aggiungi tracker di issue — Stackpit
+integrations-tracker-breadcrumb = Aggiungi tracker di issue
+integrations-tracker-heading = Aggiungi integrazione tracker di issue
+integrations-tracker-kind-label = Tracker
+integrations-tracker-name-placeholder = es. GitHub Issues
+integrations-tracker-url-label = URL di base
+integrations-tracker-token-label = Token API
+integrations-tracker-token-placeholder = Token di accesso personale
+integrations-tracker-target-help = Il repository di destinazione viene dalle impostazioni repository di ogni progetto, quindi non si configura qui. Aggiungi il repository nelle impostazioni del progetto.
+integrations-global-label = Consegna a tutti i progetti
+integrations-global-help = Gli avvisi vanno a tutti i progetti di questa organizzazione, tranne quelli che escludi nella pagina di questa integrazione. I filtri di livello e ambiente per progetto restano validi in aggiunta.
+integrations-global-badge = intera organizzazione
+integrations-global-save = Salva instradamento
+integrations-global-on = Consegna a tutta l'organizzazione
+integrations-global-off = Interrompi la consegna a tutta l'organizzazione
+
+# Dettaglio integrazione: instradamento per progetto
+integrations-detail-title = Integrazione — Stackpit
+integrations-back = Torna alle integrazioni
+integrations-projects-heading = Instradamento per progetto
+integrations-projects-hint-global = Questa integrazione consegna a tutti i progetti qui sotto, a meno che non li escluda. L'esclusione è l'unica via d'uscita; non esiste una lista di inclusione.
+integrations-projects-hint-per-project = Questa integrazione consegna solo dove un progetto l'ha attivata. Contrassegnala per l'intera organizzazione per consegnare ovunque.
+integrations-projects-hint-tracker = I tracker di issue vengono abbinati ai repository di un progetto per forge e host. Escludere un progetto toglie questo tracker dalle sue opzioni di creazione.
+integrations-projects-empty = Questa organizzazione non ha ancora progetti.
+integrations-col-project = Progetto
+integrations-col-state = Stato
+integrations-project-archived = archiviato
+integrations-state-default = In consegna
+integrations-state-customised = Personalizzato
+integrations-state-excluded = Escluso
+integrations-state-no-repo = Nessun repository corrispondente
+integrations-state-not-routed = Non attivato
+integrations-exclude = Escludi
+integrations-include = Includi
+integrations-email-to-label = Destinatario predefinito
+integrations-email-to-help = Usato dove un progetto non ha impostato un proprio indirizzo. Obbligatorio per un'integrazione a livello di organizzazione.

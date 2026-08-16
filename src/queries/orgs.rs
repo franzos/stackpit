@@ -691,6 +691,26 @@ pub async fn delete_org_guarded(pool: &DbPool, org_id: i64) -> Result<DeleteOrgO
         .bind(org_id)
         .execute(&mut *tx)
         .await?;
+    // Links no longer cascade, so clear the reference rather than leave it pointing at a dead row.
+    sqlx::query(sql!(
+        "UPDATE issue_external_links SET integration_id = NULL \
+         WHERE integration_id IN (SELECT id FROM integrations WHERE org_id = ?1)"
+    ))
+    .bind(org_id)
+    .execute(&mut *tx)
+    .await?;
+
+    // Explicit rather than by cascade: cascades only fire where the backend has foreign keys on.
+    sqlx::query(sql!("DELETE FROM integration_exclusions WHERE org_id = ?1"))
+        .bind(org_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(sql!(
+        "DELETE FROM notification_delivery_queue WHERE org_id = ?1"
+    ))
+    .bind(org_id)
+    .execute(&mut *tx)
+    .await?;
     let integrations = sqlx::query(sql!("DELETE FROM integrations WHERE org_id = ?1"))
         .bind(org_id)
         .execute(&mut *tx)
@@ -2316,6 +2336,8 @@ mod tests {
             "alert_rules",
             "digest_schedules",
             "integrations",
+            "integration_exclusions",
+            "notification_delivery_queue",
         ];
 
         for row in &rows {

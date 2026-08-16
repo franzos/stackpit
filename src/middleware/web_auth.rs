@@ -46,12 +46,14 @@ pub async fn web_auth_middleware(
     let path = req.uri().path().to_string();
 
     let admin_token = state.config.server.admin_token.as_ref();
-    let oauth_enabled = state.oidc.is_some();
+    // Configured, not discovered - a pending discovery must not open the no-auth pass-through.
+    let oauth_configured = state.config.auth.oauth.is_enabled();
+    let oidc_ready = state.oidc.get();
     let secure_cookies = state.config.server.cookies_should_be_secure();
 
     // Defense-in-depth: pass-through only when the ack flag is true;
     // config validation already enforces loopback + ack at startup.
-    if admin_token.is_none() && !oauth_enabled {
+    if admin_token.is_none() && !oauth_configured {
         if state.config.server.no_auth_loopback_acknowledged {
             // CSRF still wants something to compare against; pass-through
             // auth means the token is a constant, not a secret.
@@ -114,15 +116,16 @@ pub async fn web_auth_middleware(
     }
 
     // 2. sp_grant cookie -- BFF token vault lookup.
-    if oauth_enabled {
-        let (Some(oidc), Some(encryptor), Some(gate)) = (
-            state.oidc.as_ref(),
-            state.encryptor.as_ref(),
-            state.web_bearer_gate.as_ref(),
-        ) else {
+    if oauth_configured {
+        // No slot yet = discovery still pending, not a misconfiguration.
+        let (Some(ready), Some(encryptor)) = (oidc_ready.as_ref(), state.encryptor.as_ref()) else {
+            return unauthenticated_response(&req, secure_cookies);
+        };
+        let Some(gate) = ready.web_gate.as_ref() else {
             // Misconfiguration -- should have been caught at startup.
             return unauthenticated_response(&req, secure_cookies);
         };
+        let oidc = &ready.client;
 
         // Pure SELECT (grants::load), so it belongs on the read pool rather than
         // the single-connection writer every request would otherwise serialize on.

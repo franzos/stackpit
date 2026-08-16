@@ -54,3 +54,42 @@ integrations-email-token-placeholder = API-токен провайдера
 integrations-email-from-label = Адрес отправителя
 integrations-email-fromname-label = Имя отправителя
 integrations-email-smtp-hint = SMTP использует подключение [email] сервера; отдельный токен для интеграции не нужен.
+
+# Трекер задач
+integrations-add-tracker = + Трекер задач
+integrations-tracker-title = Добавить трекер задач — Stackpit
+integrations-tracker-breadcrumb = Добавить трекер задач
+integrations-tracker-heading = Добавить интеграцию с трекером задач
+integrations-tracker-kind-label = Трекер
+integrations-tracker-name-placeholder = например, GitHub Issues
+integrations-tracker-url-label = Базовый URL
+integrations-tracker-token-label = API-токен
+integrations-tracker-token-placeholder = Персональный токен доступа
+integrations-tracker-target-help = Репозиторий назначения берётся из настроек репозиториев каждого проекта, поэтому здесь он не настраивается. Добавьте репозиторий в настройках проекта.
+integrations-global-label = Доставлять во все проекты
+integrations-global-help = Оповещения идут во все проекты этой организации, кроме тех, которые вы исключите на странице этой интеграции. Фильтры уровня и окружения на уровне проекта продолжают действовать поверх.
+integrations-global-badge = вся организация
+integrations-global-save = Сохранить доставку
+integrations-global-on = Доставлять во всю организацию
+integrations-global-off = Прекратить доставку во всю организацию
+
+# Детали интеграции: доставка по проектам
+integrations-detail-title = Интеграция — Stackpit
+integrations-back = Назад к интеграциям
+integrations-projects-heading = Доставка по проектам
+integrations-projects-hint-global = Эта интеграция доставляет во все проекты ниже, если вы их не исключите. Исключение — единственный способ отказаться; списка включения нет.
+integrations-projects-hint-per-project = Эта интеграция доставляет только туда, где проект её активировал. Отметьте её как общую для организации, чтобы доставлять везде.
+integrations-projects-hint-tracker = Трекеры задач сопоставляются с репозиториями проекта по типу форджа и хосту. Исключение проекта убирает этот трекер из вариантов создания задачи.
+integrations-projects-empty = В этой организации пока нет проектов.
+integrations-col-project = Проект
+integrations-col-state = Состояние
+integrations-project-archived = в архиве
+integrations-state-default = Доставляется
+integrations-state-customised = Настроено
+integrations-state-excluded = Исключено
+integrations-state-no-repo = Нет подходящего репозитория
+integrations-state-not-routed = Не активировано
+integrations-exclude = Исключить
+integrations-include = Включить
+integrations-email-to-label = Получатель по умолчанию
+integrations-email-to-help = Используется там, где проект не задал собственный адрес. Обязателен для интеграции на всю организацию.

@@ -387,7 +387,8 @@ async fn get_release(pool: &DbPool, project_id: u64, version: &str) -> Result<Op
 
 async fn get_project_repos(pool: &DbPool, project_id: u64) -> Result<Vec<ProjectRepo>> {
     let rows = sqlx::query(sql!(
-        "SELECT id, project_id, repo_url, forge_type, url_template
+        "SELECT id, project_id, repo_url, forge_type, forge_type_override, url_template,
+                stack_path_prefix
          FROM project_repos WHERE project_id = ?1 ORDER BY id"
     ))
     .bind(project_id as i64)
@@ -401,7 +402,9 @@ async fn get_project_repos(pool: &DbPool, project_id: u64) -> Result<Vec<Project
             project_id: r.get::<i64, _>("project_id") as u64,
             repo_url: r.get("repo_url"),
             forge_type: r.get("forge_type"),
+            forge_type_override: r.get("forge_type_override"),
             url_template: r.get("url_template"),
+            stack_path_prefix: r.get("stack_path_prefix"),
         })
         .collect())
 }

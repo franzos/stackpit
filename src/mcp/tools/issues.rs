@@ -233,7 +233,7 @@ pub(super) async fn get_issue(
     .remove(&issue.fingerprint)
     .unwrap_or_else(|| vec![0.0; TREND_BUCKETS]);
 
-    let links = crate::queries::issue_links::links_for_issue(&ctx.pool, fingerprint)
+    let links = crate::queries::issue_links::links_for_issue(&ctx.pool, project_id, fingerprint)
         .await
         .map_err(|e| internal("get_issue", format!("{e:#}")))?;
 

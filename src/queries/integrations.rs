@@ -21,6 +21,7 @@ fn row_to_integration(row: &crate::db::DbRow) -> Result<Integration> {
         encrypted: row.get::<bool, _>(5),
         config: row.get(6),
         created_at: row.get(7),
+        is_global: row.get::<bool, _>(8),
     })
 }
 
@@ -29,7 +30,7 @@ fn row_to_integration(row: &crate::db::DbRow) -> Result<Integration> {
 pub async fn list_integrations(pool: &DbPool, org_id: Option<i64>) -> Result<Vec<Integration>> {
     let rows = if let Some(oid) = org_id {
         sqlx::query(sql!(
-            "SELECT id, name, kind, url, secret, encrypted, config, created_at
+            "SELECT id, name, kind, url, secret, encrypted, config, created_at, is_global
              FROM integrations WHERE org_id = ?1 ORDER BY name"
         ))
         .bind(oid)
@@ -37,7 +38,7 @@ pub async fn list_integrations(pool: &DbPool, org_id: Option<i64>) -> Result<Vec
         .await?
     } else {
         sqlx::query(sql!(
-            "SELECT id, name, kind, url, secret, encrypted, config, created_at
+            "SELECT id, name, kind, url, secret, encrypted, config, created_at, is_global
              FROM integrations ORDER BY name"
         ))
         .fetch_all(pool)
@@ -55,7 +56,7 @@ pub async fn get_integration(
 ) -> Result<Option<Integration>> {
     let row = if let Some(oid) = org_id {
         sqlx::query(sql!(
-            "SELECT id, name, kind, url, secret, encrypted, config, created_at
+            "SELECT id, name, kind, url, secret, encrypted, config, created_at, is_global
              FROM integrations WHERE id = ?1 AND org_id = ?2"
         ))
         .bind(id)
@@ -64,7 +65,7 @@ pub async fn get_integration(
         .await?
     } else {
         sqlx::query(sql!(
-            "SELECT id, name, kind, url, secret, encrypted, config, created_at
+            "SELECT id, name, kind, url, secret, encrypted, config, created_at, is_global
              FROM integrations WHERE id = ?1"
         ))
         .bind(id)
@@ -93,6 +94,7 @@ fn row_to_project_integration(row: &crate::db::DbRow) -> Result<ProjectIntegrati
         enabled: row.get::<bool, _>(14),
         notify_threshold: row.get::<bool, _>(15),
         notify_digests: row.get::<bool, _>(16),
+        integration_is_global: row.get::<bool, _>(17),
     })
 }
 
@@ -100,7 +102,7 @@ const PROJECT_INTEGRATION_SELECT: &str = "SELECT pi.id, pi.project_id, pi.integr
             i.name, i.kind, i.url, i.secret, i.encrypted, i.config,
             pi.notify_new_issues, pi.notify_regressions,
             pi.min_level, pi.environment_filter, pi.config, pi.enabled,
-            pi.notify_threshold, pi.notify_digests
+            pi.notify_threshold, pi.notify_digests, i.is_global
      FROM project_integrations pi
      JOIN integrations i ON i.id = pi.integration_id";
 
@@ -117,13 +119,57 @@ pub async fn list_project_integrations(
     rows.iter().map(row_to_project_integration).collect()
 }
 
+/// A project's own row for one integration, or `None` if it hasn't customised it.
+pub async fn get_project_integration(
+    pool: &DbPool,
+    project_id: i64,
+    integration_id: i64,
+) -> Result<Option<ProjectIntegration>> {
+    let sql =
+        format!("{PROJECT_INTEGRATION_SELECT} WHERE pi.project_id = ?1 AND pi.integration_id = ?2");
+    let row = sqlx::query(crate::db::dyn_sql(&sql))
+        .bind(project_id)
+        .bind(integration_id)
+        .fetch_optional(pool)
+        .await?;
+    row.as_ref().map(row_to_project_integration).transpose()
+}
+
+/// Kinds a global integration can route org-wide - trackers resolve through `project_repos` instead.
+const GLOBAL_CHANNEL_KINDS: &str = "'webhook', 'slack', 'email'";
+
 /// Enabled integrations for a project, used by the notification dispatcher.
+/// Global channels come back as synthetic rows with `id = 0`; nothing may write back through them.
 pub async fn get_active_for_project(
     pool: &DbPool,
     project_id: u64,
 ) -> Result<Vec<ProjectIntegration>> {
     let sql = format!(
-        "{PROJECT_INTEGRATION_SELECT} WHERE pi.project_id = ?1 AND pi.enabled = TRUE ORDER BY i.name"
+        "{PROJECT_INTEGRATION_SELECT}
+         WHERE pi.project_id = ?1 AND pi.enabled = TRUE
+           AND NOT EXISTS (
+               SELECT 1 FROM integration_exclusions e
+               WHERE e.integration_id = pi.integration_id AND e.project_id = ?1
+           )
+         UNION ALL
+         SELECT CAST(0 AS BIGINT), CAST(?1 AS BIGINT), i.id,
+                i.name, i.kind, i.url, i.secret, i.encrypted, i.config,
+                TRUE, TRUE,
+                CAST(NULL AS TEXT), CAST(NULL AS TEXT), CAST(NULL AS TEXT), TRUE,
+                TRUE, TRUE, TRUE
+         FROM integrations i
+         JOIN projects p ON p.project_id = ?1 AND p.org_id = i.org_id
+         WHERE i.is_global = TRUE
+           AND i.kind IN ({GLOBAL_CHANNEL_KINDS})
+           AND NOT EXISTS (
+               SELECT 1 FROM project_integrations pi2
+               WHERE pi2.project_id = ?1 AND pi2.integration_id = i.id
+           )
+           AND NOT EXISTS (
+               SELECT 1 FROM integration_exclusions e
+               WHERE e.integration_id = i.id AND e.project_id = ?1
+           )
+         ORDER BY 4"
     );
     let rows = sqlx::query(crate::db::dyn_sql(&sql))
         .bind(project_id as i64)
@@ -148,6 +194,55 @@ pub async fn list_active_for_org(pool: &DbPool, org_id: i64) -> Result<Vec<Proje
     rows.iter().map(row_to_project_integration).collect()
 }
 
+/// One project's routing state for a single integration.
+pub struct ProjectRouting {
+    pub project_id: i64,
+    pub name: Option<String>,
+    pub archived: bool,
+    /// The project has its own `project_integrations` row.
+    pub customised: bool,
+    /// That row's `enabled` flag. True when there is no row.
+    pub enabled: bool,
+    pub excluded: bool,
+}
+
+/// Every project in the org with its state for one integration, rows or not.
+pub async fn project_routing(
+    pool: &DbPool,
+    org_id: i64,
+    integration_id: i64,
+) -> Result<Vec<ProjectRouting>> {
+    let rows = sqlx::query(sql!(
+        "SELECT p.project_id, p.name, p.status, pi.enabled, e.id AS excluded_id
+         FROM projects p
+         LEFT JOIN project_integrations pi
+           ON pi.project_id = p.project_id AND pi.integration_id = ?2
+         LEFT JOIN integration_exclusions e
+           ON e.integration_id = ?2 AND e.project_id = p.project_id
+         WHERE p.org_id = ?1
+         ORDER BY p.project_id"
+    ))
+    .bind(org_id)
+    .bind(integration_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .iter()
+        .map(|r| {
+            let enabled: Option<bool> = r.get("enabled");
+            ProjectRouting {
+                project_id: r.get("project_id"),
+                name: r.get("name"),
+                archived: r.get::<String, _>("status") == "archived",
+                customised: enabled.is_some(),
+                enabled: enabled.unwrap_or(true),
+                excluded: r.get::<Option<i64>, _>("excluded_id").is_some(),
+            }
+        })
+        .collect())
+}
+
 /// Integrations not yet linked to a project (candidates for the "add" dropdown).
 /// Scoped to `org_id` so only same-org integrations are offered.
 pub async fn list_available_for_project(
@@ -156,7 +251,7 @@ pub async fn list_available_for_project(
     org_id: i64,
 ) -> Result<Vec<Integration>> {
     let rows = sqlx::query(sql!(
-        "SELECT id, name, kind, url, secret, encrypted, config, created_at
+        "SELECT id, name, kind, url, secret, encrypted, config, created_at, is_global
          FROM integrations
          WHERE org_id = ?2
            AND id NOT IN (
@@ -184,12 +279,13 @@ pub async fn create_integration(
     secret: Option<&str>,
     config: Option<&str>,
     encrypted: bool,
+    is_global: bool,
 ) -> Result<i64> {
     #[cfg(feature = "sqlite")]
     {
         let result = sqlx::query(sql!(
-            "INSERT INTO integrations (org_id, name, kind, url, secret, encrypted, config)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
+            "INSERT INTO integrations (org_id, name, kind, url, secret, encrypted, config, is_global)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
         ))
         .bind(org_id)
         .bind(name)
@@ -198,6 +294,7 @@ pub async fn create_integration(
         .bind(secret)
         .bind(encrypted)
         .bind(config)
+        .bind(is_global)
         .execute(pool)
         .await?;
         Ok(result.last_insert_rowid())
@@ -205,8 +302,8 @@ pub async fn create_integration(
     #[cfg(not(feature = "sqlite"))]
     {
         let row = sqlx::query(sql!(
-            "INSERT INTO integrations (org_id, name, kind, url, secret, encrypted, config)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) RETURNING id"
+            "INSERT INTO integrations (org_id, name, kind, url, secret, encrypted, config, is_global)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) RETURNING id"
         ))
         .bind(org_id)
         .bind(name)
@@ -215,14 +312,38 @@ pub async fn create_integration(
         .bind(secret)
         .bind(encrypted)
         .bind(config)
+        .bind(is_global)
         .fetch_one(pool)
         .await?;
         Ok(row.get::<i64, _>("id"))
     }
 }
 
+/// Flip an integration's global flag. Returns 0 if not found or wrong org.
+pub async fn set_global(pool: &DbPool, id: i64, org_id: i64, is_global: bool) -> Result<u64> {
+    let result = sqlx::query(sql!(
+        "UPDATE integrations SET is_global = ?3 WHERE id = ?1 AND org_id = ?2"
+    ))
+    .bind(id)
+    .bind(org_id)
+    .bind(is_global)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
 /// Delete an integration in the given org. Returns 0 if not found or wrong org.
 pub async fn delete_integration(pool: &DbPool, id: i64, org_id: i64) -> Result<u64> {
+    // Filed links outlive the integration, so there's no cascade: clear the reference here.
+    sqlx::query(sql!(
+        "UPDATE issue_external_links SET integration_id = NULL \
+         WHERE integration_id IN (SELECT id FROM integrations WHERE id = ?1 AND org_id = ?2)"
+    ))
+    .bind(id)
+    .bind(org_id)
+    .execute(pool)
+    .await?;
+
     let result = sqlx::query(sql!(
         "DELETE FROM integrations WHERE id = ?1 AND org_id = ?2"
     ))
@@ -379,6 +500,7 @@ mod tests {
             None,
             None,
             false,
+            false,
         )
         .await
         .unwrap();
@@ -411,6 +533,241 @@ mod tests {
         .await
         .unwrap()
         .get(0)
+    }
+
+    async fn ensure_project(pool: &DbPool, project_id: i64, org_id: i64) {
+        ensure_org(pool, org_id).await;
+        sqlx::query(sql!(
+            "INSERT INTO projects (project_id, name, org_id) VALUES (?1, ?2, ?3)
+             ON CONFLICT(project_id) DO UPDATE SET org_id = excluded.org_id"
+        ))
+        .bind(project_id)
+        .bind(format!("project-{project_id}"))
+        .bind(org_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn global_integration(pool: &DbPool, org_id: i64, name: &str, kind: &str) -> i64 {
+        ensure_org(pool, org_id).await;
+        create_integration(
+            pool,
+            org_id,
+            name,
+            kind,
+            Some("https://hooks.example/x"),
+            None,
+            None,
+            false,
+            true,
+        )
+        .await
+        .unwrap()
+    }
+
+    /// A kind missing from the literal would silently never route.
+    #[test]
+    fn global_channel_kinds_literal_matches_the_enum() {
+        for kind in IntegrationKind::ALL {
+            let listed = GLOBAL_CHANNEL_KINDS.contains(&format!("'{}'", kind.as_str()));
+            assert_eq!(
+                listed,
+                !kind.is_tracker(),
+                "{} is {}listed in GLOBAL_CHANNEL_KINDS",
+                kind.as_str(),
+                if listed { "" } else { "not " }
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn global_channel_delivers_under_defaults_without_an_explicit_row() {
+        let pool = open_test_db().await;
+        ensure_project(&pool, 101, 5).await;
+        let global_id = global_integration(&pool, 5, "org-wide-slack", "slack").await;
+        // Same org, not global: stays invisible until someone activates it.
+        create_integration(
+            &pool,
+            5,
+            "opt-in-slack",
+            "slack",
+            Some("https://hooks.example/y"),
+            None,
+            None,
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+
+        let active = get_active_for_project(&pool, 101).await.unwrap();
+        assert_eq!(active.len(), 1, "only the global integration routes");
+        let pi = &active[0];
+        assert_eq!(pi.integration_id, global_id);
+        assert_eq!(pi.integration_name, "org-wide-slack");
+        assert_eq!(pi.project_id, 101);
+        assert_eq!(pi.id, 0, "a synthetic row must not carry a writable id");
+        assert!(pi.enabled);
+        assert!(pi.notify_new_issues);
+        assert!(pi.notify_regressions);
+        assert!(pi.notify_threshold);
+        assert!(pi.notify_digests);
+        assert!(pi.min_level.is_none());
+        assert!(pi.environment_filter.is_none());
+        assert!(pi.config.is_none());
+    }
+
+    #[tokio::test]
+    async fn explicit_row_wins_over_global_and_is_not_double_delivered() {
+        let pool = open_test_db().await;
+        ensure_project(&pool, 102, 5).await;
+        let global_id = global_integration(&pool, 5, "customised-slack", "slack").await;
+        activate_project_integration(
+            &pool,
+            102,
+            global_id,
+            false,
+            true,
+            Some("error"),
+            None,
+            None,
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+
+        let active = get_active_for_project(&pool, 102).await.unwrap();
+        assert_eq!(active.len(), 1, "the global fallback must not duplicate it");
+        let pi = &active[0];
+        assert_ne!(pi.id, 0, "the explicit row's own id is what surfaces");
+        assert!(!pi.notify_new_issues, "the project's customisation wins");
+        assert_eq!(pi.min_level.as_deref(), Some("error"));
+    }
+
+    #[tokio::test]
+    async fn disabled_explicit_row_suppresses_the_global_fallback() {
+        let pool = open_test_db().await;
+        ensure_project(&pool, 103, 5).await;
+        let global_id = global_integration(&pool, 5, "silenced-slack", "slack").await;
+        activate_project_integration(
+            &pool, 103, global_id, true, true, None, None, None, true, true,
+        )
+        .await
+        .unwrap();
+        sqlx::query(sql!(
+            "UPDATE project_integrations SET enabled = FALSE
+             WHERE project_id = ?1 AND integration_id = ?2"
+        ))
+        .bind(103i64)
+        .bind(global_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let active = get_active_for_project(&pool, 103).await.unwrap();
+        assert!(
+            active.is_empty(),
+            "switching a customised row off must silence it, not resurrect global defaults"
+        );
+    }
+
+    #[tokio::test]
+    async fn exclusion_suppresses_a_global_integration() {
+        let pool = open_test_db().await;
+        ensure_project(&pool, 104, 5).await;
+        let global_id = global_integration(&pool, 5, "excluded-slack", "slack").await;
+        assert_eq!(get_active_for_project(&pool, 104).await.unwrap().len(), 1);
+
+        crate::queries::integration_exclusions::exclude(&pool, 5, global_id, 104)
+            .await
+            .unwrap();
+        assert!(get_active_for_project(&pool, 104).await.unwrap().is_empty());
+
+        crate::queries::integration_exclusions::un_exclude(&pool, 5, global_id, 104)
+            .await
+            .unwrap();
+        assert_eq!(
+            get_active_for_project(&pool, 104).await.unwrap().len(),
+            1,
+            "un-excluding resumes delivery"
+        );
+    }
+
+    #[tokio::test]
+    async fn exclusion_suppresses_a_project_that_customised_the_integration() {
+        let pool = open_test_db().await;
+        ensure_project(&pool, 108, 5).await;
+        let global_id = global_integration(&pool, 5, "excluded-custom", "slack").await;
+        activate_project_integration(
+            &pool, 108, global_id, true, true, None, None, None, false, false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            get_active_for_project(&pool, 108).await.unwrap().len(),
+            1,
+            "the customised row delivers before the exclusion"
+        );
+
+        crate::queries::integration_exclusions::exclude(&pool, 5, global_id, 108)
+            .await
+            .unwrap();
+        assert!(
+            get_active_for_project(&pool, 108).await.unwrap().is_empty(),
+            "an exclusion has to beat the project's own row, not just the fallback"
+        );
+
+        crate::queries::integration_exclusions::un_exclude(&pool, 5, global_id, 108)
+            .await
+            .unwrap();
+        assert_eq!(
+            get_active_for_project(&pool, 108).await.unwrap().len(),
+            1,
+            "and lifting it brings the customised row back"
+        );
+    }
+
+    #[tokio::test]
+    async fn global_integration_does_not_cross_org_boundaries() {
+        let pool = open_test_db().await;
+        ensure_project(&pool, 105, 5).await;
+        ensure_project(&pool, 106, 6).await;
+        global_integration(&pool, 5, "org5-only", "webhook").await;
+
+        assert_eq!(get_active_for_project(&pool, 105).await.unwrap().len(), 1);
+        assert!(
+            get_active_for_project(&pool, 106).await.unwrap().is_empty(),
+            "org 6's project must never see org 5's global integration"
+        );
+    }
+
+    #[tokio::test]
+    async fn tracker_kinds_ignore_the_global_flag() {
+        let pool = open_test_db().await;
+        ensure_project(&pool, 107, 5).await;
+        global_integration(&pool, 5, "org-wide-github", "github").await;
+        assert!(
+            get_active_for_project(&pool, 107).await.unwrap().is_empty(),
+            "trackers resolve through project_repos, not through routing"
+        );
+    }
+
+    /// Covers a project with no `projects` row, which the global branch's org join drops.
+    #[tokio::test]
+    async fn without_any_global_integration_results_match_the_explicit_rows() {
+        let pool = open_test_db().await;
+        let pi_id = seed_project_integration(&pool, 1).await;
+
+        let active = get_active_for_project(&pool, 1).await.unwrap();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].id, pi_id);
+        assert_eq!(active[0].integration_name, "test-intg");
+        assert!(
+            get_active_for_project(&pool, 2).await.unwrap().is_empty(),
+            "an unrelated project still resolves to nothing"
+        );
     }
 
     #[tokio::test]
@@ -503,6 +860,7 @@ mod tests {
             None,
             None,
             false,
+            false,
         )
         .await
         .unwrap();
@@ -514,6 +872,7 @@ mod tests {
             Some("https://b.example"),
             None,
             None,
+            false,
             false,
         )
         .await
@@ -542,6 +901,7 @@ mod tests {
             None,
             None,
             false,
+            false,
         )
         .await
         .unwrap();
@@ -564,6 +924,7 @@ mod tests {
             Some("https://y.example"),
             None,
             None,
+            false,
             false,
         )
         .await
@@ -589,6 +950,7 @@ mod tests {
             None,
             None,
             false,
+            false,
         )
         .await
         .unwrap();
@@ -600,6 +962,7 @@ mod tests {
             Some("https://b.example"),
             None,
             None,
+            false,
             false,
         )
         .await
@@ -629,6 +992,7 @@ mod tests {
             Some("https://c.example"),
             None,
             None,
+            false,
             false,
         )
         .await

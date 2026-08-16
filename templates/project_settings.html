@@ -106,6 +106,7 @@
               <tr>
                 <th>{{ chrome.t("projects-repos-url-label") }}</th>
                 <th>{{ chrome.t("projects-repos-col-forge") }}</th>
+                <th>{{ chrome.t("projects-repos-col-prefix") }}</th>
                 <th>{{ chrome.t("projects-repos-template") }}</th>
                 <th></th>
               </tr>
@@ -117,7 +118,10 @@
                     <code class="text-mono">{{ repo.repo_url }}</code>
                   </td>
                   <td>
-                    <span class="badge badge-neutral">{{ repo.forge_type }}</span>
+                    <span class="badge badge-neutral">{{ repo.effective_forge_type() }}</span>
+                  </td>
+                  <td>
+                    {% match repo.stack_path_prefix %}{% when Some with (p) %}<code class="text-mono text-[11px]">{{ p }}</code>{% when None %}<span class="text-muted">{{ chrome.t("projects-repos-auto") }}</span>{% endmatch %}
                   </td>
                   <td>
                     {% match repo.url_template %}{% when Some with (t) %}<code class="text-mono text-[11px]">{{ t }}</code>{% when None %}<span class="text-muted">{{ chrome.t("projects-repos-auto") }}</span>{% endmatch %}
@@ -155,6 +159,33 @@
              name="repo_url"
              placeholder="https://github.com/org/repo"
              required>
+    </div>
+    <div>
+      <label class="field-label" for="forge_type_override">
+        {{ chrome.t("projects-repos-forge-override") }} <span class="text-muted normal-case tracking-normal font-normal">{{ chrome.t("projects-optional") }}</span>
+      </label>
+      <select class="input" id="forge_type_override" name="forge_type_override">
+        <option value="">{{ chrome.t("projects-repos-forge-detected") }}</option>
+        <option value="github">GitHub</option>
+        <option value="gitlab">GitLab</option>
+        <option value="gitea">Gitea / Forgejo</option>
+        <option value="bitbucket">Bitbucket</option>
+        <option value="sourcehut">Sourcehut</option>
+        <option value="gitee">Gitee</option>
+        <option value="azure">Azure DevOps</option>
+      </select>
+      <p class="text-muted text-[12px] mt-1">{{ chrome.t("projects-repos-forge-override-help") }}</p>
+    </div>
+    <div>
+      <label class="field-label" for="stack_path_prefix">
+        {{ chrome.t("projects-repos-prefix") }} <span class="text-muted normal-case tracking-normal font-normal">{{ chrome.t("projects-optional") }}</span>
+      </label>
+      <input class="input text-mono"
+             type="text"
+             id="stack_path_prefix"
+             name="stack_path_prefix"
+             placeholder="{{ chrome.t("projects-repos-prefix-placeholder") }}">
+      <p class="text-muted text-[12px] mt-1">{{ chrome.t("projects-repos-prefix-help") }}</p>
     </div>
     <div>
       <label class="field-label" for="url_template">

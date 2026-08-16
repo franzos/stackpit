@@ -59,7 +59,6 @@ flash-integration-not-found = Integration not found
 flash-integration-activated = Integration activated
 flash-integration-updated = Integration updated
 flash-integration-deactivated = Integration deactivated
-flash-integration-target-saved = Tracker target saved
 
 # Org integrations
 flash-name-required = Name is required
@@ -74,8 +73,6 @@ flash-test-digest-sent = Test digest queued for { $count } project(s) to their d
 flash-test-digest-sample = No recent activity, so a labeled sample digest was queued.
 flash-test-digest-no-target = No integration has digests enabled for this schedule's project.
 flash-url-required = URL is required
-flash-tracker-repo-required = Owner and repository are required
-flash-tracker-project-required = A numeric GitLab project ID is required
 flash-secret-not-configured = Cannot store secret: encryption is not configured. Set STACKPIT_MASTER_KEY to enable secret storage.
 flash-integration-license-required = Slack, webhook and issue-tracker integrations need an active commercial license. Email notifications stay available without one.
 flash-integration-created = Integration created
@@ -106,3 +103,12 @@ flash-ip-block-removed = IP block removed
 
 # New project
 flash-project-name-required = Project name is required
+flash-integration-saved = Integration updated
+flash-integration-global-not-for-trackers = Issue trackers do not use org-wide routing; which repository they file into comes from each project's repository settings.
+flash-project-excluded = Project excluded from this integration
+flash-project-included = Project no longer excluded
+flash-global-email-needs-recipient = An org-wide email integration needs a default recipient; projects that never activated it have no address of their own.
+flash-queue-item-not-found = Queued notification not found
+flash-queue-replayed = Notification delivered and removed from the queue
+flash-queue-replay-failed = Replay failed: { $error }
+flash-queue-cancelled = Queued notification discarded

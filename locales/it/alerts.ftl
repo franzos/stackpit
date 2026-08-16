@@ -8,8 +8,8 @@ alerts-notify-help-post = .
 
 # --- Tipi di notifica ---
 alerts-notify-types-heading = Tipi di notifica
-alerts-notify-types-desc = Gli avvisi di nuovo problema e regressione si attivano per ogni problema appena visto o ricomparso, controllabili per integrazione qui sotto. Le regole di soglia si attivano sul volume di eventi in un intervallo; i riepiloghi sono sintesi periodiche.
-alerts-notify-types-empty = Nessuna integrazione di progetto attiva. Collegane una dalla pagina delle integrazioni di un progetto.
+alerts-notify-types-desc = Gli avvisi di nuovo problema e regressione si attivano per ogni problema appena visto o ricomparso. Le regole di soglia si attivano sul volume di eventi in un intervallo; i riepiloghi sono sintesi periodiche. Questo elenco copre solo le integrazioni che un progetto ha collegato da sé — un'integrazione a livello di organizzazione raggiunge ogni progetto e si gestisce dalla pagina delle integrazioni.
+alerts-notify-types-empty = Nessun progetto ha collegato una propria integrazione. Le integrazioni a livello di organizzazione non compaiono qui e potrebbero comunque essere attive; controlla la pagina delle integrazioni.
 alerts-col-integration = Integrazione
 alerts-col-new-issues = Nuovi problemi
 alerts-col-regressions = Regressioni

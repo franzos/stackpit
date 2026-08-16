@@ -35,3 +35,21 @@ provision-subtitle-1 = Les organisations suivantes sont disponibles via votre fo
 provision-subtitle-2 = Sélectionnez celles que vous souhaitez créer dans Stackpit.
 provision-create = Créer la sélection
 provision-skip = Ignorer
+
+# File de diffusion
+queue-page-title = File de diffusion — Stackpit
+queue-subtitle = Notifications qui n'ont pas pu être livrées. Elles sont réessayées automatiquement pendant 24 heures, puis vous attendent ici.
+queue-count-pending = { $count } en attente
+queue-count-failed = { $count } en échec
+queue-empty = Rien en attente. Toutes les notifications ont été livrées.
+queue-col-integration = Intégration
+queue-col-project = Projet
+queue-col-state = État
+queue-col-attempts = Tentatives
+queue-col-queued = Mise en file
+queue-col-error = Dernière erreur
+queue-state-pending = Réessai en cours
+queue-state-failed = Abandonné
+queue-replay = Renvoyer
+queue-cancel = Abandonner
+queue-cancel-confirm = Abandonner cette notification sans la livrer ?

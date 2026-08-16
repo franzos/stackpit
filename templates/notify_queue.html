@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+
+{% block title %}{{ chrome.t("queue-page-title") }}{% endblock %}
+
+{% block sidebar_nav %}
+  {% call m::settings_sidebar(chrome, "queue") %}
+  {% endcall %}
+{% endblock %}
+
+{% block breadcrumbs %}
+  <span class="breadcrumb-sep">/</span>
+  <span class="breadcrumb-link">{{ chrome.t("nav-settings") }}</span>
+  <span class="breadcrumb-sep">/</span>
+  <span class="breadcrumb-current">{{ chrome.t("nav-delivery-queue") }}</span>
+{% endblock %}
+
+{% block content %}
+  <div class="page-header">
+    <div>
+      <h1>{{ chrome.t("nav-delivery-queue") }}</h1>
+      <p class="text-muted text-[13px] mt-1">{{ chrome.t("queue-subtitle") }}</p>
+    </div>
+    <div class="page-actions">
+      <span class="badge badge-neutral">{{ chrome.tv1("queue-count-pending", "count", pending.to_string().as_ref()) }}</span>
+      <span class="badge badge-warning ms-1">{{ chrome.tv1("queue-count-failed", "count", failed.to_string().as_ref()) }}</span>
+    </div>
+  </div>
+
+  {% match message %}{% when Some with (msg) %}
+  <div class="settings-message mb-4">{{ msg }}</div>
+  {% when None %}{% endmatch %}
+
+{% if rows.is_empty() %}
+  <div class="card">
+    <p class="empty">{{ chrome.t("queue-empty") }}</p>
+  </div>
+{% else %}
+  <div class="card overflow-hidden">
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>{{ chrome.t("queue-col-integration") }}</th>
+            <th>{{ chrome.t("queue-col-project") }}</th>
+            <th>{{ chrome.t("queue-col-state") }}</th>
+            <th>{{ chrome.t("queue-col-attempts") }}</th>
+            <th>{{ chrome.t("queue-col-queued") }}</th>
+            <th>{{ chrome.t("queue-col-error") }}</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+            <tr>
+              <td>
+                <span class="font-semibold"><bdi>{{ r.integration_name }}</bdi></span>
+                <span class="badge badge-neutral ms-1">{{ r.integration_kind }}</span>
+              </td>
+              <td>
+                <a class="link"
+                   href="/web/projects/{{ r.project_id }}/"><bdi>{{ r.project_label }}</bdi></a>
+              </td>
+              <td>
+                {% if r.is_failed() %}
+                  <span class="badge badge-error">{{ chrome.t("queue-state-failed") }}</span>
+                {% else %}
+                  <span class="badge badge-neutral">{{ chrome.t("queue-state-pending") }}</span>
+                  <span class="text-muted text-[12px] ms-1">
+                    <time datetime="{{ r.next_attempt_at|format_ts }}"
+                          title="{{ r.next_attempt_at|format_ts }}">{{ chrome.rel_time(r.next_attempt_at) }}</time>
+                  </span>
+                {% endif %}
+              </td>
+              <td class="text-muted">{{ r.attempts }}</td>
+              <td class="text-muted">
+                <time datetime="{{ r.created_at|format_ts }}"
+                      title="{{ r.created_at|format_ts }}">{{ chrome.rel_time(r.created_at) }}</time>
+              </td>
+              <td class="text-mono text-[12px]">
+                {% match r.last_error %}{% when Some with (e) %}<span title="{{ e }}">{{ e|truncate_middle(80) }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
+            </td>
+            <td class="nowrap">
+              <form method="post"
+                    action="/web/settings/queue/{{ r.id }}/replay"
+                    class="inline">
+                <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+                <button type="submit" class="btn btn-secondary">{{ chrome.t("queue-replay") }}</button>
+              </form>
+              <form method="post"
+                    action="/web/settings/queue/{{ r.id }}/cancel"
+                    class="inline ms-1">
+                <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+                <button type="submit"
+                        class="btn btn-danger"
+                        data-confirm="{{ chrome.t("queue-cancel-confirm") }}">{{ chrome.t("queue-cancel") }}</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

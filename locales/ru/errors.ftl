@@ -96,3 +96,13 @@ flash-ip-block-removed = Блокировка IP удалена
 
 # Новый проект
 flash-project-name-required = Имя проекта обязательно
+flash-email-not-configured = Электронная почта не настроена. Добавьте в конфигурацию сервера секцию [email] с провайдером.
+flash-integration-saved = Интеграция обновлена
+flash-integration-global-not-for-trackers = Трекеры задач не используют доставку на всю организацию; репозиторий назначения берётся из настроек репозиториев каждого проекта.
+flash-project-excluded = Проект исключён из этой интеграции
+flash-project-included = Проект больше не исключён
+flash-global-email-needs-recipient = Почтовой интеграции на всю организацию нужен получатель по умолчанию: у проектов, которые её не активировали, нет собственного адреса.
+flash-queue-item-not-found = Уведомление в очереди не найдено
+flash-queue-replayed = Уведомление доставлено и удалено из очереди
+flash-queue-replay-failed = Повторная отправка не удалась: { $error }
+flash-queue-cancelled = Уведомление из очереди отброшено

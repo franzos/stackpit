@@ -57,10 +57,12 @@ pub fn clear_grant_cookie_all_variants() -> [HeaderValue; 2] {
     ]
 }
 
-/// 10-minute TTL mirrors Hydra's auth-code lifetime.
+/// `Max-Age` is an advisory copy of the deadline sealed into the blob - one constant drives both.
 pub fn build_login_cookie(blob_b64: &str, secure: bool) -> HeaderValue {
-    let mut v =
-        format!("{LOGIN_COOKIE}={blob_b64}; HttpOnly; SameSite=Lax; Path=/web/auth/; Max-Age=600");
+    let max_age = crate::oidc::login_state::LOGIN_TTL_SECONDS;
+    let mut v = format!(
+        "{LOGIN_COOKIE}={blob_b64}; HttpOnly; SameSite=Lax; Path=/web/auth/; Max-Age={max_age}"
+    );
     if secure {
         v.push_str("; Secure");
     }

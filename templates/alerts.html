@@ -34,11 +34,17 @@
 <section class="space-y-4 mb-6">
   <div>
     <h2 class="page-h2">{{ chrome.t("alerts-notify-types-heading") }}</h2>
-    <p class="text-muted text-[13px] mt-1">{{ chrome.t("alerts-notify-types-desc") }}</p>
+    <p class="text-muted text-[13px] mt-1">
+      {{ chrome.t("alerts-notify-types-desc") }}
+      <a class="link" href="/web/settings/integrations/">{{ chrome.t("nav-integrations") }}</a>
+    </p>
   </div>
 
   {% if notify_integrations.is_empty() %}
-    <div class="card card-pad text-muted text-[13px]">{{ chrome.t("alerts-notify-types-empty") }}</div>
+    <div class="card card-pad text-muted text-[13px]">
+      {{ chrome.t("alerts-notify-types-empty") }}
+      <a class="link" href="/web/settings/integrations/">{{ chrome.t("nav-integrations") }}</a>
+    </div>
   {% else %}
     <div class="card overflow-hidden">
       <div class="table-wrap">

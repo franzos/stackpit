@@ -108,6 +108,10 @@
        class="sidebar-link{% if active == "alerts" %} sidebar-link-active{% endif %}">
       <span>{{ chrome.t("nav-alerts-digests") |safe }}</span>
     </a>
+    <a href="/web/settings/queue/"
+       class="sidebar-link{% if active == "queue" %} sidebar-link-active{% endif %}">
+      <span>{{ chrome.t("nav-delivery-queue") }}</span>
+    </a>
     <a href="/web/settings/defaults/"
        class="sidebar-link{% if active == "defaults" %} sidebar-link-active{% endif %}">
       <span>{{ chrome.t("nav-defaults") }}</span>

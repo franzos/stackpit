@@ -25,3 +25,4 @@ nav-aria-primary = Principal
 nav-aria-breadcrumb = Trilho de navegação
 nav-active-org = Ativa:
 nav-aria-active-org = Organização ativa: { $org }
+nav-delivery-queue = Fila de entrega

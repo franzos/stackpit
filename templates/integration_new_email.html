@@ -113,6 +113,23 @@
       {% endif %}
 
       <div>
+        <label class="field-label" for="int_to">{{ chrome.t("integrations-email-to-label") }}</label>
+        <input class="input"
+               type="email"
+               id="int_to"
+               name="to_address"
+               placeholder="alerts@example.com">
+        <p class="text-muted text-[12px] mt-1">{{ chrome.t("integrations-email-to-help") }}</p>
+      </div>
+
+      <div>
+        <label class="flex items-center gap-2 text-[13px]">
+          <input type="checkbox" name="is_global" value="1">
+          {{ chrome.t("integrations-global-label") }}
+        </label>
+        <p class="text-muted text-[12px] mt-1">{{ chrome.t("integrations-global-help") }}</p>
+      </div>
+      <div>
         <button type="submit" class="btn btn-primary">{{ chrome.t("integrations-create") }}</button>
       </div>
     </form>

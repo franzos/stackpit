@@ -75,9 +75,14 @@
         <tbody>
           {% for i in integrations %}
             <tr>
-              <td class="font-semibold"><bdi>{{ i.name }}</bdi></td>
+              <td class="font-semibold">
+                <a class="link" href="/web/settings/integrations/{{ i.id }}/"><bdi>{{ i.name }}</bdi></a>
+              </td>
               <td>
                 <span class="badge badge-neutral">{{ i.kind }}</span>
+                {% if i.is_global %}
+                  <span class="badge badge-success ms-1">{{ chrome.t("integrations-global-badge") }}</span>
+                {% endif %}
                 {% if !integrations_licensed && i.kind != "email" %}
                   <span class="badge badge-warning ms-1"
                         title="{{ chrome.t("flash-integration-license-required") }}">{{ chrome.t("integrations-license-required-badge") }}</span>
@@ -105,6 +110,19 @@
                     class="inline">
                 <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
                 <button type="submit" class="btn btn-secondary">{{ chrome.t("integrations-test") }}</button>
+              </form>
+            {% endif %}
+            {% if !i.kind.is_tracker() %}
+              <form method="post"
+                    action="/web/settings/integrations/{{ i.id }}/global"
+                    class="inline ms-1">
+                <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+                {% if i.is_global %}
+                  <button type="submit" class="btn btn-secondary">{{ chrome.t("integrations-global-off") }}</button>
+                {% else %}
+                  <input type="hidden" name="is_global" value="1">
+                  <button type="submit" class="btn btn-secondary">{{ chrome.t("integrations-global-on") }}</button>
+                {% endif %}
               </form>
             {% endif %}
             <form method="post"

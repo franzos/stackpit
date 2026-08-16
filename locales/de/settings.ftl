@@ -35,3 +35,21 @@ provision-subtitle-1 = Die folgenden Organisationen sind über deinen Identität
 provision-subtitle-2 = Wähle die aus, die du in Stackpit erstellen möchtest.
 provision-create = Ausgewählte erstellen
 provision-skip = Überspringen
+
+# Zustellwarteschlange
+queue-page-title = Zustellwarteschlange — Stackpit
+queue-subtitle = Benachrichtigungen, die nicht zugestellt werden konnten. Sie werden 24 Stunden lang automatisch wiederholt und warten danach hier auf dich.
+queue-count-pending = { $count } ausstehend
+queue-count-failed = { $count } fehlgeschlagen
+queue-empty = Nichts in der Warteschlange. Alle Benachrichtigungen wurden zugestellt.
+queue-col-integration = Integration
+queue-col-project = Projekt
+queue-col-state = Status
+queue-col-attempts = Versuche
+queue-col-queued = Eingereiht
+queue-col-error = Letzter Fehler
+queue-state-pending = Wird wiederholt
+queue-state-failed = Aufgegeben
+queue-replay = Erneut senden
+queue-cancel = Verwerfen
+queue-cancel-confirm = Diese Benachrichtigung verwerfen, ohne sie zuzustellen?

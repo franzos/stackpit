@@ -8,8 +8,8 @@ alerts-notify-help-post = page.
 
 # --- Notification types (per-integration new-issue / regression toggles) ---
 alerts-notify-types-heading = Notification types
-alerts-notify-types-desc = New-issue and regression alerts fire on every newly-seen or regressed issue, gated per integration below. Threshold rules fire on event volume in a window; digests are periodic summaries.
-alerts-notify-types-empty = No active project integrations yet. Link one from a project's integrations page.
+alerts-notify-types-desc = New-issue and regression alerts fire on every newly-seen or regressed issue. Threshold rules fire on event volume in a window; digests are periodic summaries. This list covers integrations a project has linked itself — an org-wide integration delivers to every project and is managed on the integrations page.
+alerts-notify-types-empty = No project has linked an integration of its own. Org-wide integrations are not listed here and may still be delivering; check the integrations page.
 alerts-col-integration = Integration
 alerts-col-new-issues = New issues
 alerts-col-regressions = Regressions

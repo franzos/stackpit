@@ -40,8 +40,7 @@ impl ForgeType {
     }
 }
 
-/// Guesses the forge from the hostname. Self-hosted GitLab instances get
-/// caught by the `contains("gitlab")` fallback -- good enough for most cases.
+/// Guesses the forge from the hostname; a neutral host stays Unknown and needs an override.
 pub fn detect_forge(repo_url: &str) -> (ForgeType, String) {
     let hostname = extract_hostname(repo_url);
     let forge = match hostname.as_str() {
@@ -54,10 +53,100 @@ pub fn detect_forge(repo_url: &str) -> (ForgeType, String) {
         "gitee.com" => ForgeType::Gitee,
         "dev.azure.com" | "ssh.dev.azure.com" => ForgeType::Azure,
         h if h.contains("gitlab") => ForgeType::GitLab,
+        h if h.contains("github") => ForgeType::GitHub,
+        h if h.contains("forgejo") || h.contains("gitea") => ForgeType::Gitea,
         _ => ForgeType::Unknown,
     };
     (forge, hostname)
 }
+
+/// Forge tag for a tracker integration kind; Forgejo maps onto `gitea`, notify kinds to `None`.
+pub fn tracker_forge_tag(kind: crate::domain::IntegrationKind) -> Option<&'static str> {
+    use crate::domain::IntegrationKind as K;
+    match kind {
+        K::GitHub => Some(ForgeType::GitHub.as_str()),
+        K::GitLab => Some(ForgeType::GitLab.as_str()),
+        K::Forgejo => Some(ForgeType::Gitea.as_str()),
+        K::Webhook | K::Slack | K::Email => None,
+    }
+}
+
+/// A repository's forge coordinates, derived from its URL.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ForgeRef {
+    pub host: String,
+    /// GitHub and Forgejo: the first path segment. `None` for GitLab.
+    pub owner: Option<String>,
+    /// GitHub and Forgejo: the second path segment. `None` for GitLab.
+    pub repo: Option<String>,
+    /// GitLab: the whole namespace path, percent-encoded. `None` for the others.
+    pub gitlab_path: Option<String>,
+}
+
+/// The path after the host, minus surrounding slashes and any `.git` suffix.
+pub fn repo_path(repo_url: &str) -> String {
+    let url = repo_url.trim().trim_end_matches('/');
+    let url = url.strip_suffix(".git").unwrap_or(url);
+
+    if let Some(rest) = url.strip_prefix("git@") {
+        if let Some((_, path)) = rest.split_once(':') {
+            return path.trim_matches('/').to_string();
+        }
+    }
+
+    let after_scheme = url.find("://").map(|i| &url[i + 3..]).unwrap_or(url);
+
+    // Userinfo lives inside the authority; splitting it off first would move this split point.
+    match after_scheme.split_once('/') {
+        Some((_authority, path)) => path.trim_matches('/').to_string(),
+        None => String::new(),
+    }
+}
+
+/// Derive tracker coordinates from a repository URL.
+pub fn derive_forge_ref(forge: &ForgeType, repo_url: &str) -> Result<ForgeRef, String> {
+    let host = extract_hostname(repo_url);
+    if host.is_empty() {
+        return Err(format!("cannot read a hostname from `{repo_url}`"));
+    }
+    let path = repo_path(repo_url);
+    if path.is_empty() {
+        return Err(format!("`{repo_url}` has no repository path"));
+    }
+
+    match forge {
+        ForgeType::GitLab => Ok(ForgeRef {
+            host,
+            owner: None,
+            repo: None,
+            gitlab_path: Some(
+                percent_encoding::utf8_percent_encode(&path, GITLAB_PATH_ENCODE).to_string(),
+            ),
+        }),
+        ForgeType::GitHub | ForgeType::Gitea => {
+            let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+            if segments.len() != 2 {
+                return Err(format!(
+                    "expected an owner/repo path, got `{path}` ({} segments)",
+                    segments.len()
+                ));
+            }
+            Ok(ForgeRef {
+                host,
+                owner: Some(segments[0].to_string()),
+                repo: Some(segments[1].to_string()),
+                gitlab_path: None,
+            })
+        }
+        other => Err(format!("{} is not a tracker forge", other.as_str())),
+    }
+}
+
+/// GitLab's project reference needs `/` encoded, which the default PATH set leaves alone.
+const GITLAB_PATH_ENCODE: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'_')
+    .remove(b'.');
 
 /// Human-friendly label for the forge -- falls back to the raw hostname.
 pub fn label_from_hostname(hostname: &str) -> String {
@@ -132,7 +221,7 @@ fn normalize_repo_url(url: &str) -> String {
     url.to_string()
 }
 
-fn extract_hostname(url: &str) -> String {
+pub fn extract_hostname(url: &str) -> String {
     let url = url.trim();
 
     // git@ style -- colon separates host from path
@@ -145,14 +234,16 @@ fn extract_hostname(url: &str) -> String {
     // Strip scheme and optional userinfo to get at the hostname
     let after_scheme = url.find("://").map(|i| &url[i + 3..]).unwrap_or(url);
 
-    let after_userinfo = after_scheme
-        .split_once('@')
-        .map(|(_, rest)| rest)
-        .unwrap_or(after_scheme);
+    // Isolate the authority first; a path segment with an `@` could otherwise fake the host.
+    let authority = after_scheme.split('/').next().unwrap_or(after_scheme);
 
-    // Everything before the first / or : is the host
+    let after_userinfo = authority
+        .rsplit_once('@')
+        .map(|(_, rest)| rest)
+        .unwrap_or(authority);
+
     after_userinfo
-        .split(['/', ':'])
+        .split(':')
         .next()
         .unwrap_or(after_userinfo)
         .to_string()
@@ -355,6 +446,144 @@ mod tests {
     #[test]
     fn label_unknown_host() {
         assert_eq!(label_from_hostname("mygit.local"), "mygit.local");
+    }
+
+    #[test]
+    fn detect_self_hosted_github_and_forgejo() {
+        assert_eq!(
+            detect_forge("https://github.acme.internal/org/repo").0,
+            ForgeType::GitHub
+        );
+        assert_eq!(
+            detect_forge("https://forgejo.acme.internal/org/repo").0,
+            ForgeType::Gitea
+        );
+        assert_eq!(
+            detect_forge("https://gitea.acme.internal/org/repo").0,
+            ForgeType::Gitea
+        );
+    }
+
+    #[test]
+    fn detect_leaves_a_neutral_host_unknown() {
+        assert_eq!(
+            detect_forge("https://git.gofranz.com/franz/stackpit").0,
+            ForgeType::Unknown
+        );
+    }
+
+    #[test]
+    fn repo_path_strips_scheme_host_git_suffix_and_slashes() {
+        assert_eq!(repo_path("https://github.com/acme/backend"), "acme/backend");
+        assert_eq!(
+            repo_path("https://github.com/acme/backend.git"),
+            "acme/backend"
+        );
+        assert_eq!(
+            repo_path("https://github.com/acme/backend/"),
+            "acme/backend"
+        );
+        assert_eq!(repo_path("git@github.com:acme/backend.git"), "acme/backend");
+        assert_eq!(
+            repo_path("ssh://git@gitlab.example/group/sub/proj.git"),
+            "group/sub/proj"
+        );
+        assert_eq!(repo_path("https://github.com"), "");
+    }
+
+    #[test]
+    fn derive_github_ref_needs_exactly_two_segments() {
+        let r = derive_forge_ref(&ForgeType::GitHub, "https://github.com/acme/backend").unwrap();
+        assert_eq!(r.host, "github.com");
+        assert_eq!(r.owner.as_deref(), Some("acme"));
+        assert_eq!(r.repo.as_deref(), Some("backend"));
+        assert!(r.gitlab_path.is_none());
+
+        assert!(derive_forge_ref(&ForgeType::GitHub, "https://github.com/acme").is_err());
+        assert!(derive_forge_ref(&ForgeType::GitHub, "https://github.com/a/b/c").is_err());
+        assert!(derive_forge_ref(&ForgeType::GitHub, "https://github.com").is_err());
+    }
+
+    #[test]
+    fn derive_forgejo_ref_uses_the_same_two_segment_rule() {
+        let r =
+            derive_forge_ref(&ForgeType::Gitea, "git@git.gofranz.com:franz/stackpit.git").unwrap();
+        assert_eq!(r.host, "git.gofranz.com");
+        assert_eq!(r.owner.as_deref(), Some("franz"));
+        assert_eq!(r.repo.as_deref(), Some("stackpit"));
+    }
+
+    #[test]
+    fn derive_gitlab_ref_encodes_the_whole_subgroup_path() {
+        let r = derive_forge_ref(
+            &ForgeType::GitLab,
+            "https://gitlab.com/group/subgroup/project.git",
+        )
+        .unwrap();
+        assert_eq!(r.host, "gitlab.com");
+        assert_eq!(r.gitlab_path.as_deref(), Some("group%2Fsubgroup%2Fproject"));
+        assert!(r.owner.is_none());
+        assert!(r.repo.is_none());
+
+        let flat = derive_forge_ref(&ForgeType::GitLab, "git@gitlab.com:acme/backend.git").unwrap();
+        assert_eq!(flat.gitlab_path.as_deref(), Some("acme%2Fbackend"));
+    }
+
+    #[test]
+    fn gitlab_path_leaves_unreserved_characters_alone() {
+        let r =
+            derive_forge_ref(&ForgeType::GitLab, "https://gitlab.com/my-org/my.repo_v2").unwrap();
+        assert_eq!(r.gitlab_path.as_deref(), Some("my-org%2Fmy.repo_v2"));
+    }
+
+    #[test]
+    fn derive_rejects_non_tracker_forges() {
+        assert!(derive_forge_ref(&ForgeType::Bitbucket, "https://bitbucket.org/a/b").is_err());
+        assert!(derive_forge_ref(&ForgeType::Unknown, "https://git.local/a/b").is_err());
+    }
+
+    #[test]
+    fn tracker_tag_maps_forgejo_onto_gitea_and_ignores_channels() {
+        use crate::domain::IntegrationKind as K;
+        assert_eq!(tracker_forge_tag(K::GitHub), Some("github"));
+        assert_eq!(tracker_forge_tag(K::GitLab), Some("gitlab"));
+        assert_eq!(tracker_forge_tag(K::Forgejo), Some("gitea"));
+        assert_eq!(tracker_forge_tag(K::Slack), None);
+        assert_eq!(tracker_forge_tag(K::Webhook), None);
+        assert_eq!(tracker_forge_tag(K::Email), None);
+    }
+
+    #[test]
+    fn extract_hostname_handles_every_accepted_url_form() {
+        assert_eq!(extract_hostname("https://github.com/a/b"), "github.com");
+        assert_eq!(extract_hostname("git@github.com:a/b.git"), "github.com");
+        assert_eq!(
+            extract_hostname("ssh://git@git.local:2222/a/b"),
+            "git.local"
+        );
+        assert_eq!(extract_hostname("https://user@git.local/a/b"), "git.local");
+    }
+
+    /// The tracker's integration-host == repo-host guard is only as good as this.
+    #[test]
+    fn a_path_embedded_at_sign_cannot_advertise_a_host() {
+        assert_eq!(
+            extract_hostname("https://attacker.example/owner@github.com/repo"),
+            "attacker.example"
+        );
+        assert_eq!(
+            extract_hostname("https://attacker.example:8443/a@github.com/b"),
+            "attacker.example"
+        );
+        assert_eq!(
+            extract_hostname("https://user@git.local/owner@github.com/repo"),
+            "git.local"
+        );
+        assert_eq!(
+            repo_path("https://attacker.example/owner@github.com/repo"),
+            "owner@github.com/repo",
+            "the whole path is the path; none of it is authority"
+        );
     }
 
     #[test]

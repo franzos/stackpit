@@ -35,3 +35,21 @@ provision-subtitle-1 = The following organisations are available from your ident
 provision-subtitle-2 = Select the ones you want to create in Stackpit.
 provision-create = Create selected
 provision-skip = Skip
+
+# Delivery queue
+queue-page-title = Delivery queue — Stackpit
+queue-subtitle = Notifications that could not be delivered. They retry automatically for 24 hours, then wait here for you.
+queue-count-pending = { $count } pending
+queue-count-failed = { $count } failed
+queue-empty = Nothing queued. Every notification has been delivered.
+queue-col-integration = Integration
+queue-col-project = Project
+queue-col-state = State
+queue-col-attempts = Attempts
+queue-col-queued = Queued
+queue-col-error = Last error
+queue-state-pending = Retrying
+queue-state-failed = Gave up
+queue-replay = Replay
+queue-cancel = Cancel
+queue-cancel-confirm = Discard this notification without delivering it?

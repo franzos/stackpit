@@ -108,6 +108,8 @@ openidconnect = { version = "4", default-features = false, features = ["reqwest"
 # tracks Hydra's documented signing algorithm.
 jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto"] }
 url = "2"
+# already in the tree via url/askama/axum, so making it direct adds no audit surface.
+percent-encoding = "2"
 # i18n: Fluent loader (embeds locales/*.ftl at compile time), language
 # identifiers, and negotiation.
 fluent-templates = "0.15"
@@ -121,7 +123,8 @@ metrics-exporter-prometheus = { version = "0.18", default-features = false }
 [dev-dependencies]
 # loopback http only — no TLS feature needed.
 reqwest = { version = "0.12", default-features = false, features = ["cookies"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+# test-util drives the retry sleeps in the delivery-queue tests without waiting.
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
 # reuse the real cookie-hash instead of reimplementing it in the auth test.
 stackpit-auth = { path = "stackpit-auth" }
 # same crate axum's Form uses, for round-tripping form structs in unit tests.

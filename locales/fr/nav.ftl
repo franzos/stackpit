@@ -25,3 +25,4 @@ nav-aria-primary = Navigation principale
 nav-aria-breadcrumb = Fil d'Ariane
 nav-active-org = Active :
 nav-aria-active-org = Organisation active : { $org }
+nav-delivery-queue = File de diffusion

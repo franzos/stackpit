@@ -98,3 +98,13 @@ flash-ip-block-removed = Blocage d'IP retiré
 
 # Nouveau projet
 flash-project-name-required = Le nom du projet est requis
+flash-email-not-configured = L'e-mail n'est pas configuré. Ajoutez une section [email] avec un fournisseur à la configuration du serveur.
+flash-integration-saved = Intégration mise à jour
+flash-integration-global-not-for-trackers = Les gestionnaires de tickets n'utilisent pas la diffusion à l'échelle de l'organisation ; le dépôt visé provient des paramètres de dépôt de chaque projet.
+flash-project-excluded = Projet exclu de cette intégration
+flash-project-included = Projet plus exclu
+flash-global-email-needs-recipient = Une intégration e-mail à l'échelle de l'organisation exige un destinataire par défaut ; les projets qui ne l'ont jamais activée n'ont pas d'adresse propre.
+flash-queue-item-not-found = Notification en attente introuvable
+flash-queue-replayed = Notification livrée et retirée de la file
+flash-queue-replay-failed = Échec du renvoi : { $error }
+flash-queue-cancelled = Notification en attente abandonnée

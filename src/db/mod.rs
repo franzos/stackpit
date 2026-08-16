@@ -6,6 +6,8 @@ pub mod pool;
 #[cfg(any(feature = "sqlite", test))]
 use anyhow::Result;
 
+#[cfg(all(test, feature = "sqlite", not(feature = "postgres")))]
+pub use pool::run_migrations_to;
 pub use pool::{run_migrations, Db, DbPool, DbRow};
 
 use sqlx::Row;

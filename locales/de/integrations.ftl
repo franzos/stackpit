@@ -55,3 +55,42 @@ integrations-email-token-placeholder = API-Token des Anbieters
 integrations-email-from-label = Absenderadresse
 integrations-email-fromname-label = Absendername
 integrations-email-smtp-hint = SMTP nutzt die [email]-Verbindung des Servers; ein Token pro Integration ist nicht nötig.
+integrations-tracker-target-help = In welches Repository geschrieben wird, ergibt sich aus den Repository-Einstellungen des jeweiligen Projekts und wird deshalb nicht hier konfiguriert. Lege das Repository in den Projekteinstellungen an.
+integrations-global-label = An alle Projekte zustellen
+integrations-global-help = Meldungen gehen an jedes Projekt dieser Organisation, außer an die, die du auf der Seite dieser Integration ausschließt. Level- und Umgebungsfilter pro Projekt gelten weiterhin zusätzlich.
+integrations-global-badge = organisationsweit
+integrations-global-save = Zustellung speichern
+integrations-global-on = Organisationsweit zustellen
+integrations-global-off = Organisationsweite Zustellung beenden
+
+# Integrationsdetail: Zustellung pro Projekt
+integrations-detail-title = Integration — Stackpit
+integrations-back = Zurück zu den Integrationen
+integrations-projects-heading = Zustellung pro Projekt
+integrations-projects-hint-global = Diese Integration stellt an jedes Projekt unten zu, sofern du es nicht ausschließt. Ausschließen ist die einzige Abmeldung; eine Einschlussliste gibt es nicht.
+integrations-projects-hint-per-project = Diese Integration stellt nur dort zu, wo ein Projekt sie aktiviert hat. Markiere sie als organisationsweit, um überall zuzustellen.
+integrations-projects-hint-tracker = Issue-Tracker werden über Forge und Host mit den Repositories eines Projekts abgeglichen. Ein ausgeschlossenes Projekt bietet diesen Tracker nicht mehr zur Auswahl an.
+integrations-projects-empty = Diese Organisation hat noch keine Projekte.
+integrations-col-project = Projekt
+integrations-col-state = Status
+integrations-project-archived = archiviert
+integrations-state-default = Stellt zu
+integrations-state-customised = Angepasst
+integrations-state-excluded = Ausgeschlossen
+integrations-state-no-repo = Kein passendes Repository
+integrations-state-not-routed = Nicht aktiviert
+integrations-exclude = Ausschließen
+integrations-include = Einschließen
+integrations-email-to-label = Standardempfänger
+integrations-email-to-help = Wird verwendet, wo ein Projekt keine eigene Empfängeradresse gesetzt hat. Für organisationsweite Integrationen erforderlich.
+
+# Issue-Tracker
+integrations-add-tracker = + Issue-Tracker
+integrations-tracker-title = Issue-Tracker hinzufügen — Stackpit
+integrations-tracker-breadcrumb = Issue-Tracker hinzufügen
+integrations-tracker-heading = Issue-Tracker-Integration hinzufügen
+integrations-tracker-kind-label = Tracker
+integrations-tracker-name-placeholder = z. B. GitHub Issues
+integrations-tracker-url-label = Basis-URL
+integrations-tracker-token-label = API-Token
+integrations-tracker-token-placeholder = Persönlicher Zugriffstoken

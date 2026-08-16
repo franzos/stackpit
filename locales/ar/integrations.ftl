@@ -53,3 +53,42 @@ integrations-email-token-placeholder = رمز API للمزوّد
 integrations-email-from-label = عنوان المرسِل
 integrations-email-fromname-label = اسم المرسِل
 integrations-email-smtp-hint = يستخدم SMTP اتصال [email] الخاص بالخادم؛ لا حاجة إلى رمز لكل تكامل.
+
+# متعقّب المشكلات
+integrations-add-tracker = + متعقّب مشكلات
+integrations-tracker-title = إضافة متعقّب مشكلات — Stackpit
+integrations-tracker-breadcrumb = إضافة متعقّب مشكلات
+integrations-tracker-heading = إضافة تكامل متعقّب مشكلات
+integrations-tracker-kind-label = المتعقّب
+integrations-tracker-name-placeholder = مثال: GitHub Issues
+integrations-tracker-url-label = عنوان URL الأساسي
+integrations-tracker-token-label = رمز API
+integrations-tracker-token-placeholder = رمز وصول شخصي
+integrations-tracker-target-help = المستودع الهدف يأتي من إعدادات مستودعات كل مشروع، لذلك لا يُضبط هنا. أضف المستودع من إعدادات المشروع.
+integrations-global-label = التسليم إلى كل المشاريع
+integrations-global-help = تذهب التنبيهات إلى كل مشروع في هذه المؤسسة، عدا ما تستبعده في صفحة هذا التكامل. تظل مرشّحات المستوى والبيئة الخاصة بكل مشروع سارية فوق ذلك.
+integrations-global-badge = على مستوى المؤسسة
+integrations-global-save = حفظ التوجيه
+integrations-global-on = التسليم على مستوى المؤسسة
+integrations-global-off = إيقاف التسليم على مستوى المؤسسة
+
+# تفاصيل التكامل: التوجيه لكل مشروع
+integrations-detail-title = التكامل — Stackpit
+integrations-back = العودة إلى التكاملات
+integrations-projects-heading = التوجيه لكل مشروع
+integrations-projects-hint-global = يسلّم هذا التكامل إلى كل المشاريع أدناه ما لم تستبعدها. الاستبعاد هو السبيل الوحيد للخروج؛ لا توجد قائمة تضمين.
+integrations-projects-hint-per-project = لا يسلّم هذا التكامل إلا حيث فعّله المشروع. اجعله على مستوى المؤسسة ليسلّم في كل مكان.
+integrations-projects-hint-tracker = تُطابَق متعقّبات المشكلات مع مستودعات المشروع حسب نوع المنصّة والمضيف. استبعاد مشروع يُخرج هذا المتعقّب من خيارات الإنشاء فيه.
+integrations-projects-empty = لا توجد مشاريع في هذه المؤسسة بعد.
+integrations-col-project = المشروع
+integrations-col-state = الحالة
+integrations-project-archived = مؤرشف
+integrations-state-default = يسلّم
+integrations-state-customised = مخصّص
+integrations-state-excluded = مستبعَد
+integrations-state-no-repo = لا يوجد مستودع مطابق
+integrations-state-not-routed = غير مُفعّل
+integrations-exclude = استبعاد
+integrations-include = تضمين
+integrations-email-to-label = المستلم الافتراضي
+integrations-email-to-help = يُستخدم حيث لم يضبط المشروع عنوانه الخاص. مطلوب للتكامل على مستوى المؤسسة.

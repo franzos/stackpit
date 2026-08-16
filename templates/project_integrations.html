@@ -65,50 +65,24 @@
             <form method="post"
                   action="/web/projects/{{ project_id }}/settings/integrations/{{ pi.id }}/delete">
               <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
-              <button type="submit"
-                      class="btn btn-danger"
-                      data-confirm="{{ chrome.t("projects-integrations-deactivate-confirm") }}">{{ chrome.t("projects-integrations-deactivate") }}</button>
+              {# For a global integration this resets to the org defaults; silencing is an exclusion on the integration's own page. #}
+              {% if pi.integration_is_global %}
+                <button type="submit"
+                        class="btn btn-secondary"
+                        data-confirm="{{ chrome.t("projects-integrations-reset-confirm") }}">{{ chrome.t("projects-integrations-reset") }}</button>
+              {% else %}
+                <button type="submit"
+                        class="btn btn-danger"
+                        data-confirm="{{ chrome.t("projects-integrations-deactivate-confirm") }}">{{ chrome.t("projects-integrations-deactivate") }}</button>
+              {% endif %}
             </form>
           </div>
         </div>
+        {% if pi.integration_is_global %}
+          <p class="text-muted text-[13px] mb-3">{{ chrome.t("projects-integrations-global-hint") }}</p>
+        {% endif %}
         {% if pi.integration_kind.is_tracker() %}
-        <form class="settings-form"
-              method="post"
-              action="/web/projects/{{ project_id }}/settings/integrations/{{ pi.id }}/target">
-          <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
           <p class="text-muted text-[13px]">{{ chrome.t("projects-integrations-tracker-hint") }}</p>
-          <div class="grid grid-cols-2 gap-3">
-            <div>
-              <label class="field-label" for="owner_{{ pi.id }}">{{ chrome.t("projects-integrations-tracker-owner") }}</label>
-              <input class="input"
-                     type="text"
-                     id="owner_{{ pi.id }}"
-                     name="owner"
-                     value="{% match overrides.get(&pi.integration_id) %}{% when Some with (o) %}{% match o.owner %}{% when Some with (v) %}{{ v }}{% when None %}{% endmatch %}{% when None %}{% endmatch %}">
-            </div>
-            <div>
-              <label class="field-label" for="repo_{{ pi.id }}">{{ chrome.t("projects-integrations-tracker-repo") }}</label>
-              <input class="input"
-                     type="text"
-                     id="repo_{{ pi.id }}"
-                     name="repo"
-                     value="{% match overrides.get(&pi.integration_id) %}{% when Some with (o) %}{% match o.repo %}{% when Some with (v) %}{{ v }}{% when None %}{% endmatch %}{% when None %}{% endmatch %}">
-            </div>
-          </div>
-          <div>
-            <label class="field-label" for="project_id_{{ pi.id }}">
-              {{ chrome.t("projects-integrations-tracker-project-id") }} <span class="text-muted normal-case tracking-normal font-normal">{{ chrome.t("projects-integrations-tracker-project-id-note") }}</span>
-            </label>
-            <input class="input"
-                   type="text"
-                   id="project_id_{{ pi.id }}"
-                   name="project_id"
-                   value="{% match overrides.get(&pi.integration_id) %}{% when Some with (o) %}{% match o.tracker_project_id %}{% when Some with (v) %}{{ v }}{% when None %}{% endmatch %}{% when None %}{% endmatch %}">
-          </div>
-          <div>
-            <button type="submit" class="btn btn-primary">{{ chrome.t("projects-integrations-tracker-save") }}</button>
-          </div>
-        </form>
         {% else %}
         <form class="settings-form"
               method="post"

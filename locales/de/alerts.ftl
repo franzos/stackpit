@@ -9,8 +9,8 @@ alerts-notify-help-post = ausgelöst.
 
 # --- Benachrichtigungstypen ---
 alerts-notify-types-heading = Benachrichtigungstypen
-alerts-notify-types-desc = Neue-Fehler- und Regressions-Benachrichtigungen werden für jeden neu gesehenen oder erneut auftretenden Fehler ausgelöst, unten pro Integration steuerbar. Schwellenwert-Regeln greifen bei Event-Volumen in einem Zeitfenster; Zusammenfassungen sind periodische Übersichten.
-alerts-notify-types-empty = Noch keine aktiven Projekt-Integrationen. Verknüpfe eine über die Integrationsseite eines Projekts.
+alerts-notify-types-desc = Neue-Fehler- und Regressions-Benachrichtigungen werden für jeden neu gesehenen oder erneut auftretenden Fehler ausgelöst. Schwellenwert-Regeln greifen bei Event-Volumen in einem Zeitfenster; Zusammenfassungen sind periodische Übersichten. Diese Liste zeigt Integrationen, die ein Projekt selbst verknüpft hat — eine organisationsweite Integration liefert an jedes Projekt und wird auf der Integrationsseite verwaltet.
+alerts-notify-types-empty = Kein Projekt hat eine eigene Integration verknüpft. Organisationsweite Integrationen erscheinen hier nicht und liefern möglicherweise trotzdem; siehe die Integrationsseite.
 alerts-col-integration = Integration
 alerts-col-new-issues = Neue Fehler
 alerts-col-regressions = Regressionen

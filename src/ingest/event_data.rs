@@ -170,10 +170,10 @@ pub fn extract_exceptions(
                     }
 
                     let source_links = match (commit_sha, lineno) {
-                        (Some(sha), Some(ln)) => repos
-                            .iter()
+                        (Some(sha), Some(ln)) => select_repos_for_frame(repos, &filename)
+                            .into_iter()
                             .filter_map(|repo| {
-                                let ft = forge::ForgeType::from_tag(&repo.forge_type);
+                                let ft = forge::ForgeType::from_tag(repo.effective_forge_type());
                                 let (_, hostname) = forge::detect_forge(&repo.repo_url);
                                 let url = forge::source_url(
                                     &ft,
@@ -222,6 +222,30 @@ pub fn extract_exceptions(
     }
 
     result
+}
+
+/// Repos whose source links apply to a frame, matched on filename prefix.
+///
+/// Once any repo in the project sets a prefix, prefix-less repos stop matching.
+fn select_repos_for_frame<'a>(repos: &'a [ProjectRepo], filename: &str) -> Vec<&'a ProjectRepo> {
+    let any_prefixed = repos.iter().any(|r| {
+        r.stack_path_prefix
+            .as_deref()
+            .is_some_and(|p| !p.is_empty())
+    });
+
+    if !any_prefixed {
+        return repos.iter().collect();
+    }
+
+    repos
+        .iter()
+        .filter(|r| {
+            r.stack_path_prefix
+                .as_deref()
+                .is_some_and(|p| !p.is_empty() && filename.starts_with(p))
+        })
+        .collect()
 }
 
 /// Build a readable message for an `xhr`/`fetch` breadcrumb that carries none.
@@ -668,6 +692,86 @@ fn try_resolve_with_debug_meta(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn repo(id: i64, url: &str, prefix: Option<&str>) -> ProjectRepo {
+        ProjectRepo {
+            id,
+            project_id: 1,
+            repo_url: url.into(),
+            forge_type: "github".into(),
+            forge_type_override: None,
+            url_template: None,
+            stack_path_prefix: prefix.map(String::from),
+        }
+    }
+
+    fn picked(repos: &[ProjectRepo], filename: &str) -> Vec<i64> {
+        select_repos_for_frame(repos, filename)
+            .iter()
+            .map(|r| r.id)
+            .collect()
+    }
+
+    #[test]
+    fn single_repo_matches_everything_until_it_carries_a_prefix() {
+        let one = vec![repo(1, "https://github.com/acme/api", None)];
+        assert_eq!(picked(&one, "src/main.rs"), vec![1]);
+        assert_eq!(picked(&one, "anything/at/all.py"), vec![1]);
+
+        let one_prefixed = vec![repo(
+            1,
+            "https://github.com/acme/api",
+            Some("services/api/"),
+        )];
+        assert_eq!(picked(&one_prefixed, "services/api/main.rs"), vec![1]);
+        assert!(
+            picked(&one_prefixed, "tools/gen.sh").is_empty(),
+            "a prefix filters a single-repo project too; there is no repo-count carve-out"
+        );
+    }
+
+    #[test]
+    fn multi_repo_without_prefixes_keeps_the_fan_out() {
+        let repos = vec![
+            repo(1, "https://github.com/acme/api", None),
+            repo(2, "https://github.com/acme/web", None),
+        ];
+        assert_eq!(picked(&repos, "src/main.rs"), vec![1, 2]);
+    }
+
+    #[test]
+    fn multi_repo_all_prefixed_picks_only_the_matching_one() {
+        let repos = vec![
+            repo(1, "https://github.com/acme/api", Some("services/api/")),
+            repo(2, "https://github.com/acme/web", Some("apps/web/")),
+        ];
+        assert_eq!(picked(&repos, "services/api/handlers.rs"), vec![1]);
+        assert_eq!(picked(&repos, "apps/web/index.ts"), vec![2]);
+        assert!(picked(&repos, "tools/gen.sh").is_empty());
+    }
+
+    #[test]
+    fn one_prefix_switches_the_whole_project_into_prefix_matching() {
+        let repos = vec![
+            repo(1, "https://github.com/acme/api", Some("services/api/")),
+            repo(2, "https://github.com/acme/web", None),
+        ];
+        assert_eq!(picked(&repos, "services/api/handlers.rs"), vec![1]);
+        assert!(
+            picked(&repos, "apps/web/index.ts").is_empty(),
+            "a prefix-less repo must not match once any repo carries a prefix"
+        );
+    }
+
+    // A cleared form field leaves an empty string, not NULL.
+    #[test]
+    fn an_empty_prefix_is_not_a_prefix() {
+        let repos = vec![
+            repo(1, "https://github.com/acme/api", Some("")),
+            repo(2, "https://github.com/acme/web", None),
+        ];
+        assert_eq!(picked(&repos, "anything.rs"), vec![1, 2]);
+    }
 
     #[test]
     fn fmt_num_formats() {

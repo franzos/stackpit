@@ -60,6 +60,13 @@
                placeholder="{{ chrome.t("integrations-webhook-secret-placeholder") }}">
       </div>
       <div>
+        <label class="flex items-center gap-2 text-[13px]">
+          <input type="checkbox" name="is_global" value="1">
+          {{ chrome.t("integrations-global-label") }}
+        </label>
+        <p class="text-muted text-[12px] mt-1">{{ chrome.t("integrations-global-help") }}</p>
+      </div>
+      <div>
         <button type="submit" class="btn btn-primary">{{ chrome.t("integrations-create") }}</button>
       </div>
     </form>

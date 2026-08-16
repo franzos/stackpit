@@ -34,3 +34,21 @@ provision-subtitle-1 = المؤسسات التالية متاحة من مزوّ�
 provision-subtitle-2 = اختر المؤسسات التي تريد إنشاءها في Stackpit.
 provision-create = إنشاء المحدّد
 provision-skip = تخطّي
+
+# طابور التسليم
+queue-page-title = طابور التسليم — Stackpit
+queue-subtitle = إشعارات تعذّر تسليمها. تُعاد المحاولة تلقائيًا لمدة 24 ساعة، ثم تنتظرك هنا.
+queue-count-pending = { $count } قيد الانتظار
+queue-count-failed = { $count } فاشلة
+queue-empty = لا شيء في الطابور. سُلّمت كل الإشعارات.
+queue-col-integration = التكامل
+queue-col-project = المشروع
+queue-col-state = الحالة
+queue-col-attempts = المحاولات
+queue-col-queued = في الطابور منذ
+queue-col-error = آخر خطأ
+queue-state-pending = إعادة المحاولة
+queue-state-failed = تم التخلي
+queue-replay = إعادة الإرسال
+queue-cancel = تجاهل
+queue-cancel-confirm = تجاهل هذا الإشعار دون تسليمه؟

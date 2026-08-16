@@ -115,7 +115,7 @@ mod tests {
 
     fn sorted_desc(versions: &[&str]) -> Vec<String> {
         let mut v: Vec<String> = versions.iter().map(|s| s.to_string()).collect();
-        v.sort_by(|a, b| version_sort_key(b).cmp(&version_sort_key(a)));
+        v.sort_by_key(|s| std::cmp::Reverse(version_sort_key(s)));
         v
     }
 

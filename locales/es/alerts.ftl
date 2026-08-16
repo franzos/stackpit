@@ -8,8 +8,8 @@ alerts-notify-help-post = .
 
 # --- Tipos de notificación ---
 alerts-notify-types-heading = Tipos de notificación
-alerts-notify-types-desc = Las alertas de nuevo problema y regresión se disparan con cada problema recién visto o reaparecido, controladas por integración a continuación. Las reglas de umbral se disparan por volumen de eventos en una ventana; los resúmenes son síntesis periódicas.
-alerts-notify-types-empty = Aún no hay integraciones de proyecto activas. Vincula una desde la página de integraciones de un proyecto.
+alerts-notify-types-desc = Las alertas de nuevo problema y regresión se disparan con cada problema recién visto o reaparecido. Las reglas de umbral se disparan por volumen de eventos en una ventana; los resúmenes son síntesis periódicas. Esta lista solo cubre las integraciones que un proyecto ha vinculado por sí mismo — una integración de toda la organización llega a cada proyecto y se gestiona en la página de integraciones.
+alerts-notify-types-empty = Ningún proyecto ha vinculado una integración propia. Las integraciones de toda la organización no aparecen aquí y pueden estar entregando igualmente; consulta la página de integraciones.
 alerts-col-integration = Integración
 alerts-col-new-issues = Nuevos problemas
 alerts-col-regressions = Regresiones

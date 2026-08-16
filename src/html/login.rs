@@ -155,7 +155,8 @@ pub async fn login_form(
     Query(q): Query<LoginQuery>,
 ) -> impl IntoResponse {
     let locale = chrome.locale;
-    let oauth_enabled = state.oidc.is_some();
+    // Ready, not merely configured: the SSO button shows only when it would reach the IdP.
+    let oauth_enabled = state.oidc.is_ready();
     let error = q.error.as_deref().map(|c| error_message(&locale, c));
     let info = q.logout.as_deref().and_then(|c| logout_message(&locale, c));
     let tmpl = LoginTemplate {
@@ -177,7 +178,7 @@ pub async fn handle_login(
     Form(form): Form<LoginForm>,
 ) -> impl IntoResponse {
     let token = form.token.trim().to_string();
-    let oauth_enabled = state.oidc.is_some();
+    let oauth_enabled = state.oidc.is_ready();
 
     // No admin_token set? Auth is effectively disabled -- let them through.
     let expected = match &state.config.server.admin_token {
@@ -243,7 +244,11 @@ pub async fn handle_logout(State(state): State<AppState>, headers: HeaderMap) ->
 
     let mut had_grant = false;
     let mut id_token_hint = None;
-    if let (Some(_), Some(encryptor)) = (state.oidc.as_ref(), state.encryptor.as_ref()) {
+    // Configured, not ready: a grant outlives a provider outage and must still be cleared.
+    if let (true, Some(encryptor)) = (
+        state.config.auth.oauth.is_enabled(),
+        state.encryptor.as_ref(),
+    ) {
         // auth_pool to match the middleware grant branch.
         if let Some(record) =
             grants::resolve_from_headers(&headers, secure, encryptor, &state.auth_pool).await
@@ -257,8 +262,11 @@ pub async fn handle_logout(State(state): State<AppState>, headers: HeaderMap) ->
 
     // RP-initiated logout if the IdP advertises end_session_endpoint and we have
     // an id_token hint; else local-only banner for OIDC sessions; else plain.
+    let oidc_client = state.oidc.client();
     let target = match (
-        state.oidc.as_ref().and_then(|o| o.end_session_endpoint()),
+        oidc_client
+            .as_deref()
+            .and_then(|o| o.end_session_endpoint()),
         id_token_hint.as_deref(),
     ) {
         (Some(endpoint), Some(hint)) => {

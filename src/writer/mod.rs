@@ -509,6 +509,8 @@ mod tests {
     use flush::{flush_aggregation, flush_batch, insert_event};
     use simple_hll::HyperLogLog;
 
+    type LogRow = (Vec<u8>, Option<String>, Option<String>, Option<String>);
+
     async fn test_pool() -> DbPool {
         db::open_test_pool().await
     }
@@ -1753,7 +1755,7 @@ mod tests {
         let mut batch: Vec<WriteMsg> = parsed.events.into_iter().map(WriteMsg::Event).collect();
         assert!(flush_batch(&pool, &mut batch, &mut acc, None).await);
 
-        let rows: Vec<(Vec<u8>, Option<String>, Option<String>, Option<String>)> =
+        let rows: Vec<LogRow> =
             sqlx::query_as("SELECT payload, level, body, trace_id FROM logs ORDER BY body")
                 .fetch_all(&pool)
                 .await

@@ -24,3 +24,4 @@ nav-aria-primary = Основная навигация
 nav-aria-breadcrumb = Хлебные крошки
 nav-active-org = Активная:
 nav-aria-active-org = Активная организация: { $org }
+nav-delivery-queue = Очередь доставки

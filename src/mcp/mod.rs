@@ -113,7 +113,7 @@ impl FromRef<AppState> for McpState {
             auth_pool: state.auth_pool.clone(),
             pool: state.pool.clone(),
             writer_pool: state.writer_pool.clone(),
-            oidc: state.oidc.clone(),
+            oidc: state.oidc.client(),
             encryptor: state.encryptor.clone(),
             license: state.license.clone(),
             auth_cache: state.auth_cache.clone(),

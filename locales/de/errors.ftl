@@ -96,3 +96,13 @@ flash-ip-block-removed = IP-Sperre entfernt
 
 # Neues Projekt
 flash-project-name-required = Projektname ist erforderlich
+flash-integration-saved = Integration aktualisiert
+flash-integration-global-not-for-trackers = Issue-Tracker nutzen keine organisationsweite Zustellung; in welches Repository geschrieben wird, ergibt sich aus den Repository-Einstellungen des jeweiligen Projekts.
+flash-project-excluded = Projekt von dieser Integration ausgeschlossen
+flash-project-included = Projekt nicht mehr ausgeschlossen
+flash-global-email-needs-recipient = Eine organisationsweite E-Mail-Integration braucht einen Standardempfänger; Projekte, die sie nie aktiviert haben, haben keine eigene Adresse.
+flash-queue-item-not-found = Wartende Benachrichtigung nicht gefunden
+flash-queue-replayed = Benachrichtigung zugestellt und aus der Warteschlange entfernt
+flash-queue-replay-failed = Erneutes Senden fehlgeschlagen: { $error }
+flash-queue-cancelled = Wartende Benachrichtigung verworfen
+flash-email-not-configured = E-Mail ist nicht konfiguriert. Füge der Serverkonfiguration einen [email]-Abschnitt mit einem Anbieter hinzu.

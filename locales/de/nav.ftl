@@ -24,3 +24,4 @@ nav-aria-primary = Hauptnavigation
 nav-aria-breadcrumb = Navigationspfad
 nav-active-org = Aktiv:
 nav-aria-active-org = Aktive Organisation: { $org }
+nav-delivery-queue = Zustellwarteschlange

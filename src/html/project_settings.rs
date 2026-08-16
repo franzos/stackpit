@@ -204,6 +204,9 @@ pub async fn set_name(
 pub struct AddRepoForm {
     pub repo_url: String,
     pub url_template: Option<String>,
+    /// Empty means "keep the detected guess"; the select's first option.
+    pub forge_type_override: Option<String>,
+    pub stack_path_prefix: Option<String>,
 }
 
 pub async fn add_repo(
@@ -244,10 +247,17 @@ pub async fn add_repo(
     }
 
     let (forge_type, _) = forge::detect_forge(&repo_url);
-    let url_template = form
-        .url_template
-        .filter(|s| !s.trim().is_empty())
-        .map(|s| s.trim().to_string());
+    let trimmed = |v: Option<String>| {
+        v.map(|s| s.trim().to_string())
+            .filter(|s: &String| !s.is_empty())
+    };
+    let url_template = trimmed(form.url_template);
+    let stack_path_prefix = trimmed(form.stack_path_prefix);
+    // Round-trip through the enum so an unrecognised tag can't reach the row.
+    let forge_type_override = trimmed(form.forge_type_override)
+        .map(|s| forge::ForgeType::from_tag(&s))
+        .filter(|f| *f != forge::ForgeType::Unknown)
+        .map(|f| f.as_str().to_string());
 
     let s = state.clone();
     let success = chrome.t("flash-repo-added");
@@ -260,7 +270,9 @@ pub async fn add_repo(
             project_id,
             &repo_url,
             forge_type.as_str(),
+            forge_type_override.as_deref(),
             url_template.as_deref(),
+            stack_path_prefix.as_deref(),
         )
         .await,
         &chrome,
@@ -896,5 +908,77 @@ mod tests {
             mem(SYSTEM_ORG_ID, "owner", false), // system -> excluded
         ];
         assert_eq!(ids(&owner_move_targets(ms, 10)), vec![11]);
+    }
+
+    fn repo(forge: &str, over: Option<&str>, prefix: Option<&str>) -> ProjectRepo {
+        ProjectRepo {
+            id: 1,
+            project_id: 7,
+            repo_url: "https://git.gofranz.com/franz/stackpit".into(),
+            forge_type: forge.into(),
+            forge_type_override: over.map(String::from),
+            url_template: None,
+            stack_path_prefix: prefix.map(String::from),
+        }
+    }
+
+    #[test]
+    fn project_settings_renders_with_and_without_the_new_repo_columns() {
+        use askama::Template;
+        use unic_langid::langid;
+
+        for locale in [langid!("en"), langid!("de")] {
+            let chrome = PageChrome::new("csrf".into(), locale.clone(), "/web/projects/".into());
+            for repos in [
+                Vec::new(),
+                vec![repo("unknown", Some("gitea"), Some("services/api/"))],
+                vec![repo("github", None, None)],
+            ] {
+                let html = ProjectSettingsTemplate {
+                    project_id: 7,
+                    project_name: "demo".into(),
+                    project_status: "active".into(),
+                    project_source: "manual".into(),
+                    repos,
+                    move_targets: Vec::new(),
+                    message: None,
+                    nav: ProjectNavCounts::default(),
+                    chrome: chrome.clone(),
+                }
+                .render()
+                .expect("project settings renders");
+
+                assert!(
+                    !html.contains("Unknown localization"),
+                    "missing Fluent key in {locale}"
+                );
+                assert!(html.contains("stack_path_prefix"));
+                assert!(html.contains("forge_type_override"));
+            }
+        }
+    }
+
+    #[test]
+    fn settings_table_shows_the_override_not_the_detected_forge() {
+        use askama::Template;
+        use unic_langid::langid;
+
+        let chrome = PageChrome::new("csrf".into(), langid!("en"), "/web/projects/".into());
+        let html = ProjectSettingsTemplate {
+            project_id: 7,
+            project_name: "demo".into(),
+            project_status: "active".into(),
+            project_source: "manual".into(),
+            repos: vec![repo("unknown", Some("gitea"), None)],
+            move_targets: Vec::new(),
+            message: None,
+            nav: ProjectNavCounts::default(),
+            chrome,
+        }
+        .render()
+        .expect("project settings renders");
+
+        assert!(html.contains(">gitea<"));
+        assert!(!html.contains(">unknown<"));
     }
 }

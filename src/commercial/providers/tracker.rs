@@ -11,7 +11,8 @@ pub struct TrackerTarget {
     pub base_url: String,
     pub owner: Option<String>,
     pub repo: Option<String>,
-    pub project_id: Option<i64>,
+    /// GitLab's URL-encoded namespace path, taken wherever its API takes a numeric project id.
+    pub gitlab_path: Option<String>,
 }
 
 /// Why a tracker call did not produce an issue. Split by who can fix it: a
@@ -49,6 +50,18 @@ pub struct NewExternalIssue<'a> {
 pub struct CreatedExternalIssue {
     pub external_id: String,
     pub external_url: String,
+    /// State as of creation, normalised - nothing polls the forge, so it's never refreshed.
+    pub external_state: Option<String>,
+}
+
+/// GitHub and Forgejo say `open`, GitLab says `opened`; the row stores `open` either way.
+fn normalize_state(state: Option<&str>) -> Option<String> {
+    match state?.trim() {
+        "" => None,
+        "opened" => Some("open".to_string()),
+        "closed" => Some("closed".to_string()),
+        other => Some(other.to_string()),
+    }
 }
 
 pub fn issue_api_url(
@@ -64,8 +77,11 @@ pub fn issue_api_url(
             Ok(format!("{base}/repos/{owner}/{repo}/issues"))
         }
         IntegrationKind::GitLab => {
-            let project_id = target.project_id.ok_or_else(|| missing("project_id"))?;
-            Ok(format!("{base}/api/v4/projects/{project_id}/issues"))
+            let path = target
+                .gitlab_path
+                .as_deref()
+                .ok_or_else(|| missing("gitlab project path"))?;
+            Ok(format!("{base}/api/v4/projects/{path}/issues"))
         }
         IntegrationKind::Webhook | IntegrationKind::Slack | IntegrationKind::Email => {
             Err(not_a_tracker(kind))
@@ -148,12 +164,14 @@ fn parse_created(kind: IntegrationKind, body: &str) -> Result<CreatedExternalIss
             struct Resp {
                 number: i64,
                 html_url: String,
+                state: Option<String>,
             }
             let r: Resp =
                 serde_json::from_str(body).map_err(|e| TrackerError::BadResponse(e.to_string()))?;
             CreatedExternalIssue {
                 external_id: r.number.to_string(),
                 external_url: r.html_url,
+                external_state: normalize_state(r.state.as_deref()),
             }
         }
         IntegrationKind::GitLab => {
@@ -161,12 +179,14 @@ fn parse_created(kind: IntegrationKind, body: &str) -> Result<CreatedExternalIss
             struct Resp {
                 iid: i64,
                 web_url: String,
+                state: Option<String>,
             }
             let r: Resp =
                 serde_json::from_str(body).map_err(|e| TrackerError::BadResponse(e.to_string()))?;
             CreatedExternalIssue {
                 external_id: r.iid.to_string(),
                 external_url: r.web_url,
+                external_state: normalize_state(r.state.as_deref()),
             }
         }
         IntegrationKind::Webhook | IntegrationKind::Slack | IntegrationKind::Email => {
@@ -198,7 +218,7 @@ mod tests {
             base_url: "https://github.example".into(),
             owner: Some("acme".into()),
             repo: Some("backend".into()),
-            project_id: None,
+            gitlab_path: None,
         };
         assert_eq!(
             issue_api_url(IntegrationKind::GitHub, &target).unwrap(),
@@ -216,7 +236,7 @@ mod tests {
             base_url: "https://github.example".into(),
             owner: None,
             repo: Some("backend".into()),
-            project_id: None,
+            gitlab_path: None,
         };
         assert!(issue_api_url(IntegrationKind::GitHub, &no_owner).is_err());
 
@@ -224,32 +244,32 @@ mod tests {
             base_url: "https://github.example".into(),
             owner: Some("acme".into()),
             repo: None,
-            project_id: None,
+            gitlab_path: None,
         };
         assert!(issue_api_url(IntegrationKind::Forgejo, &no_repo).is_err());
     }
 
     #[test]
-    fn issue_api_url_gitlab_uses_project_id_path() {
+    fn issue_api_url_gitlab_uses_the_encoded_path() {
         let target = TrackerTarget {
             base_url: "https://gitlab.example/".into(),
             owner: None,
             repo: None,
-            project_id: Some(123),
+            gitlab_path: Some("acme%2Fbackend".into()),
         };
         assert_eq!(
             issue_api_url(IntegrationKind::GitLab, &target).unwrap(),
-            "https://gitlab.example/api/v4/projects/123/issues"
+            "https://gitlab.example/api/v4/projects/acme%2Fbackend/issues"
         );
     }
 
     #[test]
-    fn issue_api_url_gitlab_missing_project_id_errors() {
+    fn issue_api_url_gitlab_missing_path_errors() {
         let target = TrackerTarget {
             base_url: "https://gitlab.example".into(),
             owner: None,
             repo: None,
-            project_id: None,
+            gitlab_path: None,
         };
         assert!(issue_api_url(IntegrationKind::GitLab, &target).is_err());
     }
@@ -266,6 +286,51 @@ mod tests {
 
         let created = parse_created(IntegrationKind::Forgejo, body).unwrap();
         assert_eq!(created.external_id, "42");
+    }
+
+    #[test]
+    fn created_state_is_normalised_across_forges() {
+        let gh = r#"{"number":1,"html_url":"https://x.test/1","state":"open"}"#;
+        assert_eq!(
+            parse_created(IntegrationKind::GitHub, gh)
+                .unwrap()
+                .external_state
+                .as_deref(),
+            Some("open")
+        );
+
+        let gl = r#"{"iid":1,"web_url":"https://x.test/1","state":"opened"}"#;
+        assert_eq!(
+            parse_created(IntegrationKind::GitLab, gl)
+                .unwrap()
+                .external_state
+                .as_deref(),
+            Some("open")
+        );
+
+        let closed = r#"{"iid":1,"web_url":"https://x.test/1","state":"closed"}"#;
+        assert_eq!(
+            parse_created(IntegrationKind::GitLab, closed)
+                .unwrap()
+                .external_state
+                .as_deref(),
+            Some("closed")
+        );
+    }
+
+    #[test]
+    fn created_state_is_none_when_the_forge_omits_it() {
+        let body = r#"{"number":1,"html_url":"https://x.test/1"}"#;
+        assert!(parse_created(IntegrationKind::GitHub, body)
+            .unwrap()
+            .external_state
+            .is_none());
+
+        let blank = r#"{"number":1,"html_url":"https://x.test/1","state":"  "}"#;
+        assert!(parse_created(IntegrationKind::GitHub, blank)
+            .unwrap()
+            .external_state
+            .is_none());
     }
 
     #[test]
@@ -420,7 +485,7 @@ mod tests {
             base_url: format!("http://{addr}"),
             owner: Some("acme".into()),
             repo: Some("backend".into()),
-            project_id: None,
+            gitlab_path: None,
         };
         create_issue(
             &reqwest::Client::new(),
@@ -467,7 +532,7 @@ mod tests {
             base_url: format!("http://{addr}"),
             owner: Some("acme".into()),
             repo: Some("backend".into()),
-            project_id: None,
+            gitlab_path: None,
         };
         let client = reqwest::Client::new();
         let created = create_issue(
@@ -514,7 +579,7 @@ mod tests {
             base_url: format!("http://{addr}"),
             owner: None,
             repo: None,
-            project_id: Some(9),
+            gitlab_path: Some("acme%2Fgroup%2Fbackend".into()),
         };
         let client = reqwest::Client::new();
         let created = create_issue(
@@ -539,7 +604,11 @@ mod tests {
         let raw_request = responder.await.expect("responder task should not panic");
         let request = parse_request(&raw_request);
         assert_eq!(request.method, "POST");
-        assert_eq!(request.path, "/api/v4/projects/9/issues");
+        // The encoding must survive reqwest intact - a decoded `/` addresses a different project.
+        assert_eq!(
+            request.path,
+            "/api/v4/projects/acme%2Fgroup%2Fbackend/issues"
+        );
         assert_eq!(request.header("private-token"), Some("tok"));
         let sent: serde_json::Value =
             serde_json::from_str(&request.body).expect("request body should be JSON");

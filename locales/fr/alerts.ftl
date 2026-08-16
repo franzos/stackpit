@@ -9,8 +9,8 @@ alerts-notify-help-post = .
 
 # --- Types de notification ---
 alerts-notify-types-heading = Types de notification
-alerts-notify-types-desc = Les alertes de nouveau problème et de régression se déclenchent pour chaque problème nouvellement vu ou réapparu, contrôlées par intégration ci-dessous. Les règles de seuil se déclenchent selon le volume d'événements sur une fenêtre ; les récapitulatifs sont des synthèses périodiques.
-alerts-notify-types-empty = Aucune intégration de projet active pour le moment. Reliez-en une depuis la page des intégrations d'un projet.
+alerts-notify-types-desc = Les alertes de nouveau problème et de régression se déclenchent pour chaque problème nouvellement vu ou réapparu. Les règles de seuil se déclenchent selon le volume d'événements sur une fenêtre ; les récapitulatifs sont des synthèses périodiques. Cette liste ne couvre que les intégrations qu'un projet a reliées lui-même — une intégration à l'échelle de l'organisation s'applique à tous les projets et se gère depuis la page des intégrations.
+alerts-notify-types-empty = Aucun projet n'a relié sa propre intégration. Les intégrations à l'échelle de l'organisation n'apparaissent pas ici et peuvent tout de même être actives ; consultez la page des intégrations.
 alerts-col-integration = Intégration
 alerts-col-new-issues = Nouveaux problèmes
 alerts-col-regressions = Régressions

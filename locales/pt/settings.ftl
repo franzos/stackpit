@@ -36,3 +36,21 @@ provision-subtitle-1 = As seguintes organizações estão disponíveis a partir 
 provision-subtitle-2 = Selecione as que pretende criar no Stackpit.
 provision-create = Criar selecionadas
 provision-skip = Ignorar
+
+# Fila de entrega
+queue-page-title = Fila de entrega — Stackpit
+queue-subtitle = Notificações que não foi possível entregar. São repetidas automaticamente durante 24 horas e depois ficam aqui à tua espera.
+queue-count-pending = { $count } pendentes
+queue-count-failed = { $count } falhadas
+queue-empty = Nada em fila. Todas as notificações foram entregues.
+queue-col-integration = Integração
+queue-col-project = Projeto
+queue-col-state = Estado
+queue-col-attempts = Tentativas
+queue-col-queued = Em fila desde
+queue-col-error = Último erro
+queue-state-pending = A repetir
+queue-state-failed = Desistiu
+queue-replay = Reenviar
+queue-cancel = Descartar
+queue-cancel-confirm = Descartar esta notificação sem a entregar?

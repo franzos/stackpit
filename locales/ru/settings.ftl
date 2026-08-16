@@ -36,3 +36,21 @@ provision-subtitle-1 = Следующие организации доступн�
 provision-subtitle-2 = Выберите те, которые хотите создать в Stackpit.
 provision-create = Создать выбранные
 provision-skip = Пропустить
+
+# Очередь доставки
+queue-page-title = Очередь доставки — Stackpit
+queue-subtitle = Уведомления, которые не удалось доставить. Они повторяются автоматически в течение 24 часов, а затем ждут вас здесь.
+queue-count-pending = { $count } в ожидании
+queue-count-failed = { $count } с ошибкой
+queue-empty = Очередь пуста. Все уведомления доставлены.
+queue-col-integration = Интеграция
+queue-col-project = Проект
+queue-col-state = Состояние
+queue-col-attempts = Попытки
+queue-col-queued = В очереди с
+queue-col-error = Последняя ошибка
+queue-state-pending = Повтор
+queue-state-failed = Отказ
+queue-replay = Отправить снова
+queue-cancel = Отбросить
+queue-cancel-confirm = Отбросить это уведомление, не доставляя его?

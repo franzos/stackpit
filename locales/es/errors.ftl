@@ -96,3 +96,13 @@ flash-ip-block-removed = Bloqueo de IP eliminado
 
 # Nuevo proyecto
 flash-project-name-required = El nombre del proyecto es obligatorio
+flash-email-not-configured = El correo no está configurado. Añade una sección [email] con un proveedor a la configuración del servidor.
+flash-integration-saved = Integración actualizada
+flash-integration-global-not-for-trackers = Los gestores de incidencias no usan el enrutado a toda la organización; el repositorio de destino sale de los ajustes de repositorio de cada proyecto.
+flash-project-excluded = Proyecto excluido de esta integración
+flash-project-included = El proyecto ya no está excluido
+flash-global-email-needs-recipient = Una integración de correo para toda la organización necesita un destinatario por defecto; los proyectos que nunca la activaron no tienen dirección propia.
+flash-queue-item-not-found = Notificación en cola no encontrada
+flash-queue-replayed = Notificación entregada y retirada de la cola
+flash-queue-replay-failed = Fallo al reenviar: { $error }
+flash-queue-cancelled = Notificación en cola descartada

@@ -34,3 +34,21 @@ provision-subtitle-1 = องค์กรต่อไปนี้พร้อม
 provision-subtitle-2 = เลือกองค์กรที่คุณต้องการสร้างใน Stackpit
 provision-create = สร้างที่เลือก
 provision-skip = ข้าม
+
+# คิวการส่ง
+queue-page-title = คิวการส่ง — Stackpit
+queue-subtitle = การแจ้งเตือนที่ส่งไม่สำเร็จ ระบบจะลองใหม่อัตโนมัติเป็นเวลา 24 ชั่วโมง จากนั้นจะรอคุณอยู่ที่นี่
+queue-count-pending = รออยู่ { $count } รายการ
+queue-count-failed = ล้มเหลว { $count } รายการ
+queue-empty = ไม่มีอะไรในคิว ส่งการแจ้งเตือนครบทุกรายการแล้ว
+queue-col-integration = การเชื่อมต่อ
+queue-col-project = โปรเจกต์
+queue-col-state = สถานะ
+queue-col-attempts = ครั้งที่ลอง
+queue-col-queued = เข้าคิวเมื่อ
+queue-col-error = ข้อผิดพลาดล่าสุด
+queue-state-pending = กำลังลองใหม่
+queue-state-failed = ยอมแพ้แล้ว
+queue-replay = ส่งซ้ำ
+queue-cancel = ทิ้ง
+queue-cancel-confirm = ทิ้งการแจ้งเตือนนี้โดยไม่ส่งหรือไม่

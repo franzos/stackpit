@@ -98,3 +98,13 @@ flash-ip-block-removed = تمت إزالة حظر IP
 
 # مشروع جديد
 flash-project-name-required = اسم المشروع مطلوب
+flash-email-not-configured = البريد الإلكتروني غير مُعدّ. أضف قسم [email] مع مزوّد إلى إعدادات الخادم.
+flash-integration-saved = تم تحديث التكامل
+flash-integration-global-not-for-trackers = متعقّبات المشكلات لا تستخدم التوجيه على مستوى المؤسسة؛ المستودع الهدف يأتي من إعدادات مستودعات كل مشروع.
+flash-project-excluded = تم استبعاد المشروع من هذا التكامل
+flash-project-included = لم يعد المشروع مستبعدًا
+flash-global-email-needs-recipient = تكامل البريد على مستوى المؤسسة يحتاج مستلمًا افتراضيًا؛ المشاريع التي لم تُفعّله لا تملك عنوانًا خاصًا بها.
+flash-queue-item-not-found = لم يُعثر على الإشعار في الطابور
+flash-queue-replayed = تم تسليم الإشعار وإزالته من الطابور
+flash-queue-replay-failed = فشلت إعادة الإرسال: { $error }
+flash-queue-cancelled = تم تجاهل الإشعار الموجود في الطابور

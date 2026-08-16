@@ -3,9 +3,19 @@
 ## [Unreleased]
 
 ### Breaking
+- **Existing issue-tracker configuration stops working.** A tracker no longer stores an owner/repo (or a GitLab project id) of its own; which repository it files into now comes from the project's repositories, under **Project settings → Repositories**. Old targets and per-project tracker overrides are not migrated and are no longer read, so issue filing stops until each project has a repository whose URL matches the tracker's forge and host. Set the repository once and it serves both source links and issue filing.
+- **The SQLite migration rebuilds the `integrations` table**, which every install has. It brings SQLite in line with PostgreSQL (`UNIQUE(org_id, name)` plus the missing organisation foreign key) and adds the org-wide routing flag. **Back up your database before upgrading.**
 - **Slack, webhook and issue-tracker integrations now require a commercial license.** Existing installs without one keep their configuration and credentials, but delivery through those channels stops on upgrade; each refusal is logged rather than dropped silently. Email alerting — new issues, regressions, thresholds and digests — stays free and is unaffected. A lapsed license keeps delivering for a 30-day grace window and only blocks adding, editing, enabling or testing an integration. Nothing is ever deleted, and everything resumes on renewal. See `docs/commercial/integrations.md`.
 
+Taken together, a free install upgrading through this release loses Slack, webhook and tracker integrations **and** has to reconfigure any tracker it was using.
+
 ### Added
+- Email, Slack and webhook integrations can deliver to every project in the organisation, with a per-project exclusion list. Each integration has its own page showing where it delivers, where it is customised, and where it is excluded — the only place implicit inclusion is visible.
+- Email integrations carry a default recipient, used wherever a project has not set its own. Required for an org-wide email integration.
+- A notification that fails delivery is now queued instead of dropped. It retries on a backoff (30s doubling to an hour) for 24 hours, then waits on the new **Settings → Delivery queue** page, where it can be replayed or discarded. Failed items are kept for 14 days, capped at 500 per integration; both are configurable under `[notifications]`.
+- A tracker can file into any of the project's repositories, and asks which one when more than one matches. The MCP `create_tracker_issue` tool takes an optional `repo_id` and names the candidates when the call is ambiguous.
+- Repositories take an optional forge-type override, for self-hosted instances whose hostname says nothing about which forge they run.
+- Filed issue links survive deleting their integration, and can be unlinked individually. The issue stays on the forge; close or delete it there.
 - Issue stream: filter by environment (also in the JSON API and MCP)
 - Transaction summary: span breakdown, related issues, and a percentile trend with regression markers
 - Replay list: duration, URL, user, browser/OS and error count
@@ -14,6 +24,8 @@
 - Breadcrumbs: bounded scroll area and a category filter
 
 ### Changed
+- A repository can carry a stack-path prefix, so a multi-repo project links each frame to the repository it actually came from. **Once any repository in a project has a prefix, only prefix matching applies and repositories without one stop producing source links.** This holds for a project with a single repository too: give that one repository a prefix and frames outside it stop linking. A project with no prefixes anywhere behaves exactly as before.
+- Self-hosted GitHub, Gitea and Forgejo hostnames are now detected, which also repairs source links that were silently missing for them
 - Durations read `1.59s` and `484ms` instead of raw milliseconds
 - Every list page offers the same eight time ranges
 - Sidebar, heading and breadcrumb agree on each page's name; the core sections show on every project

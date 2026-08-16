@@ -24,3 +24,4 @@ nav-aria-primary = التنقل الرئيسي
 nav-aria-breadcrumb = مسار التنقل
 nav-active-org = النشطة:
 nav-aria-active-org = المؤسسة النشطة: { $org }
+nav-delivery-queue = طابور التسليم

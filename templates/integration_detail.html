@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+
+{% block title %}{{ chrome.t("integrations-detail-title") }}{% endblock %}
+
+{% block sidebar_nav %}
+  {% call m::settings_sidebar(chrome, "integrations") %}
+  {% endcall %}
+{% endblock %}
+
+{% block breadcrumbs %}
+  <span class="breadcrumb-sep">/</span>
+  <a class="breadcrumb-link" href="/web/settings/integrations/">{{ chrome.t("nav-integrations") }}</a>
+  <span class="breadcrumb-sep">/</span>
+  <span class="breadcrumb-current"><bdi>{{ integration.name }}</bdi></span>
+{% endblock %}
+
+{% block content %}
+  <div class="page-header">
+    <div>
+      <h1>
+        <bdi>{{ integration.name }}</bdi>
+      </h1>
+      <p class="text-muted text-[13px] mt-1">
+        <span class="badge badge-neutral">{{ integration.kind }}</span>
+        {% if integration.is_global %}
+          <span class="badge badge-success ms-1">{{ chrome.t("integrations-global-badge") }}</span>
+        {% endif %}
+      </p>
+    </div>
+    <div class="page-actions">
+      <a href="/web/settings/integrations/" class="btn btn-secondary">{{ chrome.t("integrations-back") }}</a>
+    </div>
+  </div>
+
+  {% match message %}{% when Some with (msg) %}
+  <div class="settings-message mb-4">{{ msg }}</div>
+  {% when None %}{% endmatch %}
+
+<div class="card card-pad mb-4">
+  <h2 class="page-h2">{{ chrome.t("integrations-projects-heading") }}</h2>
+  <p class="text-muted text-[13px] mt-1">
+    {% if integration.kind.is_tracker() %}
+      {{ chrome.t("integrations-projects-hint-tracker") }}
+    {% else if integration.is_global %}
+      {{ chrome.t("integrations-projects-hint-global") }}
+    {% else %}
+      {{ chrome.t("integrations-projects-hint-per-project") }}
+    {% endif %}
+  </p>
+</div>
+
+{% if projects.is_empty() %}
+  <div class="card">
+    <p class="empty">{{ chrome.t("integrations-projects-empty") }}</p>
+  </div>
+{% else %}
+  <div class="card overflow-hidden">
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>{{ chrome.t("integrations-col-project") }}</th>
+            <th>{{ chrome.t("integrations-col-state") }}</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in projects %}
+            <tr>
+              <td>
+                <a class="link font-semibold"
+                   href="/web/projects/{{ p.project_id }}/settings/integrations/"><bdi>{{ p.label }}</bdi></a>
+                {% if p.archived %}<span class="badge badge-neutral ms-1">{{ chrome.t("integrations-project-archived") }}</span>{% endif %}
+              </td>
+              <td>
+                {% if p.state.is_delivering() %}
+                  <span class="badge badge-success">{{ chrome.t(p.state.key()) }}</span>
+                {% else %}
+                  <span class="badge badge-neutral">{{ chrome.t(p.state.key()) }}</span>
+                {% endif %}
+              </td>
+              <td class="nowrap">
+                {% if exclusion_applies %}
+                  {% if p.excluded %}
+                    <form method="post"
+                          action="/web/settings/integrations/{{ integration.id }}/include"
+                          class="inline">
+                      <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+                      <input type="hidden" name="project_id" value="{{ p.project_id }}">
+                      <button type="submit" class="btn btn-secondary">{{ chrome.t("integrations-include") }}</button>
+                    </form>
+                  {% else %}
+                    <form method="post"
+                          action="/web/settings/integrations/{{ integration.id }}/exclude"
+                          class="inline">
+                      <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+                      <input type="hidden" name="project_id" value="{{ p.project_id }}">
+                      <button type="submit" class="btn btn-secondary">{{ chrome.t("integrations-exclude") }}</button>
+                    </form>
+                  {% endif %}
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% endif %}
+{% endblock %}

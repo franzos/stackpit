@@ -55,19 +55,19 @@
   {% endif %}
 </form>
 
-{% if !available_trackers.is_empty() %}
+{% if !tracker_options.is_empty() %}
   <form class="event-nav"
         method="post"
         action="/web/projects/{{ issue.project_id }}/issues/{{ issue.fingerprint }}/external">
     <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
-    {% if available_trackers.len() == 1 %}
-      {% for tracker in available_trackers %}
-        <input type="hidden" name="integration_id" value="{{ tracker.id }}">
+    {% if tracker_options.len() == 1 %}
+      {% for opt in tracker_options %}
+        <input type="hidden" name="target" value="{{ opt.value }}">
       {% endfor %}
     {% else %}
-      <select class="select w-auto" name="integration_id">
-        {% for tracker in available_trackers %}
-          <option value="{{ tracker.id }}">{{ tracker.name }}</option>
+      <select class="select w-auto" name="target">
+        {% for opt in tracker_options %}
+          <option value="{{ opt.value }}">{{ opt.label }}</option>
         {% endfor %}
       </select>
     {% endif %}
@@ -512,6 +512,15 @@
   <dt>{{ chrome.t("issue-detail-external-tracker") }}</dt>
   <dd class="break-all">
     <a href="{{ link.external_url }}">{{ chrome.t("issue-detail-view-on") }} {{ link.integration_name }} #{{ link.external_id }}</a>
+    {% match link.integration_id %}{% when Some with (_id) %}{% when None %}<span class="badge badge-ignored ml-1">{{ chrome.t("issue-detail-external-orphaned") }}</span>{% endmatch %}
+    <form method="post"
+          class="inline"
+          action="/web/projects/{{ issue.project_id }}/issues/{{ issue.fingerprint }}/external/{{ link.id }}/delete">
+      <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+      <button type="submit"
+              class="btn btn-ghost text-[12px]"
+              data-confirm="{{ chrome.t("issue-detail-external-unlink-confirm") }}">{{ chrome.t("issue-detail-external-unlink") }}</button>
+    </form>
   </dd>
 {% endfor %}
 </dl>

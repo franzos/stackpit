@@ -121,6 +121,15 @@ impl std::str::FromStr for IntegrationKind {
 }
 
 impl IntegrationKind {
+    pub const ALL: [Self; 6] = [
+        Self::Webhook,
+        Self::Slack,
+        Self::Email,
+        Self::GitHub,
+        Self::Forgejo,
+        Self::GitLab,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Webhook => "webhook",

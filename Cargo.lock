@@ -4029,6 +4029,7 @@ dependencies = [
  "metrics-exporter-prometheus",
  "openidconnect",
  "parking_lot",
+ "percent-encoding",
  "polymail",
  "reqwest 0.12.28",
  "rmcp",

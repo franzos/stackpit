@@ -56,18 +56,7 @@
                placeholder="https://api.github.com"
                required>
       </div>
-      <div>
-        <label class="field-label" for="int_owner">{{ chrome.t("integrations-tracker-owner-label") }}</label>
-        <input class="input" type="text" id="int_owner" name="owner" placeholder="acme">
-      </div>
-      <div>
-        <label class="field-label" for="int_repo">{{ chrome.t("integrations-tracker-repo-label") }}</label>
-        <input class="input" type="text" id="int_repo" name="repo" placeholder="my-app">
-      </div>
-      <div>
-        <label class="field-label" for="int_project_id">{{ chrome.t("integrations-tracker-project-id-label") }}</label>
-        <input class="input" type="text" id="int_project_id" name="project_id" placeholder="12345678">
-      </div>
+      <p class="text-muted text-[13px]">{{ chrome.t("integrations-tracker-target-help") }}</p>
       <div>
         <label class="field-label" for="int_secret">{{ chrome.t("integrations-tracker-token-label") }}</label>
         <input class="input"

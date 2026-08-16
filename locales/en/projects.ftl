@@ -76,6 +76,13 @@ projects-repos-auto = auto
 projects-repos-remove-confirm = Remove this repository?
 projects-repos-add = Add repository
 projects-repos-add-help = Adds clickable source links (e.g. "View on GitHub") next to stack frames. Requires a release with a commit SHA — forge type auto-detected. Supported: GitHub, GitLab, Gitea/Codeberg, Bitbucket, Sourcehut, Gitee, Azure DevOps. For other forges, provide a URL template.
+projects-repos-forge-override = Forge type
+projects-repos-forge-detected = Detected automatically
+projects-repos-forge-override-help = Set this only if the detected type is wrong — usually for a self-hosted instance whose hostname says nothing about which forge it runs.
+projects-repos-prefix = Stack path prefix
+projects-repos-prefix-placeholder = services/api/
+projects-repos-prefix-help = Which stack frames belong to this repository, matched against the start of a frame's filename. Leave empty for a single-repo project. Once any repository here has a prefix, only prefix matching applies and repositories without one stop producing source links.
+projects-repos-col-prefix = Path prefix
 projects-danger-heading = Danger zone
 projects-archive-desc = Archive this project. Archived projects reject new events.
 projects-archive-confirm = Archive this project? New events will be rejected.
@@ -207,6 +214,9 @@ projects-integrations-active-heading = Active integrations
 projects-integrations-active-empty = No integrations activated. Add a global integration on the <a class="text-primary" href="/web/settings/integrations/">Integrations</a> page first, then enable it here. You can scope each one by minimum level and environment so dev-noise stays out of prod channels.
 projects-integrations-deactivate-confirm = Deactivate this integration for the project?
 projects-integrations-deactivate = Deactivate
+projects-integrations-reset = Reset to org defaults
+projects-integrations-reset-confirm = Discard this project's settings and deliver under the organization's defaults again?
+projects-integrations-global-hint = This integration delivers to every project in the organization. The settings below only customise it here; to stop delivery entirely, exclude this project on the integration's own page.
 projects-integrations-notify-new-issues = New issues
 projects-integrations-notify-regressions = Regressions
 projects-integrations-notify-threshold = Threshold alerts
@@ -221,12 +231,7 @@ projects-integrations-activate-heading = Activate integration
 projects-integrations-integration-label = Integration
 projects-integrations-activate-submit = Activate
 projects-integrations-available-empty = No integrations available. <a class="text-primary" href="/web/settings/integrations/">Create one first</a>.
-projects-integrations-tracker-hint = Overrides the org-level tracker for this project. Leave blank to fall back to the default.
-projects-integrations-tracker-owner = Owner
-projects-integrations-tracker-repo = Repository
-projects-integrations-tracker-project-id = Project ID
-projects-integrations-tracker-project-id-note = (GitLab only)
-projects-integrations-tracker-save = Save target
+projects-integrations-tracker-hint = Which repository this files into comes from this project's repository settings, not from here.
 
 # --- Project created ---
 projects-created-word = created

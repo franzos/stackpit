@@ -33,3 +33,4 @@ license-activate = تفعيل
 license-replace = استبدال الترخيص
 license-deactivate = إلغاء التفعيل
 license-back = العودة إلى الإدارة
+license-tier = الخطة

@@ -126,7 +126,10 @@ fn three_digits(v: f64, unit: &str) -> String {
 }
 
 /// Core of the `format_duration` filter, factored out so it is unit-testable.
-fn format_duration_str(ms: i64) -> String {
+/// `pub(crate)` because the duration-bucket labels are built in `queries` and
+/// have to read the same way as every other duration on the page. The honest
+/// home for this is a shared `util::format`, not `html::filters`.
+pub(crate) fn format_duration_str(ms: i64) -> String {
     // Adaptive unit: `484ms`, `1.59s`, `19.5s`, `1.24min`, `1.00hr`. Precision
     // shrinks as magnitude grows, which keeps dense tables readable and matches
     // what a Sentry migrant expects.

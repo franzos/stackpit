@@ -63,6 +63,13 @@ pub struct License {
     pub features: Vec<Feature>,
     /// `None` = unlimited.
     pub max_orgs: Option<u32>,
+    /// The SKU the licence was sold as (`pro`, `business`, …). Read from the
+    /// blob rather than assumed: the persisted row hardcoded `"business"`, so
+    /// every licence looked like the top tier.
+    pub tier: String,
+    /// Which product the blob is for. Verification already rejects a foreign
+    /// product; this is what the row records.
+    pub product: String,
 }
 
 impl License {
@@ -186,6 +193,8 @@ mod tests {
             expires_at: expires,
             features: Vec::new(),
             max_orgs: None,
+            tier: "business".into(),
+            product: "stackpit".into(),
         }
     }
 
@@ -229,6 +238,8 @@ mod tests {
             expires_at: Some(Utc::now() + Duration::days(30)),
             features,
             max_orgs: None,
+            tier: "business".into(),
+            product: "stackpit".into(),
         })
     }
 

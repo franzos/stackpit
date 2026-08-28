@@ -18,9 +18,8 @@
     <h1>{{ chrome.t("projects-new-heading") }}</h1>
   </div>
 
-  {% match message %}{% when Some with (msg) %}
-  <div class="settings-message mb-4">{{ msg }}</div>
-  {% when None %}{% endmatch %}
+  {% call m::flash(chrome, message) %}
+  {% endcall %}
 
 <div class="card card-pad max-w-2xl">
   <form class="settings-form" method="post" action="/web/projects/new">

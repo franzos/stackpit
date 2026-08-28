@@ -93,3 +93,34 @@ integrations-exclude = Исключить
 integrations-include = Включить
 integrations-email-to-label = Получатель по умолчанию
 integrations-email-to-help = Используется там, где проект не задал собственный адрес. Обязателен для интеграции на всю организацию.
+integrations-summary-delivering = { $count ->
+    [one] { $count } доставляет
+    [few] { $count } доставляют
+    [many] { $count } доставляют
+   *[other] { $count } доставляют
+}
+integrations-summary-excluded = { $count ->
+    [one] { $count } исключён
+    [few] { $count } исключены
+    [many] { $count } исключены
+   *[other] { $count } исключены
+}
+integrations-summary-inert = { $count ->
+    [one] { $count } без доставки
+    [few] { $count } без доставки
+    [many] { $count } без доставки
+   *[other] { $count } без доставки
+}
+integrations-search-placeholder = Фильтр по названию проекта
+integrations-search-label = Фильтровать проекты
+integrations-search-submit = Фильтр
+integrations-sort-label = Сортировать проекты
+integrations-sort-state = Сначала доставляющие
+integrations-sort-name = По названию
+integrations-pagination-label = Страницы доставки по проектам
+integrations-projects-count = { $count ->
+    [one] { $count } проект
+    [few] { $count } проекта
+    [many] { $count } проектов
+   *[other] { $count } проекта
+}

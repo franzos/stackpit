@@ -43,3 +43,16 @@ test-count = { $count ->
     [many] { $count } عنصرًا
    *[other] { $count } عنصر
 }
+common-time-in-secs = خلال { $n } ث
+common-time-in-min = خلال { $n } د
+common-time-in-hour = خلال { $n } س
+common-time-in-day = { $n ->
+    [zero] الآن
+    [one] خلال يوم
+    [two] خلال يومين
+    [few] خلال { $n } أيام
+    [many] خلال { $n } يومًا
+   *[other] خلال { $n } يوم
+}
+common-pagination-prev = السابق
+common-pagination-next = التالي

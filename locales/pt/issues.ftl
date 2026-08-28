@@ -149,3 +149,13 @@ issue-detail-external-unlink-confirm = Remover esta ligação? A issue permanece
 issue-detail-external-orphaned = integração removida
 flash-tracker-unlinked = Ligação removida. A issue continua a existir na forge.
 flash-tracker-ambiguous = Este projeto tem mais do que um repositório onde este gestor pode criar a issue. Escolhe um e tenta novamente.
+issue-detail-crumbs-truncated = { $count ->
+    [one] A mostrar o rasto mais recente.
+   *[other] A mostrar os { $count } mais recentes.
+}
+issue-detail-crumbs-show-all = { $count ->
+    [one] Mostrar o único rasto
+   *[other] Mostrar todos os { $count }
+}
+issue-detail-external-state-open = aberto
+issue-detail-external-state-closed = fechado

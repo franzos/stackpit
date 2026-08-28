@@ -58,12 +58,18 @@ where
             .extensions
             .get::<crate::orgs::extractor::ActiveOrg>()
             .and_then(|a| a.org_name.clone());
+        let flash = parts
+            .uri
+            .query()
+            .and_then(crate::html::flash::token_from_query)
+            .map(str::to_string);
         let state = AppState::from_ref(state);
         let status = state.license.status();
         Ok(Chrome(
             PageChrome::new(csrf, locale, path)
                 .with_license_watermark(&status)
-                .with_active_org(active_org),
+                .with_active_org(active_org)
+                .with_flash(flash.as_deref()),
         ))
     }
 }
@@ -74,16 +80,16 @@ where
 pub async fn query_then_render<T, F, Fut>(
     result: anyhow::Result<T>,
     chrome: &PageChrome,
-    success_msg: &str,
+    success: crate::html::flash::Flash,
     render: F,
 ) -> axum::response::Response
 where
-    F: FnOnce(Option<String>) -> Fut,
+    F: FnOnce(Option<crate::html::flash::Flash>) -> Fut,
     Fut: std::future::Future<Output = axum::response::Response>,
 {
     match result {
-        Ok(_) => render(Some(success_msg.to_string())).await,
-        Err(e) => render(Some(chrome.err(e))).await,
+        Ok(_) => render(Some(success)).await,
+        Err(e) => render(Some(chrome.flash_err(e))).await,
     }
 }
 

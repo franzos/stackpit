@@ -44,11 +44,11 @@
           <tbody>
             {% for r in result.items %}
               <tr>
-                <td>
+                <td class="ltr-code">
                   <a class="text-mono"
                      href="/web/projects/{{ project_id }}/replays/{{ r.event_id }}/">{{ r.event_id|truncate_id }}</a>
                 </td>
-                <td class="col-title min-w-0 truncate-cell text-[12px]">
+                <td class="col-title min-w-0 truncate-cell text-[12px] ltr-code">
                   {% match r.url %}{% when Some with (u) %}<span title="{{ u }}"><bdi>{{ u|truncate_url }}</bdi></span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
               </td>
               <td class="hide-mobile text-[12px]">
@@ -66,10 +66,10 @@
         <td class="text-tabular text-end">
           {% if r.error_count > 0 %}<span class="badge badge-error">{{ r.error_count }}</span>{% else %}<span class="text-muted">0</span>{% endif %}
         </td>
-                <td class="text-mono text-[12px]">
+                <td class="text-mono text-[12px] ltr-code">
                   {% match r.release %}{% when Some with (rel) %}<span title="{{ rel }}">{{ rel|short_release }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
               </td>
-              <td class="hide-mobile text-mono text-[12px]">
+              <td class="hide-mobile text-mono text-[12px] ltr-code">
                 {% match r.environment %}{% when Some with (e) %}{{ e }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
             </td>
             <td class="text-muted">

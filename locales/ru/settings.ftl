@@ -54,3 +54,4 @@ queue-state-failed = Отказ
 queue-replay = Отправить снова
 queue-cancel = Отбросить
 queue-cancel-confirm = Отбросить это уведомление, не доставляя его?
+queue-col-alert = Оповещение

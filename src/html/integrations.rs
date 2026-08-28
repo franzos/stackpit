@@ -5,6 +5,7 @@ use serde::Deserialize;
 
 use crate::domain::IntegrationKind;
 use crate::html::chrome::PageChrome;
+use crate::html::flash::{self, Flash};
 use crate::html::render_template;
 use crate::html::utils::Chrome;
 use crate::orgs::extractor::{require_org_owner, ActiveOrg};
@@ -17,11 +18,15 @@ use super::html_error;
 #[allow(unused_imports)]
 use crate::html::filters;
 
+/// Where `create` redirects. Mutating POSTs land back on the list rather than
+/// rendering the POST target, so a refresh cannot re-submit the form.
+const INTEGRATIONS_PATH: &str = "/web/settings/integrations/";
+
 #[derive(Template)]
 #[template(path = "integrations.html")]
 struct IntegrationsTemplate {
     integrations: Vec<Integration>,
-    message: Option<String>,
+    message: Option<Flash>,
     chrome: PageChrome,
     /// Drives the upsell banner and the locked "add" buttons. False means the
     /// gated kinds are visible but unusable, rather than silently missing.
@@ -60,10 +65,10 @@ fn default_recipient(
 ) -> Result<Option<String>, &'static str> {
     match to_address.map(str::trim).filter(|s| !s.is_empty()) {
         Some(addr) if !email_address::EmailAddress::is_valid(addr) => {
-            Err("flash-invalid-to-address")
+            Err(flash::INVALID_TO_ADDRESS)
         }
         Some(addr) => Ok(Some(addr.to_string())),
-        None if is_global => Err("flash-global-email-needs-recipient"),
+        None if is_global => Err(flash::GLOBAL_EMAIL_NEEDS_RECIPIENT),
         None => Ok(None),
     }
 }
@@ -80,32 +85,14 @@ pub async fn create(
     let org_filter = active.role.as_ref().map(|_| active.session_org_id);
     let name = form.name.trim().to_string();
     if name.is_empty() {
-        return render_list(
-            &state,
-            org_filter,
-            Some(chrome.t("flash-name-required")),
-            &chrome,
-        )
-        .await;
+        return flash::redirect(INTEGRATIONS_PATH, flash::NAME_REQUIRED);
     }
     let kind = form.kind.trim().to_string();
     let Ok(parsed_kind) = kind.parse::<crate::domain::IntegrationKind>() else {
-        return render_list(
-            &state,
-            org_filter,
-            Some(chrome.t("flash-invalid-integration-kind")),
-            &chrome,
-        )
-        .await;
+        return flash::redirect(INTEGRATIONS_PATH, flash::INVALID_INTEGRATION_KIND);
     };
     if !crate::commercial::providers::may_configure(&state.license, parsed_kind) {
-        return render_list(
-            &state,
-            org_filter,
-            Some(chrome.t("flash-integration-license-required")),
-            &chrome,
-        )
-        .await;
+        return flash::redirect(INTEGRATIONS_PATH, flash::INTEGRATION_LICENSE_REQUIRED);
     }
     // A tracker's projects follow from its repositories, so global means nothing.
     let is_global = form.is_global.is_some() && !parsed_kind.is_tracker();
@@ -115,17 +102,11 @@ pub async fn create(
     use crate::providers::email as email_provider;
     let (url, config, ignore_secret) = if kind == "email" {
         let Some(email_cfg) = state.config.email.as_ref() else {
-            return render_list(
-                &state,
-                org_filter,
-                Some(chrome.t("flash-email-not-configured")),
-                &chrome,
-            )
-            .await;
+            return flash::redirect(INTEGRATIONS_PATH, flash::EMAIL_NOT_CONFIGURED);
         };
         let default_to = match default_recipient(form.to_address.as_deref(), is_global) {
             Ok(t) => t,
-            Err(key) => return render_list(&state, org_filter, Some(chrome.t(key)), &chrome).await,
+            Err(key) => return flash::redirect(INTEGRATIONS_PATH, key),
         };
         if email_cfg.lock {
             let mut cfg = serde_json::json!({
@@ -138,13 +119,7 @@ pub async fn create(
         } else {
             let provider_str = form.provider.as_deref().map(str::trim).unwrap_or("");
             if !email_provider::provider_is_known(provider_str) {
-                return render_list(
-                    &state,
-                    org_filter,
-                    Some(chrome.t("flash-invalid-email-provider")),
-                    &chrome,
-                )
-                .await;
+                return flash::redirect(INTEGRATIONS_PATH, flash::INVALID_EMAIL_PROVIDER);
             }
             // Reject up front when the credential needed to send mail is missing;
             // otherwise the failure only surfaces at dispatch time. API providers
@@ -154,13 +129,7 @@ pub async fn create(
             let is_smtp = provider_str == "smtp";
             if is_smtp {
                 if email_provider::provider_label(&email_cfg.provider) != "smtp" {
-                    return render_list(
-                        &state,
-                        org_filter,
-                        Some(chrome.t("flash-smtp-not-configured")),
-                        &chrome,
-                    )
-                    .await;
+                    return flash::redirect(INTEGRATIONS_PATH, flash::SMTP_NOT_CONFIGURED);
                 }
             } else {
                 let has_form_secret = form
@@ -171,13 +140,7 @@ pub async fn create(
                 let has_global_token =
                     email_provider::global_api_token(&email_cfg.provider, provider_str).is_some();
                 if !has_form_secret && !has_global_token {
-                    return render_list(
-                        &state,
-                        org_filter,
-                        Some(chrome.t("flash-api-token-required")),
-                        &chrome,
-                    )
-                    .await;
+                    return flash::redirect(INTEGRATIONS_PATH, flash::API_TOKEN_REQUIRED);
                 }
             }
             let has_form_from = form
@@ -186,13 +149,7 @@ pub async fn create(
                 .map(str::trim)
                 .is_some_and(|s| !s.is_empty());
             if !has_form_from && email_cfg.from_address.is_none() {
-                return render_list(
-                    &state,
-                    org_filter,
-                    Some(chrome.t("flash-from-address-required")),
-                    &chrome,
-                )
-                .await;
+                return flash::redirect(INTEGRATIONS_PATH, flash::FROM_ADDRESS_REQUIRED);
             }
             let mut cfg = serde_json::json!({ "provider": provider_str });
             if let Some(from) = form
@@ -220,18 +177,16 @@ pub async fn create(
     } else if ["github", "forgejo", "gitlab"].contains(&kind.as_str()) {
         let base_url = form.url.trim().to_string();
         if base_url.is_empty() {
-            return render_list(
-                &state,
-                org_filter,
-                Some(chrome.t("flash-url-required")),
-                &chrome,
-            )
-            .await;
+            return flash::redirect(INTEGRATIONS_PATH, flash::URL_REQUIRED);
         }
         // Same SSRF gate as the webhook branch: trackers point at a
         // user-controlled base URL (self-hosted Forgejo/GitLab instances).
+        //
+        // The validator's reason ("cannot resolve webhook host") is the whole
+        // point of the message and no catalogue key can carry it, so this
+        // branch renders in place instead of redirecting.
         if let Err(msg) = crate::util::ssrf::check_ssrf(&base_url).await {
-            return render_list(&state, org_filter, Some(msg), &chrome).await;
+            return render_list(&state, org_filter, Some(Flash::err(msg)), &chrome).await;
         }
         let has_token = form
             .secret
@@ -239,31 +194,20 @@ pub async fn create(
             .map(str::trim)
             .is_some_and(|s| !s.is_empty());
         if !has_token {
-            return render_list(
-                &state,
-                org_filter,
-                Some(chrome.t("flash-api-token-required")),
-                &chrome,
-            )
-            .await;
+            return flash::redirect(INTEGRATIONS_PATH, flash::API_TOKEN_REQUIRED);
         }
         // A tracker files into the project's own repositories, so no target to store.
         (Some(base_url), None, false)
     } else {
         let url = form.url.trim().to_string();
         if url.is_empty() {
-            return render_list(
-                &state,
-                org_filter,
-                Some(chrome.t("flash-url-required")),
-                &chrome,
-            )
-            .await;
+            return flash::redirect(INTEGRATIONS_PATH, flash::URL_REQUIRED);
         }
         // Block webhooks pointing at private/internal addresses. Validation only,
         // no request here, so no TOCTOU; the dispatcher does its own pinned resolution.
+        // Renders in place for the same reason as the tracker branch above.
         if let Err(msg) = crate::util::ssrf::check_ssrf(&url).await {
-            return render_list(&state, org_filter, Some(msg), &chrome).await;
+            return render_list(&state, org_filter, Some(Flash::err(msg)), &chrome).await;
         }
         (Some(url), None, false)
     };
@@ -282,13 +226,7 @@ pub async fn create(
             Ok(val) => (Some(val), true),
             Err(e) => {
                 tracing::warn!("refusing to store plaintext secret: {e}");
-                return render_list(
-                    &state,
-                    org_filter,
-                    Some(chrome.t("flash-secret-not-configured")),
-                    &chrome,
-                )
-                .await;
+                return flash::redirect(INTEGRATIONS_PATH, flash::SECRET_NOT_CONFIGURED);
             }
         },
         None => (None, false),
@@ -307,25 +245,12 @@ pub async fn create(
     )
     .await;
     match result {
-        Ok(_) => {
-            render_list(
-                &state,
-                org_filter,
-                Some(chrome.t("flash-integration-created")),
-                &chrome,
-            )
-            .await
-        }
+        Ok(_) => flash::redirect(INTEGRATIONS_PATH, flash::INTEGRATION_CREATED),
         Err(ref e) if is_name_conflict(e) => {
-            render_list(
-                &state,
-                org_filter,
-                Some(chrome.t("flash-integration-name-exists")),
-                &chrome,
-            )
-            .await
+            flash::redirect(INTEGRATIONS_PATH, flash::INTEGRATION_NAME_EXISTS)
         }
-        Err(e) => render_list(&state, org_filter, Some(chrome.err(e)), &chrome).await,
+        // The database's own message, which no key can carry.
+        Err(e) => render_list(&state, org_filter, Some(chrome.flash_err(e)), &chrome).await,
     }
 }
 
@@ -357,6 +282,18 @@ impl RoutingState {
     pub fn is_delivering(&self) -> bool {
         matches!(self, Self::Default | Self::Customised)
     }
+
+    /// Sort order for the detail page: delivering first, then the rows an
+    /// operator deliberately turned off, then the inert majority. On a tracker
+    /// integration in a large org almost every row is `NoRepo`, and the one
+    /// project that actually delivers is what the page exists to show.
+    fn rank(&self) -> u8 {
+        match self {
+            Self::Default | Self::Customised => 0,
+            Self::Excluded => 1,
+            Self::NoRepo | Self::NotRouted => 2,
+        }
+    }
 }
 
 pub struct ProjectRoutingView {
@@ -371,11 +308,41 @@ pub struct ProjectRoutingView {
 #[template(path = "integration_detail.html")]
 struct IntegrationDetailTemplate {
     integration: Integration,
-    projects: Vec<ProjectRoutingView>,
-    message: Option<String>,
+    projects: queries::PagedResult<ProjectRoutingView>,
+    /// Counts across the whole org, not the page: the header has to say how
+    /// many projects actually deliver even when none of them are on screen.
+    delivering: usize,
+    excluded_count: usize,
+    inert: usize,
+    /// The live search term, echoed back into the input.
+    q: String,
+    sort: String,
+    /// This page's own URL, for the pager.
+    detail_url: String,
+    /// Pre-encoded `&q=…&sort=…`, for the pager and the exclude forms.
+    filter_qs: String,
+    message: Option<Flash>,
     chrome: PageChrome,
     /// Only meaningful where inclusion is implicit: global channels and trackers.
     exclusion_applies: bool,
+}
+
+/// Projects per page on the integration detail view.
+const DETAIL_PAGE_LIMIT: u64 = 25;
+
+/// Query parameters for the detail page's sort/search/pager, and the ones the
+/// exclude/include posts carry through so an action does not dump the operator
+/// back on page 1 of an unfiltered list.
+#[derive(Deserialize, Default)]
+pub struct DetailParams {
+    #[serde(default)]
+    pub q: Option<String>,
+    #[serde(default)]
+    pub sort: Option<String>,
+    #[serde(default)]
+    pub offset: Option<u64>,
+    #[serde(default)]
+    pub limit: Option<u64>,
 }
 
 fn routing_state(
@@ -406,16 +373,30 @@ pub async fn detail(
     Chrome(chrome): Chrome,
     active: ActiveOrg,
     Path(id): Path<i64>,
+    axum::extract::Query(params): axum::extract::Query<DetailParams>,
 ) -> axum::response::Response {
     if let Err(r) = require_org_owner(&active) {
         return r;
     }
-    render_detail(&state, &chrome, active.session_org_id, id, None).await
+    // An id that is not in this org is indistinguishable from one that does not
+    // exist, so neither leaks the other org's integrations.
+    match detail_page(&state, &chrome, active.session_org_id, id, &params, None).await {
+        Some(r) => r,
+        None => html_error(StatusCode::NOT_FOUND, "Integration not found"),
+    }
 }
 
 #[derive(Deserialize)]
 pub struct ExcludeForm {
     pub project_id: i64,
+    /// Carried through the POST so excluding a project from page 3 of a
+    /// filtered list comes back to page 3 of that filtered list.
+    #[serde(default)]
+    pub q: Option<String>,
+    #[serde(default)]
+    pub sort: Option<String>,
+    #[serde(default)]
+    pub offset: Option<u64>,
 }
 
 /// Stop a global integration delivering to one project - there's no include list.
@@ -426,7 +407,13 @@ pub async fn exclude(
     Path(id): Path<i64>,
     Form(form): Form<ExcludeForm>,
 ) -> axum::response::Response {
-    exclusion_action(state, chrome, active, id, form.project_id, true).await
+    let params = DetailParams {
+        q: form.q,
+        sort: form.sort,
+        offset: form.offset,
+        limit: None,
+    };
+    exclusion_action(state, chrome, active, id, form.project_id, true, params).await
 }
 
 pub async fn un_exclude(
@@ -436,7 +423,13 @@ pub async fn un_exclude(
     Path(id): Path<i64>,
     Form(form): Form<ExcludeForm>,
 ) -> axum::response::Response {
-    exclusion_action(state, chrome, active, id, form.project_id, false).await
+    let params = DetailParams {
+        q: form.q,
+        sort: form.sort,
+        offset: form.offset,
+        limit: None,
+    };
+    exclusion_action(state, chrome, active, id, form.project_id, false, params).await
 }
 
 async fn exclusion_action(
@@ -446,6 +439,7 @@ async fn exclusion_action(
     id: i64,
     project_id: i64,
     excluding: bool,
+    params: DetailParams,
 ) -> axum::response::Response {
     if let Err(r) = require_org_owner(&active) {
         return r;
@@ -460,12 +454,14 @@ async fn exclusion_action(
                 return render_list(
                     &state,
                     Some(org_id),
-                    Some(chrome.t("flash-integration-not-found")),
+                    Some(chrome.flash_of(flash::INTEGRATION_NOT_FOUND)),
                     &chrome,
                 )
                 .await
             }
-            Err(e) => return render_list(&state, Some(org_id), Some(chrome.err(e)), &chrome).await,
+            Err(e) => {
+                return render_list(&state, Some(org_id), Some(chrome.flash_err(e)), &chrome).await
+            }
         };
     // Changing routing is configuration, so grace does not cover it.
     if !crate::commercial::providers::may_configure(&state.license, integration.kind) {
@@ -474,7 +470,8 @@ async fn exclusion_action(
             &chrome,
             org_id,
             id,
-            Some(chrome.t("flash-integration-license-required")),
+            &params,
+            Some(chrome.flash_of(flash::INTEGRATION_LICENSE_REQUIRED)),
         )
         .await;
     }
@@ -489,7 +486,8 @@ async fn exclusion_action(
             &chrome,
             org_id,
             id,
-            Some(chrome.t("flash-project-not-found-or-denied")),
+            &params,
+            Some(chrome.flash_of(flash::PROJECT_NOT_FOUND_OR_DENIED)),
         )
         .await;
     }
@@ -497,37 +495,31 @@ async fn exclusion_action(
     let result = if excluding {
         queries::integration_exclusions::exclude(&state.writer_pool, org_id, id, project_id)
             .await
-            .map(|()| chrome.t("flash-project-excluded"))
+            .map(|()| chrome.flash_of(flash::PROJECT_EXCLUDED))
     } else {
         queries::integration_exclusions::un_exclude(&state.writer_pool, org_id, id, project_id)
             .await
-            .map(|_| chrome.t("flash-project-included"))
+            .map(|_| chrome.flash_of(flash::PROJECT_INCLUDED))
     };
-    let msg = result.unwrap_or_else(|e| chrome.err(e));
-    render_detail(&state, &chrome, org_id, id, Some(msg)).await
+    let msg = result.unwrap_or_else(|e| chrome.flash_err(e));
+    render_detail(&state, &chrome, org_id, id, &params, Some(msg)).await
 }
 
-async fn render_detail(
+/// Renders the detail page, or `None` when the integration does not exist in
+/// this org. Split out so `detail` can 404 while `exclusion_action` keeps the
+/// fall-through to the list it needs.
+async fn detail_page(
     state: &AppState,
     chrome: &PageChrome,
     org_id: i64,
     id: i64,
-    message: Option<String>,
-) -> axum::response::Response {
-    let integration =
-        match queries::integrations::get_integration(&state.pool, id, Some(org_id)).await {
-            Ok(Some(i)) => i,
-            Ok(None) => {
-                return render_list(
-                    state,
-                    Some(org_id),
-                    Some(chrome.t("flash-integration-not-found")),
-                    chrome,
-                )
-                .await
-            }
-            Err(e) => return render_list(state, Some(org_id), Some(chrome.err(e)), chrome).await,
-        };
+    params: &DetailParams,
+    message: Option<Flash>,
+) -> Option<axum::response::Response> {
+    let integration = queries::integrations::get_integration(&state.pool, id, Some(org_id))
+        .await
+        .ok()
+        .flatten()?;
 
     let rows = queries::integrations::project_routing(&state.pool, org_id, id)
         .await
@@ -542,7 +534,7 @@ async fn render_detail(
         Vec::new()
     };
 
-    let projects = rows
+    let mut all: Vec<ProjectRoutingView> = rows
         .iter()
         .map(|r| {
             let has_repo = repos.iter().any(|repo| {
@@ -563,14 +555,85 @@ async fn render_detail(
         })
         .collect();
 
+    // Counted over the whole org before filtering: the header summarises the
+    // integration, not the current page.
+    let delivering = all.iter().filter(|p| p.state.is_delivering()).count();
+    let excluded_count = all
+        .iter()
+        .filter(|p| p.state == RoutingState::Excluded)
+        .count();
+    let inert = all.len() - delivering - excluded_count;
+
+    let q = params.q.as_deref().unwrap_or("").trim().to_string();
+    if !q.is_empty() {
+        let needle = q.to_lowercase();
+        all.retain(|p| p.label.to_lowercase().contains(&needle));
+    }
+
+    // Default order floats the rows that do something above the inert majority;
+    // `sort=name` is the escape hatch when you know what you are looking for.
+    let sort = match params.sort.as_deref() {
+        Some("name") => "name",
+        _ => "state",
+    };
+    match sort {
+        "name" => all.sort_by_key(|p| p.label.to_lowercase()),
+        _ => all.sort_by_key(|p| (p.state.rank(), p.label.to_lowercase())),
+    }
+
+    let total = all.len() as i64;
+    let page = queries::types::Page::new(
+        params.offset,
+        Some(params.limit.unwrap_or(DETAIL_PAGE_LIMIT)),
+    );
+    let items: Vec<ProjectRoutingView> = all
+        .into_iter()
+        .skip(page.offset as usize)
+        .take(page.limit as usize)
+        .collect();
+
+    let (_, filter_qs) = crate::html::utils::build_filter_qs(&[("q", q.as_str())], sort);
+
     let exclusion_applies = integration.is_global || integration.kind.is_tracker();
-    render_template(&IntegrationDetailTemplate {
+    Some(render_template(&IntegrationDetailTemplate {
         integration,
-        projects,
+        projects: queries::PagedResult::from_page(items, total, &page),
+        delivering,
+        excluded_count,
+        inert,
+        q,
+        sort: sort.to_string(),
+        detail_url: format!("{INTEGRATIONS_PATH}{id}/"),
+        filter_qs,
         message,
         chrome: chrome.clone(),
         exclusion_applies,
-    })
+    }))
+}
+
+/// As [`detail_page`], falling through to the integrations list when the
+/// integration is gone. Only the exclude/include actions want this: a plain GET
+/// for a missing id is a 404, not a silent redirect to somewhere else.
+async fn render_detail(
+    state: &AppState,
+    chrome: &PageChrome,
+    org_id: i64,
+    id: i64,
+    params: &DetailParams,
+    message: Option<Flash>,
+) -> axum::response::Response {
+    match detail_page(state, chrome, org_id, id, params, message).await {
+        Some(r) => r,
+        None => {
+            render_list(
+                state,
+                Some(org_id),
+                Some(chrome.flash_of(flash::INTEGRATION_NOT_FOUND)),
+                chrome,
+            )
+            .await
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -610,19 +673,21 @@ pub async fn set_global(
                 return render_list(
                     &state,
                     org_filter,
-                    Some(chrome.t("flash-integration-not-found")),
+                    Some(chrome.flash_of(flash::INTEGRATION_NOT_FOUND)),
                     &chrome,
                 )
                 .await
             }
-            Err(e) => return render_list(&state, org_filter, Some(chrome.err(e)), &chrome).await,
+            Err(e) => {
+                return render_list(&state, org_filter, Some(chrome.flash_err(e)), &chrome).await
+            }
         };
     let kind = integration.kind;
     if !crate::commercial::providers::may_configure(&state.license, kind) {
         return render_list(
             &state,
             org_filter,
-            Some(chrome.t("flash-integration-license-required")),
+            Some(chrome.flash_of(flash::INTEGRATION_LICENSE_REQUIRED)),
             &chrome,
         )
         .await;
@@ -631,7 +696,7 @@ pub async fn set_global(
         return render_list(
             &state,
             org_filter,
-            Some(chrome.t("flash-integration-global-not-for-trackers")),
+            Some(chrome.flash_of(flash::INTEGRATION_GLOBAL_NOT_FOR_TRACKERS)),
             &chrome,
         )
         .await;
@@ -643,7 +708,7 @@ pub async fn set_global(
         return render_list(
             &state,
             org_filter,
-            Some(chrome.t("flash-global-email-needs-recipient")),
+            Some(chrome.flash_of(flash::GLOBAL_EMAIL_NEEDS_RECIPIENT)),
             &chrome,
         )
         .await;
@@ -657,9 +722,9 @@ pub async fn set_global(
     )
     .await
     {
-        Ok(0) => chrome.t("flash-integration-not-found"),
-        Ok(_) => chrome.t("flash-integration-saved"),
-        Err(e) => chrome.err(e),
+        Ok(0) => chrome.flash_of(flash::INTEGRATION_NOT_FOUND),
+        Ok(_) => chrome.flash_of(flash::INTEGRATION_SAVED),
+        Err(e) => chrome.flash_err(e),
     };
     render_list(&state, org_filter, Some(msg), &chrome).await
 }
@@ -681,13 +746,13 @@ pub async fn delete(
     )
     .await
     {
-        Ok(0) => format!(
+        Ok(0) => Flash::err(format!(
             "{} {}",
             chrome.t("common-error-prefix"),
             chrome.tv1("flash-not-found-integration", "id", &id.to_string())
-        ),
-        Ok(_) => chrome.t("flash-integration-deleted"),
-        Err(e) => chrome.err(e),
+        )),
+        Ok(_) => chrome.flash_of(flash::INTEGRATION_DELETED),
+        Err(e) => chrome.flash_err(e),
     };
     render_list(&state, org_filter, Some(msg), &chrome).await
 }
@@ -714,20 +779,21 @@ pub async fn test_integration(
         return r;
     }
     let org_filter = active.role.as_ref().map(|_| active.session_org_id);
-    let integration =
-        match queries::integrations::get_integration(&state.pool, id, org_filter).await {
-            Ok(Some(i)) => i,
-            Ok(None) => {
-                return render_list(
-                    &state,
-                    org_filter,
-                    Some(chrome.t("flash-integration-not-found")),
-                    &chrome,
-                )
-                .await
-            }
-            Err(e) => return render_list(&state, org_filter, Some(chrome.err(e)), &chrome).await,
-        };
+    let integration = match queries::integrations::get_integration(&state.pool, id, org_filter)
+        .await
+    {
+        Ok(Some(i)) => i,
+        Ok(None) => {
+            return render_list(
+                &state,
+                org_filter,
+                Some(chrome.flash_of(flash::INTEGRATION_NOT_FOUND)),
+                &chrome,
+            )
+            .await
+        }
+        Err(e) => return render_list(&state, org_filter, Some(chrome.flash_err(e)), &chrome).await,
+    };
 
     if let Some(r) = license_wall(&state, &chrome, org_filter, integration.kind).await {
         return r;
@@ -787,7 +853,7 @@ pub async fn test_integration(
                 return render_list(
                     &state,
                     org_filter,
-                    Some(chrome.t("flash-integration-no-url")),
+                    Some(chrome.flash_of(flash::INTEGRATION_NO_URL)),
                     &chrome,
                 )
                 .await
@@ -797,7 +863,9 @@ pub async fn test_integration(
         // Pin resolved DNS so reqwest can't re-resolve to a different (internal) IP.
         let resolved = match crate::util::ssrf::check_ssrf(url).await {
             Ok(r) => r,
-            Err(msg) => return render_list(&state, org_filter, Some(msg), &chrome).await,
+            Err(msg) => {
+                return render_list(&state, org_filter, Some(Flash::err(msg)), &chrome).await
+            }
         };
 
         let client = match reqwest::Client::builder()
@@ -829,7 +897,7 @@ pub async fn test_integration(
             render_list(
                 &state,
                 org_filter,
-                Some(chrome.t("flash-test-notification-sent")),
+                Some(chrome.flash_of(flash::TEST_NOTIFICATION_SENT)),
                 &chrome,
             )
             .await
@@ -838,7 +906,11 @@ pub async fn test_integration(
             render_list(
                 &state,
                 org_filter,
-                Some(chrome.tv1("flash-test-failed", "error", &e.to_string())),
+                Some(Flash::err(chrome.tv1(
+                    "flash-test-failed",
+                    "error",
+                    &e.to_string(),
+                ))),
                 &chrome,
             )
             .await
@@ -919,7 +991,7 @@ pub async fn new_email(
         return render_list(
             &state,
             org_filter,
-            Some(chrome.t("flash-email-not-configured")),
+            Some(chrome.flash_of(flash::EMAIL_NOT_CONFIGURED)),
             &chrome,
         )
         .await;
@@ -984,7 +1056,7 @@ async fn license_wall(
         render_list(
             state,
             org_filter,
-            Some(chrome.t("flash-integration-license-required")),
+            Some(chrome.flash_of(flash::INTEGRATION_LICENSE_REQUIRED)),
             chrome,
         )
         .await,
@@ -1011,7 +1083,7 @@ fn is_name_conflict(err: &anyhow::Error) -> bool {
 async fn render_list(
     state: &AppState,
     org_id: Option<i64>,
-    message: Option<String>,
+    message: Option<Flash>,
     chrome: &PageChrome,
 ) -> axum::response::Response {
     let integrations = queries::integrations::list_integrations(&state.pool, org_id)
@@ -1526,6 +1598,24 @@ mod tests {
         PageChrome::new("csrf".into(), langid!("en"), "/web/projects/".into())
     }
 
+    fn detail_page_of(items: Vec<ProjectRoutingView>) -> queries::PagedResult<ProjectRoutingView> {
+        let total = items.len() as i64;
+        queries::PagedResult::from_page(
+            items,
+            total,
+            &queries::types::Page::new(None, Some(DETAIL_PAGE_LIMIT)),
+        )
+    }
+
+    fn exclude_form(project_id: i64) -> ExcludeForm {
+        ExcludeForm {
+            project_id,
+            q: None,
+            sort: None,
+            offset: None,
+        }
+    }
+
     fn routing_row(
         project_id: i64,
         customised: bool,
@@ -1624,11 +1714,18 @@ mod tests {
                 excluded: state == RoutingState::Excluded,
                 state,
             })
-            .collect();
+            .collect::<Vec<_>>();
 
             let html = IntegrationDetailTemplate {
                 integration: integration_fixture("slack", true),
-                projects,
+                delivering: 2,
+                excluded_count: 1,
+                inert: 2,
+                projects: detail_page_of(projects),
+                q: String::new(),
+                sort: "state".into(),
+                detail_url: "/web/settings/integrations/1/".into(),
+                filter_qs: String::new(),
                 message: None,
                 chrome: chrome.clone(),
                 exclusion_applies: true,
@@ -1644,8 +1741,15 @@ mod tests {
 
             let bare = IntegrationDetailTemplate {
                 integration: integration_fixture("webhook", false),
-                projects: Vec::new(),
-                message: Some("hi".into()),
+                delivering: 0,
+                excluded_count: 0,
+                inert: 0,
+                projects: detail_page_of(Vec::new()),
+                q: String::new(),
+                sort: "state".into(),
+                detail_url: "/web/settings/integrations/1/".into(),
+                filter_qs: String::new(),
+                message: Some(Flash::err("hi".into())),
                 chrome,
                 exclusion_applies: false,
             }
@@ -1691,7 +1795,7 @@ mod tests {
             Chrome(test_chrome()),
             active.clone(),
             Path(id),
-            Form(ExcludeForm { project_id: 900 }),
+            Form(exclude_form(900)),
         )
         .await;
         assert!(queries::integration_exclusions::is_excluded(&pool, id, 900)
@@ -1707,7 +1811,7 @@ mod tests {
             Chrome(test_chrome()),
             active,
             Path(id),
-            Form(ExcludeForm { project_id: 900 }),
+            Form(exclude_form(900)),
         )
         .await;
         assert!(
@@ -1742,7 +1846,7 @@ mod tests {
             Chrome(test_chrome()),
             active,
             Path(id),
-            Form(ExcludeForm { project_id: 902 }),
+            Form(exclude_form(902)),
         )
         .await;
 
@@ -1869,8 +1973,212 @@ mod tests {
         );
 
         let (state, _chans) = crate::server::AppState::for_test(pool.clone());
-        let response = detail(State(state), Chrome(test_chrome()), active, Path(id)).await;
+        let response = detail(
+            State(state),
+            Chrome(test_chrome()),
+            active,
+            Path(id),
+            axum::extract::Query(DetailParams::default()),
+        )
+        .await;
         assert_eq!(response.status(), axum::http::StatusCode::OK);
+    }
+
+    /// The shape the review found: one live project among a hundred inert
+    /// ones, on the page whose whole justification is making it findable.
+    async fn org_with_many_projects(pool: &crate::db::DbPool) -> (i64, ActiveOrg) {
+        let active = owner_of(pool, 11, 1_100).await;
+        for i in 1..104 {
+            sqlx::query(crate::db::sql!(
+                "INSERT INTO projects (project_id, name, org_id) VALUES (?1, ?2, 11)"
+            ))
+            .bind(1_100 + i)
+            .bind(format!("filler-{i:03}"))
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query(crate::db::sql!(
+            "UPDATE projects SET name = 'needle-service' WHERE project_id = 1100"
+        ))
+        .execute(pool)
+        .await
+        .unwrap();
+        // A tracker, because that is where the finding lives: inclusion follows
+        // from having a matching repository, so 103 rows read "no matching
+        // repository" and the single delivering project is what you came for.
+        let id = queries::integrations::create_integration(
+            pool,
+            11,
+            "gh-wide",
+            "github",
+            Some("https://github.com"),
+            None,
+            None,
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+        queries::projects::upsert_project_repo(
+            pool,
+            1_100,
+            "https://github.com/acme/needle",
+            "github",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        (id, active)
+    }
+
+    async fn detail_html(
+        state: &AppState,
+        active: &ActiveOrg,
+        id: i64,
+        params: DetailParams,
+    ) -> String {
+        let r = detail(
+            State(state.clone()),
+            Chrome(test_chrome()),
+            active.clone(),
+            Path(id),
+            axum::extract::Query(params),
+        )
+        .await;
+        assert_eq!(r.status(), axum::http::StatusCode::OK);
+        let body = axum::body::to_bytes(r.into_body(), 4 * 1024 * 1024)
+            .await
+            .unwrap();
+        String::from_utf8(body.to_vec()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn the_detail_page_pages_sorts_and_searches_over_a_large_org() {
+        let pool = crate::db::open_test_pool().await;
+        let (id, active) = org_with_many_projects(&pool).await;
+        // One project excluded, so the middle rank is exercised too.
+        queries::integration_exclusions::exclude(&pool, 11, id, 1_101)
+            .await
+            .unwrap();
+        let (state, _chans) = crate::server::AppState::for_test(pool.clone());
+
+        let page1 = detail_html(&state, &active, id, DetailParams::default()).await;
+        // 25 per page out of 104, so the pager is there and page 1 is bounded.
+        assert_eq!(page1.matches("<td class=\"nowrap\">").count(), 25);
+        assert!(page1.contains("offset=25"), "a next-page link exists");
+        // The one project with a matching repository lands first, which is the
+        // whole point: before this it was somewhere in an unsorted 104.
+        assert!(page1.contains("needle-service"));
+        assert!(
+            page1.find("needle-service").unwrap() < page1.find("filler-002").unwrap(),
+            "the delivering project sorts above the inert majority"
+        );
+
+        // Search finds the one row by name, whichever page it would land on.
+        let found = detail_html(
+            &state,
+            &active,
+            id,
+            DetailParams {
+                q: Some("needle".into()),
+                ..Default::default()
+            },
+        )
+        .await;
+        assert!(found.contains("needle-service"));
+        assert_eq!(
+            found.matches("<td class=\"nowrap\">").count(),
+            1,
+            "search narrows to the match"
+        );
+        assert!(!found.contains("filler-001"));
+
+        // Excluded ranks between delivering and inert, so a deliberate opt-out
+        // stays visible rather than sinking into the noise.
+        assert!(
+            page1.find("needle-service").unwrap() < page1.find("filler-001").unwrap(),
+            "delivering sorts above excluded"
+        );
+        assert!(
+            page1.find("filler-001").unwrap() < page1.find("filler-002").unwrap(),
+            "excluded sorts above inert"
+        );
+    }
+
+    /// A missing id and another org's id must be indistinguishable, or the
+    /// difference tells you what exists elsewhere.
+    #[tokio::test]
+    async fn the_detail_page_is_not_found_for_a_missing_or_foreign_integration() {
+        let pool = crate::db::open_test_pool().await;
+        let (id, active) = org_with_many_projects(&pool).await;
+        let (state, _chans) = crate::server::AppState::for_test(pool.clone());
+
+        let missing = detail(
+            State(state.clone()),
+            Chrome(test_chrome()),
+            active.clone(),
+            Path(999_999),
+            axum::extract::Query(DetailParams::default()),
+        )
+        .await;
+        assert_eq!(missing.status(), axum::http::StatusCode::NOT_FOUND);
+
+        let mut foreign = active.clone();
+        foreign.session_org_id = 12;
+        foreign.memberships = vec![(12, crate::orgs::Role::Owner)];
+        let leaked = detail(
+            State(state),
+            Chrome(test_chrome()),
+            foreign,
+            Path(id),
+            axum::extract::Query(DetailParams::default()),
+        )
+        .await;
+        assert_eq!(
+            leaked.status(),
+            axum::http::StatusCode::NOT_FOUND,
+            "another org's integration must 404, not render"
+        );
+    }
+
+    /// Excluding a project from page 3 of a filtered list must come back to
+    /// page 3 of that filtered list, not page 1 unfiltered.
+    #[tokio::test]
+    async fn excluding_keeps_the_search_and_the_page() {
+        let pool = crate::db::open_test_pool().await;
+        let (id, active) = org_with_many_projects(&pool).await;
+        let (state, _chans) = crate::server::AppState::for_test(pool.clone());
+
+        let r = exclude(
+            State(state),
+            Chrome(test_chrome()),
+            active,
+            Path(id),
+            Form(ExcludeForm {
+                project_id: 1_105,
+                q: Some("filler".into()),
+                sort: Some("name".into()),
+                offset: Some(50),
+            }),
+        )
+        .await;
+
+        let body = axum::body::to_bytes(r.into_body(), 4 * 1024 * 1024)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            html.contains(r#"name="q" value="filler""#),
+            "the search survives the action"
+        );
+        assert!(
+            html.contains(r#"name="offset" value="50""#),
+            "and so does the page"
+        );
+        assert!(!html.contains("needle-service"), "the filter still applies");
     }
 
     fn email_cfg(from: Option<&str>) -> crate::config::EmailConfig {
@@ -1894,7 +2202,7 @@ mod tests {
 
         assert_eq!(
             default_recipient(None, true),
-            Err("flash-global-email-needs-recipient"),
+            Err(flash::GLOBAL_EMAIL_NEEDS_RECIPIENT),
         );
         assert_eq!(
             default_recipient(Some("ops@example.com"), true),
@@ -1903,9 +2211,91 @@ mod tests {
 
         assert_eq!(
             default_recipient(Some("not-an-address"), true),
-            Err("flash-invalid-to-address"),
+            Err(flash::INVALID_TO_ADDRESS),
         );
     }
+
+    fn location_of(r: &axum::response::Response) -> String {
+        r.headers()
+            .get(axum::http::header::LOCATION)
+            .map(|v| v.to_str().unwrap().to_string())
+            .unwrap_or_default()
+    }
+
+    fn create_form(name: &str, kind: &str, url: &str) -> CreateForm {
+        CreateForm {
+            name: name.into(),
+            kind: kind.into(),
+            url: url.into(),
+            secret: None,
+            from_address: None,
+            from_name: None,
+            provider: None,
+            to_address: None,
+            is_global: None,
+        }
+    }
+
+    /// The enumerable failures redirect, so a refresh cannot re-submit the form
+    /// and the URL bar stops showing the POST target.
+    #[tokio::test]
+    async fn enumerable_create_failures_redirect_with_their_key() {
+        let pool = crate::db::open_test_pool().await;
+        let active = owner_of(&pool, 7, 70).await;
+        let (state, _chans) = crate::server::AppState::for_test(pool.clone());
+
+        for (form, expected) in [
+            (
+                create_form("", "webhook", "https://x.test/h"),
+                "name-required",
+            ),
+            (
+                create_form("ops", "nonsense", "https://x.test/h"),
+                "invalid-integration-kind",
+            ),
+            (create_form("ops", "webhook", ""), "url-required"),
+            (create_form("ops", "email", ""), "email-not-configured"),
+        ] {
+            let r = create(
+                State(state.clone()),
+                Chrome(test_chrome()),
+                active.clone(),
+                Form(form),
+            )
+            .await;
+            assert_eq!(r.status(), axum::http::StatusCode::SEE_OTHER);
+            assert_eq!(
+                location_of(&r),
+                format!("{INTEGRATIONS_PATH}?flash={expected}")
+            );
+        }
+    }
+
+    /// The SSRF reason is the whole message and no key can carry it, so this
+    /// branch renders the list in place with the validator's own text.
+    #[tokio::test]
+    async fn an_ssrf_rejection_renders_in_place_with_its_reason() {
+        let pool = crate::db::open_test_pool().await;
+        let active = owner_of(&pool, 8, 80).await;
+        let (state, _chans) = crate::server::AppState::for_test(pool.clone());
+
+        let r = create(
+            State(state),
+            Chrome(test_chrome()),
+            active,
+            Form(create_form("ops", "webhook", "http://127.0.0.1:9/hook")),
+        )
+        .await;
+        assert_eq!(
+            r.status(),
+            axum::http::StatusCode::OK,
+            "a message this specific has to render, not travel in a URL"
+        );
+        assert!(location_of(&r).is_empty());
+    }
+
+    // The success path is not reachable here: every non-email kind passes through
+    // `check_ssrf`, which needs DNS. It is exercised in the browser instead.
 
     #[test]
     fn email_test_recipient_prefers_user_then_from_address() {

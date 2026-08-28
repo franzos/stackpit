@@ -27,11 +27,11 @@
       {% when None %}{% endmatch %}
     {% match distribution %}{% when Some with (dist) %}
     <p class="text-muted text-[13px] mt-1">
-      {{ chrome.t("transactions-col-throughput") }} {{ dist.summary.throughput }} ·
-      {{- " " }}p50 {{ dist.summary.p50_ms|format_duration }} · p75 {{ dist.summary.p75_ms|format_duration }} · p95 {{ dist.summary.p95_ms|format_duration }} ·
-      {{- " " }}{{ chrome.t("transactions-col-failure") }} {{ dist.summary.failure_rate|format_pct(1) }} ·
-      {{- " " }}{{ chrome.t("transactions-col-count") }} {{ dist.summary.count }} ·
-      {{- " " }}{{ chrome.t("transactions-col-users") }} {{ dist.summary.users }}
+      <bdi>{{ chrome.t("transactions-col-throughput") }} {{ dist.summary.throughput }}</bdi> ·
+      {{- " " }}<bdi>p50 {{ dist.summary.p50_ms|format_duration }}</bdi> · <bdi>p75 {{ dist.summary.p75_ms|format_duration }}</bdi> · <bdi>p95 {{ dist.summary.p95_ms|format_duration }}</bdi> ·
+      {{- " " }}<bdi>{{ chrome.t("transactions-detail-failure-label") }} {{ dist.summary.failure_rate|format_pct(1) }}</bdi> ·
+      {{- " " }}<bdi>{{ chrome.t("transactions-col-count") }} {{ dist.summary.count }}</bdi> ·
+      {{- " " }}<bdi>{{ chrome.t("transactions-col-users") }} {{ dist.summary.users }}</bdi>
     </p>
     {% when None %}{% endmatch %}
 </div>
@@ -80,7 +80,7 @@
         <thead>
           <tr>
             <th>{{ chrome.t("spans-col-op") }}</th>
-            <th>{{ chrome.t("spans-col-description") }}</th>
+            <th class="col-desc">{{ chrome.t("spans-col-description") }}</th>
             <th class="text-end">{{ chrome.t("spans-col-count") }}</th>
             <th class="text-end">{{ chrome.t("spans-col-p50") }}</th>
             <th class="text-end">{{ chrome.t("spans-col-p95") }}</th>
@@ -93,7 +93,7 @@
               <td class="text-mono">
                 {% match g.op %}{% when Some with (op) %}{{ op }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
             </td>
-            <td class="truncate-cell text-mono">
+            <td class="col-desc truncate-cell text-mono ltr-code">
               {% match g.description %}{% when Some with (d) %}{{ d }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
           </td>
           <td class="text-tabular text-end">{{ g.count }}</td>

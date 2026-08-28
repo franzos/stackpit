@@ -24,6 +24,7 @@ license-issued = Issued
 license-expires = Expires
 license-lifetime = Lifetime
 license-max-orgs = Max organizations
+license-tier = Plan
 license-unlocked-features = Unlocked features
 license-none = None
 license-no-license = No commercial license is active. This build runs the open-source tier.

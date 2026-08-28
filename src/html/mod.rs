@@ -19,6 +19,7 @@ pub mod event_list;
 pub mod event_type_list;
 #[allow(dead_code)]
 pub mod filters;
+pub(crate) mod flash;
 pub mod integrations;
 pub mod issue_detail;
 pub mod issue_list;
@@ -55,6 +56,12 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/web/projects/new",
             get(new_project::form).post(new_project::create),
+        )
+        // Where `POST /web/projects/new` lands: the DSN page rebuilt from the
+        // database, so a refresh cannot re-create the project.
+        .route(
+            "/web/projects/{project_id}/created",
+            get(new_project::created),
         )
         .route("/web/projects/{project_id}/", get(issue_list::handler))
         // Looks like the parent of the issue-detail route, so people trim the

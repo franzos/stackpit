@@ -149,3 +149,13 @@ issue-detail-external-unlink-confirm = Supprimer ce lien ? Le ticket reste sur l
 issue-detail-external-orphaned = intégration supprimée
 flash-tracker-unlinked = Lien supprimé. Le ticket existe toujours sur la forge.
 flash-tracker-ambiguous = Ce projet a plusieurs dépôts dans lesquels ce gestionnaire peut créer un ticket. Choisissez-en un et réessayez.
+issue-detail-crumbs-truncated = { $count ->
+    [one] Affiche la trace la plus récente.
+   *[other] Affiche les { $count } plus récentes.
+}
+issue-detail-crumbs-show-all = { $count ->
+    [one] Afficher la seule trace
+   *[other] Afficher les { $count }
+}
+issue-detail-external-state-open = ouvert
+issue-detail-external-state-closed = fermé

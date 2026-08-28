@@ -4,6 +4,7 @@ use serde::Deserialize;
 
 use crate::extractors::ProjectPath;
 use crate::html::chrome::PageChrome;
+use crate::html::flash::{self, Flash};
 use crate::html::render_template;
 use crate::html::utils::{self, Chrome};
 use crate::orgs::extractor::{require_project_owner, require_project_scope, ActiveOrg};
@@ -37,8 +38,13 @@ fn recipient_config(to_address: Option<String>) -> Result<Option<String>, &'stat
 struct ProjectIntegrationsTemplate {
     project_id: u64,
     active: Vec<ProjectIntegration>,
-    available: Vec<Integration>,
-    message: Option<String>,
+    /// Notification channels: they carry level, environment and digest options.
+    available_channels: Vec<Integration>,
+    /// Issue trackers: activating one only says "this project may file here";
+    /// which repository it files into comes from the project's repositories,
+    /// and none of the notify options mean anything.
+    available_trackers: Vec<Integration>,
+    message: Option<Flash>,
     nav: ProjectNavCounts,
     chrome: PageChrome,
 }
@@ -92,7 +98,7 @@ pub async fn activate(
                 return render_page(
                     &state,
                     project_id,
-                    Some(chrome.t("flash-integration-license-required")),
+                    Some(chrome.flash_of(flash::INTEGRATION_LICENSE_REQUIRED)),
                     &chrome,
                     scope.org_id,
                 )
@@ -103,7 +109,7 @@ pub async fn activate(
             return render_page(
                 &state,
                 project_id,
-                Some(chrome.t("flash-integration-not-found")),
+                Some(chrome.flash_of(flash::INTEGRATION_NOT_FOUND)),
                 &chrome,
                 scope.org_id,
             )
@@ -113,7 +119,7 @@ pub async fn activate(
             return render_page(
                 &state,
                 project_id,
-                Some(chrome.err(e)),
+                Some(chrome.flash_err(e)),
                 &chrome,
                 scope.org_id,
             )
@@ -126,7 +132,7 @@ pub async fn activate(
             return render_page(
                 &state,
                 project_id,
-                Some(chrome.t(key)),
+                Some(Flash::err(chrome.t(key))),
                 &chrome,
                 scope.org_id,
             )
@@ -136,7 +142,7 @@ pub async fn activate(
 
     let s = state.clone();
     let org_id = scope.org_id;
-    let success = chrome.t("flash-integration-activated");
+    let success = Flash::ok(chrome.t("flash-integration-activated"));
     let render_chrome = chrome.clone();
     utils::query_then_render(
         queries::integrations::activate_project_integration(
@@ -155,7 +161,7 @@ pub async fn activate(
         )
         .await,
         &chrome,
-        &success,
+        success,
         move |msg| async move { render_page(&s, project_id, msg, &render_chrome, org_id).await },
     )
     .await
@@ -195,7 +201,7 @@ pub async fn update(
                     return render_page(
                         &state,
                         project_id,
-                        Some(chrome.t("flash-integration-license-required")),
+                        Some(chrome.flash_of(flash::INTEGRATION_LICENSE_REQUIRED)),
                         &chrome,
                         scope.org_id,
                     )
@@ -206,7 +212,7 @@ pub async fn update(
                 return render_page(
                     &state,
                     project_id,
-                    Some(chrome.t("flash-integration-not-found")),
+                    Some(chrome.flash_of(flash::INTEGRATION_NOT_FOUND)),
                     &chrome,
                     scope.org_id,
                 )
@@ -217,7 +223,7 @@ pub async fn update(
             return render_page(
                 &state,
                 project_id,
-                Some(chrome.err(e)),
+                Some(chrome.flash_err(e)),
                 &chrome,
                 scope.org_id,
             )
@@ -231,7 +237,7 @@ pub async fn update(
             return render_page(
                 &state,
                 project_id,
-                Some(chrome.t(key)),
+                Some(Flash::err(chrome.t(key))),
                 &chrome,
                 scope.org_id,
             )
@@ -255,13 +261,13 @@ pub async fn update(
     )
     .await
     {
-        Ok(0) => format!(
+        Ok(0) => Flash::err(format!(
             "{} {}",
             chrome.t("common-error-prefix"),
             chrome.tv1("flash-not-found-project-integration", "id", &id.to_string())
-        ),
-        Ok(_) => chrome.t("flash-integration-updated"),
-        Err(e) => chrome.err(e),
+        )),
+        Ok(_) => Flash::ok(chrome.t("flash-integration-updated")),
+        Err(e) => chrome.flash_err(e),
     };
     render_page(&state, project_id, Some(msg), &chrome, scope.org_id).await
 }
@@ -283,13 +289,13 @@ pub async fn deactivate(
     )
     .await
     {
-        Ok(0) => format!(
+        Ok(0) => Flash::err(format!(
             "{} {}",
             chrome.t("common-error-prefix"),
             chrome.tv1("flash-not-found-project-integration", "id", &id.to_string())
-        ),
-        Ok(_) => chrome.t("flash-integration-deactivated"),
-        Err(e) => chrome.err(e),
+        )),
+        Ok(_) => Flash::ok(chrome.t("flash-integration-deactivated")),
+        Err(e) => chrome.flash_err(e),
     };
     render_page(&state, project_id, Some(msg), &chrome, scope.org_id).await
 }
@@ -315,7 +321,7 @@ pub async fn test(
             return render_page(
                 &state,
                 project_id,
-                Some(chrome.err(e)),
+                Some(chrome.flash_err(e)),
                 &chrome,
                 scope.org_id,
             )
@@ -326,7 +332,7 @@ pub async fn test(
         return render_page(
             &state,
             project_id,
-            Some(chrome.t("flash-integration-not-found")),
+            Some(chrome.flash_of(flash::INTEGRATION_NOT_FOUND)),
             &chrome,
             scope.org_id,
         )
@@ -337,7 +343,7 @@ pub async fn test(
         return render_page(
             &state,
             project_id,
-            Some(chrome.t("flash-integration-license-required")),
+            Some(chrome.flash_of(flash::INTEGRATION_LICENSE_REQUIRED)),
             &chrome,
             scope.org_id,
         )
@@ -392,7 +398,7 @@ pub async fn test(
                 return render_page(
                     &state,
                     project_id,
-                    Some(chrome.t("flash-integration-no-url")),
+                    Some(chrome.flash_of(flash::INTEGRATION_NO_URL)),
                     &chrome,
                     scope.org_id,
                 )
@@ -403,7 +409,14 @@ pub async fn test(
         let resolved = match crate::util::ssrf::check_ssrf(url).await {
             Ok(r) => r,
             Err(msg) => {
-                return render_page(&state, project_id, Some(msg), &chrome, scope.org_id).await
+                return render_page(
+                    &state,
+                    project_id,
+                    Some(Flash::err(msg)),
+                    &chrome,
+                    scope.org_id,
+                )
+                .await
             }
         };
         let client = match reqwest::Client::builder()
@@ -418,7 +431,11 @@ pub async fn test(
                 return render_page(
                     &state,
                     project_id,
-                    Some(chrome.tv1("flash-test-failed", "error", "internal error")),
+                    Some(Flash::err(chrome.tv1(
+                        "flash-test-failed",
+                        "error",
+                        "internal error",
+                    ))),
                     &chrome,
                     scope.org_id,
                 )
@@ -437,8 +454,8 @@ pub async fn test(
     };
 
     let msg = match result {
-        Ok(()) => chrome.t("flash-test-notification-sent"),
-        Err(e) => chrome.tv1("flash-test-failed", "error", &e.to_string()),
+        Ok(()) => chrome.flash_of(flash::TEST_NOTIFICATION_SENT),
+        Err(e) => Flash::err(chrome.tv1("flash-test-failed", "error", &e.to_string())),
     };
     render_page(&state, project_id, Some(msg), &chrome, scope.org_id).await
 }
@@ -446,7 +463,7 @@ pub async fn test(
 async fn render_page(
     state: &AppState,
     project_id: u64,
-    message: Option<String>,
+    message: Option<Flash>,
     chrome: &PageChrome,
     org_id: i64,
 ) -> axum::response::Response {
@@ -457,17 +474,140 @@ async fn render_page(
         queries::integrations::list_available_for_project(&state.pool, project_id, org_id)
             .await
             .unwrap_or_default();
+    // Split so each kind gets a form that only asks what it can use. The
+    // post-activation row already branches on `is_tracker()`.
+    let (available_trackers, available_channels): (Vec<_>, Vec<_>) =
+        available.into_iter().partition(|i| i.kind.is_tracker());
 
     let nav = state.nav_counts(project_id).await;
 
     let tmpl = ProjectIntegrationsTemplate {
         project_id,
         active,
-        available,
+        available_channels,
+        available_trackers,
         message,
         nav,
         chrome: chrome.clone(),
     };
 
     render_template(&tmpl)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use askama::Template;
+    use unic_langid::langid;
+
+    fn integration(id: i64, name: &str, kind: crate::domain::IntegrationKind) -> Integration {
+        Integration {
+            id,
+            name: name.into(),
+            kind,
+            url: Some("https://x.test/h".into()),
+            secret: None,
+            encrypted: false,
+            config: None,
+            created_at: 1_700_000_000,
+            is_global: false,
+        }
+    }
+
+    fn page(
+        channels: Vec<Integration>,
+        trackers: Vec<Integration>,
+        locale: unic_langid::LanguageIdentifier,
+    ) -> String {
+        ProjectIntegrationsTemplate {
+            project_id: 7,
+            active: Vec::new(),
+            available_channels: channels,
+            available_trackers: trackers,
+            message: None,
+            nav: ProjectNavCounts::default(),
+            chrome: PageChrome::new("csrf".into(), locale, "/web/projects/".into()),
+        }
+        .render()
+        .expect("project integrations renders")
+    }
+
+    /// A tracker files on demand into the project's own repository, so none of
+    /// the channel options apply. Offering them would be offering settings that
+    /// do nothing.
+    #[test]
+    fn the_tracker_form_asks_only_for_the_integration() {
+        use crate::domain::IntegrationKind as K;
+
+        let html = page(
+            Vec::new(),
+            vec![integration(1, "gh", K::GitHub)],
+            langid!("en"),
+        );
+        assert!(html.contains("Activate issue tracker"));
+        for field in [
+            r#"name="min_level""#,
+            r#"name="environment_filter""#,
+            r#"name="notify_threshold""#,
+            r#"name="notify_digests""#,
+            r#"name="to_address""#,
+        ] {
+            assert!(
+                !html.contains(field),
+                "the tracker form still offers {field}"
+            );
+        }
+        assert!(html.contains(r#"name="integration_id""#));
+    }
+
+    /// The channel form keeps every option it had.
+    #[test]
+    fn the_channel_form_keeps_its_options() {
+        use crate::domain::IntegrationKind as K;
+
+        let html = page(
+            vec![integration(2, "ops", K::Slack)],
+            Vec::new(),
+            langid!("en"),
+        );
+        for field in [
+            r#"name="min_level""#,
+            r#"name="environment_filter""#,
+            r#"name="notify_threshold""#,
+            r#"name="to_address""#,
+        ] {
+            assert!(html.contains(field), "the channel form lost {field}");
+        }
+        assert!(!html.contains("Activate issue tracker"));
+    }
+
+    /// Both lists empty is the only empty state; one list empty is not.
+    #[test]
+    fn the_empty_state_needs_both_lists_empty() {
+        use crate::domain::IntegrationKind as K;
+
+        // The active list is empty in both cases and has an empty state of its
+        // own, so count the panels rather than looking for the class.
+        for locale in [langid!("en"), langid!("de")] {
+            let empty = page(Vec::new(), Vec::new(), locale.clone());
+            assert!(!empty.contains(crate::i18n::MISSING_PREFIX));
+            assert_eq!(
+                empty.matches(r#"<p class="empty">"#).count(),
+                2,
+                "nothing active and nothing available: two empty states"
+            );
+
+            let one = page(
+                Vec::new(),
+                vec![integration(1, "gh", K::GitHub)],
+                locale.clone(),
+            );
+            assert!(!one.contains(crate::i18n::MISSING_PREFIX), "{locale}");
+            assert_eq!(
+                one.matches(r#"<p class="empty">"#).count(),
+                1,
+                "a tracker is available, so only the active list is empty"
+            );
+        }
+    }
 }

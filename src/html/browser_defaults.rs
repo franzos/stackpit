@@ -7,6 +7,7 @@ use serde::Deserialize;
 
 use crate::extractors::BrowserDefaults;
 use crate::html::chrome::PageChrome;
+use crate::html::flash::Flash;
 use crate::html::render_template;
 use crate::html::utils::{serialize_defaults_cookie, Chrome, DEFAULTS_COOKIE};
 use crate::server::AppState;
@@ -17,7 +18,7 @@ struct BrowserDefaultsTemplate {
     status: String,
     level: String,
     period: String,
-    message: Option<String>,
+    message: Option<Flash>,
     chrome: PageChrome,
 }
 
@@ -73,11 +74,11 @@ pub async fn save_defaults(
         format!("{DEFAULTS_COOKIE}={cookie_value}; Path=/web; HttpOnly; SameSite=Strict{secure}; Max-Age=31536000")
     };
 
-    let message = if defaults.is_empty() {
+    let message = Flash::ok(if defaults.is_empty() {
         chrome.t("flash-defaults-cleared")
     } else {
         chrome.t("flash-defaults-saved")
-    };
+    });
 
     let mut resp = render_page(&defaults, Some(message), &chrome);
     resp.headers_mut()
@@ -93,7 +94,11 @@ pub async fn clear_defaults(
     let cookie_header =
         format!("{DEFAULTS_COOKIE}=; Path=/web; HttpOnly; SameSite=Strict{secure}; Max-Age=0");
     let defaults = HashMap::new();
-    let mut resp = render_page(&defaults, Some(chrome.t("flash-defaults-cleared")), &chrome);
+    let mut resp = render_page(
+        &defaults,
+        Some(Flash::ok(chrome.t("flash-defaults-cleared"))),
+        &chrome,
+    );
     resp.headers_mut()
         .insert(header::SET_COOKIE, cookie_header.parse().unwrap());
     resp
@@ -109,7 +114,7 @@ fn secure_flag(state: &AppState) -> &'static str {
 
 fn render_page(
     defaults: &HashMap<String, String>,
-    message: Option<String>,
+    message: Option<Flash>,
     chrome: &PageChrome,
 ) -> axum::response::Response {
     let tmpl = BrowserDefaultsTemplate {

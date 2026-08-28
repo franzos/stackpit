@@ -132,6 +132,8 @@ pub fn fully_licensed() -> LicenseHandle {
             expires_at: Some(chrono::Utc::now() + chrono::Duration::days(365)),
             features: vec![Feature::Observability, Feature::Integrations],
             max_orgs: None,
+            tier: "business".into(),
+            product: "stackpit".into(),
         }),
         GRACE_DAYS,
     )
@@ -174,6 +176,8 @@ mod tests {
             expires_at: Some(Utc::now() + Duration::days(expires_in_days)),
             features: Vec::new(),
             max_orgs: None,
+            tier: "business".into(),
+            product: "stackpit".into(),
         };
         LicenseHandle::new(LicenseStatus::Active(license), GRACE_DAYS)
     }

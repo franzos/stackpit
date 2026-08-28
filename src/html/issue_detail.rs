@@ -12,6 +12,7 @@ use crate::domain::{
 use crate::domain::FrameGroup;
 use crate::extractors::ReadPool;
 use crate::html::chrome::PageChrome;
+use crate::html::flash;
 use crate::html::render_template;
 use crate::html::utils::Chrome;
 use crate::orgs::extractor::ActiveOrg;
@@ -31,11 +32,18 @@ use crate::html::filters;
 #[derive(Deserialize)]
 pub struct PageParams {
     pub tab: Option<String>,
+    /// `crumbs=all` lifts the render cap for one page load.
     #[serde(default)]
-    pub tracker_flash: Option<String>,
+    pub crumbs: Option<String>,
     #[serde(flatten)]
     pub page: Pagination,
 }
+
+/// How many breadcrumbs the panel renders by default. The stored payload keeps
+/// every crumb — an SDK that sent 400 for a hard-to-reproduce crash sent them
+/// for a reason — so this bounds the page, not the data: the Raw JSON tab is
+/// still complete and "Show all" renders the rest.
+const BREADCRUMB_RENDER_CAP: usize = 100;
 
 #[derive(Deserialize)]
 pub struct StatusForm {
@@ -74,7 +82,12 @@ struct IssueDetailTemplate {
     summary_tags: Vec<SummaryTag>,
     exceptions: Vec<ExceptionData>,
     breadcrumbs: Vec<Breadcrumb>,
-    /// Option set for the breadcrumb type filter; derived from `breadcrumbs`.
+    /// How many the event actually carries, which is what the header shows.
+    breadcrumb_total: usize,
+    /// True when `breadcrumbs` is the capped tail rather than all of them.
+    crumbs_truncated: bool,
+    /// Option set for the breadcrumb type filter; derived from the *full* set,
+    /// so capping the render never silently drops a filter option.
     breadcrumb_categories: Vec<String>,
     tags: Vec<Tag>,
     contexts: Vec<ContextGroup>,
@@ -97,18 +110,30 @@ struct IssueDetailTemplate {
     // -- external trackers --
     tracker_options: Vec<TrackerOption>,
     external_links: Vec<queries::issue_links::ExternalLink>,
-    tracker_flash: Option<String>,
     chrome: PageChrome,
 }
 
-/// Builds the file-into picker, naming the repo only when an integration matches several.
+/// Builds the file-into picker, naming the repo only when an integration
+/// matches several.
+///
+/// Filtering is per `(integration, repository)`, not per integration: filing
+/// into one repository of a forge must not make its sibling unfileable, which
+/// is what the picker used to do — it offered two targets and silently lost
+/// both the moment you used either.
+///
+/// A link whose repository cannot be parsed filters nothing out. Offering a
+/// possibly-duplicate target beats hiding the only reachable one; a duplicate
+/// issue can be closed on the forge.
 fn tracker_options(
     matches: &[crate::trackers::TrackerMatch],
-    already_linked: &std::collections::HashSet<i64>,
+    already_linked: &std::collections::HashSet<(i64, String)>,
 ) -> Vec<TrackerOption> {
     matches
         .iter()
-        .filter(|m| !already_linked.contains(&m.integration.id))
+        .filter(|m| match crate::trackers::repo_key(&m.forge_ref) {
+            Some(key) => !already_linked.contains(&(m.integration.id, key)),
+            None => true,
+        })
         .map(|m| {
             let ambiguous = matches
                 .iter()
@@ -130,19 +155,6 @@ fn tracker_options(
             }
         })
         .collect()
-}
-
-/// Maps a `tracker_flash` query value to its i18n message. Only known keys
-/// resolve, so an attacker can't smuggle arbitrary text into the page.
-fn resolve_tracker_flash(value: Option<&str>, chrome: &PageChrome) -> Option<String> {
-    match value {
-        Some("create-failed") => Some(chrome.t("flash-tracker-create-failed")),
-        Some("config") => Some(chrome.t("flash-tracker-config-incomplete")),
-        Some("license") => Some(chrome.t("flash-integration-license-required")),
-        Some("unlinked") => Some(chrome.t("flash-tracker-unlinked")),
-        Some("ambiguous") => Some(chrome.t("flash-tracker-ambiguous")),
-        _ => None,
-    }
 }
 
 pub async fn handler(
@@ -170,7 +182,6 @@ pub async fn handler(
     }
 
     let tab = params.tab.unwrap_or_else(|| "details".to_string());
-    let tracker_flash = resolve_tracker_flash(params.tracker_flash.as_deref(), &chrome);
 
     let nav = state.nav_counts(project_id).await;
 
@@ -198,9 +209,9 @@ pub async fn handler(
             .unwrap_or_default();
     let tracker_options = match queries::orgs::org_of_project(&pool, project_id as i64).await {
         Ok(Some(org_id)) => {
-            let linked_ids: std::collections::HashSet<i64> = external_links
+            let linked_ids: std::collections::HashSet<(i64, String)> = external_links
                 .iter()
-                .filter_map(|l| l.integration_id)
+                .filter_map(|l| Some((l.integration_id?, l.repo_key()?)))
                 .collect();
             let matches =
                 crate::trackers::resolve_matching_trackers(&pool, org_id, project_id as i64)
@@ -224,6 +235,8 @@ pub async fn handler(
             summary_tags: Vec::new(),
             exceptions: Vec::new(),
             breadcrumbs: Vec::new(),
+            breadcrumb_total: 0,
+            crumbs_truncated: false,
             breadcrumb_categories: Vec::new(),
             tags: Vec::new(),
             contexts: Vec::new(),
@@ -243,7 +256,6 @@ pub async fn handler(
             last_seen_release,
             tracker_options,
             external_links,
-            tracker_flash,
             chrome,
         };
         return Ok(render_template(&tmpl));
@@ -257,7 +269,7 @@ pub async fn handler(
     let (
         summary_tags,
         exceptions,
-        breadcrumbs,
+        mut breadcrumbs,
         tags,
         contexts,
         request,
@@ -328,7 +340,16 @@ pub async fn handler(
         limit: 25,
     };
 
+    // Computed before slicing: the filter must offer every category the event
+    // carries, not only those surviving the cap.
     let breadcrumb_categories = crate::domain::breadcrumb_categories(&breadcrumbs);
+    let breadcrumb_total = breadcrumbs.len();
+    let show_all = params.crumbs.as_deref() == Some("all");
+    let crumbs_truncated = !show_all && breadcrumb_total > BREADCRUMB_RENDER_CAP;
+    // SDKs send oldest-first, so the useful end is the tail.
+    if crumbs_truncated {
+        breadcrumbs.drain(..breadcrumb_total - BREADCRUMB_RENDER_CAP);
+    }
 
     let tmpl = IssueDetailTemplate {
         issue,
@@ -339,6 +360,8 @@ pub async fn handler(
         summary_tags,
         exceptions,
         breadcrumbs,
+        breadcrumb_total,
+        crumbs_truncated,
         breadcrumb_categories,
         tags,
         contexts,
@@ -358,7 +381,6 @@ pub async fn handler(
         last_seen_release,
         tracker_options,
         external_links,
-        tracker_flash,
         chrome,
     };
     Ok(render_template(&tmpl))
@@ -516,21 +538,21 @@ pub async fn create_external_issue(
         }
         Err(LinkError::Misconfigured(msg)) => {
             tracing::warn!("create_external_issue: {msg}");
-            Redirect::to(&format!("{redirect_url}?tracker_flash=config")).into_response()
+            flash::redirect(&redirect_url, flash::TRACKER_CONFIG_INCOMPLETE)
         }
         Err(LinkError::Ambiguous(msg)) => {
             tracing::warn!("create_external_issue: {msg}");
-            Redirect::to(&format!("{redirect_url}?tracker_flash=ambiguous")).into_response()
+            flash::redirect(&redirect_url, flash::TRACKER_AMBIGUOUS)
         }
         Err(LinkError::Blocked(msg)) => html_error(StatusCode::BAD_REQUEST, &msg),
         Err(LinkError::LicenseRequired) => {
-            Redirect::to(&format!("{redirect_url}?tracker_flash=license")).into_response()
+            flash::redirect(&redirect_url, flash::INTEGRATION_LICENSE_REQUIRED)
         }
         // Status only in the log: the tracker response body can reflect
         // submitted input, so it never surfaces on the page.
         Err(e @ (LinkError::Rejected(_) | LinkError::Unavailable(_))) => {
             tracing::warn!("create_external_issue: tracker call failed: {e}");
-            Redirect::to(&format!("{redirect_url}?tracker_flash=create-failed")).into_response()
+            flash::redirect(&redirect_url, flash::TRACKER_CREATE_FAILED)
         }
         Err(LinkError::Internal(e)) => {
             tracing::error!("create_external_issue: {e:#}");
@@ -565,7 +587,7 @@ pub async fn delete_external_link(
         .await
     {
         Ok(0) => html_error(StatusCode::NOT_FOUND, "Link not found"),
-        Ok(_) => Redirect::to(&format!("{redirect_url}?tracker_flash=unlinked")).into_response(),
+        Ok(_) => flash::redirect(&redirect_url, flash::TRACKER_UNLINKED),
         Err(e) => {
             tracing::error!("delete_external_link: {e:#}");
             html_error(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
@@ -615,6 +637,8 @@ mod tests {
             summary_tags: Vec::new(),
             exceptions: Vec::new(),
             breadcrumbs: Vec::new(),
+            breadcrumb_total: 0,
+            crumbs_truncated: false,
             breadcrumb_categories: Vec::new(),
             tags: Vec::new(),
             contexts: Vec::new(),
@@ -639,7 +663,6 @@ mod tests {
             last_seen_release: None,
             tracker_options: Vec::new(),
             external_links,
-            tracker_flash: None,
             chrome,
         }
     }
@@ -661,6 +684,84 @@ mod tests {
             assert!(html.contains("/issues/fp-render/external/11/delete"));
             assert!(html.contains("/issues/fp-render/external/12/delete"));
         }
+    }
+
+    /// The breadcrumb panel lives inside the details tab's `event` arm, so a
+    /// page that renders crumbs needs one.
+    fn an_event() -> queries::EventDetail {
+        queries::EventDetail {
+            event_id: "e1".into(),
+            item_type: crate::ingest::models::ItemType::Event,
+            project_id: 7,
+            fingerprint: Some("fp-render".into()),
+            timestamp: 1_700_000_100,
+            level: Some("error".into()),
+            title: Some("Boom".into()),
+            platform: None,
+            release: None,
+            environment: None,
+            server_name: None,
+            transaction_name: None,
+            sdk_name: None,
+            sdk_version: None,
+            received_at: 1_700_000_100,
+            payload: serde_json::json!({}),
+        }
+    }
+
+    fn crumbs(n: usize) -> Vec<crate::domain::Breadcrumb> {
+        (0..n)
+            .map(|i| crate::domain::Breadcrumb {
+                timestamp: format!("2026-08-28T00:00:{:02}Z", i % 60),
+                level: "info".into(),
+                // Two categories, one of which only ever appears at the head, so
+                // a filter option built after slicing would lose it.
+                category: if i == 0 { "boot" } else { "http" }.into(),
+                message: format!("crumb {i}"),
+                data: String::new(),
+            })
+            .collect()
+    }
+
+    /// The stored payload keeps every crumb; only the render is bounded. The
+    /// header still reports the true count and the filter still offers every
+    /// category, including one that exists only in the truncated head.
+    #[test]
+    fn breadcrumbs_are_capped_at_render_without_losing_the_count_or_the_filter() {
+        let all = crumbs(5_001);
+        let categories = crate::domain::breadcrumb_categories(&all);
+        let chrome = PageChrome::new("csrf".into(), langid!("en"), "/web/projects/".into());
+
+        let mut capped = page(chrome.clone(), Vec::new());
+        capped.event = Some(an_event());
+        capped.breadcrumb_total = all.len();
+        capped.crumbs_truncated = true;
+        capped.breadcrumbs = all[all.len() - BREADCRUMB_RENDER_CAP..].to_vec();
+        capped.breadcrumb_categories = categories.clone();
+        let html = capped.render().expect("capped page renders");
+
+        assert_eq!(
+            html.matches("data-category=").count(),
+            BREADCRUMB_RENDER_CAP
+        );
+        assert!(html.contains("(5001)"), "header shows the true count");
+        assert!(html.contains("crumbs=all"), "an escape hatch is offered");
+        assert!(html.contains("crumb 5000"), "the tail is what survives");
+        assert!(!html.contains(">crumb 0<"), "the head is what is dropped");
+        assert!(
+            html.contains("value=\"boot\""),
+            "a category only present in the dropped head must still be filterable"
+        );
+
+        let mut full = page(chrome, Vec::new());
+        full.event = Some(an_event());
+        full.breadcrumb_total = all.len();
+        full.crumbs_truncated = false;
+        full.breadcrumbs = all;
+        full.breadcrumb_categories = categories;
+        let html = full.render().expect("uncapped page renders");
+        assert_eq!(html.matches("data-category=").count(), 5_001);
+        assert!(!html.contains("crumbs=all"));
     }
 
     use crate::orgs::Role;
@@ -800,7 +901,10 @@ mod tests {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default()
             .to_string();
-        assert!(location.contains("tracker_flash=config"), "{location}");
+        assert!(
+            location.contains("flash=tracker-config-incomplete"),
+            "{location}"
+        );
     }
 
     #[tokio::test]
@@ -928,8 +1032,37 @@ mod tests {
             .all(|o| o.value.starts_with(&format!("{integration_id}:"))));
     }
 
+    /// Filing into one repository must not make its sibling unfileable. The
+    /// old behaviour keyed on the integration and hid both.
     #[tokio::test]
-    async fn an_already_linked_integration_is_not_offered_again() {
+    async fn a_linked_repository_is_dropped_but_its_sibling_is_still_offered() {
+        let pool = crate::db::open_test_pool().await;
+        seeded_project(&pool).await;
+        let integration_id = tracker_integration(&pool).await;
+        add_repo(&pool, "https://github.com/acme/api").await;
+        add_repo(&pool, "https://github.com/acme/web").await;
+
+        let matches = crate::trackers::resolve_matching_trackers(&pool, ORG, 7)
+            .await
+            .unwrap();
+        assert_eq!(tracker_options(&matches, &Default::default()).len(), 2);
+
+        let linked = std::collections::HashSet::from([(integration_id, "acme/api".to_string())]);
+        let opts = tracker_options(&matches, &linked);
+        assert_eq!(opts.len(), 1, "the sibling repository stays fileable");
+        assert!(opts[0].label.contains("acme/web"));
+
+        // Both filed: now there is nothing left to offer.
+        let both = std::collections::HashSet::from([
+            (integration_id, "acme/api".to_string()),
+            (integration_id, "acme/web".to_string()),
+        ]);
+        assert!(tracker_options(&matches, &both).is_empty());
+    }
+
+    /// A link whose repository cannot be recovered must not hide a target.
+    #[tokio::test]
+    async fn an_unparseable_link_filters_nothing_out() {
         let pool = crate::db::open_test_pool().await;
         seeded_project(&pool).await;
         let integration_id = tracker_integration(&pool).await;
@@ -938,8 +1071,24 @@ mod tests {
         let matches = crate::trackers::resolve_matching_trackers(&pool, ORG, 7)
             .await
             .unwrap();
-        let linked = std::collections::HashSet::from([integration_id]);
-        assert!(tracker_options(&matches, &linked).is_empty());
+        let unparseable = queries::issue_links::ExternalLink {
+            id: 1,
+            integration_id: Some(integration_id),
+            integration_kind: "github".into(),
+            integration_name: "gh-handler".into(),
+            external_id: "7".into(),
+            external_url: "not a url at all".into(),
+            external_state: None,
+        };
+        assert!(unparseable.repo_key().is_none());
+
+        // The handler builds the set with `filter_map`, so a `None` key never
+        // enters it and the target stays offered.
+        let linked: std::collections::HashSet<(i64, String)> = [unparseable]
+            .iter()
+            .filter_map(|l| Some((l.integration_id?, l.repo_key()?)))
+            .collect();
+        assert_eq!(tracker_options(&matches, &linked).len(), 1);
     }
 
     #[test]

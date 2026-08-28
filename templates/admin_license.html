@@ -9,9 +9,9 @@
 {% endblock %}
 
 {% block breadcrumbs %}
-  <span class="breadcrumb-sep">›</span>
+  <span class="breadcrumb-sep">/</span>
   <span>{{ chrome.t("admin-breadcrumb-admin") }}</span>
-  <span class="breadcrumb-sep">›</span>
+  <span class="breadcrumb-sep">/</span>
   <span class="breadcrumb-current">{{ chrome.t("license-page-title") }}</span>
 {% endblock %}
 
@@ -22,6 +22,9 @@
       <p class="text-muted text-[13px] mt-1">{{ chrome.t("license-intro") }}</p>
     </div>
   </div>
+
+  {% call m::flash_banner(chrome) %}
+  {% endcall %}
 
   {% if banner_kind == "warning" %}
     <div class="card card-pad mb-4 border-warning/40"
@@ -60,6 +63,16 @@
               <tr>
                 <th>{{ chrome.t("license-contact") }}</th>
                 <td><bdi>{{ email }}</bdi></td>
+              </tr>
+              <tr>
+                <th>{{ chrome.t("license-tier") }}</th>
+                <td>
+                  {% if tier.is_empty() %}
+                    <span class="text-muted">—</span>
+                  {% else %}
+                    <span class="badge badge-neutral">{{ tier }}</span>
+                  {% endif %}
+                </td>
               </tr>
               <tr>
                 <th>{{ chrome.t("license-issued") }}</th>

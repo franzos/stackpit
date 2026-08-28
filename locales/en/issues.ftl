@@ -105,6 +105,17 @@ issue-detail-th-message = Message
 issue-detail-crumb-data = data
 issue-detail-crumb-filter = Filter breadcrumbs by type
 issue-detail-crumb-filter-all = All types
+# The panel renders the most recent { $count }; the stored event keeps them all.
+issue-detail-crumbs-truncated =
+    { $count ->
+        [one] Showing the most recent crumb.
+       *[other] Showing the { $count } most recent.
+    }
+issue-detail-crumbs-show-all =
+    { $count ->
+        [one] Show the one crumb
+       *[other] Show all { $count }
+    }
 issue-detail-tags = Tags
 issue-detail-contexts = Contexts
 issue-detail-additional-data = Additional data
@@ -147,5 +158,9 @@ flash-tracker-config-incomplete = This tracker integration is missing a reposito
 issue-detail-external-unlink = Unlink
 issue-detail-external-unlink-confirm = Remove this link? The issue stays on the forge — close or delete it there.
 issue-detail-external-orphaned = integration removed
+# Recorded at file time, not synchronised: a remote issue closed on the forge
+# still reads as open here.
+issue-detail-external-state-open = open
+issue-detail-external-state-closed = closed
 flash-tracker-unlinked = Link removed. The issue still exists on the forge.
 flash-tracker-ambiguous = This project has more than one repository this tracker can file into. Pick one and try again.

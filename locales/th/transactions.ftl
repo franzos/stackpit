@@ -35,3 +35,4 @@ transactions-pagination-next = ถัดไป »
 transactions-detail-count = { $count ->
    *[other] { $count } อินสแตนซ์
 }
+transactions-detail-failure-label = ล้มเหลว

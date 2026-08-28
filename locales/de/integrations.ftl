@@ -71,6 +71,29 @@ integrations-projects-hint-global = Diese Integration stellt an jedes Projekt un
 integrations-projects-hint-per-project = Diese Integration stellt nur dort zu, wo ein Projekt sie aktiviert hat. Markiere sie als organisationsweit, um überall zuzustellen.
 integrations-projects-hint-tracker = Issue-Tracker werden über Forge und Host mit den Repositories eines Projekts abgeglichen. Ein ausgeschlossenes Projekt bietet diesen Tracker nicht mehr zur Auswahl an.
 integrations-projects-empty = Diese Organisation hat noch keine Projekte.
+integrations-summary-delivering = { $count ->
+    [one] { $count } stellt zu
+   *[other] { $count } stellen zu
+}
+integrations-summary-excluded = { $count ->
+    [one] { $count } ausgeschlossen
+   *[other] { $count } ausgeschlossen
+}
+integrations-summary-inert = { $count ->
+    [one] { $count } ohne Zustellung
+   *[other] { $count } ohne Zustellung
+}
+integrations-search-placeholder = Nach Projektnamen filtern
+integrations-search-label = Projekte filtern
+integrations-search-submit = Filtern
+integrations-sort-label = Projekte sortieren
+integrations-sort-state = Zustellende zuerst
+integrations-sort-name = Nach Name
+integrations-pagination-label = Seiten der Projektzustellung
+integrations-projects-count = { $count ->
+    [one] { $count } Projekt
+   *[other] { $count } Projekte
+}
 integrations-col-project = Projekt
 integrations-col-state = Status
 integrations-project-archived = archiviert

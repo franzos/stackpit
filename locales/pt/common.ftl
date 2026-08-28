@@ -28,3 +28,12 @@ test-count = { $count ->
     [one] { $count } item
    *[other] { $count } itens
 }
+common-time-in-secs = em { $n } s
+common-time-in-min = em { $n } min
+common-time-in-hour = em { $n } h
+common-time-in-day = { $n ->
+    [one] em { $n } dia
+   *[other] em { $n } dias
+}
+common-pagination-prev = Anterior
+common-pagination-next = Seguinte

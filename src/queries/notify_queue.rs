@@ -170,6 +170,24 @@ pub async fn record_attempt(
     Ok(result.rows_affected())
 }
 
+/// Record why a *manual* replay failed, leaving `attempts` and
+/// `next_attempt_at` alone: an operator pressing Replay must not burn one of
+/// the automatic retries. `last_error` therefore means "the last attempt,
+/// manual or automatic", which is the reading the queue page needs.
+pub async fn record_manual_error(pool: &DbPool, id: i64, error: &str, now: i64) -> Result<u64> {
+    let result = sqlx::query(sql!(
+        "UPDATE notification_delivery_queue
+         SET last_error = ?2, updated_at = ?3
+         WHERE id = ?1"
+    ))
+    .bind(id)
+    .bind(error)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
 /// `org_id` is `None` only for the drain, which already resolved the row.
 pub async fn delete(pool: &DbPool, id: i64, org_id: Option<i64>) -> Result<u64> {
     let result = match org_id {

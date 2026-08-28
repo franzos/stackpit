@@ -259,3 +259,7 @@ projects-integrations-reset = Restablecer los valores de la organización
 projects-integrations-reset-confirm = ¿Descartar los ajustes de este proyecto y volver a entregar con los valores de la organización?
 projects-integrations-global-hint = Esta integración entrega a todos los proyectos de la organización. Los ajustes de abajo solo la personalizan aquí; para detener la entrega por completo, excluye este proyecto en la página de la integración.
 projects-integrations-tracker-hint = El repositorio de destino sale de los ajustes de repositorio de este proyecto, no de aquí.
+projects-repos-inert = forja desconocida
+projects-repos-inert-help = Stackpit no pudo determinar qué forja ejecuta este host, así que el repositorio no genera enlaces al código ni coincide con ningún gestor de incidencias. Elige la forja abajo y guarda.
+projects-integrations-activate-tracker-heading = Activar gestor de incidencias
+projects-integrations-activate-tracker-help = Permite que este proyecto cree incidencias cuando haga falta. El repositorio de destino sale de los repositorios del proyecto, así que no hay nada más que configurar aquí.

@@ -54,3 +54,4 @@ queue-state-failed = Desistiu
 queue-replay = Reenviar
 queue-cancel = Descartar
 queue-cancel-confirm = Descartar esta notificação sem a entregar?
+queue-col-alert = Alerta

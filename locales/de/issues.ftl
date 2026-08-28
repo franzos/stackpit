@@ -104,6 +104,16 @@ issue-detail-th-message = Nachricht
 issue-detail-crumb-data = Daten
 issue-detail-crumb-filter = Breadcrumbs nach Typ filtern
 issue-detail-crumb-filter-all = Alle Typen
+issue-detail-crumbs-truncated =
+    { $count ->
+        [one] Zeigt den neuesten Eintrag.
+       *[other] Zeigt die { $count } neuesten.
+    }
+issue-detail-crumbs-show-all =
+    { $count ->
+        [one] Den einen Eintrag zeigen
+       *[other] Alle { $count } zeigen
+    }
 issue-detail-tags = Tags
 issue-detail-contexts = Kontexte
 issue-detail-additional-data = Zusätzliche Daten
@@ -142,6 +152,8 @@ issue-detail-discard = Zukünftige Ereignisse verwerfen
 issue-detail-external-unlink = Verknüpfung entfernen
 issue-detail-external-unlink-confirm = Diese Verknüpfung entfernen? Das Issue bleibt auf der Forge — schließe oder lösche es dort.
 issue-detail-external-orphaned = Integration entfernt
+issue-detail-external-state-open = offen
+issue-detail-external-state-closed = geschlossen
 flash-tracker-unlinked = Verknüpfung entfernt. Das Issue existiert weiterhin auf der Forge.
 flash-tracker-ambiguous = Dieses Projekt hat mehrere Repositories, in die dieser Tracker schreiben kann. Wähle eines aus und versuche es erneut.
 issue-detail-create-external-issue = Issue anlegen

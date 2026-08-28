@@ -93,3 +93,26 @@ integrations-exclude = Exclure
 integrations-include = Inclure
 integrations-email-to-label = Destinataire par défaut
 integrations-email-to-help = Utilisé là où un projet n'a pas défini sa propre adresse. Obligatoire pour une intégration à l'échelle de l'organisation.
+integrations-summary-delivering = { $count ->
+    [one] { $count } livre
+   *[other] { $count } livrent
+}
+integrations-summary-excluded = { $count ->
+    [one] { $count } exclu
+   *[other] { $count } exclus
+}
+integrations-summary-inert = { $count ->
+    [one] { $count } sans livraison
+   *[other] { $count } sans livraison
+}
+integrations-search-placeholder = Filtrer par nom de projet
+integrations-search-label = Filtrer les projets
+integrations-search-submit = Filtrer
+integrations-sort-label = Trier les projets
+integrations-sort-state = Livrants d'abord
+integrations-sort-name = Par nom
+integrations-pagination-label = Pages de livraison par projet
+integrations-projects-count = { $count ->
+    [one] { $count } projet
+   *[other] { $count } projets
+}

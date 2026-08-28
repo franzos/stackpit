@@ -258,3 +258,7 @@ projects-integrations-reset = إعادة الضبط إلى قيم المؤسسة
 projects-integrations-reset-confirm = تجاهل إعدادات هذا المشروع والعودة إلى التسليم بقيم المؤسسة؟
 projects-integrations-global-hint = يسلّم هذا التكامل إلى كل مشاريع المؤسسة. الإعدادات أدناه تخصّصه هنا فقط؛ ولإيقاف التسليم تمامًا استبعد هذا المشروع من صفحة التكامل.
 projects-integrations-tracker-hint = المستودع الهدف يأتي من إعدادات مستودعات هذا المشروع، لا من هنا.
+projects-repos-inert = المنصّة غير معروفة
+projects-repos-inert-help = تعذّر على Stackpit تحديد المنصّة التي تعمل على هذا المضيف، لذا لا ينتج المستودع روابط للشيفرة ولا يطابق أي متتبّع مشكلات. اختر المنصّة أدناه واحفظ.
+projects-integrations-activate-tracker-heading = تفعيل متتبّع المشكلات
+projects-integrations-activate-tracker-help = يتيح لهذا المشروع فتح مشكلات عند الحاجة. المستودع الهدف يأتي من مستودعات المشروع، فلا شيء آخر لضبطه هنا.

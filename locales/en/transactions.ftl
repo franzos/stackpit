@@ -12,6 +12,9 @@ transactions-list-empty = No transactions in this period.
 transactions-col-name = Transaction
 transactions-col-throughput = Throughput
 transactions-col-failure = Failure %
+# The summary line already renders the value with its own `%`, so the shared
+# column header would read "Failure % 0.0 %" there.
+transactions-detail-failure-label = Failure
 transactions-col-count = Count
 transactions-col-users = Users
 

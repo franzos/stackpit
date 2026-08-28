@@ -37,3 +37,4 @@ transactions-detail-count = { $count ->
     [one] { $count } istanza
    *[other] { $count } istanze
 }
+transactions-detail-failure-label = Errori

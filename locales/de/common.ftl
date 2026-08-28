@@ -12,6 +12,15 @@ common-time-day-ago = { $n ->
     [one] vor { $n } Tag
    *[other] vor { $n } Tagen
 }
+common-time-in-secs = in { $n } Sek.
+common-time-in-min = in { $n } Min.
+common-time-in-hour = in { $n } Std.
+common-time-in-day = { $n ->
+    [one] in { $n } Tag
+   *[other] in { $n } Tagen
+}
+common-pagination-prev = Zurück
+common-pagination-next = Weiter
 common-period-all = Gesamter Zeitraum
 common-period-1h = Letzte Stunde
 common-period-24h = Letzte 24 Stunden

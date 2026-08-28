@@ -27,9 +27,8 @@
     </div>
   </div>
 
-  {% match message %}{% when Some with (msg) %}
-  <div class="settings-message mb-4">{{ msg }}</div>
-  {% when None %}{% endmatch %}
+  {% call m::flash_banner(chrome) %}
+  {% endcall %}
 
 {% if rows.is_empty() %}
   <div class="card">
@@ -43,6 +42,7 @@
           <tr>
             <th>{{ chrome.t("queue-col-integration") }}</th>
             <th>{{ chrome.t("queue-col-project") }}</th>
+            <th class="col-title">{{ chrome.t("queue-col-alert") }}</th>
             <th>{{ chrome.t("queue-col-state") }}</th>
             <th>{{ chrome.t("queue-col-attempts") }}</th>
             <th>{{ chrome.t("queue-col-queued") }}</th>
@@ -61,6 +61,25 @@
                 <a class="link"
                    href="/web/projects/{{ r.project_id }}/"><bdi>{{ r.project_label }}</bdi></a>
               </td>
+              <td class="col-title min-w-0 truncate-cell">
+                {% match r.alert %}
+                {% when Some with (a) %}
+                <span class="badge badge-neutral">{{ a.trigger }}</span>
+                {% match a.title %}
+                {% when Some with (t) %}
+                {% if a.has_issue() %}
+                  <a class="link ms-1"
+                     title="{{ t }}"
+                     href="/web/projects/{{ r.project_id }}/issues/{{ a.fingerprint }}/"><bdi>{{ t|truncate_middle(72) }}</bdi></a>
+                {% else %}
+                  <span class="ms-1" title="{{ t }}"><bdi>{{ t|truncate_middle(72) }}</bdi></span>
+                {% endif %}
+                {% when None %}
+              {% endmatch %}
+              {% when None %}
+              <span class="text-muted">—</span>
+            {% endmatch %}
+          </td>
               <td>
                 {% if r.is_failed() %}
                   <span class="badge badge-error">{{ chrome.t("queue-state-failed") }}</span>
@@ -68,7 +87,7 @@
                   <span class="badge badge-neutral">{{ chrome.t("queue-state-pending") }}</span>
                   <span class="text-muted text-[12px] ms-1">
                     <time datetime="{{ r.next_attempt_at|format_ts }}"
-                          title="{{ r.next_attempt_at|format_ts }}">{{ chrome.rel_time(r.next_attempt_at) }}</time>
+                          title="{{ r.next_attempt_at|format_ts }}">{{ chrome.rel_time_future(r.next_attempt_at) }}</time>
                   </span>
                 {% endif %}
               </td>
@@ -77,7 +96,7 @@
                 <time datetime="{{ r.created_at|format_ts }}"
                       title="{{ r.created_at|format_ts }}">{{ chrome.rel_time(r.created_at) }}</time>
               </td>
-              <td class="text-mono text-[12px]">
+              <td class="text-mono text-[12px] ltr-code">
                 {% match r.last_error %}{% when Some with (e) %}<span title="{{ e }}">{{ e|truncate_middle(80) }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
             </td>
             <td class="nowrap">

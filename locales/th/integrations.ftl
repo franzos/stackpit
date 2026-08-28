@@ -92,3 +92,22 @@ integrations-exclude = ยกเว้น
 integrations-include = รวมกลับ
 integrations-email-to-label = ผู้รับเริ่มต้น
 integrations-email-to-help = ใช้ในกรณีที่โปรเจกต์ยังไม่ได้ตั้งที่อยู่ผู้รับของตัวเอง จำเป็นสำหรับการเชื่อมต่อทั่วทั้งองค์กร
+integrations-summary-delivering = { $count ->
+   *[other] ส่งอยู่ { $count }
+}
+integrations-summary-excluded = { $count ->
+   *[other] ถูกยกเว้น { $count }
+}
+integrations-summary-inert = { $count ->
+   *[other] ไม่ได้ส่ง { $count }
+}
+integrations-search-placeholder = กรองตามชื่อโปรเจกต์
+integrations-search-label = กรองโปรเจกต์
+integrations-search-submit = กรอง
+integrations-sort-label = เรียงโปรเจกต์
+integrations-sort-state = ที่ส่งอยู่ก่อน
+integrations-sort-name = ตามชื่อ
+integrations-pagination-label = หน้าการส่งต่อโปรเจกต์
+integrations-projects-count = { $count ->
+   *[other] { $count } โปรเจกต์
+}

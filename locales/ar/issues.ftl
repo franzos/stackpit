@@ -172,3 +172,19 @@ issue-detail-external-unlink-confirm = إزالة هذا الرابط؟ تبقى
 issue-detail-external-orphaned = أُزيل التكامل
 flash-tracker-unlinked = أُزيل الرابط. لا تزال المشكلة موجودة على المنصّة.
 flash-tracker-ambiguous = لهذا المشروع أكثر من مستودع يمكن لهذا المتعقّب الكتابة فيه. اختر واحدًا وأعد المحاولة.
+issue-detail-crumbs-truncated = { $count ->
+    [one] يعرض أحدث أثر.
+    [two] يعرض أحدث أثرين.
+    [few] يعرض أحدث { $count } آثار.
+    [many] يعرض أحدث { $count } أثرًا.
+   *[other] يعرض أحدث { $count } أثر.
+}
+issue-detail-crumbs-show-all = { $count ->
+    [one] عرض الأثر الوحيد
+    [two] عرض الأثرين
+    [few] عرض كل الـ { $count }
+    [many] عرض كل الـ { $count }
+   *[other] عرض كل الـ { $count }
+}
+issue-detail-external-state-open = مفتوح
+issue-detail-external-state-closed = مغلق

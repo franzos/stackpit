@@ -15,6 +15,20 @@
 
   var instances = [];
 
+  // Mirror of `format_duration_str` in src/html/filters.rs. Duplicated here
+  // because Chart.js picks the tick values itself, so the server cannot format
+  // them; keep the two in step.
+  function threeDigits(v, unit) {
+    return (Math.round(v * 100) < 1000 ? v.toFixed(2) : v.toFixed(1)) + unit;
+  }
+
+  function formatDuration(ms) {
+    if (ms < 1000) return Math.round(ms) + "ms";
+    if (ms < 60000) return threeDigits(ms / 1000, "s");
+    if (ms < 3600000) return threeDigits(ms / 60000, "min");
+    return threeDigits(ms / 3600000, "hr");
+  }
+
   function build(canvas) {
     var raw = canvas.dataset.chart;
     if (!raw) return;
@@ -96,13 +110,20 @@
             borderWidth: 1,
             padding: 8,
             displayColors: multi,
-            callbacks: data.unit
-              ? {
-                  label: function (ctx) {
-                    return ctx.dataset.label + ": " + ctx.formattedValue + " " + data.unit;
-                  },
-                }
-              : {},
+            callbacks:
+              data.y_format === "duration"
+                ? {
+                    label: function (ctx) {
+                      return ctx.dataset.label + ": " + formatDuration(ctx.parsed.y);
+                    },
+                  }
+                : data.unit
+                  ? {
+                      label: function (ctx) {
+                        return ctx.dataset.label + ": " + ctx.formattedValue + " " + data.unit;
+                      },
+                    }
+                  : {},
           },
         },
         scales: {
@@ -121,7 +142,18 @@
             beginAtZero: true,
             grid: { color: grid, drawTicks: false },
             border: { display: false },
-            ticks: { color: muted, font: { size: 10 }, precision: 0, maxTicksLimit: 5 },
+            ticks: {
+              color: muted,
+              font: { size: 10 },
+              precision: 0,
+              maxTicksLimit: 5,
+              callback:
+                data.y_format === "duration"
+                  ? function (value) {
+                      return formatDuration(value);
+                    }
+                  : undefined,
+            },
           },
         },
       },

@@ -111,4 +111,17 @@ flash-global-email-needs-recipient = An org-wide email integration needs a defau
 flash-queue-item-not-found = Queued notification not found
 flash-queue-replayed = Notification delivered and removed from the queue
 flash-queue-replay-failed = Replay failed: { $error }
+# Replay redirects, so the banner can only carry a key. The provider's own
+# message goes to the row's last_error, beside the item it belongs to.
+flash-queue-replay-failed-generic = Replay failed. The reason is on the queued item, under Error.
 flash-queue-cancelled = Queued notification discarded
+
+# Licence activation
+flash-license-activated = License activated
+flash-license-deactivated = License removed
+flash-license-persist-failed = The license verified but could not be saved. Check the server log.
+flash-license-clear-failed = The license could not be removed. Check the server log.
+flash-license-empty = Paste your license key to activate.
+flash-license-bad-signature = This license isn't valid for this installation. Double-check you pasted the right key.
+flash-license-wrong-product = This license isn't for Stackpit.
+flash-license-unreadable = We couldn't read that license. Please check it and try again.

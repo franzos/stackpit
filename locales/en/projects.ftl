@@ -67,7 +67,9 @@ projects-settings-info-heading = Project info
 projects-settings-status = Status
 projects-settings-source = Source
 projects-repos-heading = Source repositories
-projects-repos-help = Link stack frames to source code on your forge. Register a release with a commit SHA via <code class="text-mono">sentry-cli</code> to activate links.
+projects-repos-help = Link stack frames to source code on your forge, and make this project eligible for org-wide issue-tracker routing. Register a release with a commit SHA via <code class="text-mono">sentry-cli</code> to activate links.
+projects-repos-inert = forge unknown
+projects-repos-inert-help = Stackpit could not tell which forge this host runs, so the repository produces no source links and no issue-tracker match. Pick the forge below and save.
 projects-repos-empty = No repositories configured.
 projects-repos-url-label = Repository URL
 projects-repos-col-forge = Forge
@@ -227,7 +229,9 @@ projects-integrations-env-filter = Environment filter
 projects-integrations-env-placeholder = e.g. production
 projects-integrations-to-address = To address
 projects-integrations-to-address-note = (email integrations only)
-projects-integrations-activate-heading = Activate integration
+projects-integrations-activate-heading = Activate notification channel
+projects-integrations-activate-tracker-heading = Activate issue tracker
+projects-integrations-activate-tracker-help = Lets this project file issues on demand. Which repository it files into comes from the project's repositories, so there is nothing else to set here.
 projects-integrations-integration-label = Integration
 projects-integrations-activate-submit = Activate
 projects-integrations-available-empty = No integrations available. <a class="text-primary" href="/web/settings/integrations/">Create one first</a>.

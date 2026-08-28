@@ -34,3 +34,4 @@ license-activate = Activar
 license-replace = Reemplazar licencia
 license-deactivate = Desactivar
 license-back = Volver a la administración
+license-tier = Plan

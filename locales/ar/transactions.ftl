@@ -40,3 +40,4 @@ transactions-detail-count = { $count ->
     [many] { $count } مثيلًا
    *[other] { $count } مثيل
 }
+transactions-detail-failure-label = الإخفاقات

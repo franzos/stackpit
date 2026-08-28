@@ -290,7 +290,7 @@ impl StackFrame {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Breadcrumb {
     pub timestamp: String,
     pub level: String,

@@ -68,7 +68,9 @@ projects-settings-info-heading = Projektinfo
 projects-settings-status = Status
 projects-settings-source = Quelle
 projects-repos-heading = Quell-Repositories
-projects-repos-help = Verknüpfe Stack-Frames mit dem Quellcode auf deiner Forge. Registriere ein Release mit einem Commit-SHA über <code class="text-mono">sentry-cli</code>, um Links zu aktivieren.
+projects-repos-help = Verknüpfe Stack-Frames mit dem Quellcode auf deiner Forge und mach dieses Projekt für organisationsweites Issue-Tracker-Routing zugänglich. Registriere ein Release mit einem Commit-SHA über <code class="text-mono">sentry-cli</code>, um Links zu aktivieren.
+projects-repos-inert = Forge unbekannt
+projects-repos-inert-help = Stackpit konnte nicht erkennen, welche Forge auf diesem Host läuft. Das Repository liefert daher keine Quell-Links und passt zu keinem Issue-Tracker. Wähl unten die Forge und speichere.
 projects-repos-empty = Keine Repositories konfiguriert.
 projects-repos-url-label = Repository-URL
 projects-repos-col-forge = Forge
@@ -228,7 +230,9 @@ projects-integrations-env-filter = Umgebungsfilter
 projects-integrations-env-placeholder = z. B. production
 projects-integrations-to-address = Empfängeradresse
 projects-integrations-to-address-note = (nur E-Mail-Integrationen)
-projects-integrations-activate-heading = Integration aktivieren
+projects-integrations-activate-heading = Benachrichtigungskanal aktivieren
+projects-integrations-activate-tracker-heading = Issue-Tracker aktivieren
+projects-integrations-activate-tracker-help = Erlaubt diesem Projekt, bei Bedarf Issues anzulegen. In welches Repository geschrieben wird, ergibt sich aus den Repositorys des Projekts — hier gibt es sonst nichts einzustellen.
 projects-integrations-integration-label = Integration
 projects-integrations-activate-submit = Aktivieren
 projects-integrations-available-empty = Keine Integrationen verfügbar. <a class="text-primary" href="/web/settings/integrations/">Erstelle zuerst eine</a>.

@@ -28,3 +28,11 @@ common-select-all-matching = { $count ->
 test-count = { $count ->
    *[other] { $count } รายการ
 }
+common-time-in-secs = ในอีก { $n } วิ
+common-time-in-min = ในอีก { $n } นาที
+common-time-in-hour = ในอีก { $n } ชม.
+common-time-in-day = { $n ->
+   *[other] ในอีก { $n } วัน
+}
+common-pagination-prev = ก่อนหน้า
+common-pagination-next = ถัดไป

@@ -20,6 +20,9 @@ pub(crate) struct PageChrome {
     // Name of the org the request is scoped to. The active org is a mode, so it needs a
     // persistent indicator; None on the admin-token and loopback paths, which have no name.
     pub(crate) active_org: Option<String>,
+    // Banner carried here from a `?flash=` key, already resolved against `locale`.
+    // A page that builds its own message renders that instead; see the `flash` macro.
+    pub(crate) flash: Option<crate::html::flash::Flash>,
 }
 
 /// One entry in the language switcher: BCP-47 code, endonym (shown untranslated),
@@ -49,6 +52,15 @@ fn locale_endonym(active: &LanguageIdentifier) -> &'static str {
         .unwrap_or("English")
 }
 
+// Tier boundaries, shared by the past and future relative-time ladders. The
+// two ladders differ in depth and floor, so only these are common.
+const MINUTE: i64 = 60;
+const HOUR: i64 = 60 * MINUTE;
+const DAY: i64 = 24 * HOUR;
+const WEEK: i64 = 7 * DAY;
+const MONTH: i64 = 30 * DAY;
+const YEAR: i64 = 365 * DAY;
+
 /// Paths where the commercial licensee watermark is surfaced.
 fn is_admin_surface(path: &str) -> bool {
     path.starts_with("/web/admin")
@@ -64,7 +76,15 @@ impl PageChrome {
             path,
             license_watermark: None,
             active_org: None,
+            flash: None,
         }
+    }
+
+    /// Resolves a `?flash=` token against the request locale. An unknown token
+    /// leaves the banner absent.
+    pub(crate) fn with_flash(mut self, token: Option<&str>) -> Self {
+        self.flash = crate::html::flash::resolve(token, &self.locale);
+        self
     }
 
     /// Sets the scope indicator to the active org's name.
@@ -91,6 +111,17 @@ impl PageChrome {
         crate::i18n::lookup(&self.locale, id)
     }
 
+    /// A banner for a catalogue key, localised and with the catalogue's severity.
+    pub(crate) fn flash_of(&self, token: &str) -> crate::html::flash::Flash {
+        crate::html::flash::of(&self.locale, token)
+    }
+
+    /// An error banner for text this side computed — a database error, a
+    /// validator's reason — which no catalogue key can carry.
+    pub(crate) fn flash_err(&self, e: impl Into<anyhow::Error>) -> crate::html::flash::Flash {
+        crate::html::flash::Flash::err(self.err(e))
+    }
+
     pub(crate) fn err(&self, e: impl Into<anyhow::Error>) -> String {
         format!(
             "{} {}",
@@ -110,28 +141,56 @@ impl PageChrome {
     pub(crate) fn rel_time(&self, ts: impl std::borrow::Borrow<i64>) -> String {
         let ts = *ts.borrow();
         let delta = chrono::Utc::now().timestamp() - ts;
-        if delta < 60 {
+        if delta < MINUTE {
             return self.t("common-time-just-now");
         }
         let secs = delta as u64;
-        let tn = |id: &str, n: u64| {
-            let mut a: HashMap<Cow<'static, str>, FluentValue> = HashMap::new();
-            a.insert(Cow::Borrowed("n"), (n as i64).into());
-            crate::i18n::lookup_args(&self.locale, id, &a)
-        };
-        if secs < 3600 {
-            tn("common-time-min-ago", secs / 60)
-        } else if secs < 86400 {
-            tn("common-time-hour-ago", secs / 3600)
-        } else if secs < 604_800 {
-            tn("common-time-day-ago", secs / 86400)
-        } else if secs < 2_592_000 {
-            tn("common-time-week-ago", secs / 604_800)
-        } else if secs < 31_536_000 {
-            tn("common-time-month-ago", secs / 2_592_000)
+        if secs < HOUR as u64 {
+            self.tn("common-time-min-ago", secs / MINUTE as u64)
+        } else if secs < DAY as u64 {
+            self.tn("common-time-hour-ago", secs / HOUR as u64)
+        } else if secs < WEEK as u64 {
+            self.tn("common-time-day-ago", secs / DAY as u64)
+        } else if secs < MONTH as u64 {
+            self.tn("common-time-week-ago", secs / WEEK as u64)
+        } else if secs < YEAR as u64 {
+            self.tn("common-time-month-ago", secs / MONTH as u64)
         } else {
-            tn("common-time-year-ago", secs / 31_536_000)
+            self.tn("common-time-year-ago", secs / YEAR as u64)
         }
+    }
+
+    /// The forward-looking twin of [`rel_time`](Self::rel_time): "in 30s",
+    /// "in 2h". A timestamp already in the past delegates to `rel_time`, so a
+    /// due item reads "just now" and no caller has to branch.
+    ///
+    /// The ladder stops at days on purpose. The only user is the delivery
+    /// queue's next attempt, which the backoff caps at an hour and the
+    /// giving-up window at 24. The two ladders share their boundaries and
+    /// nothing else — `rel_time` also has a "just now" floor and six tiers, so
+    /// one helper parameterised by key family would not cover both.
+    pub(crate) fn rel_time_future(&self, ts: impl std::borrow::Borrow<i64>) -> String {
+        let ts = *ts.borrow();
+        let delta = ts - chrono::Utc::now().timestamp();
+        if delta <= 0 {
+            return self.rel_time(ts);
+        }
+        let secs = delta as u64;
+        if secs < MINUTE as u64 {
+            self.tn("common-time-in-secs", secs)
+        } else if secs < HOUR as u64 {
+            self.tn("common-time-in-min", secs / MINUTE as u64)
+        } else if secs < DAY as u64 {
+            self.tn("common-time-in-hour", secs / HOUR as u64)
+        } else {
+            self.tn("common-time-in-day", secs / DAY as u64)
+        }
+    }
+
+    fn tn(&self, id: &str, n: u64) -> String {
+        let mut a: HashMap<Cow<'static, str>, FluentValue> = HashMap::new();
+        a.insert(Cow::Borrowed("n"), (n as i64).into());
+        crate::i18n::lookup_args(&self.locale, id, &a)
     }
 
     pub(crate) fn tv1(&self, id: &str, name: &str, val: &str) -> String {
@@ -235,6 +294,36 @@ mod tests {
     }
 
     #[test]
+    fn rel_time_future_climbs_its_ladder_and_falls_back_to_the_past() {
+        let c = chrome_for(langid!("en"));
+        let now = chrono::Utc::now().timestamp();
+
+        // Already due, or overdue: the caller must not have to branch.
+        assert_eq!(c.rel_time_future(now - 1), c.t("common-time-just-now"));
+        assert_eq!(c.rel_time_future(now), c.t("common-time-just-now"));
+
+        assert_eq!(c.rel_time_future(now + 30), "in 30s");
+        assert_eq!(c.rel_time_future(now + 90), "in 1m");
+        assert_eq!(c.rel_time_future(now + 7_200), "in 2h");
+        assert_eq!(c.rel_time_future(now + 200_000), "in 2d");
+    }
+
+    /// `rel_time` has ~100 call sites and its own tests; the future twin must
+    /// not have changed it.
+    #[test]
+    fn rel_time_is_unchanged_by_its_future_twin() {
+        let c = chrome_for(langid!("en"));
+        let now = chrono::Utc::now().timestamp();
+        assert_eq!(c.rel_time(now - 30), "just now");
+        assert_eq!(c.rel_time(now - 120), "2m ago");
+        assert_eq!(c.rel_time(now - 7_200), "2h ago");
+        assert_eq!(c.rel_time(now - 200_000), "2d ago");
+        assert_eq!(c.rel_time(now - 1_300_000), "2w ago");
+        assert_eq!(c.rel_time(now - 5_200_000), "2mo ago");
+        assert_eq!(c.rel_time(now - 64_000_000), "2y ago");
+    }
+
+    #[test]
     fn dir_is_ltr_for_en() {
         assert_eq!(chrome_for(default_locale()).dir(), "ltr");
     }
@@ -293,6 +382,8 @@ mod tests {
             expires_at: Some(chrono::Utc::now() + chrono::Duration::days(30)),
             features: Vec::new(),
             max_orgs: None,
+            tier: "business".into(),
+            product: "stackpit".into(),
         })
     }
 

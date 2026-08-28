@@ -41,9 +41,12 @@ queue-page-title = Delivery queue — Stackpit
 queue-subtitle = Notifications that could not be delivered. They retry automatically for 24 hours, then wait here for you.
 queue-count-pending = { $count } pending
 queue-count-failed = { $count } failed
-queue-empty = Nothing queued. Every notification has been delivered.
+# Just the fact. An empty queue also follows from cancelling an item or from the
+# retention sweep, so "every notification has been delivered" was not true.
+queue-empty = Nothing queued.
 queue-col-integration = Integration
 queue-col-project = Project
+queue-col-alert = Alert
 queue-col-state = State
 queue-col-attempts = Attempts
 queue-col-queued = Queued

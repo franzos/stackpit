@@ -7,6 +7,7 @@ use stackpit_auth::AuthContext;
 use crate::extractors::ProjectPath;
 use crate::forge;
 use crate::html::chrome::PageChrome;
+use crate::html::flash::Flash;
 use crate::html::render_template;
 use crate::html::utils::{self, Chrome};
 use crate::orgs::extractor::{
@@ -39,11 +40,24 @@ struct ProjectSettingsTemplate {
     project_status: String,
     project_source: String,
     repos: Vec<ProjectRepo>,
+    /// `(tag, label)` for the forge-override selector, shared by the add form
+    /// and every row's edit form so the two lists cannot drift.
+    forge_options: &'static [(&'static str, &'static str)],
     move_targets: Vec<MoveTarget>,
-    message: Option<String>,
+    message: Option<Flash>,
     nav: ProjectNavCounts,
     chrome: PageChrome,
 }
+
+const FORGE_OPTIONS: &[(&str, &str)] = &[
+    ("github", "GitHub"),
+    ("gitlab", "GitLab"),
+    ("gitea", "Gitea / Forgejo"),
+    ("bitbucket", "Bitbucket"),
+    ("sourcehut", "Sourcehut"),
+    ("gitee", "Gitee"),
+    ("azure", "Azure DevOps"),
+];
 
 pub async fn handler(
     State(state): State<AppState>,
@@ -166,25 +180,25 @@ pub async fn set_name(
             &scope,
             opt_auth.as_ref(),
             project_id,
-            Some(chrome.tv1(
+            Some(Flash::err(chrome.tv1(
                 "flash-project-name-too-long",
                 "max",
                 &MAX_FIELD_LENGTH.to_string(),
-            )),
+            ))),
             &chrome,
         )
         .await;
     }
 
     let s = state.clone();
-    let success = chrome.t("flash-project-name-updated");
+    let success = Flash::ok(chrome.t("flash-project-name-updated"));
     let render_chrome = chrome.clone();
     let render_active = scope.clone();
     let render_auth = opt_auth.clone();
     utils::query_then_render(
         queries::projects::set_project_name(&state.writer_pool, project_id, &name).await,
         &chrome,
-        &success,
+        success,
         move |msg| async move {
             render_general(
                 &s,
@@ -229,7 +243,7 @@ pub async fn add_repo(
             &scope,
             opt_auth.as_ref(),
             project_id,
-            Some(chrome.t("flash-repo-url-required")),
+            Some(Flash::err(chrome.t("flash-repo-url-required"))),
             &chrome,
         )
         .await;
@@ -240,7 +254,7 @@ pub async fn add_repo(
             &scope,
             opt_auth.as_ref(),
             project_id,
-            Some(chrome.t("flash-repo-url-too-long")),
+            Some(Flash::err(chrome.t("flash-repo-url-too-long"))),
             &chrome,
         )
         .await;
@@ -260,7 +274,7 @@ pub async fn add_repo(
         .map(|f| f.as_str().to_string());
 
     let s = state.clone();
-    let success = chrome.t("flash-repo-added");
+    let success = Flash::ok(chrome.t("flash-repo-added"));
     let render_chrome = chrome.clone();
     let render_active = scope.clone();
     let render_auth = opt_auth.clone();
@@ -276,7 +290,7 @@ pub async fn add_repo(
         )
         .await,
         &chrome,
-        &success,
+        success,
         move |msg| async move {
             render_general(
                 &s,
@@ -307,13 +321,13 @@ pub async fn delete_repo(
     let msg = match queries::projects::delete_project_repo(&state.writer_pool, project_id, repo_id)
         .await
     {
-        Ok(0) => format!(
+        Ok(0) => Flash::err(format!(
             "{} {}",
             chrome.t("common-error-prefix"),
             chrome.tv1("flash-not-found-repo", "id", &repo_id.to_string())
-        ),
-        Ok(_) => chrome.t("flash-repo-removed"),
-        Err(e) => chrome.err(e),
+        )),
+        Ok(_) => Flash::ok(chrome.t("flash-repo-removed")),
+        Err(e) => chrome.flash_err(e),
     };
     render_general(
         &state,
@@ -345,11 +359,11 @@ pub async fn archive_project(
                 &scope,
                 opt_auth.as_ref(),
                 project_id,
-                Some(format!(
+                Some(Flash::err(format!(
                     "{} {}",
                     chrome.t("common-error-prefix"),
                     chrome.tv1("flash-not-found-project", "id", &project_id.to_string())
-                )),
+                ))),
                 &chrome,
             )
             .await
@@ -366,7 +380,7 @@ pub async fn archive_project(
                 &scope,
                 opt_auth.as_ref(),
                 project_id,
-                Some(chrome.t("flash-project-archived")),
+                Some(Flash::ok(chrome.t("flash-project-archived"))),
                 &chrome,
             )
             .await
@@ -377,7 +391,7 @@ pub async fn archive_project(
                 &scope,
                 opt_auth.as_ref(),
                 project_id,
-                Some(chrome.err(e)),
+                Some(chrome.flash_err(e)),
                 &chrome,
             )
             .await
@@ -398,11 +412,11 @@ pub async fn unarchive_project(
     };
 
     let msg = match queries::projects::unarchive_project(&state.writer_pool, project_id).await {
-        Ok(0) => format!(
+        Ok(0) => Flash::err(format!(
             "{} {}",
             chrome.t("common-error-prefix"),
             chrome.tv1("flash-not-found-project", "id", &project_id.to_string())
-        ),
+        )),
         Ok(_) => {
             // Drop the negative Archived denials or valid keys stay rejected until TTL.
             crate::ingest::auth::invalidate_project(
@@ -410,9 +424,9 @@ pub async fn unarchive_project(
                 &state.negative_auth_cache,
                 project_id,
             );
-            chrome.t("flash-project-unarchived")
+            Flash::ok(chrome.t("flash-project-unarchived"))
         }
-        Err(e) => chrome.err(e),
+        Err(e) => chrome.flash_err(e),
     };
     render_general(
         &state,
@@ -453,7 +467,7 @@ pub async fn delete_project(
                 &scope,
                 opt_auth.as_ref(),
                 project_id,
-                Some(chrome.err(e)),
+                Some(chrome.flash_err(e)),
                 &chrome,
             )
             .await
@@ -486,7 +500,7 @@ pub async fn move_project(
             &scope,
             opt_auth.as_ref(),
             project_id,
-            Some(msg),
+            Some(Flash::err(msg)),
             &chrome,
         )
     };
@@ -578,7 +592,7 @@ async fn render_general(
     scope: &ProjectScope,
     opt_auth: Option<&Extension<AuthContext>>,
     project_id: u64,
-    message: Option<String>,
+    message: Option<Flash>,
     chrome: &PageChrome,
 ) -> axum::response::Response {
     let repos = queries::projects::get_project_repos(&state.pool, project_id)
@@ -611,6 +625,7 @@ async fn render_general(
         project_status,
         project_source,
         repos,
+        forge_options: FORGE_OPTIONS,
         move_targets,
         message,
         nav,
@@ -628,7 +643,7 @@ struct ProjectKeysTemplate {
     project_id: u64,
     dsn: String,
     keys: Vec<ProjectKey>,
-    message: Option<String>,
+    message: Option<Flash>,
     nav: ProjectNavCounts,
     chrome: PageChrome,
 }
@@ -667,13 +682,13 @@ pub async fn create_key(
         .map(|s| s.trim().to_string());
 
     let s = state.clone();
-    let success = chrome.t("flash-key-created");
+    let success = Flash::ok(chrome.t("flash-key-created"));
     let render_chrome = chrome.clone();
     utils::query_then_render(
         queries::projects::create_project_key(&state.writer_pool, project_id, label.as_deref())
             .await,
         &chrome,
-        &success,
+        success,
         move |msg| async move { render_keys(&s, project_id, msg, &render_chrome).await },
     )
     .await
@@ -694,11 +709,11 @@ pub async fn delete_key(
             render_keys(
                 &state,
                 project_id,
-                Some(format!(
+                Some(Flash::err(format!(
                     "{} {}",
                     chrome.t("common-error-prefix"),
                     chrome.tv1("flash-not-found-key", "id", &public_key)
-                )),
+                ))),
                 &chrome,
             )
             .await
@@ -712,19 +727,19 @@ pub async fn delete_key(
             render_keys(
                 &state,
                 project_id,
-                Some(chrome.t("flash-key-deleted")),
+                Some(Flash::ok(chrome.t("flash-key-deleted"))),
                 &chrome,
             )
             .await
         }
-        Err(e) => render_keys(&state, project_id, Some(chrome.err(e)), &chrome).await,
+        Err(e) => render_keys(&state, project_id, Some(chrome.flash_err(e)), &chrome).await,
     }
 }
 
 async fn render_keys(
     state: &AppState,
     project_id: u64,
-    message: Option<String>,
+    message: Option<Flash>,
     chrome: &PageChrome,
 ) -> axum::response::Response {
     let keys = queries::projects::list_project_keys(&state.pool, project_id)
@@ -763,7 +778,7 @@ struct SourceMapsTemplate {
     key_prefix: String,
     key_created_at: i64,
     new_key: String,
-    message: Option<String>,
+    message: Option<Flash>,
     sentry_url: String,
     nav: ProjectNavCounts,
     chrome: PageChrome,
@@ -815,7 +830,7 @@ pub async fn generate_sourcemap_key(
                 &state,
                 project_id,
                 String::new(),
-                Some(chrome.err(e)),
+                Some(chrome.flash_err(e)),
                 &chrome,
             )
             .await
@@ -827,7 +842,7 @@ async fn render_sourcemaps(
     state: &AppState,
     project_id: u64,
     new_key: String,
-    message: Option<String>,
+    message: Option<Flash>,
     chrome: &PageChrome,
 ) -> axum::response::Response {
     let existing = queries::api_keys::get_api_key_for_project(&state.pool, project_id, "sourcemap")
@@ -940,6 +955,7 @@ mod tests {
                     project_status: "active".into(),
                     project_source: "manual".into(),
                     repos,
+                    forge_options: FORGE_OPTIONS,
                     move_targets: Vec::new(),
                     message: None,
                     nav: ProjectNavCounts::default(),
@@ -970,6 +986,7 @@ mod tests {
             project_status: "active".into(),
             project_source: "manual".into(),
             repos: vec![repo("unknown", Some("gitea"), None)],
+            forge_options: FORGE_OPTIONS,
             move_targets: Vec::new(),
             message: None,
             nav: ProjectNavCounts::default(),
@@ -980,5 +997,47 @@ mod tests {
 
         assert!(html.contains(">gitea<"));
         assert!(!html.contains(">unknown<"));
+    }
+
+    /// `upsert_project_repo` keys on `repo_url`, so an editable URL field would
+    /// silently create a second row and orphan the one being edited.
+    #[test]
+    fn the_inline_edit_form_carries_the_url_but_never_as_an_input() {
+        use askama::Template;
+        use unic_langid::langid;
+
+        let chrome = PageChrome::new("csrf".into(), langid!("en"), "/web/projects/".into());
+        let html = ProjectSettingsTemplate {
+            project_id: 7,
+            project_name: "demo".into(),
+            project_status: "active".into(),
+            project_source: "manual".into(),
+            repos: vec![repo("unknown", None, None)],
+            forge_options: FORGE_OPTIONS,
+            move_targets: Vec::new(),
+            message: None,
+            nav: ProjectNavCounts::default(),
+            chrome,
+        }
+        .render()
+        .expect("project settings renders");
+
+        // One `repo_url` per rendered row, plus the add form's own field.
+        assert_eq!(html.matches(r#"name="repo_url""#).count(), 2);
+        assert_eq!(
+            html.matches(r#"<input type="hidden" name="repo_url""#)
+                .count(),
+            1,
+            "the edit form submits the URL it was rendered from, as a hidden field"
+        );
+        // The one editable `repo_url` belongs to the add form, which is the
+        // only place a new row is meant to appear.
+        assert_eq!(
+            html.matches(r#"id="repo_url""#).count(),
+            1,
+            "exactly one editable URL field, and it is the add form's"
+        );
+        // The inert row says so, and points at the control that fixes it.
+        assert!(html.contains("forge unknown"));
     }
 }

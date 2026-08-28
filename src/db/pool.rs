@@ -386,4 +386,103 @@ mod tests {
             .unwrap();
         assert_eq!(queued, 0);
     }
+
+    #[tokio::test]
+    async fn migration_028_widens_the_link_key_without_losing_rows_or_ids() {
+        let pool = seeded_at_022().await;
+        run_migrations_to(&pool, 28).await.unwrap();
+
+        // The existing row survives, keeping its id: the unlink route takes
+        // `link_id` straight off the rendered page.
+        let (id, url): (i64, String) =
+            sqlx::query_as("SELECT id, external_url FROM issue_external_links")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(id, 5, "028 must preserve link ids");
+        assert_eq!(url, "https://github.com/franzos/throwaway/issues/1");
+
+        // Two repositories of one integration, filed from one issue.
+        sqlx::query(
+            "INSERT INTO issue_external_links (project_id, fingerprint, integration_id, integration_name, integration_kind, external_id, external_url, created_at)
+             VALUES (900, 'fp-abc', 2, 'gh', 'github', 'acme/frontend#9', 'https://github.com/acme/frontend/issues/9', 1700000003)",
+        )
+        .execute(&pool)
+        .await
+        .expect("a second repository on the same integration is a second link");
+
+        // A true duplicate of the whole triple is still rejected.
+        sqlx::query(
+            "INSERT INTO issue_external_links (project_id, fingerprint, integration_id, integration_name, integration_kind, external_id, external_url, created_at)
+             VALUES (900, 'fp-abc', 2, 'gh', 'github', 'acme/frontend#9', 'https://github.com/acme/frontend/issues/9', 1700000004)",
+        )
+        .execute(&pool)
+        .await
+        .expect_err("the same (fingerprint, integration, external_id) must still collide");
+    }
+
+    /// The rebuild must not re-add the foreign key. A plain `NULL` insert would
+    /// prove nothing — NULL satisfies any FK — so this deletes the integration
+    /// and asserts the link outlives it, which is what the cascade would break.
+    /// `foreign_keys(true)` is set on the writer pool, so the check is live.
+    #[tokio::test]
+    async fn migration_028_keeps_integration_id_nullable_and_free_of_a_foreign_key() {
+        let pool = seeded_at_022().await;
+        run_migrations_to(&pool, 28).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO issue_external_links (project_id, fingerprint, integration_id, integration_name, integration_kind, external_id, external_url, created_at)
+             VALUES (900, 'fp-orphan', 4242, 'gone', 'github', '1', 'https://x/1', 1700000005)",
+        )
+        .execute(&pool)
+        .await
+        .expect("a non-existent integration_id must be accepted: there is no FK");
+
+        sqlx::query("DELETE FROM integrations WHERE id = 2")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let surviving: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM issue_external_links WHERE id = 5")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            surviving, 1,
+            "028 re-added the cascade and ate a filed link"
+        );
+
+        // Orphans stay mutually distinct: no NULLS NOT DISTINCT.
+        for fp in ["fp-a", "fp-a"] {
+            sqlx::query(
+                "INSERT INTO issue_external_links (project_id, fingerprint, integration_id, integration_name, integration_kind, external_id, external_url, created_at)
+                 VALUES (900, ?1, NULL, 'gone', 'github', '1', 'https://x/1', 1700000006)",
+            )
+            .bind(fp)
+            .execute(&pool)
+            .await
+            .expect("NULL integration_ids must not collide with each other");
+        }
+    }
+
+    /// SQLite drops indexes with the table, so the rebuild has to recreate both.
+    #[tokio::test]
+    async fn migration_028_recreates_both_indexes() {
+        let pool = seeded_at_022().await;
+        run_migrations_to(&pool, 28).await.unwrap();
+
+        let names: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'issue_external_links' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            names,
+            vec![
+                "idx_issue_external_links_fingerprint".to_string(),
+                "idx_issue_external_links_integration".to_string(),
+            ]
+        );
+    }
 }

@@ -52,3 +52,4 @@ queue-state-failed = ยอมแพ้แล้ว
 queue-replay = ส่งซ้ำ
 queue-cancel = ทิ้ง
 queue-cancel-confirm = ทิ้งการแจ้งเตือนนี้โดยไม่ส่งหรือไม่
+queue-col-alert = การแจ้งเตือน

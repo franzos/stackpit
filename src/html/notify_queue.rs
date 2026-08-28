@@ -4,6 +4,7 @@ use askama::Template;
 use axum::extract::{Path, State};
 
 use crate::html::chrome::PageChrome;
+use crate::html::flash;
 use crate::html::render_template;
 use crate::html::utils::Chrome;
 use crate::orgs::extractor::{require_org_owner, ActiveOrg};
@@ -16,6 +17,9 @@ use crate::html::filters;
 /// Render cap only; the retention sweep bounds the table itself.
 const PAGE_LIMIT: i64 = 200;
 
+/// Where replay and cancel land. Both mutate, so both redirect here.
+const QUEUE_PATH: &str = "/web/settings/queue/";
+
 pub struct QueueRow {
     pub id: i64,
     pub project_id: i64,
@@ -27,11 +31,38 @@ pub struct QueueRow {
     pub last_error: Option<String>,
     pub next_attempt_at: i64,
     pub created_at: i64,
+    /// What the queued notification is about, read back out of the payload the
+    /// row already carries. `None` when that payload no longer parses — the
+    /// drain treats such a row as `NotAttempted::Corrupt`, and the page
+    /// degrades to the bare rendering rather than failing.
+    pub alert: Option<QueuedAlert>,
+}
+
+pub struct QueuedAlert {
+    pub trigger: String,
+    pub title: Option<String>,
+    /// Empty for the "Test notification" shape, which has no issue to link to.
+    pub fingerprint: String,
 }
 
 impl QueueRow {
     pub fn is_failed(&self) -> bool {
         self.status == queries::notify_queue::STATUS_FAILED
+    }
+}
+
+impl QueuedAlert {
+    fn from_payload(payload: &str) -> Option<Self> {
+        let ev: crate::notify::NotificationEvent = serde_json::from_str(payload).ok()?;
+        Some(Self {
+            trigger: ev.trigger.display_label(),
+            title: ev.title,
+            fingerprint: ev.fingerprint,
+        })
+    }
+
+    pub fn has_issue(&self) -> bool {
+        !self.fingerprint.is_empty()
     }
 }
 
@@ -41,7 +72,6 @@ struct QueueTemplate {
     rows: Vec<QueueRow>,
     pending: i64,
     failed: i64,
-    message: Option<String>,
     chrome: PageChrome,
 }
 
@@ -53,13 +83,17 @@ pub async fn handler(
     if let Err(r) = require_org_owner(&active) {
         return r;
     }
-    render_page(&state, &chrome, active.session_org_id, None).await
+    render_page(&state, &chrome, active.session_org_id).await
 }
 
 /// Attempt one queued delivery now, synchronously: a failure is reported, never re-queued.
+///
+/// Redirects rather than rendering in place, so a refresh cannot re-attempt
+/// delivery. The banner can only carry a catalogue key, so the provider's own
+/// message — "webhook returned 405" — is written to the row's `last_error`,
+/// where the operator reads it beside the item it belongs to.
 pub async fn replay(
     State(state): State<AppState>,
-    Chrome(chrome): Chrome,
     active: ActiveOrg,
     Path(id): Path<i64>,
 ) -> axum::response::Response {
@@ -70,39 +104,39 @@ pub async fn replay(
 
     let item = match queries::notify_queue::get(&state.pool, id, org_id).await {
         Ok(Some(i)) => i,
-        Ok(None) => {
-            return render_page(
-                &state,
-                &chrome,
-                org_id,
-                Some(chrome.t("flash-queue-item-not-found")),
-            )
-            .await
+        Ok(None) => return flash::redirect(QUEUE_PATH, flash::QUEUE_ITEM_NOT_FOUND),
+        Err(e) => {
+            tracing::warn!(error = ?e, id, "queue: replay lookup failed");
+            return flash::redirect(QUEUE_PATH, flash::QUEUE_ITEM_NOT_FOUND);
         }
-        Err(e) => return render_page(&state, &chrome, org_id, Some(chrome.err(e))).await,
     };
 
     // Same `DrainCtx` as the background drain, so replay re-checks licence and SSRF by the same code.
     let ctx = state.drain_ctx();
-    let msg = match crate::notify::queue::replay_once(&ctx, &item).await {
-        Ok(()) => {
-            if let Err(e) =
-                queries::notify_queue::delete(&state.writer_pool, id, Some(org_id)).await
-            {
-                chrome.err(e)
-            } else {
-                chrome.t("flash-queue-replayed")
+    let key = match crate::notify::queue::replay_once(&ctx, &item).await {
+        Ok(()) => match queries::notify_queue::delete(&state.writer_pool, id, Some(org_id)).await {
+            Ok(_) => flash::QUEUE_REPLAYED,
+            Err(e) => {
+                tracing::warn!(error = ?e, id, "queue: delivered but could not dequeue");
+                flash::QUEUE_REPLAY_FAILED
             }
+        },
+        Err(e) => {
+            let now = chrono::Utc::now().timestamp();
+            if let Err(e) =
+                queries::notify_queue::record_manual_error(&state.writer_pool, id, &e, now).await
+            {
+                tracing::warn!(error = ?e, id, "queue: could not record the replay error");
+            }
+            flash::QUEUE_REPLAY_FAILED
         }
-        Err(e) => chrome.tv1("flash-queue-replay-failed", "error", &e),
     };
-    render_page(&state, &chrome, org_id, Some(msg)).await
+    flash::redirect(QUEUE_PATH, key)
 }
 
 /// Drop a queued item without attempting it.
 pub async fn cancel(
     State(state): State<AppState>,
-    Chrome(chrome): Chrome,
     active: ActiveOrg,
     Path(id): Path<i64>,
 ) -> axum::response::Response {
@@ -110,19 +144,21 @@ pub async fn cancel(
         return r;
     }
     let org_id = active.session_org_id;
-    let msg = match queries::notify_queue::delete(&state.writer_pool, id, Some(org_id)).await {
-        Ok(0) => chrome.t("flash-queue-item-not-found"),
-        Ok(_) => chrome.t("flash-queue-cancelled"),
-        Err(e) => chrome.err(e),
+    let key = match queries::notify_queue::delete(&state.writer_pool, id, Some(org_id)).await {
+        Ok(0) => flash::QUEUE_ITEM_NOT_FOUND,
+        Ok(_) => flash::QUEUE_CANCELLED,
+        Err(e) => {
+            tracing::warn!(error = ?e, id, "queue: cancel failed");
+            flash::QUEUE_ITEM_NOT_FOUND
+        }
     };
-    render_page(&state, &chrome, org_id, Some(msg)).await
+    flash::redirect(QUEUE_PATH, key)
 }
 
 async fn render_page(
     state: &AppState,
     chrome: &PageChrome,
     org_id: i64,
-    message: Option<String>,
 ) -> axum::response::Response {
     let rows = queries::notify_queue::list_for_org_detailed(&state.pool, org_id, PAGE_LIMIT)
         .await
@@ -142,6 +178,7 @@ async fn render_page(
             last_error: v.item.last_error,
             next_attempt_at: v.item.next_attempt_at,
             created_at: v.item.created_at,
+            alert: QueuedAlert::from_payload(&v.item.payload),
         })
         .collect();
 
@@ -153,7 +190,6 @@ async fn render_page(
         rows,
         pending,
         failed,
-        message,
         chrome: chrome.clone(),
     })
 }
@@ -180,7 +216,65 @@ mod tests {
             last_error: Some("connection refused".into()),
             next_attempt_at: 1_700_000_000,
             created_at: 1_700_000_000,
+            alert: QueuedAlert::from_payload(&payload("deadbeef", "TypeError: boom")),
         }
+    }
+
+    fn payload(fingerprint: &str, title: &str) -> String {
+        serde_json::json!({
+            "trigger": "NewIssue",
+            "project_id": 42,
+            "fingerprint": fingerprint,
+            "title": title,
+            "level": "error",
+            "environment": "production",
+            "environments": ["production"],
+            "event_id": "e1",
+            "digest": null,
+        })
+        .to_string()
+    }
+
+    /// The row identity comes out of the payload the row already carries — no
+    /// migration, no extra query. A payload that no longer parses degrades to
+    /// the bare rendering rather than failing the page.
+    #[test]
+    fn the_alert_column_names_the_issue_and_degrades_on_a_corrupt_payload() {
+        let chrome = chrome_for(langid!("en"));
+
+        let mut linked = row(1, queries::notify_queue::STATUS_FAILED);
+        // The "Test notification" shape: a real payload with no issue behind it.
+        let mut unlinked = row(2, queries::notify_queue::STATUS_FAILED);
+        unlinked.alert = QueuedAlert::from_payload(&payload("", "Test notification"));
+        // The fixture the drain calls `NotAttempted::Corrupt`.
+        let mut corrupt = row(3, queries::notify_queue::STATUS_PENDING);
+        corrupt.alert = QueuedAlert::from_payload("not json at all");
+        assert!(corrupt.alert.is_none());
+        assert!(!unlinked.alert.as_ref().unwrap().has_issue());
+        assert!(linked.alert.as_ref().unwrap().has_issue());
+        linked.last_error = None;
+
+        let html = QueueTemplate {
+            rows: vec![linked, unlinked, corrupt],
+            pending: 1,
+            failed: 2,
+            chrome,
+        }
+        .render()
+        .expect("the page renders all three rows");
+
+        assert!(!html.contains(crate::i18n::MISSING_PREFIX));
+        assert!(
+            html.contains("/web/projects/42/issues/deadbeef/"),
+            "a row with an issue links to it"
+        );
+        assert!(html.contains("Test notification"));
+        assert!(
+            html.matches("New Issue").count() == 2,
+            "both parsable rows name their trigger"
+        );
+        // Three rows survived: the corrupt one did not take the page down.
+        assert_eq!(html.matches("/cancel").count(), 3);
     }
 
     #[test]
@@ -194,8 +288,7 @@ mod tests {
                 ],
                 pending: 1,
                 failed: 1,
-                message: Some("hi".into()),
-                chrome: chrome.clone(),
+                chrome: chrome.clone().with_flash(Some(flash::QUEUE_REPLAY_FAILED)),
             }
             .render()
             .expect("queue page renders");
@@ -210,7 +303,6 @@ mod tests {
                 rows: Vec::new(),
                 pending: 0,
                 failed: 0,
-                message: None,
                 chrome,
             }
             .render()
@@ -277,13 +369,7 @@ mod tests {
         let mut foreign = active.clone();
         foreign.session_org_id = 6;
         foreign.memberships = vec![(6, crate::orgs::Role::Owner)];
-        cancel(
-            State(state.clone()),
-            Chrome(chrome_for(langid!("en"))),
-            foreign,
-            Path(item_id),
-        )
-        .await;
+        cancel(State(state.clone()), foreign, Path(item_id)).await;
         assert_eq!(
             queries::notify_queue::list_for_org(&pool, 5, 10)
                 .await
@@ -293,13 +379,7 @@ mod tests {
             "another org must not be able to cancel this item"
         );
 
-        cancel(
-            State(state),
-            Chrome(chrome_for(langid!("en"))),
-            active,
-            Path(item_id),
-        )
-        .await;
+        cancel(State(state), active, Path(item_id)).await;
         assert!(queries::notify_queue::list_for_org(&pool, 5, 10)
             .await
             .unwrap()
@@ -318,14 +398,8 @@ mod tests {
             0,
         );
 
-        let response = replay(
-            State(state),
-            Chrome(chrome_for(langid!("en"))),
-            active,
-            Path(item_id),
-        )
-        .await;
-        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let response = replay(State(state), active, Path(item_id)).await;
+        assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
         let remaining = queries::notify_queue::list_for_org(&pool, 5, 10)
             .await
             .unwrap();
@@ -340,13 +414,7 @@ mod tests {
         let (state, _chans) = crate::server::AppState::for_test(pool.clone());
 
         // hooks.test does not resolve, so the attempt fails at the SSRF gate.
-        replay(
-            State(state),
-            Chrome(chrome_for(langid!("en"))),
-            active,
-            Path(item_id),
-        )
-        .await;
+        replay(State(state), active, Path(item_id)).await;
 
         let remaining = queries::notify_queue::list_for_org(&pool, 5, 10)
             .await

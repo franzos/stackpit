@@ -101,9 +101,9 @@ expression: tpl.render().unwrap()
                  aria-label="Breadcrumb">
               <a href="/web/projects/" class="breadcrumb-link">Projects</a>
               
-  <span class="breadcrumb-sep">›</span>
+  <span class="breadcrumb-sep">/</span>
   <span>Admin</span>
-  <span class="breadcrumb-sep">›</span>
+  <span class="breadcrumb-sep">/</span>
   <span class="breadcrumb-current">License</span>
 
             </nav>
@@ -116,6 +116,8 @@ expression: tpl.render().unwrap()
       <p class="text-muted text-[13px] mt-1">Commercial-tier license for this installation. Verified locally and offline, no data leaves the server.</p>
     </div>
   </div>
+
+  
 
   
 
@@ -138,6 +140,14 @@ expression: tpl.render().unwrap()
               <tr>
                 <th>Contact</th>
                 <td><bdi>test@stackpit.test</bdi></td>
+              </tr>
+              <tr>
+                <th>Plan</th>
+                <td>
+                  
+                    <span class="badge badge-neutral">business</span>
+                  
+                </td>
               </tr>
               <tr>
                 <th>Issued</th>

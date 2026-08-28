@@ -55,17 +55,16 @@ impl std::fmt::Display for VerifyError {
 
 impl std::error::Error for VerifyError {}
 
-/// User-facing message for the activate page. Deliberately terse and
-/// non-technical; the detailed `Display` form goes into `tracing::warn`
-/// for the operator.
+/// Flash key for the activate page. A key rather than English text because the
+/// activate handler redirects and the banner is resolved against the request
+/// locale on the other side; the detailed `Display` form goes into
+/// `tracing::warn` for the operator.
 pub fn user_message(err: &VerifyError) -> &'static str {
     match err {
-        VerifyError::Empty => "Paste your license key to activate.",
-        VerifyError::BadSignature => {
-            "This license isn't valid for this installation. Double-check you pasted the right key."
-        }
-        VerifyError::WrongProduct => "This license isn't for Stackpit.",
-        _ => "We couldn't read that license. Please check it and try again.",
+        VerifyError::Empty => crate::html::flash::LICENSE_EMPTY,
+        VerifyError::BadSignature => crate::html::flash::LICENSE_BAD_SIGNATURE,
+        VerifyError::WrongProduct => crate::html::flash::LICENSE_WRONG_PRODUCT,
+        _ => crate::html::flash::LICENSE_UNREADABLE,
     }
 }
 
@@ -117,6 +116,8 @@ fn into_license(claims: signetlib::claims::Claims) -> Result<License, VerifyErro
         expires_at,
         features,
         max_orgs: claims.max_orgs,
+        tier: claims.tier,
+        product: claims.product,
     })
 }
 
@@ -168,6 +169,25 @@ mod tests {
         assert_eq!(license.customer, "Stackpit Web Test");
         assert!(license.has_feature(Feature::Observability));
         assert!(license.has_feature(Feature::Integrations));
+    }
+
+    /// The two fixtures carry *different* tiers, which is what proves the value
+    /// is read from the blob. The persisted row used to hardcode `"business"`,
+    /// so a `pro` licence recorded itself as the top tier.
+    #[test]
+    fn the_tier_and_product_come_from_the_blob() {
+        let root = decode_and_verify(FIXTURE).expect("fixture verifies");
+        assert_eq!(root.tier, "business");
+        assert_eq!(root.product, "stackpit");
+
+        let web = decode_and_verify(WEB_FIXTURE).expect("web fixture verifies");
+        assert_eq!(web.tier, "pro", "a pro licence must not read as business");
+        assert_eq!(web.product, "stackpit");
+
+        assert_ne!(
+            root.tier, web.tier,
+            "the fixtures must differ or this proves nothing"
+        );
     }
 
     /// Guards the key material itself: a truncated file, or web-pubkey.bin

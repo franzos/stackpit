@@ -259,3 +259,7 @@ projects-integrations-reset = Rétablir les valeurs de l'organisation
 projects-integrations-reset-confirm = Abandonner les réglages de ce projet et diffuser de nouveau selon les valeurs de l'organisation ?
 projects-integrations-global-hint = Cette intégration diffuse à tous les projets de l'organisation. Les réglages ci-dessous ne la personnalisent qu'ici ; pour arrêter complètement la diffusion, excluez ce projet sur la page de l'intégration.
 projects-integrations-tracker-hint = Le dépôt visé provient des paramètres de dépôt de ce projet, pas d'ici.
+projects-repos-inert = forge inconnue
+projects-repos-inert-help = Stackpit n'a pas pu déterminer quelle forge tourne sur cet hôte : le dépôt ne produit donc aucun lien vers le code ni aucune correspondance de traqueur. Choisis la forge ci-dessous et enregistre.
+projects-integrations-activate-tracker-heading = Activer le traqueur de tickets
+projects-integrations-activate-tracker-help = Permet à ce projet de créer des tickets à la demande. Le dépôt visé découle des dépôts du projet, il n'y a donc rien d'autre à régler ici.

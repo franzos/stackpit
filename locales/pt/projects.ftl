@@ -259,3 +259,7 @@ projects-integrations-reset = Repor os valores da organização
 projects-integrations-reset-confirm = Descartar as definições deste projeto e voltar a entregar com os valores da organização?
 projects-integrations-global-hint = Esta integração entrega a todos os projetos da organização. As definições abaixo apenas a personalizam aqui; para parar a entrega por completo, exclui este projeto na página da integração.
 projects-integrations-tracker-hint = O repositório de destino vem das definições de repositório deste projeto, não daqui.
+projects-repos-inert = forja desconhecida
+projects-repos-inert-help = O Stackpit não conseguiu determinar que forja corre neste anfitrião, por isso o repositório não produz ligações para o código nem corresponde a nenhum issue tracker. Escolhe a forja abaixo e guarda.
+projects-integrations-activate-tracker-heading = Ativar issue tracker
+projects-integrations-activate-tracker-help = Permite que este projeto abra issues quando for preciso. O repositório de destino vem dos repositórios do projeto, por isso não há mais nada a definir aqui.

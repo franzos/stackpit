@@ -104,5 +104,16 @@ flash-global-email-needs-recipient = Eine organisationsweite E-Mail-Integration 
 flash-queue-item-not-found = Wartende Benachrichtigung nicht gefunden
 flash-queue-replayed = Benachrichtigung zugestellt und aus der Warteschlange entfernt
 flash-queue-replay-failed = Erneutes Senden fehlgeschlagen: { $error }
+flash-queue-replay-failed-generic = Erneutes Senden fehlgeschlagen. Der Grund steht am wartenden Eintrag unter „Fehler".
 flash-queue-cancelled = Wartende Benachrichtigung verworfen
+
+# Lizenzaktivierung
+flash-license-activated = Lizenz aktiviert
+flash-license-deactivated = Lizenz entfernt
+flash-license-persist-failed = Die Lizenz wurde geprüft, konnte aber nicht gespeichert werden. Sieh ins Serverprotokoll.
+flash-license-clear-failed = Die Lizenz konnte nicht entfernt werden. Sieh ins Serverprotokoll.
+flash-license-empty = Füge deinen Lizenzschlüssel ein, um zu aktivieren.
+flash-license-bad-signature = Diese Lizenz gilt nicht für diese Installation. Prüfe, ob du den richtigen Schlüssel eingefügt hast.
+flash-license-wrong-product = Diese Lizenz ist nicht für Stackpit.
+flash-license-unreadable = Diese Lizenz konnte nicht gelesen werden. Bitte prüfe sie und versuch es erneut.
 flash-email-not-configured = E-Mail ist nicht konfiguriert. Füge der Serverkonfiguration einen [email]-Abschnitt mit einem Anbieter hinzu.

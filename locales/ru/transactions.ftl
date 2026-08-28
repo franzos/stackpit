@@ -40,3 +40,4 @@ transactions-detail-count = { $count ->
     [many] { $count } экземпляров
    *[other] { $count } экземпляра
 }
+transactions-detail-failure-label = Ошибки

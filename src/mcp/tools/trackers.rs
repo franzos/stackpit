@@ -427,6 +427,9 @@ mod tests {
         let pool = crate::db::open_test_pool().await;
         let org = seed(&pool, "trk-linked", 6040, "fp-linked").await;
         let integration = tracker(&pool, org, "gh-linked").await;
+        // The existing-link check now sits after target resolution, so the
+        // fixture needs the repository the link points at.
+        repo(&pool, 6040, "https://git.invalid/acme/backend").await;
         crate::queries::issue_links::insert_link(
             &pool,
             6040,

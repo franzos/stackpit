@@ -143,3 +143,11 @@ issue-detail-external-unlink-confirm = ลบการเชื่อมโย�
 issue-detail-external-orphaned = ลบการเชื่อมต่อแล้ว
 flash-tracker-unlinked = ลบการเชื่อมโยงแล้ว ปัญหายังคงอยู่บนฟอร์จ
 flash-tracker-ambiguous = โปรเจกต์นี้มีที่เก็บโค้ดมากกว่าหนึ่งแห่งที่ตัวติดตามนี้สร้างปัญหาได้ เลือกหนึ่งแห่งแล้วลองอีกครั้ง
+issue-detail-crumbs-truncated = { $count ->
+   *[other] แสดง { $count } รายการล่าสุด
+}
+issue-detail-crumbs-show-all = { $count ->
+   *[other] แสดงทั้งหมด { $count }
+}
+issue-detail-external-state-open = เปิด
+issue-detail-external-state-closed = ปิด

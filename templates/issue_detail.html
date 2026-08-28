@@ -20,9 +20,8 @@
 {% endblock %}
 
 {% block content %}
-  {% match tracker_flash %}{% when Some with (msg) %}
-  <div class="settings-message-error mb-4">{{ msg }}</div>
-  {% when None %}{% endmatch %}
+  {% call m::flash_banner(chrome) %}
+  {% endcall %}
   <div class="issue-header">
     <div class="min-w-0">
       <h1 class="page-h1 break-words">
@@ -80,9 +79,10 @@
   <div class="flex flex-wrap gap-2 mb-4">
     {% for st in summary_tags %}
       <a class="pill-stat"
+         title="{{ st.label }}: {{ st.value }}"
          href="/web/projects/{{ issue.project_id }}/?tag={{ st.label }}%3D{{ st.value|urlencode }}">
         <span class="text-on-surface-variant"><bdi>{{ st.label }}</bdi></span>
-        <span class="text-on-surface">{{ st.value }}</span>
+        <span class="text-on-surface"><bdi>{{ st.value }}</bdi></span>
       </a>
     {% endfor %}
   </div>
@@ -178,7 +178,7 @@
 {% if !breadcrumbs.is_empty() %}
   <details open class="card">
     <summary class="card-header cursor-pointer select-none">
-      {{ chrome.t("issue-detail-breadcrumbs") }} <span class="text-muted text-[11px] ms-1">({{ breadcrumbs.len() }})</span>
+      {{ chrome.t("issue-detail-breadcrumbs") }} <span class="text-muted text-[11px] ms-1">({{ breadcrumb_total }})</span>
     </summary>
     {% if breadcrumb_categories.len() > 1 %}
       <div class="card-pad pt-0 pb-2">
@@ -188,6 +188,13 @@
           <option value="">{{ chrome.t("issue-detail-crumb-filter-all") }}</option>
           {% for cat in breadcrumb_categories %}<option value="{{ cat }}">{{ cat }}</option>{% endfor %}
         </select>
+      </div>
+    {% endif %}
+    {% if crumbs_truncated %}
+      <div class="card-pad pt-0 pb-2 text-muted text-[12px]">
+        {{ chrome.tv_count("issue-detail-crumbs-truncated", breadcrumbs.len() as i64) }}
+        <a class="link ms-1"
+           href="/web/projects/{{ issue.project_id }}/issues/{{ issue.fingerprint }}/?tab=details&amp;crumbs=all">{{ chrome.tv_count("issue-detail-crumbs-show-all", breadcrumb_total as i64) }}</a>
       </div>
     {% endif %}
     <div class="table-wrap breadcrumb-scroll">
@@ -511,7 +518,15 @@
 {% for link in external_links %}
   <dt>{{ chrome.t("issue-detail-external-tracker") }}</dt>
   <dd class="break-all">
-    <a href="{{ link.external_url }}">{{ chrome.t("issue-detail-view-on") }} {{ link.integration_name }} #{{ link.external_id }}</a>
+    <a href="{{ link.external_url }}"><bdi>{{ chrome.t("issue-detail-view-on") }} {{ link.integration_name }}</bdi>
+      <span class="ltr-code">{% match link.repo_key() %}{% when Some with (r) %}{{ r }}{% when None %}{% endmatch %}#{{ link.issue_number() }}</span></a>
+    {# Written once at file time and never refreshed: Sentry keeps this current
+       through inbound forge webhooks, which is a recorded divergence. #}
+    {% match link.state_label_key() %}
+    {% when Some with (k) %}
+    <span class="badge badge-{% if link.state_is_closed() %}resolved{% else %}neutral{% endif %} ml-1">{{ chrome.t(k) }}</span>
+    {% when None %}
+  {% endmatch %}
     {% match link.integration_id %}{% when Some with (_id) %}{% when None %}<span class="badge badge-ignored ml-1">{{ chrome.t("issue-detail-external-orphaned") }}</span>{% endmatch %}
     <form method="post"
           class="inline"

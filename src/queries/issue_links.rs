@@ -13,8 +13,96 @@ pub struct ExternalLink {
     pub external_state: Option<String>,
 }
 
+impl ExternalLink {
+    /// Which repository this link points at, in the same shape
+    /// [`trackers::repo_key`](crate::trackers::repo_key) produces.
+    ///
+    /// New rows carry it as the prefix of the qualified `external_id`. Rows
+    /// filed before that key existed carry a bare `"42"`, so it is recovered
+    /// from `external_url` instead — comparing the *repository* rather than the
+    /// id string is what makes legacy and new rows behave identically. A
+    /// string comparison against the newly computed key would miss every
+    /// pre-migration link and open a second issue on the operator's forge.
+    ///
+    /// `None` when the URL is hand-edited or otherwise unparseable. Callers
+    /// fail toward offering the target: a duplicate issue can be closed,
+    /// whereas hiding the only reachable target is the bug being fixed.
+    pub fn repo_key(&self) -> Option<String> {
+        if let Some((prefix, _)) = self.external_id.rsplit_once('#') {
+            if !prefix.is_empty() {
+                return Some(prefix.to_string());
+            }
+        }
+        repo_key_from_url(&self.external_url)
+    }
+
+    /// The forge's own issue number, without the repository qualifier.
+    pub fn issue_number(&self) -> &str {
+        match self.external_id.rsplit_once('#') {
+            Some((_, n)) if !n.is_empty() => n,
+            _ => &self.external_id,
+        }
+    }
+
+    /// `open` / `closed`, normalising the forge spellings. GitLab says
+    /// `opened`; GitHub and Forgejo say `open`. An unrecognised value renders
+    /// no badge rather than a wrong one.
+    pub fn normalised_state(&self) -> Option<&'static str> {
+        match self.external_state.as_deref()?.trim() {
+            "open" | "opened" | "reopened" => Some("open"),
+            "closed" | "merged" | "resolved" => Some("closed"),
+            _ => None,
+        }
+    }
+
+    /// Fluent key for the state badge.
+    pub fn state_label_key(&self) -> Option<&'static str> {
+        match self.normalised_state()? {
+            "closed" => Some("issue-detail-external-state-closed"),
+            _ => Some("issue-detail-external-state-open"),
+        }
+    }
+
+    pub fn state_is_closed(&self) -> bool {
+        self.normalised_state() == Some("closed")
+    }
+}
+
+/// Recover `owner/repo` (or GitLab's encoded namespace path) from an issue URL.
+/// GitHub and Forgejo are `…/owner/repo/issues/42`; GitLab is
+/// `…/group/sub/project/-/issues/42`.
+fn repo_key_from_url(url: &str) -> Option<String> {
+    let after_scheme = url.find("://").map(|i| &url[i + 3..]).unwrap_or(url);
+    let (_, path) = after_scheme.split_once('/')?;
+    let path = path.trim_matches('/');
+
+    // GitLab's `/-/` separates the namespace from the resource, however deep.
+    if let Some((namespace, _)) = path.split_once("/-/") {
+        if namespace.is_empty() {
+            return None;
+        }
+        return Some(
+            percent_encoding::utf8_percent_encode(namespace, crate::forge::GITLAB_PATH_ENCODE)
+                .to_string(),
+        );
+    }
+
+    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    let issues_at = segments.iter().rposition(|s| *s == "issues")?;
+    if issues_at < 2 {
+        return None;
+    }
+    Some(format!(
+        "{}/{}",
+        segments[issues_at - 2],
+        segments[issues_at - 1]
+    ))
+}
+
 /// Insert-first idempotency guard: returns true if THIS insert created the row,
-/// false if a link for (fingerprint, integration_id) already existed.
+/// false if a link for (fingerprint, integration_id, external_id) already
+/// existed. The key carries the external issue's identity, so one issue can be
+/// filed into two repositories of the same integration.
 #[allow(clippy::too_many_arguments)]
 pub async fn insert_link(
     pool: &DbPool,
@@ -33,7 +121,7 @@ pub async fn insert_link(
          (project_id, fingerprint, integration_id, integration_name, integration_kind, \
           external_id, external_url, external_state, created_at) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
-         ON CONFLICT (fingerprint, integration_id) DO NOTHING"
+         ON CONFLICT (fingerprint, integration_id, external_id) DO NOTHING"
     ))
     .bind(project_id)
     .bind(fingerprint)
@@ -154,26 +242,50 @@ mod tests {
         .await;
         assert!(won);
 
-        // second insert for the same (fingerprint, integration_id) loses the race
-        let won_again = link(
+        // A different external issue on the same integration is a different
+        // link: one Stackpit issue can be filed into two repositories of one
+        // forge. The old `UNIQUE(fingerprint, integration_id)` made this lose.
+        let second = link(
             &pool,
             1,
             "fp1",
             integration_id,
             "99",
-            "https://other",
+            "https://git/acme/frontend/issues/99",
             None,
             1_700_000_001,
         )
         .await;
-        assert!(!won_again);
+        assert!(second, "a second repository is a second link");
+
+        // The same external issue twice is still idempotent.
+        let duplicate = link(
+            &pool,
+            1,
+            "fp1",
+            integration_id,
+            "42",
+            "https://git/acme/backend/issues/42",
+            Some("closed"),
+            1_700_000_002,
+        )
+        .await;
+        assert!(!duplicate, "the same triple is still rejected");
 
         let links = links_for_issue(&pool, 1, "fp1").await.unwrap();
-        assert_eq!(links.len(), 1);
-        assert_eq!(links[0].external_url, "https://git/acme/backend/issues/42");
-        assert_eq!(links[0].integration_kind, "github");
-        assert_eq!(links[0].integration_name, "gh-intg");
-        assert_eq!(links[0].external_state.as_deref(), Some("open"));
+        assert_eq!(links.len(), 2);
+        let first = links
+            .iter()
+            .find(|l| l.external_id == "42")
+            .expect("the original link");
+        assert_eq!(first.external_url, "https://git/acme/backend/issues/42");
+        assert_eq!(first.integration_kind, "github");
+        assert_eq!(first.integration_name, "gh-intg");
+        assert_eq!(
+            first.external_state.as_deref(),
+            Some("open"),
+            "the duplicate insert did not overwrite the state"
+        );
     }
 
     #[tokio::test]
@@ -249,7 +361,8 @@ mod tests {
             1_700_000_000,
         )
         .await;
-        // A different integration too, or `UNIQUE(fingerprint, integration_id)` eats the second row.
+        // A second integration, so the scoping is tested across integrations
+        // and not merely across external ids.
         sqlx::query(sql!(
             "INSERT INTO organizations (org_id, slug, name) VALUES (2, 'other', 'Other')
              ON CONFLICT (org_id) DO NOTHING"
@@ -302,7 +415,9 @@ mod tests {
         );
     }
 
-    /// `UNIQUE(fingerprint, integration_id)` treats NULLs as distinct, so orphans coexist.
+    /// `UNIQUE(fingerprint, integration_id, external_id)` treats NULLs as
+    /// distinct, so orphaned links — all carrying `integration_id IS NULL` —
+    /// coexist rather than collapsing onto one row.
     #[tokio::test]
     async fn several_links_per_issue_including_orphans() {
         let pool = open_test_db().await;
@@ -347,5 +462,79 @@ mod tests {
         assert_eq!(links.len(), 2);
         assert_eq!(links[0].integration_id, None);
         assert_eq!(links[1].integration_id, Some(second));
+    }
+
+    fn a_link(external_id: &str, external_url: &str) -> ExternalLink {
+        ExternalLink {
+            id: 1,
+            integration_id: Some(1),
+            integration_kind: "github".into(),
+            integration_name: "gh".into(),
+            external_id: external_id.into(),
+            external_url: external_url.into(),
+            external_state: None,
+        }
+    }
+
+    #[test]
+    fn repo_key_prefers_the_qualified_id_and_falls_back_to_the_url() {
+        // New shape: the key is already in the id.
+        assert_eq!(
+            a_link("acme/backend#42", "https://git.test/acme/backend/issues/42")
+                .repo_key()
+                .as_deref(),
+            Some("acme/backend")
+        );
+
+        // Legacy GitHub/Forgejo shape: recovered from the URL.
+        assert_eq!(
+            a_link("42", "https://github.com/acme/backend/issues/42")
+                .repo_key()
+                .as_deref(),
+            Some("acme/backend")
+        );
+
+        // Legacy GitLab shape: `/-/` separates the namespace, however deep.
+        assert_eq!(
+            a_link("42", "https://gitlab.com/group/sub/project/-/issues/42")
+                .repo_key()
+                .as_deref(),
+            Some("group%2Fsub%2Fproject")
+        );
+
+        // Unparseable: callers fail toward offering the target.
+        assert!(a_link("42", "not a url at all").repo_key().is_none());
+        assert!(a_link("42", "https://git.test/").repo_key().is_none());
+        assert!(a_link("42", "https://git.test/issues/42")
+            .repo_key()
+            .is_none());
+    }
+
+    #[test]
+    fn issue_number_strips_the_qualifier() {
+        assert_eq!(a_link("acme/backend#42", "u").issue_number(), "42");
+        assert_eq!(a_link("42", "u").issue_number(), "42");
+        // GitLab's encoded key contains no '#', so only the last one splits.
+        assert_eq!(a_link("group%2Fsub#7", "u").issue_number(), "7");
+    }
+
+    #[test]
+    fn external_state_is_normalised_across_forges() {
+        let mut l = a_link("1", "u");
+        for (raw, want) in [
+            ("open", Some("open")),
+            ("opened", Some("open")),
+            ("reopened", Some("open")),
+            ("closed", Some("closed")),
+            ("merged", Some("closed")),
+            (" open ", Some("open")),
+            ("something-else", None),
+        ] {
+            l.external_state = Some(raw.into());
+            assert_eq!(l.normalised_state(), want, "{raw}");
+        }
+        l.external_state = None;
+        assert_eq!(l.normalised_state(), None);
+        assert!(!l.state_is_closed());
     }
 }

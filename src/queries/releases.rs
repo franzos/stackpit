@@ -335,6 +335,19 @@ pub async fn get_release_health_daily(
     project_id: u64,
     since_ts: i64,
 ) -> Result<Vec<DailySessions>> {
+    get_release_health_daily_at(pool, project_id, since_ts, chrono::Utc::now().timestamp()).await
+}
+
+/// As [`get_release_health_daily`], with the clock injected. The padding runs
+/// to today, so `now` has to reach the gap filler rather than being read inside
+/// it — a test that only injected one level down would still see today's real
+/// date and a window thousands of buckets wide.
+pub async fn get_release_health_daily_at(
+    pool: &DbPool,
+    project_id: u64,
+    since_ts: i64,
+    now: i64,
+) -> Result<Vec<DailySessions>> {
     let rows = sqlx::query(sql!(
         "SELECT day_bucket, \
                 CAST(SUM(sessions_total) AS BIGINT) AS total, \
@@ -360,18 +373,24 @@ pub async fn get_release_health_daily(
         })
         .collect();
 
-    Ok(fill_session_gaps(present, since_ts))
+    Ok(fill_session_gaps(present, since_ts, now))
 }
 
 const SECS_PER_DAY: i64 = 86400;
 
 /// Insert zero-valued entries for missing days so the chart x-axis is
-/// time-proportional. Fills from the requested `since_day` (day-aligned) to the
-/// last present day, capped at 90 days to avoid pathological output.
-fn fill_session_gaps(present: Vec<DailySessions>, since_ts: i64) -> Vec<DailySessions> {
-    let Some(last_day) = present.last().map(|d| d.day) else {
+/// time-proportional. Fills from the requested `since_day` (day-aligned) through
+/// today, not merely to the last day that has data — a project that stopped
+/// reporting three days ago should show three empty days, not a chart that ends
+/// on its last good day and reads as current. Capped at 90 days, anchored on the
+/// end of the window.
+fn fill_session_gaps(present: Vec<DailySessions>, since_ts: i64, now: i64) -> Vec<DailySessions> {
+    if present.is_empty() {
         return present;
-    };
+    }
+    let now_day = (now / SECS_PER_DAY) * SECS_PER_DAY;
+    let last_present = present.last().map(|d| d.day).unwrap_or(now_day);
+    let last_day = now_day.max(last_present);
     let since_day = (since_ts / SECS_PER_DAY) * SECS_PER_DAY;
     let first_present = present.first().map(|d| d.day).unwrap_or(last_day);
     let mut start = since_day.min(first_present);
@@ -828,8 +847,14 @@ mod tests {
         insert_agg_day(&pool, 1, "app@1.0", "prod", day2, 7, 2, 0, 0, None, None).await;
         insert_agg_day(&pool, 1, "app@1.0", "prod", day3, 9, 3, 1, 0, None, None).await;
 
+        // The clock is pinned to the last day with data, so the padding to
+        // "today" adds nothing and these assertions are about grouping only.
+        let now = day3;
+
         // since = day2 -> day1 excluded.
-        let daily = get_release_health_daily(&pool, 1, day2).await.unwrap();
+        let daily = get_release_health_daily_at(&pool, 1, day2, now)
+            .await
+            .unwrap();
         assert_eq!(daily.len(), 2);
         assert_eq!(daily[0].day, day2);
         assert_eq!(daily[0].total, 7);
@@ -838,12 +863,65 @@ mod tests {
         assert_eq!(daily[1].total, 9);
 
         // since = day1 -> all three, day1 env rows summed.
-        let daily = get_release_health_daily(&pool, 1, day1).await.unwrap();
+        let daily = get_release_health_daily_at(&pool, 1, day1, now)
+            .await
+            .unwrap();
         assert_eq!(daily.len(), 3);
         assert_eq!(daily[0].day, day1);
         assert_eq!(daily[0].total, 15);
         assert_eq!(daily[0].crashed, 1);
         assert_eq!(daily[0].errored, 3);
+    }
+
+    /// A project that stopped reporting four days ago must still show a window
+    /// ending today, with the silent days visibly empty. Before this the chart
+    /// ended on the last day with data and read as current.
+    #[tokio::test]
+    async fn daily_pads_to_today_when_reporting_stopped() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        let today = 1_609_459_200;
+        let last_data = today - 4 * 86400;
+        let since = today - 6 * 86400;
+        insert_agg_day(
+            &pool, 1, "app@1.0", "prod", last_data, 11, 1, 0, 0, None, None,
+        )
+        .await;
+
+        let daily = get_release_health_daily_at(&pool, 1, since, today)
+            .await
+            .unwrap();
+
+        assert_eq!(daily.len(), 7, "a 7-day window stays 7 buckets wide");
+        assert_eq!(daily.first().unwrap().day, since);
+        assert_eq!(daily.last().unwrap().day, today);
+        assert_eq!(
+            daily.last().unwrap().total,
+            0,
+            "today is silent, not absent"
+        );
+        let populated: Vec<i64> = daily
+            .iter()
+            .filter(|d| d.total > 0)
+            .map(|d| d.day)
+            .collect();
+        assert_eq!(populated, vec![last_data]);
+    }
+
+    /// The 90-day cap anchors on the end of the window, not on the last day
+    /// that happened to have data.
+    #[tokio::test]
+    async fn daily_caps_ninety_days_from_today() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        let today = 1_609_459_200;
+        let ancient = today - 400 * 86400;
+        insert_agg_day(&pool, 1, "app@1.0", "prod", ancient, 3, 0, 0, 0, None, None).await;
+
+        let daily = get_release_health_daily_at(&pool, 1, ancient, today)
+            .await
+            .unwrap();
+
+        assert_eq!(daily.len(), 90);
+        assert_eq!(daily.last().unwrap().day, today);
     }
 
     async fn insert_org_rel(pool: &DbPool, slug: &str) -> i64 {

@@ -279,6 +279,12 @@
     font-size: 13px; font-weight: 600;
   }
 
+  /* Inline anchors that need to read as links: the global `a` rule paints them
+     body-coloured and undecorated, which is right for table rows and wrong
+     anywhere the anchor sits in a run of plain text. */
+  .link { color: var(--color-primary); }
+  .link:hover { text-decoration: underline; }
+
   .breadcrumb-sep { color: var(--color-outline); padding: 0 0.125rem; }
   .breadcrumb-link { color: var(--color-on-surface-variant); }
   .breadcrumb-link:hover { color: var(--color-on-surface); }
@@ -301,11 +307,18 @@
     overflow-x: auto;
   }
 
+  /* A tag value is attacker-supplied and unbounded: bound the flex container
+     as well as the value span, or the pill grows and the ellipsis never
+     engages. The full value stays reachable through the anchor's title. */
   .pill-stat {
     display: inline-flex; align-items: center; gap: 0.375rem;
+    max-width: 320px; overflow: hidden;
     height: 22px; padding: 0 0.5rem;
     background: var(--color-surface-container-high); border-radius: var(--radius);
     font-size: 11px; color: var(--color-on-surface-variant);
+  }
+  .pill-stat > span {
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
 
   .empty {
@@ -414,6 +427,9 @@
   .col-narrow { width: 1%; white-space: nowrap; }
   .col-time { width: 1%; white-space: nowrap; }
   .col-check { width: 28px; }
+  /* Span descriptions are URLs and code fragments — wide enough to be
+     recognisable, narrow enough that the metrics beside them stay visible. */
+  .col-desc { width: 40%; }
   .col-spark { width: 92px; white-space: nowrap; }
   /* Per-issue trend mini bar chart: muted so counts/levels stay the focus.
      Rendered at natural size (no width/height override) to keep it crisp. */
@@ -456,9 +472,11 @@
   .frame-context ol {
     margin: 0; padding-left: 4ch; list-style-position: outside;
     color: var(--color-on-surface);
+    direction: ltr; unicode-bidi: isolate; text-align: start;
   }
   .frame-context li {
     white-space: pre; padding: 0 0.5rem; line-height: 1.5;
+    direction: ltr; unicode-bidi: isolate; text-align: start;
   }
   .frame-context li::marker { color: var(--color-on-surface-variant); font-size: 11px; }
   .frame-context .current-line { background: color-mix(in srgb, var(--color-error) 18%, transparent); }
@@ -626,4 +644,9 @@
   /* directional glyphs (back-nav arrow): flip under RTL */
   .rtl-flip { display: inline-block; }
   [dir="rtl"] .rtl-flip { transform: scaleX(-1); }
+
+  /* Identifiers, paths, URLs and source code are LTR whatever the page
+     direction: under RTL an unisolated value reorders (`:def charge(order)`)
+     and CSS ellipsis eats the front of the string instead of the end. */
+  .ltr-code { direction: ltr; unicode-bidi: isolate; text-align: start; }
 }

@@ -24,6 +24,7 @@ license-issued = Ausgestellt
 license-expires = Läuft ab
 license-lifetime = Unbegrenzt
 license-max-orgs = Maximale Organisationen
+license-tier = Tarif
 license-unlocked-features = Freigeschaltete Funktionen
 license-none = Keine
 license-no-license = Es ist keine kommerzielle Lizenz aktiv. Dieser Build läuft in der Open-Source-Stufe.

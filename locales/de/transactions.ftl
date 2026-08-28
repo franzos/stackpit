@@ -12,6 +12,7 @@ transactions-list-empty = Keine Transaktionen in diesem Zeitraum.
 transactions-col-name = Transaktion
 transactions-col-throughput = Durchsatz
 transactions-col-failure = Fehler %
+transactions-detail-failure-label = Fehler
 transactions-col-count = Anzahl
 transactions-col-users = Nutzer
 

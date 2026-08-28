@@ -161,3 +161,17 @@ issue-detail-external-unlink-confirm = Удалить эту связь? Зад�
 issue-detail-external-orphaned = интеграция удалена
 flash-tracker-unlinked = Связь удалена. Задача по-прежнему существует на фордже.
 flash-tracker-ambiguous = У этого проекта несколько репозиториев, в которые может писать этот трекер. Выберите один и попробуйте снова.
+issue-detail-crumbs-truncated = { $count ->
+    [one] Показана самая свежая запись.
+    [few] Показаны { $count } самые свежие.
+    [many] Показаны { $count } самых свежих.
+   *[other] Показаны { $count } самые свежие.
+}
+issue-detail-crumbs-show-all = { $count ->
+    [one] Показать одну запись
+    [few] Показать все { $count }
+    [many] Показать все { $count }
+   *[other] Показать все { $count }
+}
+issue-detail-external-state-open = открыт
+issue-detail-external-state-closed = закрыт

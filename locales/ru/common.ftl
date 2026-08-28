@@ -37,3 +37,14 @@ test-count = { $count ->
     [many] { $count } элементов
    *[other] { $count } элемента
 }
+common-time-in-secs = через { $n } с
+common-time-in-min = через { $n } мин
+common-time-in-hour = через { $n } ч
+common-time-in-day = { $n ->
+    [one] через { $n } день
+    [few] через { $n } дня
+    [many] через { $n } дней
+   *[other] через { $n } дня
+}
+common-pagination-prev = Назад
+common-pagination-next = Вперёд

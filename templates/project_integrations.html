@@ -37,9 +37,8 @@
        class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-primary text-on-surface">{{ chrome.t("projects-tab-integrations") }}</a>
   </nav>
 
-  {% match message %}{% when Some with (msg) %}
-  <div class="settings-message mb-4">{{ msg }}</div>
-  {% when None %}{% endmatch %}
+  {% call m::flash(chrome, message) %}
+  {% endcall %}
 
 <div class="space-y-6 max-w-3xl">
 
@@ -185,7 +184,31 @@
 {% endfor %}
 {% endif %}
 
-{% if !available.is_empty() %}
+{% if !available_trackers.is_empty() %}
+  {# A tracker has nothing to say about levels, environments or digests: it
+     files on demand, into the repository the project already declares. Asking
+     for those options here would be asking for settings that do nothing. #}
+  <div class="card card-pad mb-4">
+    <h2 class="page-h2 mb-1">{{ chrome.t("projects-integrations-activate-tracker-heading") }}</h2>
+    <p class="text-muted text-[13px] mb-3">{{ chrome.t("projects-integrations-activate-tracker-help") }}</p>
+    <form class="settings-form"
+          method="post"
+          action="/web/projects/{{ project_id }}/settings/integrations/activate">
+      <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+      <div>
+        <label class="field-label" for="pi_tracker_id">{{ chrome.t("projects-integrations-integration-label") }}</label>
+        <select class="select" id="pi_tracker_id" name="integration_id">
+          {% for i in available_trackers %}<option value="{{ i.id }}">{{ i.name }} ({{ i.kind }})</option>{% endfor %}
+        </select>
+      </div>
+      <div>
+        <button type="submit" class="btn btn-primary">{{ chrome.t("projects-integrations-activate-submit") }}</button>
+      </div>
+    </form>
+  </div>
+{% endif %}
+
+{% if !available_channels.is_empty() %}
   <div class="card card-pad">
     <h2 class="page-h2 mb-3">{{ chrome.t("projects-integrations-activate-heading") }}</h2>
     <form class="settings-form"
@@ -195,7 +218,7 @@
       <div>
         <label class="field-label" for="pi_integration_id">{{ chrome.t("projects-integrations-integration-label") }}</label>
         <select class="select" id="pi_integration_id" name="integration_id">
-          {% for i in available %}<option value="{{ i.id }}">{{ i.name }} ({{ i.kind }})</option>{% endfor %}
+          {% for i in available_channels %}<option value="{{ i.id }}">{{ i.name }} ({{ i.kind }})</option>{% endfor %}
         </select>
       </div>
       <div class="flex flex-wrap gap-4 text-[13px]">
@@ -252,7 +275,9 @@
       </div>
     </form>
   </div>
-{% else %}
+{% endif %}
+
+{% if available_channels.is_empty() && available_trackers.is_empty() %}
   <div class="card">
     <p class="empty">{{ chrome.t("projects-integrations-available-empty") |safe }}</p>
   </div>

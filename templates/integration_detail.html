@@ -33,9 +33,8 @@
     </div>
   </div>
 
-  {% match message %}{% when Some with (msg) %}
-  <div class="settings-message mb-4">{{ msg }}</div>
-  {% when None %}{% endmatch %}
+  {% call m::flash(chrome, message) %}
+  {% endcall %}
 
 <div class="card card-pad mb-4">
   <h2 class="page-h2">{{ chrome.t("integrations-projects-heading") }}</h2>
@@ -48,9 +47,34 @@
       {{ chrome.t("integrations-projects-hint-per-project") }}
     {% endif %}
   </p>
+  {# Counted across the org, not the page: on a tracker integration in a large
+     org almost every project is inert and the header is where the one that
+     delivers becomes visible. #}
+  <p class="mt-2">
+    <span class="badge badge-success">{{ chrome.tv_count("integrations-summary-delivering", delivering as i64) }}</span>
+    <span class="badge badge-neutral ms-1">{{ chrome.tv_count("integrations-summary-excluded", excluded_count as i64) }}</span>
+    <span class="badge badge-neutral ms-1">{{ chrome.tv_count("integrations-summary-inert", inert as i64) }}</span>
+  </p>
+  <form class="flex gap-2 items-center mt-3"
+        method="get"
+        action="/web/settings/integrations/{{ integration.id }}/">
+    <input class="input w-auto"
+           type="search"
+           name="q"
+           value="{{ q }}"
+           placeholder="{{ chrome.t("integrations-search-placeholder") }}"
+           aria-label="{{ chrome.t("integrations-search-label") }}">
+    <select class="input w-auto"
+            name="sort"
+            aria-label="{{ chrome.t("integrations-sort-label") }}">
+      <option value="state" {% if sort == "state" %}selected{% endif %}>{{ chrome.t("integrations-sort-state") }}</option>
+      <option value="name" {% if sort == "name" %}selected{% endif %}>{{ chrome.t("integrations-sort-name") }}</option>
+    </select>
+    <button type="submit" class="btn btn-secondary">{{ chrome.t("integrations-search-submit") }}</button>
+  </form>
 </div>
 
-{% if projects.is_empty() %}
+{% if projects.items.is_empty() %}
   <div class="card">
     <p class="empty">{{ chrome.t("integrations-projects-empty") }}</p>
   </div>
@@ -66,7 +90,7 @@
           </tr>
         </thead>
         <tbody>
-          {% for p in projects %}
+          {% for p in projects.items %}
             <tr>
               <td>
                 <a class="link font-semibold"
@@ -88,6 +112,9 @@
                           class="inline">
                       <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
                       <input type="hidden" name="project_id" value="{{ p.project_id }}">
+                      <input type="hidden" name="q" value="{{ q }}">
+                      <input type="hidden" name="sort" value="{{ sort }}">
+                      <input type="hidden" name="offset" value="{{ projects.offset }}">
                       <button type="submit" class="btn btn-secondary">{{ chrome.t("integrations-include") }}</button>
                     </form>
                   {% else %}
@@ -96,6 +123,9 @@
                           class="inline">
                       <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
                       <input type="hidden" name="project_id" value="{{ p.project_id }}">
+                      <input type="hidden" name="q" value="{{ q }}">
+                      <input type="hidden" name="sort" value="{{ sort }}">
+                      <input type="hidden" name="offset" value="{{ projects.offset }}">
                       <button type="submit" class="btn btn-secondary">{{ chrome.t("integrations-exclude") }}</button>
                     </form>
                   {% endif %}
@@ -107,5 +137,8 @@
       </table>
     </div>
   </div>
+
+  {% call m::pagination(chrome, projects, detail_url, filter_qs, "", chrome.t("integrations-pagination-label"), chrome.tv_count("integrations-projects-count", projects.total as i64)) %}
+  {% endcall %}
 {% endif %}
 {% endblock %}

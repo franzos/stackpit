@@ -39,12 +39,11 @@
        class="inline-flex items-center px-3 h-9 text-[13px] -mb-px border-b-2 border-transparent text-muted hover:text-on-surface">{{ chrome.t("projects-tab-integrations") }}</a>
   </nav>
 
-  {% match message %}{% when Some with (msg) %}
-  <div class="settings-message mb-4">{{ msg }}</div>
-  {% when None %}{% endmatch %}
+  {% call m::flash(chrome, message) %}
+  {% endcall %}
 
-<div class="space-y-6 max-w-3xl">
-  <div class="card card-pad">
+<div class="space-y-6">
+  <div class="card card-pad max-w-3xl">
     <h2 class="page-h2 mb-3">{{ chrome.t("projects-settings-name-heading") }}</h2>
     <form class="settings-form"
           method="post"
@@ -65,7 +64,7 @@
     </form>
   </div>
 
-  <div class="card">
+  <div class="card max-w-3xl">
     <div class="card-header">
       <span>{{ chrome.t("projects-settings-info-heading") }}</span>
     </div>
@@ -114,11 +113,16 @@
             <tbody>
               {% for repo in repos %}
                 <tr>
-                  <td>
+                  <td class="ltr-code">
                     <code class="text-mono">{{ repo.repo_url }}</code>
                   </td>
                   <td>
-                    <span class="badge badge-neutral">{{ repo.effective_forge_type() }}</span>
+                    {% if repo.is_inert() %}
+                      <span class="badge badge-warning"
+                            title="{{ chrome.t("projects-repos-inert-help") }}">{{ chrome.t("projects-repos-inert") }}</span>
+                    {% else %}
+                      <span class="badge badge-neutral">{{ repo.effective_forge_type() }}</span>
+                    {% endif %}
                   </td>
                   <td>
                     {% match repo.stack_path_prefix %}{% when Some with (p) %}<code class="text-mono text-[11px]">{{ p }}</code>{% when None %}<span class="text-muted">{{ chrome.t("projects-repos-auto") }}</span>{% endmatch %}
@@ -126,8 +130,40 @@
                   <td>
                     {% match repo.url_template %}{% when Some with (t) %}<code class="text-mono text-[11px]">{{ t }}</code>{% when None %}<span class="text-muted">{{ chrome.t("projects-repos-auto") }}</span>{% endmatch %}
                 </td>
-                <td>
-                  <form method="post"
+                <td class="nowrap">
+                  {# Posts to the same upsert route as "add". `ON CONFLICT` keys on
+                     `repo_url`, so the URL is read-only here: editing it would
+                     create a second row and orphan this one. #}
+                  <form class="inline"
+                        method="post"
+                        action="/web/projects/{{ project_id }}/settings/repos">
+                    <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+                    <input type="hidden" name="repo_url" value="{{ repo.repo_url }}">
+                    <select class="input w-auto inline-block text-[12px]"
+                            name="forge_type_override"
+                            aria-label="{{ chrome.t("projects-repos-forge-override") }}">
+                      <option value="">{{ chrome.t("projects-repos-forge-detected") }}</option>
+                      {% for opt in forge_options %}
+                        <option value="{{ opt.0 }}"
+                                {% if repo.forge_type_override.as_deref() == Some(opt.0) %}selected{% endif %}>{{ opt.1 }}</option>
+                      {% endfor %}
+                    </select>
+                    <input class="input w-auto inline-block text-mono text-[12px]"
+                           type="text"
+                           name="stack_path_prefix"
+                           value="{% match repo.stack_path_prefix %}{% when Some with (p) %}{{ p }}{% when None %}{% endmatch %}"
+                           placeholder="{{ chrome.t("projects-repos-prefix-placeholder") }}"
+                           aria-label="{{ chrome.t("projects-repos-prefix") }}">
+                    <input class="input w-auto inline-block text-mono text-[12px]"
+                           type="text"
+                           name="url_template"
+                           value="{% match repo.url_template %}{% when Some with (t) %}{{ t }}{% when None %}{% endmatch %}"
+                           placeholder="{repo}/blob/{commit}/{path}#L{line}"
+                           aria-label="{{ chrome.t("projects-repos-template") }}">
+                    <button type="submit" class="btn btn-secondary">{{ chrome.t("common-action-save") }}</button>
+                  </form>
+                  <form class="inline ms-1"
+                        method="post"
                         action="/web/projects/{{ project_id }}/settings/repos/{{ repo.id }}/delete">
                     <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
                     <button type="submit"
@@ -144,7 +180,7 @@
   </div>
 </div>
 
-<div class="card card-pad">
+<div class="card card-pad max-w-3xl">
   <h2 class="page-h2 mb-2">{{ chrome.t("projects-repos-add") }}</h2>
   <p class="text-muted text-[13px] mb-4">{{ chrome.t("projects-repos-add-help") |safe }}</p>
   <form class="settings-form"
@@ -166,13 +202,7 @@
       </label>
       <select class="input" id="forge_type_override" name="forge_type_override">
         <option value="">{{ chrome.t("projects-repos-forge-detected") }}</option>
-        <option value="github">GitHub</option>
-        <option value="gitlab">GitLab</option>
-        <option value="gitea">Gitea / Forgejo</option>
-        <option value="bitbucket">Bitbucket</option>
-        <option value="sourcehut">Sourcehut</option>
-        <option value="gitee">Gitee</option>
-        <option value="azure">Azure DevOps</option>
+        {% for opt in forge_options %}<option value="{{ opt.0 }}">{{ opt.1 }}</option>{% endfor %}
       </select>
       <p class="text-muted text-[12px] mt-1">{{ chrome.t("projects-repos-forge-override-help") }}</p>
     </div>
@@ -203,7 +233,7 @@
   </form>
 </div>
 
-<div class="card border-error/40">
+<div class="card border-error/40 max-w-3xl">
   <div class="card-header" style="color: var(--color-error);">
     <span>{{ chrome.t("projects-danger-heading") }}</span>
   </div>

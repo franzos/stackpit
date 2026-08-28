@@ -37,3 +37,4 @@ transactions-detail-count = { $count ->
     [one] { $count } instance
    *[other] { $count } instances
 }
+transactions-detail-failure-label = Échecs

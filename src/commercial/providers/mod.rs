@@ -72,6 +72,8 @@ mod tests {
             expires_at: Some(Utc::now() + Duration::days(expires_in_days)),
             features,
             max_orgs: None,
+            tier: "business".into(),
+            product: "stackpit".into(),
         }
     }
 

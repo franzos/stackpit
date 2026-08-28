@@ -33,7 +33,7 @@ pub fn session_chart_json(daily: &[DailySessions]) -> String {
         .iter()
         .map(|d| {
             let label = chrono::DateTime::from_timestamp(d.day, 0)
-                .map(|dt| dt.format("%m-%d").to_string())
+                .map(|dt| dt.format("%b %d").to_string())
                 .unwrap_or_default();
             (label, d.total as f32)
         })
@@ -60,6 +60,12 @@ struct MultiSeriesChartData<'a> {
     /// Suffix the client appends in tooltips, so the axis numbers are not
     /// unitless. Kept server-side rather than duplicating `format_duration` in JS.
     unit: &'a str,
+    /// When `"duration"`, the client formats Y ticks with the same adaptive
+    /// ladder as `format_duration`. The ticks cannot be computed here because
+    /// Chart.js picks the scale, so this is the one place the ladder is
+    /// mirrored in JS.
+    #[serde(skip_serializing_if = "str::is_empty")]
+    y_format: &'a str,
 }
 
 /// JSON for the transaction summary's percentile trend: p50 and p95 as two
@@ -95,6 +101,7 @@ pub fn trend_chart_json(
             },
         ],
         unit: "ms",
+        y_format: "duration",
     };
     serde_json::to_string(&data).unwrap_or_default()
 }
@@ -197,6 +204,30 @@ mod tests {
         assert_eq!(v["series"][0]["markers"], serde_json::json!([]));
         assert_eq!(v["series"][1]["name"], "p95");
         assert_eq!(v["series"][1]["markers"], serde_json::json!([1]));
+        // Without this the Y axis reads `8,000` under points labelled 7.99s.
+        assert_eq!(v["y_format"], "duration");
+    }
+
+    /// The single-series charts plot counts, so they must not ask the client
+    /// to format their axis as a duration.
+    #[test]
+    fn single_series_payload_carries_no_duration_axis() {
+        let json = chart_json(&[("Jul 20".to_string(), 3.0)], "Events");
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(v.get("y_format").is_none());
+    }
+
+    #[test]
+    fn session_chart_labels_name_their_month() {
+        let json = session_chart_json(&[DailySessions {
+            // 2026-08-21T00:00:00Z
+            day: 1_787_270_400,
+            total: 5,
+            crashed: 0,
+            errored: 0,
+        }]);
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["labels"], serde_json::json!(["Aug 21"]));
     }
 
     // The client branches on `series`, so the single-series shape must not grow it.

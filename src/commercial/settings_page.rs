@@ -3,7 +3,7 @@
 
 use askama::Template;
 use axum::extract::State;
-use axum::response::{IntoResponse, Redirect, Response};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use serde::Deserialize;
@@ -11,6 +11,7 @@ use serde::Deserialize;
 use crate::commercial::license::{classify, LicenseStatus};
 use crate::commercial::{store, verify};
 use crate::html::chrome::PageChrome;
+use crate::html::flash;
 use crate::html::render_template;
 use crate::html::utils::Chrome;
 use crate::orgs::extractor::{require_superuser, ActiveOrg};
@@ -37,6 +38,9 @@ struct LicenseTemplate {
     expires_at: String,
     is_lifetime: bool,
     max_orgs_label: String,
+    /// The SKU from the blob. Empty when unlicensed, or when a blob predates
+    /// the claim; the page shows a dash rather than inventing a tier.
+    tier: String,
     banner_kind: &'static str,
     banner_message: String,
 }
@@ -69,7 +73,7 @@ async fn activate(
     if let Err(r) = require_superuser(&active) {
         return r;
     }
-    match verify::decode_and_verify(&form.blob) {
+    let outcome = match verify::decode_and_verify(&form.blob) {
         Ok(license) => {
             let next = classify(
                 license.clone(),
@@ -80,15 +84,21 @@ async fn activate(
                 Ok(()) => {
                     state.license.swap(next);
                     tracing::info!(customer = %license.customer, email = %license.email, "license: activated");
+                    flash::LICENSE_ACTIVATED
                 }
-                Err(e) => tracing::error!(error = ?e, "license: persist failed"),
+                Err(e) => {
+                    tracing::error!(error = ?e, "license: persist failed");
+                    flash::LICENSE_PERSIST_FAILED
+                }
             }
         }
         Err(e) => {
-            tracing::warn!(error = %e, "license: activation rejected: {}", verify::user_message(&e))
+            let key = verify::user_message(&e);
+            tracing::warn!(error = %e, flash = key, "license: activation rejected");
+            key
         }
-    }
-    Redirect::to("/web/admin/license").into_response()
+    };
+    flash::redirect("/web/admin/license", outcome)
 }
 
 #[derive(Deserialize)]
@@ -106,11 +116,17 @@ async fn deactivate(
         return r;
     }
     let _ = &form.csrf_token;
-    match store::clear(&state.writer_pool).await {
-        Ok(()) => state.license.swap(LicenseStatus::Unlicensed),
-        Err(e) => tracing::error!(error = ?e, "license: deactivate failed"),
-    }
-    Redirect::to("/web/admin/license").into_response()
+    let outcome = match store::clear(&state.writer_pool).await {
+        Ok(()) => {
+            state.license.swap(LicenseStatus::Unlicensed);
+            flash::LICENSE_DEACTIVATED
+        }
+        Err(e) => {
+            tracing::error!(error = ?e, "license: deactivate failed");
+            flash::LICENSE_CLEAR_FAILED
+        }
+    };
+    flash::redirect("/web/admin/license", outcome)
 }
 
 fn build_template(chrome: PageChrome, status: &LicenseStatus, grace_days: i64) -> LicenseTemplate {
@@ -150,6 +166,7 @@ fn build_template(chrome: PageChrome, status: &LicenseStatus, grace_days: i64) -
             max_orgs_label: l
                 .max_orgs
                 .map_or_else(|| "Unlimited".into(), |n| n.to_string()),
+            tier: l.tier.clone(),
             banner_kind,
             banner_message,
         },
@@ -163,6 +180,7 @@ fn build_template(chrome: PageChrome, status: &LicenseStatus, grace_days: i64) -
             expires_at: String::new(),
             is_lifetime: false,
             max_orgs_label: String::new(),
+            tier: String::new(),
             banner_kind,
             banner_message,
         },
@@ -185,6 +203,8 @@ mod tests {
             expires_at: chrono::DateTime::from_timestamp(1_900_000_000, 0),
             features: Vec::new(),
             max_orgs: Some(50),
+            tier: "business".into(),
+            product: "stackpit".into(),
         })
     }
 
@@ -227,6 +247,8 @@ mod tests {
             expires_at: Some(now - chrono::Duration::days(5)),
             features: Vec::new(),
             max_orgs: None,
+            tier: "business".into(),
+            product: "stackpit".into(),
         });
         for locale in [langid!("en"), langid!("de")] {
             for status in [&active_status(), &LicenseStatus::Unlicensed, &grace] {

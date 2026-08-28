@@ -10,6 +10,16 @@ common-time-week-ago = { $n }w ago
 common-time-month-ago = { $n }mo ago
 common-time-year-ago = { $n }y ago
 common-time-day-ago = { $n }d ago
+# Forward-looking twins, for a scheduled next attempt. Stops at days: the
+# delivery backoff caps at an hour and gives up after 24.
+common-time-in-secs = in { $n }s
+common-time-in-min = in { $n }m
+common-time-in-hour = in { $n }h
+common-time-in-day = in { $n }d
+# Shared pager labels (`m::pagination`). The fourteen per-page
+# `*-pagination-prev`/`-next` keys stay: nothing is migrated onto this yet.
+common-pagination-prev = Previous
+common-pagination-next = Next
 # Canonical time-range option set, shared by every list page (`m::period_options`).
 common-period-all = All time
 common-period-1h = Last hour

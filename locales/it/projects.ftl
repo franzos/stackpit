@@ -259,3 +259,7 @@ projects-integrations-reset = Ripristina i valori dell'organizzazione
 projects-integrations-reset-confirm = Scartare le impostazioni di questo progetto e tornare a consegnare con i valori dell'organizzazione?
 projects-integrations-global-hint = Questa integrazione consegna a tutti i progetti dell'organizzazione. Le impostazioni qui sotto la personalizzano solo in questo progetto; per fermare del tutto la consegna, escludi questo progetto nella pagina dell'integrazione.
 projects-integrations-tracker-hint = Il repository di destinazione viene dalle impostazioni repository di questo progetto, non da qui.
+projects-repos-inert = forge sconosciuta
+projects-repos-inert-help = Stackpit non è riuscito a capire quale forge gira su questo host, quindi il repository non produce link al codice né corrisponde a un issue tracker. Scegli la forge qui sotto e salva.
+projects-integrations-activate-tracker-heading = Attiva issue tracker
+projects-integrations-activate-tracker-help = Permette a questo progetto di aprire issue su richiesta. Il repository di destinazione deriva dai repository del progetto, quindi qui non c'è altro da impostare.

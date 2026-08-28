@@ -51,9 +51,8 @@
     </div>
   {% endif %}
 
-  {% match message %}{% when Some with (msg) %}
-  <div class="settings-message mb-4">{{ msg }}</div>
-  {% when None %}{% endmatch %}
+  {% call m::flash(chrome, message) %}
+  {% endcall %}
 
 {% if integrations.is_empty() %}
   <div class="card">

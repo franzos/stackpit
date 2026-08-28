@@ -7,6 +7,7 @@ use serde::Deserialize;
 use crate::extractors::ProjectPath;
 use crate::filter::admin;
 use crate::html::chrome::PageChrome;
+use crate::html::flash::Flash;
 use crate::html::render_template;
 use crate::html::utils::Chrome;
 use crate::orgs::extractor::{require_project_owner, require_project_scope, ActiveOrg};
@@ -24,8 +25,16 @@ async fn write_then_render(
     success_msg: &str,
 ) -> axum::response::Response {
     match admin::persist_and_reload(&state.writer_pool, &state.filter_engine, result).await {
-        Ok(()) => render_filters(state, project_id, Some(success_msg.into()), chrome).await,
-        Err(e) => render_filters(state, project_id, Some(chrome.err(e)), chrome).await,
+        Ok(()) => {
+            render_filters(
+                state,
+                project_id,
+                Some(Flash::ok(success_msg.into())),
+                chrome,
+            )
+            .await
+        }
+        Err(e) => render_filters(state, project_id, Some(chrome.flash_err(e)), chrome).await,
     }
 }
 
@@ -44,11 +53,11 @@ async fn delete_then_render(
             render_filters_status(
                 state,
                 project_id,
-                Some(format!(
+                Some(Flash::err(format!(
                     "{} {}",
                     chrome.t("common-error-prefix"),
                     chrome.tv1("flash-not-found-filter", "label", label)
-                )),
+                ))),
                 chrome,
                 StatusCode::NOT_FOUND,
             )
@@ -56,9 +65,15 @@ async fn delete_then_render(
         }
         Ok(_) => {
             admin::reload(&state.writer_pool, &state.filter_engine).await;
-            render_filters(state, project_id, Some(success_msg.into()), chrome).await
+            render_filters(
+                state,
+                project_id,
+                Some(Flash::ok(success_msg.into())),
+                chrome,
+            )
+            .await
         }
-        Err(e) => render_filters(state, project_id, Some(chrome.err(e)), chrome).await,
+        Err(e) => render_filters(state, project_id, Some(chrome.flash_err(e)), chrome).await,
     }
 }
 
@@ -87,7 +102,7 @@ use crate::html::filters;
 struct ProjectFiltersTemplate {
     project_id: u64,
     nav: crate::queries::ProjectNavCounts,
-    message: Option<String>,
+    message: Option<Flash>,
     browser_extensions_enabled: bool,
     localhost_enabled: bool,
     message_filters: Vec<(i64, String)>,
@@ -116,7 +131,7 @@ pub async fn handler(
 async fn render_filters(
     state: &AppState,
     project_id: u64,
-    message: Option<String>,
+    message: Option<Flash>,
     chrome: &PageChrome,
 ) -> axum::response::Response {
     render_filters_status(state, project_id, message, chrome, StatusCode::OK).await
@@ -125,7 +140,7 @@ async fn render_filters(
 async fn render_filters_status(
     state: &AppState,
     project_id: u64,
-    message: Option<String>,
+    message: Option<Flash>,
     chrome: &PageChrome,
     status: StatusCode,
 ) -> axum::response::Response {
@@ -144,7 +159,7 @@ async fn validation_error(
     render_filters_status(
         state,
         project_id,
-        Some(msg.into()),
+        Some(Flash::err(msg.into())),
         chrome,
         StatusCode::UNPROCESSABLE_ENTITY,
     )
@@ -154,7 +169,7 @@ async fn validation_error(
 async fn build_filters_template(
     state: &AppState,
     project_id: u64,
-    message: Option<String>,
+    message: Option<Flash>,
     chrome: &PageChrome,
 ) -> Result<ProjectFiltersTemplate, HtmlError> {
     let inbound = queries::filters::get_inbound_filters(&state.pool, project_id).await?;
@@ -248,7 +263,7 @@ pub async fn set_inbound_filters(
             queries::filters::set_inbound_filter(&state.writer_pool, project_id, filter_id, enabled)
                 .await
         {
-            return render_filters(&state, project_id, Some(chrome.err(e)), &chrome).await;
+            return render_filters(&state, project_id, Some(chrome.flash_err(e)), &chrome).await;
         }
     }
     admin::reload(&state.writer_pool, &state.filter_engine).await;
@@ -256,7 +271,7 @@ pub async fn set_inbound_filters(
     render_filters(
         &state,
         project_id,
-        Some(chrome.t("flash-inbound-filters-updated")),
+        Some(Flash::ok(chrome.t("flash-inbound-filters-updated"))),
         &chrome,
     )
     .await

@@ -155,7 +155,11 @@ fn distribution_buckets(buckets: &[u64; NUM_BUCKETS]) -> Vec<DurationBucket> {
         .map(|b| {
             let count = buckets[b];
             DurationBucket {
-                label: format!("{}-{}ms", 1u64 << b, 1u64 << (b + 1)),
+                label: format!(
+                    "{}-{}",
+                    crate::html::filters::format_duration_str((1u64 << b) as i64),
+                    crate::html::filters::format_duration_str((1u64 << (b + 1)) as i64)
+                ),
                 count,
                 pct: if max > 0 {
                     count as f64 / max as f64 * 100.0
@@ -932,7 +936,7 @@ mod tests {
         let dist = distribution_buckets(&buckets);
         // First..=last populated, including the empty in-between bucket.
         assert_eq!(dist.len(), 3);
-        assert_eq!(dist[0].label, "256-512ms");
+        assert_eq!(dist[0].label, "256ms-512ms");
         assert_eq!(dist[0].count, 10);
         assert!(
             (dist[0].pct - 100.0).abs() < f64::EPSILON,
@@ -940,8 +944,20 @@ mod tests {
         );
         assert_eq!(dist[1].count, 0);
         assert!(dist[1].pct.abs() < f64::EPSILON);
-        assert_eq!(dist[2].label, "1024-2048ms");
+        assert_eq!(dist[2].label, "1.02s-2.05s");
         assert!((dist[2].pct - 50.0).abs() < f64::EPSILON);
+    }
+
+    /// The buckets that motivated this: `2048-4096ms` and `16384-32768ms` read
+    /// as raw milliseconds while every other duration on the page was adaptive.
+    #[test]
+    fn distribution_labels_use_the_same_ladder_as_every_other_duration() {
+        let mut buckets = [0u64; NUM_BUCKETS];
+        buckets[11] = 1; // [2048, 4096)
+        buckets[14] = 1; // [16384, 32768)
+        let dist = distribution_buckets(&buckets);
+        assert_eq!(dist.first().unwrap().label, "2.05s-4.10s");
+        assert_eq!(dist.last().unwrap().label, "16.4s-32.8s");
     }
 
     #[test]

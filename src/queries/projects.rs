@@ -1229,6 +1229,53 @@ mod tests {
         assert_eq!(repo.effective_forge_type(), "unknown");
     }
 
+    /// An inert repository produces no source links and matches no tracker, so
+    /// it has to be visibly distinct from a working one.
+    #[test]
+    fn is_inert_follows_the_effective_type() {
+        let mut repo = ProjectRepo {
+            id: 1,
+            project_id: 1,
+            repo_url: "https://git.gofranz.com/franz/stackpit".into(),
+            forge_type: "unknown".into(),
+            forge_type_override: None,
+            url_template: None,
+            stack_path_prefix: None,
+        };
+        assert!(repo.is_inert());
+
+        repo.forge_type_override = Some("gitea".into());
+        assert!(!repo.is_inert(), "an override is what fixes it");
+
+        repo.forge_type_override = None;
+        repo.forge_type = "github".into();
+        assert!(!repo.is_inert());
+    }
+
+    /// The inline edit form posts to the same upsert route as "add", so a
+    /// changed override has to land on the existing row rather than a new one.
+    #[tokio::test]
+    async fn editing_a_repo_in_place_updates_the_row_it_was_rendered_from() {
+        let pool = open_test_db().await;
+        let url = "https://git.gofranz.com/franz/stackpit";
+        upsert_project_repo(&pool, 42, url, "unknown", None, None, None)
+            .await
+            .unwrap();
+        let before = get_project_repos(&pool, 42).await.unwrap();
+        assert!(before[0].is_inert());
+        let id = before[0].id;
+
+        upsert_project_repo(&pool, 42, url, "unknown", Some("gitea"), None, Some("api/"))
+            .await
+            .unwrap();
+
+        let after = get_project_repos(&pool, 42).await.unwrap();
+        assert_eq!(after.len(), 1, "the edit must not orphan the old row");
+        assert_eq!(after[0].id, id, "and must keep its id");
+        assert!(!after[0].is_inert());
+        assert_eq!(after[0].stack_path_prefix.as_deref(), Some("api/"));
+    }
+
     #[test]
     fn evict_to_cap_is_a_noop_under_the_cap() {
         let cache: ProjectListCache = Default::default();

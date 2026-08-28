@@ -26,9 +26,8 @@
     </div>
   </div>
 
-  {% match message %}{% when Some with (msg) %}
-  <div class="settings-message mb-4">{{ msg }}</div>
-  {% when None %}{% endmatch %}
+  {% call m::flash(chrome, message) %}
+  {% endcall %}
 
 {# ============ Notification types ============ #}
 <section class="space-y-4 mb-6">

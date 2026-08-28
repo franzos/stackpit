@@ -3,6 +3,7 @@ use axum::extract::{Form, Path, State};
 use serde::Deserialize;
 
 use crate::html::chrome::PageChrome;
+use crate::html::flash::{self, Flash};
 use crate::html::render_template;
 use crate::html::utils::{self, Chrome};
 use crate::orgs::extractor::{require_org_owner, ActiveOrg};
@@ -39,7 +40,7 @@ struct AlertsTemplate {
     digest_schedules: Vec<DigestSchedule>,
     notify_integrations: Vec<NotifyIntegration>,
     projects: Vec<ProjectOption>,
-    message: Option<String>,
+    message: Option<Flash>,
     chrome: PageChrome,
 }
 
@@ -94,7 +95,7 @@ pub async fn create_alert_rule(
             return render_page(
                 &state,
                 active_org.session_org_id,
-                Some(chrome.t("flash-project-not-found-or-denied")),
+                Some(chrome.flash_of(flash::PROJECT_NOT_FOUND_OR_DENIED)),
                 &chrome,
             )
             .await;
@@ -103,7 +104,7 @@ pub async fn create_alert_rule(
 
     let s = state.clone();
     let org_id = active_org.session_org_id;
-    let success = chrome.t("flash-alert-rule-created");
+    let success = Flash::ok(chrome.t("flash-alert-rule-created"));
     let render_chrome = chrome.clone();
     utils::query_then_render(
         queries::alerts::create_alert_rule(
@@ -118,7 +119,7 @@ pub async fn create_alert_rule(
         )
         .await,
         &chrome,
-        &success,
+        success,
         move |msg| async move { render_page(&s, org_id, msg, &render_chrome).await },
     )
     .await
@@ -137,13 +138,13 @@ pub async fn delete_alert_rule(
         match queries::alerts::delete_alert_rule(&state.writer_pool, id, active_org.session_org_id)
             .await
         {
-            Ok(0) => format!(
+            Ok(0) => Flash::err(format!(
                 "{} {}",
                 chrome.t("common-error-prefix"),
                 chrome.tv1("flash-not-found-alert-rule", "id", &id.to_string())
-            ),
-            Ok(_) => chrome.t("flash-alert-rule-deleted"),
-            Err(e) => chrome.err(e),
+            )),
+            Ok(_) => Flash::ok(chrome.t("flash-alert-rule-deleted")),
+            Err(e) => chrome.flash_err(e),
         };
     render_page(&state, active_org.session_org_id, Some(msg), &chrome).await
 }
@@ -176,7 +177,7 @@ pub async fn update_notify_types(
         return render_page(
             &state,
             active_org.session_org_id,
-            Some(chrome.t("flash-project-not-found-or-denied")),
+            Some(chrome.flash_of(flash::PROJECT_NOT_FOUND_OR_DENIED)),
             &chrome,
         )
         .await;
@@ -191,7 +192,7 @@ pub async fn update_notify_types(
     )
     .await
     {
-        Ok(0) => format!(
+        Ok(0) => Flash::err(format!(
             "{} {}",
             chrome.t("common-error-prefix"),
             chrome.tv1(
@@ -199,9 +200,9 @@ pub async fn update_notify_types(
                 "id",
                 &form.id.to_string()
             )
-        ),
-        Ok(_) => chrome.t("flash-integration-updated"),
-        Err(e) => chrome.err(e),
+        )),
+        Ok(_) => Flash::ok(chrome.t("flash-integration-updated")),
+        Err(e) => chrome.flash_err(e),
     };
     render_page(&state, active_org.session_org_id, Some(msg), &chrome).await
 }
@@ -241,7 +242,7 @@ pub async fn create_digest_schedule(
             return render_page(
                 &state,
                 active_org.session_org_id,
-                Some(chrome.t("flash-project-not-found-or-denied")),
+                Some(chrome.flash_of(flash::PROJECT_NOT_FOUND_OR_DENIED)),
                 &chrome,
             )
             .await;
@@ -250,7 +251,7 @@ pub async fn create_digest_schedule(
 
     let s = state.clone();
     let org_id = active_org.session_org_id;
-    let success = chrome.t("flash-digest-schedule-created");
+    let success = Flash::ok(chrome.t("flash-digest-schedule-created"));
     let render_chrome = chrome.clone();
     utils::query_then_render(
         queries::alerts::create_digest_schedule(
@@ -261,7 +262,7 @@ pub async fn create_digest_schedule(
         )
         .await,
         &chrome,
-        &success,
+        success,
         move |msg| async move { render_page(&s, org_id, msg, &render_chrome).await },
     )
     .await
@@ -283,13 +284,13 @@ pub async fn delete_digest_schedule(
     )
     .await
     {
-        Ok(0) => format!(
+        Ok(0) => Flash::err(format!(
             "{} {}",
             chrome.t("common-error-prefix"),
             chrome.tv1("flash-not-found-digest-schedule", "id", &id.to_string())
-        ),
-        Ok(_) => chrome.t("flash-digest-schedule-deleted"),
-        Err(e) => chrome.err(e),
+        )),
+        Ok(_) => Flash::ok(chrome.t("flash-digest-schedule-deleted")),
+        Err(e) => chrome.flash_err(e),
     };
     render_page(&state, active_org.session_org_id, Some(msg), &chrome).await
 }
@@ -315,12 +316,16 @@ pub async fn test_digest_schedule(
             return render_page(
                 &state,
                 org_id,
-                Some(chrome.tv1("flash-not-found-digest-schedule", "id", &id.to_string())),
+                Some(Flash::err(chrome.tv1(
+                    "flash-not-found-digest-schedule",
+                    "id",
+                    &id.to_string(),
+                ))),
                 &chrome,
             )
             .await
         }
-        Err(e) => return render_page(&state, org_id, Some(chrome.err(e)), &chrome).await,
+        Err(e) => return render_page(&state, org_id, Some(chrome.flash_err(e)), &chrome).await,
     };
 
     // Representative window: since the last send, or one interval back if it has
@@ -342,25 +347,26 @@ pub async fn test_digest_schedule(
     .await
     .unwrap_or_default();
 
+    let no_target = || Flash::err(chrome.t("flash-test-digest-no-target"));
     let msg = if !projects.is_empty() {
         let queued = queue_digest_previews(&state, period_start, now, projects, false).await;
         if queued > 0 {
-            chrome.tv1("flash-test-digest-sent", "count", &queued.to_string())
+            Flash::ok(chrome.tv1("flash-test-digest-sent", "count", &queued.to_string()))
         } else {
-            chrome.t("flash-test-digest-no-target")
+            no_target()
         }
     } else if let Some(pid) = schedule.project_id {
         // No activity, but a concrete project: send a labeled sample.
         let sample = vec![sample_digest_project(pid)];
         let queued = queue_digest_previews(&state, period_start, now, sample, true).await;
         if queued > 0 {
-            chrome.t("flash-test-digest-sample")
+            Flash::ok(chrome.t("flash-test-digest-sample"))
         } else {
-            chrome.t("flash-test-digest-no-target")
+            no_target()
         }
     } else {
         // Global schedule with no activity: no concrete recipient to sample.
-        chrome.t("flash-test-digest-no-target")
+        no_target()
     };
 
     render_page(&state, org_id, Some(msg), &chrome).await
@@ -449,7 +455,7 @@ fn sample_digest_project(project_id: u64) -> crate::notify::DigestProject {
 async fn render_page(
     state: &AppState,
     org_id: i64,
-    message: Option<String>,
+    message: Option<Flash>,
     chrome: &PageChrome,
 ) -> axum::response::Response {
     let alert_rules = queries::alerts::list_alert_rules(&state.pool, None, Some(org_id))

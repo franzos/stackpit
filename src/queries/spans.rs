@@ -632,9 +632,22 @@ async fn list_traces_with_scan_limit(
             }
         }
 
+        // The root transaction lives in `events`, not `spans`, so the GROUP BY
+        // above counts only children and the list read one short of the detail
+        // page. Add one for "a transaction exists", never the row count: this
+        // query groups by trace_id, and a distributed or re-ingested trace can
+        // carry several transaction rows for one root.
+        let with_transaction: std::collections::HashSet<String> = txn_meta_rows
+            .iter()
+            .map(|row| row.get_opt_string("trace_id").unwrap_or_default())
+            .collect();
+
         for item in &mut items {
             if let Some(root_duration_ms) = duration_map.remove(&item.trace_id) {
                 item.total_duration_ms = item.total_duration_ms.map(|e| e.max(root_duration_ms));
+            }
+            if with_transaction.contains(&item.trace_id) {
+                item.span_count += 1;
             }
         }
     }
@@ -1157,7 +1170,9 @@ mod tests {
         assert_eq!(res.items.len(), 1);
         let t = &res.items[0];
         assert_eq!(t.trace_id, "t1");
-        assert_eq!(t.span_count, 2);
+        // Two child spans plus the root transaction, which lives in `events`:
+        // the detail page renders three rows, so the list must say three.
+        assert_eq!(t.span_count, 3);
         // Duration follows the 1000ms transaction, not the 400ms child extent.
         assert_eq!(t.total_duration_ms, Some(1000));
         assert_eq!(t.root_description.as_deref(), Some("GET /checkout"));

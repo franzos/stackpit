@@ -1,6 +1,56 @@
 {# Shared Askama macros. Imported by templates that need them via
    `{% import "_macros.html" as m %}` and invoked with `{% call m::name(...) %}`. #}
 
+{# One-shot banner. `message` is the page's own `Option<Flash>`, set by a handler
+   that rendered in place; `chrome.flash` is what a `?flash=` redirect carried.
+   The page's own wins. A macro rather than a `base.html` block so the markup
+   churn stays inside the templates that opt in. #}
+{% macro flash(chrome, message) %}
+  {%- match message -%}
+  {%- when Some with (f) %}
+  <div class="{{ f.css_class() }} mb-4">{{ f.text }}</div>
+  {%- when None -%}
+  {%- call flash_banner(chrome) -%}
+  {%- endcall -%}
+{%- endmatch -%}
+{% endmacro %}
+
+{# Shared pager. `param_prefix` is what makes this reusable: the spans page
+   needs `trace_offset`/`trace_limit` so its two tables do not fight over one
+   URL. `extra_qs` is a pre-built query fragment — `build_filter_qs` output —
+   and is rendered `|safe`, so it must never carry a raw user string: it is
+   already percent-encoded there, and putting an unencoded one here would be an
+   XSS. It emits a bare `&`, matching the fourteen hand-rolled pagers this is
+   meant to replace later.
+
+   The other fourteen are deliberately not migrated in this change; that sweep
+   has real regression surface across every list in the app. #}
+{% macro pagination(chrome, result, base_url, extra_qs, param_prefix, label, count_text) %}
+  <nav class="pagination" aria-label="{{ label }}">
+    <span>{{ count_text }}</span>
+    <span class="flex gap-2">
+      {% if result.has_prev() %}
+        <a class="btn btn-ghost"
+           href="{{ base_url }}?{{ param_prefix }}offset={{ result.prev_offset() }}&amp;{{ param_prefix }}limit={{ result.limit }}{{ extra_qs|safe }}">{{ chrome.t("common-pagination-prev") }}</a>
+      {% endif %}
+      {% if result.has_next() %}
+        <a class="btn btn-ghost"
+           href="{{ base_url }}?{{ param_prefix }}offset={{ result.next_offset() }}&amp;{{ param_prefix }}limit={{ result.limit }}{{ extra_qs|safe }}">{{ chrome.t("common-pagination-next") }}</a>
+      {% endif %}
+    </span>
+  </nav>
+{% endmacro %}
+
+{# For pages that never build a message of their own and only ever receive one
+   through a redirect. #}
+{% macro flash_banner(chrome) %}
+  {%- match chrome.flash -%}
+  {%- when Some with (f) %}
+  <div class="{{ f.css_class() }} mb-4">{{ f.text }}</div>
+  {%- when None -%}
+  {%- endmatch -%}
+{% endmacro %}
+
 {# Project-scoped sidebar nav. The `active` string marks the current section
    so its link gets `sidebar-link-active`. Sections without recorded events
    are omitted, mirroring the legacy horizontal tab-strip behavior. #}
@@ -129,7 +179,7 @@
            {% if frame.in_app && frame.has_detail() %}open{% endif %}>
     <summary class="frame-header">
       <span class="truncate">
-        <span class="text-on-surface-variant"><bdi>{{ frame.filename }}</bdi>{% match frame.lineno %}{% when Some with (ln) %}:{{ ln }}{% match frame.colno %}{% when Some with (cn) %}:{{ cn }}{% when None %}{% endmatch %}{% when None %}{% endmatch %}</span>
+        <span class="text-on-surface-variant"><bdi>{{ frame.filename }}{% match frame.lineno %}{% when Some with (ln) %}:{{ ln }}{% match frame.colno %}{% when Some with (cn) %}:{{ cn }}{% when None %}{% endmatch %}{% when None %}{% endmatch %}</bdi></span>
         {{ chrome.t("issue-detail-in") }} <strong class="text-on-surface">{{ frame.function }}</strong>
       </span>
       <span class="ms-auto flex gap-2 items-center">

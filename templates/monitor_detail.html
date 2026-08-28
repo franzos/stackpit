@@ -43,6 +43,23 @@
                 data-confirm="{{ chrome.t("monitors-detail-confirm-delete-selected") }}">{{ chrome.t("monitors-detail-delete") }}</button>
       </div>
 
+      {% if checkins.total > 0 %}
+        <form class="mb-3 flex gap-2 items-center flex-wrap"
+              method="post"
+              action="/web/projects/{{ project_id }}/monitors/{{ slug }}/bulk">
+          <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+          <input type="hidden" name="action" value="delete">
+          <input type="hidden" name="mode" value="all_matching">
+          <label class="select-all-gate">
+            <input type="checkbox">
+            <span>{{ chrome.tv_count("common-select-all-matching", checkins.total as i64) }}</span>
+          </label>
+          <button type="submit"
+                  class="btn btn-danger"
+                  disabled
+                  data-confirm="{{ chrome.tv_count("monitors-detail-confirm-delete-all", checkins.total as i64) }}">{{ chrome.tv_count("monitors-detail-delete-all", checkins.total as i64) }}</button>
+        </form>
+      {% endif %}
       <div class="card overflow-hidden">
         <div class="table-wrap">
           <table class="table">
@@ -85,23 +102,6 @@
 </div>
 </form>
 
-{% if checkins.total > 0 %}
-  <form class="mt-3 flex gap-2 items-center flex-wrap"
-        method="post"
-        action="/web/projects/{{ project_id }}/monitors/{{ slug }}/bulk">
-    <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
-    <input type="hidden" name="action" value="delete">
-    <input type="hidden" name="mode" value="all_matching">
-    <label class="select-all-gate">
-      <input type="checkbox">
-      <span>{{ chrome.tv_count("common-select-all-matching", checkins.total as i64) }}</span>
-    </label>
-    <button type="submit"
-            class="btn btn-danger"
-            disabled
-            data-confirm="{{ chrome.tv_count("monitors-detail-confirm-delete-all", checkins.total as i64) }}">{{ chrome.tv_count("monitors-detail-delete-all", checkins.total as i64) }}</button>
-  </form>
-{% endif %}
 
 <nav class="pagination"
      aria-label="{{ chrome.t("monitors-pagination-label") }}">

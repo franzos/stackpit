@@ -52,9 +52,21 @@ pub fn detect_forge(repo_url: &str) -> (ForgeType, String) {
         "git.sr.ht" => ForgeType::Sourcehut,
         "gitee.com" => ForgeType::Gitee,
         "dev.azure.com" | "ssh.dev.azure.com" => ForgeType::Azure,
+        // Substring fallbacks for self-hosted instances that name themselves.
+        // GitLab is tried before GitHub deliberately: `gitlab.example.com`
+        // contains neither the other's name, but the order has been relied on.
+        //
+        // There is no `git.<domain>` → Gitea rule and no network probe:
+        // `git.gnome.org` is GitLab and `git.kernel.org` is cgit, so a guess
+        // would silently produce broken source links where `unknown` at least
+        // admits it does not know. The operator sets the override once.
         h if h.contains("gitlab") => ForgeType::GitLab,
         h if h.contains("github") => ForgeType::GitHub,
         h if h.contains("forgejo") || h.contains("gitea") => ForgeType::Gitea,
+        h if h.contains("bitbucket") => ForgeType::Bitbucket,
+        h if h.contains("sourcehut") || h.contains("sr.ht") => ForgeType::Sourcehut,
+        h if h.contains("gitee") => ForgeType::Gitee,
+        h if h.contains("azure") => ForgeType::Azure,
         _ => ForgeType::Unknown,
     };
     (forge, hostname)
@@ -143,7 +155,7 @@ pub fn derive_forge_ref(forge: &ForgeType, repo_url: &str) -> Result<ForgeRef, S
 }
 
 /// GitLab's project reference needs `/` encoded, which the default PATH set leaves alone.
-const GITLAB_PATH_ENCODE: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
+pub const GITLAB_PATH_ENCODE: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
     .remove(b'-')
     .remove(b'_')
     .remove(b'.');
@@ -464,12 +476,48 @@ mod tests {
         );
     }
 
+    /// The kinds that previously matched only an exact host now match by
+    /// substring too, like GitHub/GitLab/Gitea already did.
+    #[test]
+    fn detect_self_hosted_instances_that_name_themselves() {
+        for (url, want) in [
+            ("https://bitbucket.acme.internal/o/r", ForgeType::Bitbucket),
+            ("https://sourcehut.acme.internal/~o/r", ForgeType::Sourcehut),
+            ("https://sr.ht.acme.internal/~o/r", ForgeType::Sourcehut),
+            ("https://gitee.acme.internal/o/r", ForgeType::Gitee),
+            ("https://azure.acme.internal/o/r", ForgeType::Azure),
+        ] {
+            assert_eq!(detect_forge(url).0, want, "{url}");
+        }
+        // The exact hosts keep working.
+        assert_eq!(
+            detect_forge("https://bitbucket.org/o/r").0,
+            ForgeType::Bitbucket
+        );
+        assert_eq!(
+            detect_forge("https://git.sr.ht/~o/r").0,
+            ForgeType::Sourcehut
+        );
+        assert_eq!(detect_forge("https://gitee.com/o/r").0, ForgeType::Gitee);
+        assert_eq!(
+            detect_forge("https://dev.azure.com/o/r").0,
+            ForgeType::Azure
+        );
+    }
+
+    /// No `git.<domain>` heuristic: `git.gnome.org` is GitLab and
+    /// `git.kernel.org` is cgit, so a guess would be silently wrong where
+    /// `unknown` is at least honest.
     #[test]
     fn detect_leaves_a_neutral_host_unknown() {
-        assert_eq!(
-            detect_forge("https://git.gofranz.com/franz/stackpit").0,
-            ForgeType::Unknown
-        );
+        for url in [
+            "https://git.gofranz.com/franz/stackpit",
+            "https://git.gnome.org/o/r",
+            "https://git.kernel.org/o/r",
+            "https://code.example.com/o/r",
+        ] {
+            assert_eq!(detect_forge(url).0, ForgeType::Unknown, "{url}");
+        }
     }
 
     #[test]

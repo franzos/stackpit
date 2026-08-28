@@ -33,3 +33,4 @@ license-activate = Activer
 license-replace = Remplacer la licence
 license-deactivate = Désactiver
 license-back = Retour à l'administration
+license-tier = Formule

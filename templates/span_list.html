@@ -29,7 +29,7 @@
             <tr>
               <th>{{ chrome.t("spans-col-trace-id") }}</th>
               <th>{{ chrome.t("spans-col-root-op") }}</th>
-              <th>{{ chrome.t("spans-col-root-description") }}</th>
+              <th class="col-desc">{{ chrome.t("spans-col-root-description") }}</th>
               <th>{{ chrome.t("nav-spans") }}</th>
               <th>{{ chrome.t("spans-col-duration") }}</th>
               <th>{{ chrome.t("spans-col-first-seen") }}</th>
@@ -39,14 +39,14 @@
           <tbody>
             {% for trace in traces.items %}
               <tr>
-                <td>
+                <td class="ltr-code">
                   <a class="text-mono"
                      href="/web/projects/{{ project_id }}/traces/{{ trace.trace_id }}/">{{ trace.trace_id|truncate_id }}</a>
                 </td>
-                <td class="text-mono">
+                <td class="text-mono ltr-code">
                   {% match trace.root_op %}{% when Some with (op) %}{{ op }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
               </td>
-              <td class="truncate-cell text-mono">
+              <td class="col-desc truncate-cell text-mono ltr-code">
                 {% match trace.root_description %}{% when Some with (d) %}{{ d }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
             </td>
             <td class="text-tabular">{{ trace.span_count }}</td>
@@ -100,7 +100,7 @@
         <thead>
           <tr>
             <th>{{ chrome.t("spans-col-op") }}</th>
-            <th>{{ chrome.t("spans-col-description") }}</th>
+            <th class="col-desc">{{ chrome.t("spans-col-description") }}</th>
             <th class="text-end">{{ chrome.t("spans-col-count") }}</th>
             <th class="text-end">{{ chrome.t("spans-col-p50") }}</th>
             <th class="text-end">{{ chrome.t("spans-col-p95") }}</th>
@@ -110,10 +110,10 @@
         <tbody>
           {% for g in aggregates.groups %}
             <tr>
-              <td class="text-mono">
+              <td class="text-mono ltr-code">
                 {% match g.op %}{% when Some with (op) %}{{ op }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
             </td>
-            <td class="truncate-cell text-mono">
+            <td class="col-desc truncate-cell text-mono ltr-code">
               {% match g.description %}{% when Some with (d) %}{{ d }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
           </td>
           <td class="text-tabular text-end">{{ g.count }}</td>
@@ -141,7 +141,7 @@
             <th>{{ chrome.t("spans-col-span-id") }}</th>
             <th>{{ chrome.t("spans-col-trace-id") }}</th>
             <th>{{ chrome.t("spans-col-op") }}</th>
-            <th>{{ chrome.t("spans-col-description") }}</th>
+            <th class="col-desc">{{ chrome.t("spans-col-description") }}</th>
             <th>{{ chrome.t("spans-col-duration") }}</th>
             <th>{{ chrome.t("spans-col-timestamp") }}</th>
           </tr>
@@ -149,18 +149,18 @@
         <tbody>
           {% for span in result.items %}
             <tr>
-              <td>
+              <td class="ltr-code">
                 <a class="text-mono"
                    href="/web/projects/{{ project_id }}/traces/{{ span.trace_id }}/">{{ span.span_id|truncate_id }}</a>
               </td>
-              <td>
+              <td class="ltr-code">
                 <a class="text-mono"
                    href="/web/projects/{{ project_id }}/traces/{{ span.trace_id }}/">{{ span.trace_id|truncate_id }}</a>
               </td>
-              <td class="text-mono">
+              <td class="text-mono ltr-code">
                 {% match span.op %}{% when Some with (op) %}{{ op }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
             </td>
-            <td class="truncate-cell text-mono">
+            <td class="col-desc truncate-cell text-mono ltr-code">
               {% match span.description %}{% when Some with (d) %}{{ d }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
           </td>
           <td class="text-tabular">

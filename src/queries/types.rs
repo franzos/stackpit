@@ -258,6 +258,13 @@ impl ProjectRepo {
             .filter(|s| !s.is_empty())
             .unwrap_or(&self.forge_type)
     }
+
+    /// True when the forge could not be named, which is not cosmetic: the row
+    /// produces no source links and never matches a tracker integration. The
+    /// operator has to set the override, so the UI has to say so.
+    pub fn is_inert(&self) -> bool {
+        self.effective_forge_type() == crate::forge::ForgeType::Unknown.as_str()
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

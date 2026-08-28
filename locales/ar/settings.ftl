@@ -52,3 +52,4 @@ queue-state-failed = تم التخلي
 queue-replay = إعادة الإرسال
 queue-cancel = تجاهل
 queue-cancel-confirm = تجاهل هذا الإشعار دون تسليمه؟
+queue-col-alert = التنبيه

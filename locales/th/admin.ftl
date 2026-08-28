@@ -35,3 +35,4 @@ license-activate = เปิดใช้งาน
 license-replace = เปลี่ยนใบอนุญาต
 license-deactivate = ปิดใช้งาน
 license-back = กลับไปยังผู้ดูแลระบบ
+license-tier = แพ็กเกจ

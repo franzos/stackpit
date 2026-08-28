@@ -35,3 +35,4 @@ license-activate = Активировать
 license-replace = Заменить лицензию
 license-deactivate = Деактивировать
 license-back = Назад к администрированию
+license-tier = Тариф

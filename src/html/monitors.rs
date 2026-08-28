@@ -154,4 +154,48 @@ mod snapshot_tests {
         };
         insta::assert_snapshot!(tmpl.render().unwrap());
     }
+
+    /// The all-matching affirmation has to sit above the table it acts on, as
+    /// it does on the issue stream: below a screenful of rows it reads as a
+    /// footnote to the last row rather than a gate on the whole filter.
+    ///
+    /// The snapshot above cannot catch this — its fixture has `total: 0`, so
+    /// the gate never renders there.
+    #[test]
+    fn the_all_matching_gate_sits_above_the_table() {
+        let tmpl = MonitorDetailTemplate {
+            project_id: 42,
+            slug: "nightly-backup".to_string(),
+            checkins: PagedResult {
+                items: vec![queries::EventSummary {
+                    event_id: "e1".into(),
+                    item_type: crate::ingest::models::ItemType::Event,
+                    project_id: 42,
+                    project_name: None,
+                    fingerprint: Some("fp".into()),
+                    timestamp: 1_700_000_000,
+                    level: Some("info".into()),
+                    title: Some("ok".into()),
+                    platform: None,
+                    release: None,
+                    environment: None,
+                }],
+                total: 3,
+                offset: 0,
+                limit: 25,
+            },
+            nav: ProjectNavCounts::default(),
+            chrome: PageChrome::new(
+                "test-csrf-token".into(),
+                crate::locale::default_locale(),
+                "/web/projects/".into(),
+            ),
+        };
+        let html = tmpl.render().unwrap();
+        let gate = html.find("select-all-gate").expect("the gate renders");
+        let table = html
+            .find(r#"<table class="table">"#)
+            .expect("the table renders");
+        assert!(gate < table, "the gate must precede the table it governs");
+    }
 }

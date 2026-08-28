@@ -81,6 +81,30 @@ integrations-projects-hint-global = This integration delivers to every project b
 integrations-projects-hint-per-project = This integration only delivers where a project has activated it. Mark it org-wide to deliver everywhere instead.
 integrations-projects-hint-tracker = Issue trackers match a project's repositories by forge and host. Excluding a project keeps this tracker out of its filing options.
 integrations-projects-empty = This organization has no projects yet.
+# Header summary, counted across the org rather than the current page.
+integrations-summary-delivering = { $count ->
+    [one] { $count } delivering
+   *[other] { $count } delivering
+}
+integrations-summary-excluded = { $count ->
+    [one] { $count } excluded
+   *[other] { $count } excluded
+}
+integrations-summary-inert = { $count ->
+    [one] { $count } not routed
+   *[other] { $count } not routed
+}
+integrations-search-placeholder = Filter by project name
+integrations-search-label = Filter projects
+integrations-search-submit = Filter
+integrations-sort-label = Sort projects
+integrations-sort-state = Delivering first
+integrations-sort-name = By name
+integrations-pagination-label = Project routing pages
+integrations-projects-count = { $count ->
+    [one] { $count } project
+   *[other] { $count } projects
+}
 integrations-col-project = Project
 integrations-col-state = State
 integrations-project-archived = archived

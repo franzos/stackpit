@@ -92,3 +92,42 @@ integrations-exclude = استبعاد
 integrations-include = تضمين
 integrations-email-to-label = المستلم الافتراضي
 integrations-email-to-help = يُستخدم حيث لم يضبط المشروع عنوانه الخاص. مطلوب للتكامل على مستوى المؤسسة.
+integrations-summary-delivering = { $count ->
+    [zero] لا مشروع يسلّم
+    [one] مشروع واحد يسلّم
+    [two] مشروعان يسلّمان
+    [few] { $count } مشاريع تسلّم
+    [many] { $count } مشروعًا تسلّم
+   *[other] { $count } مشروع يسلّم
+}
+integrations-summary-excluded = { $count ->
+    [zero] لا مشروع مستبعد
+    [one] مشروع واحد مستبعد
+    [two] مشروعان مستبعدان
+    [few] { $count } مشاريع مستبعدة
+    [many] { $count } مشروعًا مستبعدًا
+   *[other] { $count } مشروع مستبعد
+}
+integrations-summary-inert = { $count ->
+    [zero] لا مشروع بلا تسليم
+    [one] مشروع واحد بلا تسليم
+    [two] مشروعان بلا تسليم
+    [few] { $count } مشاريع بلا تسليم
+    [many] { $count } مشروعًا بلا تسليم
+   *[other] { $count } مشروع بلا تسليم
+}
+integrations-search-placeholder = تصفية حسب اسم المشروع
+integrations-search-label = تصفية المشاريع
+integrations-search-submit = تصفية
+integrations-sort-label = ترتيب المشاريع
+integrations-sort-state = المسلِّمة أولًا
+integrations-sort-name = حسب الاسم
+integrations-pagination-label = صفحات التسليم لكل مشروع
+integrations-projects-count = { $count ->
+    [zero] لا مشاريع
+    [one] مشروع واحد
+    [two] مشروعان
+    [few] { $count } مشاريع
+    [many] { $count } مشروعًا
+   *[other] { $count } مشروع
+}

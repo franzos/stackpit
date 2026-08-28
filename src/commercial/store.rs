@@ -84,8 +84,8 @@ pub async fn save(write_pool: &DbPool, blob: &str, license: &License) -> anyhow:
     .bind(&license.license_id)
     .bind(&license.customer)
     .bind(&license.email)
-    .bind("stackpit")
-    .bind("business")
+    .bind(&license.product)
+    .bind(&license.tier)
     .bind(license.issued_at.to_rfc3339())
     .bind(license.expires_at.map(|d| d.to_rfc3339()))
     .bind(features)
@@ -121,18 +121,36 @@ mod tests {
             expires_at: Some(Utc::now() + chrono::Duration::days(365)),
             features: Vec::new(),
             max_orgs: Some(50),
+            tier: "business".into(),
+            product: "stackpit".into(),
         };
         save(&pool, "BLOBTEXT", &lic).await.unwrap();
 
         // load re-verifies the blob (won't verify here), so assert on the row.
         let row = sqlx::query(sql!(
-            "SELECT customer, max_orgs FROM stackpit_license WHERE id = 1"
+            "SELECT customer, max_orgs, tier, product FROM stackpit_license WHERE id = 1"
         ))
         .fetch_one(&pool)
         .await
         .unwrap();
         assert_eq!(row.get::<String, _>("customer"), "Acme");
         assert_eq!(row.get::<i32, _>("max_orgs"), 50);
+        assert_eq!(row.get::<String, _>("tier"), "business");
+        assert_eq!(row.get::<String, _>("product"), "stackpit");
+
+        // A different tier must persist as itself: these columns used to be
+        // bound to the literals "stackpit" / "business" regardless of the blob.
+        let pro = License {
+            tier: "pro".into(),
+            ..lic.clone()
+        };
+        save(&pool, "BLOBPRO", &pro).await.unwrap();
+        let tier: String = sqlx::query(sql!("SELECT tier FROM stackpit_license WHERE id = 1"))
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get("tier");
+        assert_eq!(tier, "pro");
 
         // Re-save upserts the singleton rather than erroring on the PK.
         let lic2 = License {

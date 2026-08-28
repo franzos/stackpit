@@ -34,6 +34,35 @@ pub struct TrackerMatch {
     pub forge_ref: crate::forge::ForgeRef,
 }
 
+/// The repository half of a qualified external-issue key.
+///
+/// GitHub and Forgejo name a repository `owner/repo`; GitLab has no such split
+/// and uses the percent-encoded namespace path it already stores. This is the
+/// value `link_repo_key` recovers from an existing row, so the two must agree.
+pub fn repo_key(forge_ref: &crate::forge::ForgeRef) -> Option<String> {
+    match (
+        forge_ref.owner.as_deref(),
+        forge_ref.repo.as_deref(),
+        forge_ref.gitlab_path.as_deref(),
+    ) {
+        (Some(owner), Some(repo), _) => Some(format!("{owner}/{repo}")),
+        (_, _, Some(path)) => Some(path.to_string()),
+        _ => None,
+    }
+}
+
+/// The fully-qualified external-issue key, in Sentry's shape: the repository
+/// followed by the forge's own issue number. A bare `"42"` collides across
+/// repositories on one forge, which is what forced the old integration-wide
+/// unique constraint; qualifying it is what lets one issue be filed into two
+/// repositories of the same integration.
+pub fn qualified_external_id(forge_ref: &crate::forge::ForgeRef, raw: &str) -> String {
+    match repo_key(forge_ref) {
+        Some(key) => format!("{key}#{raw}"),
+        None => raw.to_string(),
+    }
+}
+
 /// GitHub's API host (`api.github.com`) isn't its repo host; self-hosted forges share one host.
 fn hosts_match(integration_host: &str, repo_host: &str) -> bool {
     if integration_host.eq_ignore_ascii_case(repo_host) {
@@ -179,22 +208,6 @@ pub async fn link_issue(
         return Err(LinkError::LicenseRequired);
     }
 
-    let existing = queries::issue_links::links_for_issue(pool, req.project_id, req.fingerprint)
-        .await
-        .map_err(LinkError::Internal)?
-        .into_iter()
-        .find(|l| l.integration_id == Some(req.integration_id));
-    if let Some(link) = existing {
-        return Ok(LinkedIssue {
-            integration_id: integration.id,
-            integration_name: integration.name,
-            integration_kind: integration.kind,
-            external_id: link.external_id,
-            external_url: link.external_url,
-            created: false,
-        });
-    }
-
     let issue = queries::issues::get_issue(pool, req.fingerprint)
         .await
         .map_err(LinkError::Internal)?
@@ -224,35 +237,85 @@ pub async fn link_issue(
         .filter(|m| m.integration.id == req.integration_id)
         .collect::<Vec<_>>();
 
+    // Resolution is fallible, but a failure does not end the call: an existing
+    // link may still answer it, and answering is what the caller asked for.
     let chosen = match (req.repo_id, matches.len()) {
-        (_, 0) => {
-            return Err(LinkError::Misconfigured(
-                "no repository on this project matches it; set the project's repository \
-                 under project settings"
-                    .to_string(),
-            ))
-        }
-        (None, 1) => matches.into_iter().next().expect("length checked"),
+        (_, 0) => Err(LinkError::Misconfigured(
+            "no repository on this project matches it; set the project's repository \
+             under project settings"
+                .to_string(),
+        )),
+        (None, 1) => Ok(matches.into_iter().next().expect("length checked")),
         (None, _) => {
             let candidates = matches
                 .iter()
                 .map(|m| format!("{} (repo_id {})", m.repo.repo_url, m.repo.id))
                 .collect::<Vec<_>>()
                 .join(", ");
-            return Err(LinkError::Ambiguous(format!(
+            Err(LinkError::Ambiguous(format!(
                 "this project has several repositories it could file into; \
                  pick one of: {candidates}"
-            )));
+            )))
         }
         (Some(repo_id), _) => match matches.into_iter().find(|m| m.repo.id == repo_id) {
-            Some(m) => m,
-            None => {
-                return Err(LinkError::Misconfigured(
-                    "the chosen repository is not one this integration can file into".to_string(),
-                ))
-            }
+            Some(m) => Ok(m),
+            None => Err(LinkError::Misconfigured(
+                "the chosen repository is not one this integration can file into".to_string(),
+            )),
         },
     };
+
+    // The existing-link check sits *after* target resolution, and matches on
+    // the repository rather than on the integration: an issue may be filed into
+    // two repositories of one forge, so "already linked" is a question about
+    // this repository, not this integration.
+    //
+    // It compares `repo_key`s rather than `external_id` strings. A pre-migration
+    // row carries a bare `"7"` while the key computed here is `acme/backend#7`;
+    // a string comparison would miss it, `create_issue` would run, and a second
+    // real issue would appear on the operator's forge — for every legacy link,
+    // on its first refile.
+    //
+    // When no target resolves, this falls back to the pre-repo-scoped rule —
+    // any link on this integration answers — because the repository question
+    // cannot be asked and a call that used to be idempotent must stay
+    // idempotent. That covers a project whose repository was reconfigured after
+    // filing, and the MCP tool's documented no-`repo_id` convention, where
+    // adding a second matching repository would otherwise turn a previously
+    // successful repeat call into `Ambiguous`.
+    let wanted_repo = chosen.as_ref().ok().and_then(|c| repo_key(&c.forge_ref));
+    let target_resolved = chosen.is_ok();
+    let existing = queries::issue_links::links_for_issue(pool, req.project_id, req.fingerprint)
+        .await
+        .map_err(LinkError::Internal)?
+        .into_iter()
+        .find(|l| {
+            if l.integration_id != Some(req.integration_id) {
+                return false;
+            }
+            if !target_resolved {
+                return true;
+            }
+            match (l.repo_key(), wanted_repo.as_deref()) {
+                (Some(have), Some(want)) => have == want,
+                // An unparseable stored URL cannot be shown to be a different
+                // repository, so treat it as this one rather than filing a
+                // duplicate.
+                (None, _) => true,
+                (Some(_), None) => false,
+            }
+        });
+    if let Some(link) = existing {
+        return Ok(LinkedIssue {
+            integration_id: integration.id,
+            integration_name: integration.name,
+            integration_kind: integration.kind,
+            external_id: link.external_id,
+            external_url: link.external_url,
+            created: false,
+        });
+    }
+    let chosen = chosen?;
 
     let target = TrackerTarget {
         base_url: base_url.to_string(),
@@ -291,6 +354,8 @@ pub async fn link_issue(
         other => LinkError::Unavailable(other.to_string()),
     })?;
 
+    // Stored qualified, so the unique key can tell two repositories apart.
+    let external_id = qualified_external_id(&chosen.forge_ref, &created.external_id);
     let now = chrono::Utc::now().timestamp();
     if let Err(e) = queries::issue_links::insert_link(
         writer_pool,
@@ -299,7 +364,7 @@ pub async fn link_issue(
         integration.id,
         &integration.name,
         integration.kind.as_str(),
-        &created.external_id,
+        &external_id,
         &created.external_url,
         created.external_state.as_deref(),
         now,
@@ -318,7 +383,7 @@ pub async fn link_issue(
         integration_id: integration.id,
         integration_name: integration.name,
         integration_kind: integration.kind,
-        external_id: created.external_id,
+        external_id,
         external_url: created.external_url,
         created: true,
     })
@@ -567,13 +632,21 @@ mod tests {
         assert!(matches!(err, LinkError::Misconfigured(_)), "{err:?}");
     }
 
-    // An issue already linked to this integration is handed back untouched, so a
-    // retry cannot open a second tracker issue.
+    /// **The test that matters.** A link filed before the qualified key stores a
+    /// bare `"7"`; the key computed today is `acme/backend#7`. Matching on the
+    /// id string would miss it, `create_issue` would run, and a second real
+    /// issue would open on the operator's forge — for every legacy link, on its
+    /// first refile. Matching on the *repository* is what keeps legacy and new
+    /// rows behaving identically.
+    ///
+    /// The fixture needs a project repo: the short-circuit now sits after target
+    /// resolution, so without one this returns `Misconfigured` instead.
     #[tokio::test]
     async fn an_existing_link_is_returned_without_calling_the_tracker() {
         let pool = crate::db::open_test_pool().await;
-        let id = integration(&pool, 1, "gh-dup", "github", Some("https://git.test")).await;
+        let id = integration(&pool, 1, "gh-dup", "github", Some("https://api.github.com")).await;
         issue(&pool, "fp-dup", 1).await;
+        repo(&pool, 1, "https://github.com/acme/backend").await;
         queries::issue_links::insert_link(
             &pool,
             1,
@@ -581,8 +654,9 @@ mod tests {
             id,
             "gh-dup",
             "github",
+            // Pre-migration shape: a bare forge issue number.
             "7",
-            "https://git.test/acme/backend/issues/7",
+            "https://github.com/acme/backend/issues/7",
             Some("open"),
             1_700_000_000,
         )
@@ -592,9 +666,210 @@ mod tests {
         let link = link_issue(&pool, &pool, None, &licensed(), &request(1, "fp-dup", id))
             .await
             .expect("the existing link is the answer");
+        assert!(
+            !link.created,
+            "a legacy link must be recognised, not refiled"
+        );
+        assert_eq!(link.external_id, "7", "the stored id is handed back as-is");
+        assert_eq!(
+            link.external_url,
+            "https://github.com/acme/backend/issues/7"
+        );
+    }
+
+    /// The same, for a link written after the migration.
+    #[tokio::test]
+    async fn a_qualified_link_is_also_returned_without_calling_the_tracker() {
+        let pool = crate::db::open_test_pool().await;
+        let id = integration(&pool, 1, "gh-new", "github", Some("https://api.github.com")).await;
+        issue(&pool, "fp-new", 1).await;
+        repo(&pool, 1, "https://github.com/acme/backend").await;
+        queries::issue_links::insert_link(
+            &pool,
+            1,
+            "fp-new",
+            id,
+            "gh-new",
+            "github",
+            "acme/backend#7",
+            "https://github.com/acme/backend/issues/7",
+            Some("open"),
+            1_700_000_000,
+        )
+        .await
+        .unwrap();
+
+        let link = link_issue(&pool, &pool, None, &licensed(), &request(1, "fp-new", id))
+            .await
+            .expect("the existing link is the answer");
         assert!(!link.created);
-        assert_eq!(link.external_id, "7");
-        assert_eq!(link.external_url, "https://git.test/acme/backend/issues/7");
+        assert_eq!(link.external_id, "acme/backend#7");
+    }
+
+    /// A link into one repository must not short-circuit a request aimed at a
+    /// sibling repository of the same integration. Reaching `create_issue`
+    /// means the network, so this asserts it gets *past* the short-circuit
+    /// rather than asserting a successful file.
+    #[tokio::test]
+    async fn a_link_in_one_repo_does_not_satisfy_a_request_for_another() {
+        let pool = crate::db::open_test_pool().await;
+        let id = integration(&pool, 1, "gh-two", "github", Some("https://api.github.com")).await;
+        issue(&pool, "fp-two", 1).await;
+        let backend = repo(&pool, 1, "https://github.com/acme/backend").await;
+        let frontend = repo(&pool, 1, "https://github.com/acme/frontend").await;
+        queries::issue_links::insert_link(
+            &pool,
+            1,
+            "fp-two",
+            id,
+            "gh-two",
+            "github",
+            "acme/backend#7",
+            "https://github.com/acme/backend/issues/7",
+            Some("open"),
+            1_700_000_000,
+        )
+        .await
+        .unwrap();
+
+        // The linked repository still short-circuits.
+        let same = link_issue(
+            &pool,
+            &pool,
+            None,
+            &licensed(),
+            &request_for(1, "fp-two", id, Some(backend)),
+        )
+        .await
+        .expect("the linked repository is answered from the row");
+        assert!(!same.created);
+
+        // The sibling does not: it goes on to try the forge, which is
+        // unreachable here, so anything but a short-circuit proves the point.
+        let other = link_issue(
+            &pool,
+            &pool,
+            None,
+            &licensed(),
+            &request_for(1, "fp-two", id, Some(frontend)),
+        )
+        .await;
+        match other {
+            Ok(l) => panic!("the sibling repository was short-circuited: {l:?}"),
+            Err(LinkError::Blocked(_) | LinkError::Unavailable(_) | LinkError::Rejected(_)) => {}
+            Err(e) => panic!("expected to reach the forge, got {e:?}"),
+        }
+    }
+
+    /// A second matching repository must not turn a previously-idempotent
+    /// repeat call into `Ambiguous`. The MCP tool documents `repo_id` as
+    /// optional and its response as idempotent, so an agent that filed once
+    /// and calls again the same way has to keep getting the stored link.
+    #[tokio::test]
+    async fn an_existing_link_still_answers_when_the_target_became_ambiguous() {
+        let pool = crate::db::open_test_pool().await;
+        let id = integration(&pool, 1, "gh-amb", "github", Some("https://api.github.com")).await;
+        issue(&pool, "fp-amb", 1).await;
+        repo(&pool, 1, "https://github.com/acme/backend").await;
+        queries::issue_links::insert_link(
+            &pool,
+            1,
+            "fp-amb",
+            id,
+            "gh-amb",
+            "github",
+            "acme/backend#7",
+            "https://github.com/acme/backend/issues/7",
+            Some("open"),
+            1_700_000_000,
+        )
+        .await
+        .unwrap();
+
+        // A second repository appears, so `repo_id: None` no longer resolves.
+        repo(&pool, 1, "https://github.com/acme/frontend").await;
+
+        let link = link_issue(&pool, &pool, None, &licensed(), &request(1, "fp-amb", id))
+            .await
+            .expect("the stored link still answers an ambiguous target");
+        assert!(!link.created);
+        assert_eq!(link.external_id, "acme/backend#7");
+    }
+
+    /// The repository association can be removed after filing. The link still
+    /// exists, so the answer is still the link, not `Misconfigured`.
+    #[tokio::test]
+    async fn an_existing_link_still_answers_when_the_repository_is_gone() {
+        let pool = crate::db::open_test_pool().await;
+        let id = integration(
+            &pool,
+            1,
+            "gh-gone",
+            "github",
+            Some("https://api.github.com"),
+        )
+        .await;
+        issue(&pool, "fp-gone", 1).await;
+        queries::issue_links::insert_link(
+            &pool,
+            1,
+            "fp-gone",
+            id,
+            "gh-gone",
+            "github",
+            "acme/backend#7",
+            "https://github.com/acme/backend/issues/7",
+            Some("open"),
+            1_700_000_000,
+        )
+        .await
+        .unwrap();
+
+        // No project repo at all: target resolution cannot pick one.
+        let link = link_issue(&pool, &pool, None, &licensed(), &request(1, "fp-gone", id))
+            .await
+            .expect("the stored link answers even with no repository configured");
+        assert!(!link.created);
+        assert_eq!(link.external_id, "acme/backend#7");
+    }
+
+    /// The fallback must not mask a genuine misconfiguration when there is
+    /// nothing stored to fall back to.
+    #[tokio::test]
+    async fn an_unresolvable_target_still_errors_when_no_link_exists() {
+        let pool = crate::db::open_test_pool().await;
+        let id = integration(
+            &pool,
+            1,
+            "gh-none",
+            "github",
+            Some("https://api.github.com"),
+        )
+        .await;
+        issue(&pool, "fp-none", 1).await;
+
+        let err = link_issue(&pool, &pool, None, &licensed(), &request(1, "fp-none", id))
+            .await
+            .expect_err("no repository and no link is still a misconfiguration");
+        assert!(matches!(err, LinkError::Misconfigured(_)), "{err:?}");
+    }
+
+    #[test]
+    fn qualified_ids_carry_the_repository_per_forge() {
+        use crate::forge::{derive_forge_ref, ForgeType};
+
+        let gh = derive_forge_ref(&ForgeType::GitHub, "https://github.com/acme/backend").unwrap();
+        assert_eq!(repo_key(&gh).as_deref(), Some("acme/backend"));
+        assert_eq!(qualified_external_id(&gh, "42"), "acme/backend#42");
+
+        let forgejo = derive_forge_ref(&ForgeType::Gitea, "https://git.test/acme/backend").unwrap();
+        assert_eq!(qualified_external_id(&forgejo, "42"), "acme/backend#42");
+
+        // GitLab has no owner/repo split; its key is the encoded namespace.
+        let gl =
+            derive_forge_ref(&ForgeType::GitLab, "https://gitlab.com/group/sub/project").unwrap();
+        assert_eq!(repo_key(&gl).as_deref(), Some("group%2Fsub%2Fproject"));
+        assert_eq!(qualified_external_id(&gl, "42"), "group%2Fsub%2Fproject#42");
     }
 
     #[test]

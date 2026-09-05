@@ -73,6 +73,7 @@ pub fn require_superuser(active: &ActiveOrg) -> Result<(), Response> {
 ///
 /// Fails closed as 404 (never 403) so a probe cannot distinguish "exists elsewhere"
 /// from "does not exist".
+#[allow(clippy::result_large_err)]
 pub async fn require_project_scope(
     active: &ActiveOrg,
     pool: &crate::db::DbPool,
@@ -115,6 +116,7 @@ pub async fn require_project_scope(
 /// [`require_project_scope`] followed by [`require_owner`]: the standard preamble for
 /// project-scoped mutations. Returns the scope so handlers can key writes on the
 /// owning org.
+#[allow(clippy::result_large_err)]
 pub async fn require_project_owner(
     active: &ActiveOrg,
     pool: &crate::db::DbPool,

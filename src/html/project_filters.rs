@@ -79,6 +79,7 @@ async fn delete_then_render(
 
 /// Trims `value`, returning it when non-empty, otherwise an error response
 /// rendering `msg` as a 422 on the filters page.
+#[allow(clippy::result_large_err)]
 async fn require_nonempty(
     value: &str,
     msg: &str,

@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.4.0] - 2026-09-05
 
 ### Breaking
 - **Existing issue-tracker configuration stops working.** A tracker no longer stores an owner/repo (or a GitLab project id) of its own; which repository it files into now comes from the project's repositories, under **Project settings → Repositories**. Old targets and per-project tracker overrides are not migrated and are no longer read, so issue filing stops until each project has a repository whose URL matches the tracker's forge and host. Set the repository once and it serves both source links and issue filing.
@@ -10,12 +10,13 @@
 Taken together, a free install upgrading through this release loses Slack, webhook and tracker integrations **and** has to reconfigure any tracker it was using.
 
 ### Added
-- Email, Slack and webhook integrations can deliver to every project in the organisation, with a per-project exclusion list. Each integration has its own page showing where it delivers, where it is customised, and where it is excluded — the only place implicit inclusion is visible.
-- Email integrations carry a default recipient, used wherever a project has not set its own. Required for an org-wide email integration.
-- A notification that fails delivery is now queued instead of dropped. It retries on a backoff (30s doubling to an hour) for 24 hours, then waits on the new **Settings → Delivery queue** page, where it can be replayed or discarded. Failed items are kept for 14 days, capped at 500 per integration; both are configurable under `[notifications]`.
-- A tracker can file into any of the project's repositories, and asks which one when more than one matches. The MCP `create_tracker_issue` tool takes an optional `repo_id` and names the candidates when the call is ambiguous.
-- Repositories take an optional forge-type override, for self-hosted instances whose hostname says nothing about which forge they run.
-- Filed issue links survive deleting their integration, and can be unlinked individually. The issue stays on the forge; close or delete it there.
+- Integrations can deliver to every project in the organisation, with a per-project exclusion list
+- Each integration has a page showing where it delivers, where it is customised and where it is excluded
+- Email integrations carry a default recipient, used where a project has not set its own
+- Failed notifications are queued and retried for 24 hours, then wait on **Settings → Delivery queue** to be replayed or discarded
+- Trackers file into any of the project's repositories, and ask when more than one matches
+- Repositories take a forge-type override, for self-hosted instances the hostname can't identify
+- Filed issue links survive deleting their integration, and can be unlinked individually
 - Issue stream: filter by environment (also in the JSON API and MCP)
 - Transaction summary: span breakdown, related issues, and a percentile trend with regression markers
 - Replay list: duration, URL, user, browser/OS and error count
@@ -24,8 +25,8 @@ Taken together, a free install upgrading through this release loses Slack, webho
 - Breadcrumbs: bounded scroll area and a category filter
 
 ### Changed
-- A repository can carry a stack-path prefix, so a multi-repo project links each frame to the repository it actually came from. **Once any repository in a project has a prefix, only prefix matching applies and repositories without one stop producing source links.** This holds for a project with a single repository too: give that one repository a prefix and frames outside it stop linking. A project with no prefixes anywhere behaves exactly as before.
-- Self-hosted GitHub, Gitea and Forgejo hostnames are now detected, which also repairs source links that were silently missing for them
+- A repository can carry a stack-path prefix, so a multi-repo project links each frame to the right repository. **Once any repository in a project has a prefix, only prefix matching applies and repositories without one stop producing source links.**
+- Self-hosted GitHub, Gitea and Forgejo hostnames are detected, repairing source links that were silently missing
 - Durations read `1.59s` and `484ms` instead of raw milliseconds
 - Every list page offers the same eight time ranges
 - Sidebar, heading and breadcrumb agree on each page's name; the core sections show on every project

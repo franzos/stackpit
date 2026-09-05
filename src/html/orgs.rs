@@ -595,6 +595,7 @@ pub struct RoleForm {
 }
 
 /// Auth-before-kind preamble: Ok only if caller owns the native org at path_org_id, else Err(response); order hides org kind from non-owners.
+#[allow(clippy::result_large_err)]
 async fn check_native_org_owner(
     pool: &DbPool,
     active_org: &ActiveOrg,

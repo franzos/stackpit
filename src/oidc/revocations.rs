@@ -17,11 +17,11 @@ use crate::db::{sql, DbPool};
 
 /// Cheap to clone; pool is Arc-shared internally.
 #[derive(Clone)]
-pub struct SqliteRevocationStore {
+pub struct DbRevocationStore {
     pool: DbPool,
 }
 
-impl SqliteRevocationStore {
+impl DbRevocationStore {
     pub fn new(pool: DbPool) -> Self {
         Self { pool }
     }
@@ -32,7 +32,7 @@ impl SqliteRevocationStore {
 }
 
 #[async_trait]
-impl RevocationStore for SqliteRevocationStore {
+impl RevocationStore for DbRevocationStore {
     async fn is_revoked(
         &self,
         iss: &str,

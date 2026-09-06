@@ -25,6 +25,17 @@ fn row_to_integration(row: &crate::db::DbRow) -> Result<Integration> {
     })
 }
 
+/// Integrations whose secret is stored encrypted; the boot guard refuses to
+/// start without the master key when this is non-zero.
+pub async fn count_encrypted(pool: &DbPool) -> Result<i64> {
+    let (count,): (i64,) = sqlx::query_as(sql!(
+        "SELECT COUNT(*) FROM integrations WHERE encrypted = TRUE"
+    ))
+    .fetch_one(pool)
+    .await?;
+    Ok(count)
+}
+
 /// All configured integrations (webhooks, Slack, email, etc.).
 /// Pass `Some(org_id)` to scope to one org; `None` returns all (superuser only).
 pub async fn list_integrations(pool: &DbPool, org_id: Option<i64>) -> Result<Vec<Integration>> {
@@ -476,6 +487,40 @@ mod tests {
     use super::*;
     use crate::queries::test_helpers::open_test_db;
     use sqlx::Row;
+
+    #[tokio::test]
+    async fn count_encrypted_counts_only_encrypted_rows() {
+        let pool = open_test_db().await;
+        ensure_org(&pool, 5).await;
+        assert_eq!(count_encrypted(&pool).await.unwrap(), 0);
+        create_integration(
+            &pool,
+            5,
+            "sealed",
+            "webhook",
+            Some("https://hooks.test/a"),
+            Some("ciphertext"),
+            None,
+            true,
+            false,
+        )
+        .await
+        .unwrap();
+        create_integration(
+            &pool,
+            5,
+            "plain",
+            "webhook",
+            Some("https://hooks.test/b"),
+            None,
+            None,
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(count_encrypted(&pool).await.unwrap(), 1);
+    }
 
     // Org 1 is seeded by migrations; any other org must exist to satisfy the FK.
     async fn ensure_org(pool: &DbPool, org_id: i64) {

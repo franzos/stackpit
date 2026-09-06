@@ -208,7 +208,7 @@ pub async fn link_issue(
         return Err(LinkError::LicenseRequired);
     }
 
-    let issue = queries::issues::get_issue(pool, req.fingerprint)
+    let issue = queries::issues::get_issue(pool, req.project_id as u64, req.fingerprint)
         .await
         .map_err(LinkError::Internal)?
         .ok_or(LinkError::IssueNotFound)?;

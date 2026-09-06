@@ -112,7 +112,7 @@ fn push_issue_filter_conditions(
         qb.push(")");
     }
     if let Some((ref key, ref value)) = filter.tag {
-        qb.push(" AND EXISTS (SELECT 1 FROM issue_tag_values itv WHERE itv.fingerprint = issues.fingerprint AND itv.tag_key = ");
+        qb.push(" AND EXISTS (SELECT 1 FROM issue_tag_values itv WHERE itv.project_id = issues.project_id AND itv.fingerprint = issues.fingerprint AND itv.tag_key = ");
         qb.push_bind(key.as_str());
         qb.push(" AND itv.tag_value = ");
         qb.push_bind(value.as_str());
@@ -157,15 +157,17 @@ pub async fn list_issues_for_transaction(
     rows.iter().map(map_issue_row).collect()
 }
 
-/// Fetch a single issue by its fingerprint.
+/// Fetch a single issue by its `(project_id, fingerprint)` key.
 pub async fn get_issue(
     pool: &crate::db::DbPool,
+    project_id: u64,
     fingerprint: &str,
 ) -> Result<Option<IssueSummary>> {
     let row = sqlx::query(sql!(
         "SELECT fingerprint, project_id, title, level, first_seen, last_seen, event_count, status, item_type, user_hll
-         FROM issues WHERE fingerprint = ?1"
+         FROM issues WHERE project_id = ?1 AND fingerprint = ?2"
     ))
+    .bind(project_id as i64)
     .bind(fingerprint)
     .fetch_optional(pool)
     .await?;
@@ -176,27 +178,22 @@ pub async fn get_issue(
 /// Fetch the release string from the earliest and latest events for an issue.
 pub async fn get_issue_release_range(
     pool: &crate::db::DbPool,
+    project_id: u64,
     fingerprint: &str,
 ) -> Result<(Option<String>, Option<String>)> {
-    let first: Option<String> = sqlx::query(sql!(
-        "SELECT release FROM events WHERE fingerprint = ?1 AND release IS NOT NULL
-         ORDER BY timestamp ASC LIMIT 1"
+    let row = sqlx::query(sql!(
+        "SELECT
+            (SELECT release FROM events WHERE project_id = ?1 AND fingerprint = ?2 AND release IS NOT NULL
+             ORDER BY timestamp ASC LIMIT 1) AS first_release,
+            (SELECT release FROM events WHERE project_id = ?1 AND fingerprint = ?2 AND release IS NOT NULL
+             ORDER BY timestamp DESC LIMIT 1) AS last_release"
     ))
+    .bind(project_id as i64)
     .bind(fingerprint)
-    .fetch_optional(pool)
-    .await?
-    .and_then(|r| r.get("release"));
+    .fetch_one(pool)
+    .await?;
 
-    let last: Option<String> = sqlx::query(sql!(
-        "SELECT release FROM events WHERE fingerprint = ?1 AND release IS NOT NULL
-         ORDER BY timestamp DESC LIMIT 1"
-    ))
-    .bind(fingerprint)
-    .fetch_optional(pool)
-    .await?
-    .and_then(|r| r.get("release"));
-
-    Ok((first, last))
+    Ok((row.get("first_release"), row.get("last_release")))
 }
 
 /// Per-fingerprint event counts bucketed across `[start_ts, now]` into
@@ -252,31 +249,37 @@ pub async fn issue_sparklines(
 
 // --- Write operations ---
 
-/// Flip an issue's status. Returns 0 if the fingerprint doesn't exist.
+/// Flip an issue's status. Returns 0 if the issue doesn't exist in that project.
 pub async fn update_issue_status(
     pool: &crate::db::DbPool,
+    project_id: u64,
     fingerprint: &str,
     status: IssueStatus,
 ) -> Result<u64> {
-    let result = sqlx::query(sql!("UPDATE issues SET status = ?1 WHERE fingerprint = ?2"))
-        .bind(status.as_str())
-        .bind(fingerprint)
-        .execute(pool)
-        .await?;
+    let result = sqlx::query(sql!(
+        "UPDATE issues SET status = ?1 WHERE project_id = ?2 AND fingerprint = ?3"
+    ))
+    .bind(status.as_str())
+    .bind(project_id as i64)
+    .bind(fingerprint)
+    .execute(pool)
+    .await?;
     Ok(result.rows_affected())
 }
 
 /// Link an issue to its upstream Sentry group ID -- only if not already set.
 pub async fn set_sentry_group_id(
     pool: &crate::db::DbPool,
+    project_id: u64,
     fingerprint: &str,
     group_id: &str,
 ) -> Result<()> {
     sqlx::query(sql!(
         "UPDATE issues SET sentry_group_id = ?1
-         WHERE fingerprint = ?2 AND sentry_group_id IS NULL"
+         WHERE project_id = ?2 AND fingerprint = ?3 AND sentry_group_id IS NULL"
     ))
     .bind(group_id)
+    .bind(project_id as i64)
     .bind(fingerprint)
     .execute(pool)
     .await?;
@@ -359,7 +362,7 @@ pub async fn upsert_issue(
     let sql = format!(
         "INSERT INTO issues (fingerprint, project_id, title, level, first_seen, last_seen, event_count, status, item_type)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'unresolved', ?8)
-         ON CONFLICT(fingerprint) DO UPDATE SET
+         ON CONFLICT(project_id, fingerprint) DO UPDATE SET
              first_seen = MIN(issues.first_seen, excluded.first_seen),
              last_seen = MAX(issues.last_seen, excluded.last_seen),
              event_count = issues.event_count + excluded.event_count,
@@ -372,7 +375,7 @@ pub async fn upsert_issue(
     let sql = format!(
         "INSERT INTO issues (fingerprint, project_id, title, level, first_seen, last_seen, event_count, status, item_type)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'unresolved', ?8)
-         ON CONFLICT(fingerprint) DO UPDATE SET
+         ON CONFLICT(project_id, fingerprint) DO UPDATE SET
              first_seen = LEAST(issues.first_seen, excluded.first_seen),
              last_seen = GREATEST(issues.last_seen, excluded.last_seen),
              event_count = issues.event_count + excluded.event_count,
@@ -920,7 +923,7 @@ mod tests {
         )
         .await;
 
-        let issue = get_issue(&pool, "fp1").await.unwrap().unwrap();
+        let issue = get_issue(&pool, 1, "fp1").await.unwrap().unwrap();
         assert_eq!(issue.fingerprint, "fp1");
         assert_eq!(issue.project_id, 1);
         assert_eq!(issue.title.as_deref(), Some("Error A"));
@@ -931,7 +934,73 @@ mod tests {
     #[tokio::test]
     async fn get_issue_not_found() {
         let pool = open_test_db().await;
-        assert!(get_issue(&pool, "nonexistent").await.unwrap().is_none());
+        assert!(get_issue(&pool, 1, "nonexistent").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn get_issue_is_scoped_to_its_project_when_two_projects_share_a_fingerprint() {
+        let pool = open_test_db().await;
+        insert_test_issue(
+            &pool,
+            "fp-shared",
+            1,
+            Some("In A"),
+            None,
+            100,
+            200,
+            5,
+            "unresolved",
+        )
+        .await;
+        insert_test_issue(
+            &pool,
+            "fp-shared",
+            2,
+            Some("In B"),
+            None,
+            300,
+            400,
+            1,
+            "resolved",
+        )
+        .await;
+
+        let a = get_issue(&pool, 1, "fp-shared").await.unwrap().unwrap();
+        let b = get_issue(&pool, 2, "fp-shared").await.unwrap().unwrap();
+        assert_eq!(a.title.as_deref(), Some("In A"));
+        assert_eq!(b.title.as_deref(), Some("In B"));
+        assert!(get_issue(&pool, 3, "fp-shared").await.unwrap().is_none());
+
+        // Flipping B's status leaves A alone.
+        assert_eq!(
+            update_issue_status(&pool, 2, "fp-shared", IssueStatus::Ignored)
+                .await
+                .unwrap(),
+            1
+        );
+        let a = get_issue(&pool, 1, "fp-shared").await.unwrap().unwrap();
+        assert_eq!(a.status, IssueStatus::Unresolved);
+
+        // The upsert merges into the right project's row only.
+        upsert_issue(
+            &pool,
+            "fp-shared",
+            2,
+            Some("Still B"),
+            None,
+            50,
+            500,
+            2,
+            "event",
+            false,
+        )
+        .await
+        .unwrap();
+        let a = get_issue(&pool, 1, "fp-shared").await.unwrap().unwrap();
+        let b = get_issue(&pool, 2, "fp-shared").await.unwrap().unwrap();
+        assert_eq!(a.event_count, 5);
+        assert_eq!(b.event_count, 3);
+        assert_eq!(b.title.as_deref(), Some("Still B"));
     }
 
     #[tokio::test]
@@ -950,29 +1019,29 @@ mod tests {
         )
         .await;
 
-        update_issue_status(&pool, "fp1", IssueStatus::Resolved)
+        update_issue_status(&pool, 1, "fp1", IssueStatus::Resolved)
             .await
             .unwrap();
-        let issue = get_issue(&pool, "fp1").await.unwrap().unwrap();
+        let issue = get_issue(&pool, 1, "fp1").await.unwrap().unwrap();
         assert_eq!(issue.status, IssueStatus::Resolved);
 
-        update_issue_status(&pool, "fp1", IssueStatus::Ignored)
+        update_issue_status(&pool, 1, "fp1", IssueStatus::Ignored)
             .await
             .unwrap();
-        let issue = get_issue(&pool, "fp1").await.unwrap().unwrap();
+        let issue = get_issue(&pool, 1, "fp1").await.unwrap().unwrap();
         assert_eq!(issue.status, IssueStatus::Ignored);
 
-        update_issue_status(&pool, "fp1", IssueStatus::Unresolved)
+        update_issue_status(&pool, 1, "fp1", IssueStatus::Unresolved)
             .await
             .unwrap();
-        let issue = get_issue(&pool, "fp1").await.unwrap().unwrap();
+        let issue = get_issue(&pool, 1, "fp1").await.unwrap().unwrap();
         assert_eq!(issue.status, IssueStatus::Unresolved);
     }
 
     #[tokio::test]
     async fn update_issue_status_not_found() {
         let pool = open_test_db().await;
-        let rows = update_issue_status(&pool, "nonexistent", IssueStatus::Resolved)
+        let rows = update_issue_status(&pool, 1, "nonexistent", IssueStatus::Resolved)
             .await
             .unwrap();
         assert_eq!(rows, 0);

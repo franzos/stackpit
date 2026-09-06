@@ -254,6 +254,199 @@ fn extract_fields(
     event: &mut StorableEvent,
     drift: i64,
 ) -> Option<String> {
+    match item_type {
+        // Not JSON: a header line followed by compressed rrweb / video bytes.
+        // The full parse always failed on these, so the generated id is the
+        // same outcome without the attempt.
+        ItemType::ReplayRecording | ItemType::ReplayVideo => None,
+        // Up to 50 MiB, mostly `profile.samples`; only the head is wanted.
+        ItemType::Profile | ItemType::ProfileChunk => {
+            extract_fields_head(payload, item_type, event, drift)
+        }
+        _ => extract_fields_full(payload, item_type, event, drift),
+    }
+}
+
+/// Magnitude distinguishes s / ms / us / ns, normalized to seconds: seconds up
+/// to ~1e11 (year ~5138), milliseconds to 1e14, microseconds to 1e17,
+/// nanoseconds above.
+fn timestamp_from_value(v: &Value) -> Option<i64> {
+    v.as_f64()
+        .filter(|f| f.is_finite())
+        .map(|f| {
+            if f > 1e17 {
+                (f / 1e9).round() as i64
+            } else if f > 1e14 {
+                (f / 1e6).round() as i64
+            } else if f > 1e11 {
+                (f / 1e3).round() as i64
+            } else {
+                f.round() as i64
+            }
+        })
+        .or_else(|| {
+            v.as_i64().map(|i| {
+                if i > 100_000_000_000_000_000 {
+                    i / 1_000_000_000
+                } else if i > 100_000_000_000_000 {
+                    i / 1_000_000
+                } else if i > 100_000_000_000 {
+                    i / 1_000
+                } else {
+                    i
+                }
+            })
+        })
+}
+
+/// First of `user.id` (string or integer), `email`, `username`, `ip_address`.
+fn user_identifier_from(
+    id: Option<&Value>,
+    email: Option<&Value>,
+    username: Option<&Value>,
+    ip_address: Option<&Value>,
+) -> Option<String> {
+    id.and_then(|v| {
+        v.as_str()
+            .map(String::from)
+            .or_else(|| v.as_u64().map(|n| n.to_string()))
+    })
+    .or_else(|| email.and_then(|v| v.as_str()).map(String::from))
+    .or_else(|| username.and_then(|v| v.as_str()).map(String::from))
+    .or_else(|| ip_address.and_then(|v| v.as_str()).map(String::from))
+}
+
+fn str_field(v: Option<&Value>) -> Option<String> {
+    v.and_then(|v| v.as_str()).map(String::from)
+}
+
+/// The few top-level keys a profile item contributes to its row. serde skips
+/// every other key without building it, which is the whole point. Every field
+/// is a `Value` so a wrong-shaped one degrades exactly as `.get()` chains do on
+/// the full document instead of failing the whole parse.
+#[derive(Default, serde::Deserialize)]
+struct EventHead {
+    event_id: Option<Value>,
+    timestamp: Option<Value>,
+    level: Option<Value>,
+    severity_text: Option<Value>,
+    platform: Option<Value>,
+    release: Option<Value>,
+    environment: Option<Value>,
+    server_name: Option<Value>,
+    transaction: Option<Value>,
+    monitor_slug: Option<Value>,
+    contexts: Option<Value>,
+    sdk: Option<Value>,
+    user: Option<Value>,
+    tags: Option<Value>,
+    exception: Option<Value>,
+    message: Option<Value>,
+    logentry: Option<Value>,
+}
+
+/// Same assignments as `extract_fields_full`, fed from the typed head. Profile
+/// items never fingerprint, so only the title helper needs a JSON view, built
+/// from the handful of keys it reads.
+fn extract_fields_head(
+    payload: &[u8],
+    item_type: &ItemType,
+    event: &mut StorableEvent,
+    drift: i64,
+) -> Option<String> {
+    // serde would fill the struct positionally from a top-level array, so a
+    // non-object document takes the full path, which extracts nothing from it.
+    let starts_object = payload
+        .iter()
+        .find(|b| !b.is_ascii_whitespace())
+        .is_some_and(|b| *b == b'{');
+    if !starts_object {
+        return extract_fields_full(payload, item_type, event, drift);
+    }
+    let head: EventHead = match serde_json::from_slice(payload) {
+        Ok(h) => h,
+        Err(_) => return None,
+    };
+
+    let event_id = head
+        .event_id
+        .as_ref()
+        .and_then(|v| v.as_str())
+        .and_then(crate::ingest::ids::sanitize_id);
+
+    if let Some(ts) = head.timestamp.as_ref().and_then(timestamp_from_value) {
+        event.timestamp = ts + drift;
+    }
+
+    event.level = head
+        .level
+        .as_ref()
+        .or(head.severity_text.as_ref())
+        .and_then(|v| v.as_str())
+        .map(|s| {
+            s.parse::<crate::ingest::models::Level>()
+                .unwrap_or(crate::ingest::models::Level::Unknown)
+        });
+    event.platform = str_field(head.platform.as_ref());
+    event.release = str_field(head.release.as_ref());
+    event.environment = str_field(head.environment.as_ref());
+    event.server_name = str_field(head.server_name.as_ref());
+    event.transaction_name = str_field(head.transaction.as_ref());
+    event.monitor_slug = str_field(head.monitor_slug.as_ref());
+
+    if event.trace_id.is_none() {
+        event.trace_id = head
+            .contexts
+            .as_ref()
+            .and_then(|c| c.get("trace"))
+            .and_then(|t| t.get("trace_id"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
+    }
+
+    if let Some(sdk) = &head.sdk {
+        event.sdk_name = str_field(sdk.get("name"));
+        event.sdk_version = str_field(sdk.get("version"));
+    }
+
+    event.user_identifier = head.user.as_ref().and_then(|u| {
+        user_identifier_from(
+            u.get("id"),
+            u.get("email"),
+            u.get("username"),
+            u.get("ip_address"),
+        )
+    });
+
+    event.tags = extract_tags(head.tags.as_ref());
+
+    event.fingerprint = None;
+    let mut title_src = serde_json::Map::new();
+    for (key, value) in [
+        ("exception", head.exception),
+        ("message", head.message),
+        ("logentry", head.logentry),
+        ("transaction", head.transaction),
+    ] {
+        if let Some(v) = value {
+            title_src.insert(key.to_string(), v);
+        }
+    }
+    event.title = crate::ingest::enrich::extract_title_from(
+        &Value::Object(title_src),
+        item_type,
+        event.monitor_slug.as_deref(),
+    );
+
+    event_id
+}
+
+fn extract_fields_full(
+    payload: &[u8],
+    item_type: &ItemType,
+    event: &mut StorableEvent,
+    drift: i64,
+) -> Option<String> {
     let json: Value = match serde_json::from_slice(payload) {
         Ok(v) => v,
         Err(_) => return None,
@@ -279,37 +472,7 @@ fn extract_fields(
         .and_then(|v| v.as_str())
         .and_then(crate::ingest::ids::sanitize_id);
 
-    // Magnitude distinguishes s / ms / us / ns, normalized to seconds:
-    // seconds up to ~1e11 (year ~5138), milliseconds to 1e14, microseconds
-    // to 1e17, nanoseconds above.
-    if let Some(ts) = json.get("timestamp").and_then(|v| {
-        v.as_f64()
-            .filter(|f| f.is_finite())
-            .map(|f| {
-                if f > 1e17 {
-                    (f / 1e9).round() as i64
-                } else if f > 1e14 {
-                    (f / 1e6).round() as i64
-                } else if f > 1e11 {
-                    (f / 1e3).round() as i64
-                } else {
-                    f.round() as i64
-                }
-            })
-            .or_else(|| {
-                v.as_i64().map(|i| {
-                    if i > 100_000_000_000_000_000 {
-                        i / 1_000_000_000
-                    } else if i > 100_000_000_000_000 {
-                        i / 1_000_000
-                    } else if i > 100_000_000_000 {
-                        i / 1_000
-                    } else {
-                        i
-                    }
-                })
-            })
-    }) {
+    if let Some(ts) = json.get("timestamp").and_then(timestamp_from_value) {
         event.timestamp = ts + drift;
     }
 
@@ -390,22 +553,15 @@ fn extract_fields(
     }
 
     event.user_identifier = json.get("user").and_then(|u| {
-        u.get("id")
-            .and_then(|v| {
-                v.as_str()
-                    .map(String::from)
-                    .or_else(|| v.as_u64().map(|n| n.to_string()))
-            })
-            .or_else(|| u.get("email").and_then(|v| v.as_str()).map(String::from))
-            .or_else(|| u.get("username").and_then(|v| v.as_str()).map(String::from))
-            .or_else(|| {
-                u.get("ip_address")
-                    .and_then(|v| v.as_str())
-                    .map(String::from)
-            })
+        user_identifier_from(
+            u.get("id"),
+            u.get("email"),
+            u.get("username"),
+            u.get("ip_address"),
+        )
     });
 
-    event.tags = extract_tags_from_json(&json);
+    event.tags = extract_tags(json.get("tags"));
 
     // Compute fingerprint and title from the already-parsed JSON so
     // enrich_event won't need to re-parse the payload
@@ -582,10 +738,9 @@ fn extract_session_aggregates(json: &Value, event: &mut StorableEvent, drift: i6
 
 /// Tags from Sentry arrive as either `[["key", "value"], ...]` or
 /// `{"key": "value", ...}`; both shapes occur in the wild.
-fn extract_tags_from_json(json: &Value) -> Vec<(String, String)> {
-    let tags = match json.get("tags") {
-        Some(v) => v,
-        None => return Vec::new(),
+fn extract_tags(tags: Option<&Value>) -> Vec<(String, String)> {
+    let Some(tags) = tags else {
+        return Vec::new();
     };
 
     let mut result = Vec::new();
@@ -724,6 +879,170 @@ mod tests {
         SentryAuth {
             sentry_key: "testkey".to_string(),
         }
+    }
+
+    fn profile_payload(samples: usize) -> Vec<u8> {
+        let samples: Vec<Value> = (0..samples)
+            .map(|i| {
+                serde_json::json!({
+                    "stack_id": i % 7,
+                    "thread_id": "1",
+                    "elapsed_since_start_ns": i * 1000,
+                })
+            })
+            .collect();
+        serde_json::to_vec(&serde_json::json!({
+            "event_id": "abcdef0123456789abcdef0123456789",
+            "timestamp": 1_700_000_000.5,
+            "platform": "python",
+            "release": "app@1.2.3",
+            "environment": "prod",
+            "transaction": "/api/orders",
+            "sdk": {
+                "name": "sentry.python",
+                "version": "2.0.0",
+                "packages": [{"name": "pypi:sentry-sdk", "version": "2.0.0"}],
+            },
+            "user": {"id": 42, "email": "u@example.com"},
+            "tags": {"region": "eu", "tier": "gold"},
+            "contexts": {
+                "trace": {"trace_id": "0af7651916cd43dd8448eb211c80319c", "span_id": "b7ad6b7169203331"},
+                "device": {"arch": "arm64"},
+            },
+            "profile": {
+                "samples": samples,
+                "stacks": [[0, 1, 2]],
+                "frames": [{"function": "main"}],
+            },
+        }))
+        .unwrap()
+    }
+
+    // The typed head must store exactly what the full parse stored. The
+    // literal values are the fixture captured from the full parse; the second
+    // half pins the head path to it field by field.
+    #[test]
+    fn profile_head_matches_full_parse_fixture() {
+        let raw = profile_payload(3000);
+        let mut full = StorableEvent::test_default("x");
+        let full_id = extract_fields_full(&raw, &ItemType::Profile, &mut full, 7);
+
+        assert_eq!(full_id.as_deref(), Some("abcdef0123456789abcdef0123456789"));
+        assert_eq!(full.timestamp, 1_700_000_001 + 7);
+        assert_eq!(full.level, None);
+        assert_eq!(full.platform.as_deref(), Some("python"));
+        assert_eq!(full.release.as_deref(), Some("app@1.2.3"));
+        assert_eq!(full.environment.as_deref(), Some("prod"));
+        assert_eq!(full.server_name, None);
+        assert_eq!(full.transaction_name.as_deref(), Some("/api/orders"));
+        assert_eq!(full.monitor_slug, None);
+        assert_eq!(
+            full.trace_id.as_deref(),
+            Some("0af7651916cd43dd8448eb211c80319c")
+        );
+        assert_eq!(full.sdk_name.as_deref(), Some("sentry.python"));
+        assert_eq!(full.sdk_version.as_deref(), Some("2.0.0"));
+        assert_eq!(full.user_identifier.as_deref(), Some("42"));
+        assert_eq!(
+            full.tags,
+            vec![
+                ("region".to_string(), "eu".to_string()),
+                ("tier".to_string(), "gold".to_string()),
+            ]
+        );
+        assert_eq!(full.fingerprint, None);
+        assert_eq!(full.title.as_deref(), Some("/api/orders"));
+
+        let mut head = StorableEvent::test_default("x");
+        let head_id = extract_fields_head(&raw, &ItemType::Profile, &mut head, 7);
+        assert_eq!(head_id, full_id);
+        assert_eq!(head.timestamp, full.timestamp);
+        assert_eq!(head.level, full.level);
+        assert_eq!(head.platform, full.platform);
+        assert_eq!(head.release, full.release);
+        assert_eq!(head.environment, full.environment);
+        assert_eq!(head.server_name, full.server_name);
+        assert_eq!(head.transaction_name, full.transaction_name);
+        assert_eq!(head.monitor_slug, full.monitor_slug);
+        assert_eq!(head.trace_id, full.trace_id);
+        assert_eq!(head.sdk_name, full.sdk_name);
+        assert_eq!(head.sdk_version, full.sdk_version);
+        assert_eq!(head.user_identifier, full.user_identifier);
+        assert_eq!(head.tags, full.tags);
+        assert_eq!(head.fingerprint, full.fingerprint);
+        assert_eq!(head.title, full.title);
+    }
+
+    // Shape drift in one nested object must cost only that object's fields,
+    // and a non-object document must yield nothing, exactly like the full parse.
+    #[test]
+    fn profile_head_degrades_like_the_full_parse_on_odd_shapes() {
+        let odd = serde_json::to_vec(&serde_json::json!({
+            "event_id": "abcdef0123456789abcdef0123456789",
+            "platform": "python",
+            "user": "anonymized",
+            "sdk": ["sentry.python"],
+            "contexts": {"trace": "not-an-object"},
+            "tags": 7,
+        }))
+        .unwrap();
+        for payload in [
+            odd.as_slice(),
+            br#"["abcdef0123456789abcdef0123456789", 1700000000, "error"]"#.as_slice(),
+            b"42".as_slice(),
+        ] {
+            let mut full = StorableEvent::test_default("x");
+            let full_id = extract_fields_full(payload, &ItemType::Profile, &mut full, 0);
+            let mut head = StorableEvent::test_default("x");
+            let head_id = extract_fields_head(payload, &ItemType::Profile, &mut head, 0);
+            assert_eq!(head_id, full_id);
+            assert_eq!(head.platform, full.platform);
+            assert_eq!(head.user_identifier, full.user_identifier);
+            assert_eq!(head.sdk_name, full.sdk_name);
+            assert_eq!(head.trace_id, full.trace_id);
+            assert_eq!(head.tags, full.tags);
+            assert_eq!(head.title, full.title);
+        }
+    }
+
+    // Recording blobs are not JSON: the full parse always failed and the item
+    // got a generated id with nothing extracted. Skipping the parse must land
+    // in exactly that state.
+    #[test]
+    fn replay_recording_skips_the_parse_and_gets_a_generated_id() {
+        let payload = b"{\"segment_id\":1}\n\x1f\x8b\x08\x00binary-rrweb-bytes";
+        let mut before = StorableEvent::new(
+            String::new(),
+            ItemType::ReplayRecording,
+            payload.to_vec(),
+            1,
+            "testkey".to_string(),
+        );
+        assert_eq!(
+            extract_fields_full(payload, &ItemType::ReplayRecording, &mut before, 0),
+            None
+        );
+        assert_eq!(before.title, None);
+        assert_eq!(before.platform, None);
+
+        let body = format!(
+            "{{}}\n{{\"type\":\"replay_recording\",\"length\":{}}}\n",
+            payload.len()
+        );
+        let mut body = body.into_bytes();
+        body.extend_from_slice(payload);
+        body.push(b'\n');
+
+        let result = parse(&body, 1, &test_auth()).unwrap();
+        assert_eq!(result.events.len(), 1);
+        let ev = &result.events[0];
+        assert_eq!(ev.item_type, ItemType::ReplayRecording);
+        assert!(uuid::Uuid::parse_str(&ev.event_id).is_ok());
+        assert_eq!(ev.platform, before.platform);
+        assert_eq!(ev.title, before.title);
+        assert_eq!(ev.tags, before.tags);
+        assert_eq!(ev.user_identifier, before.user_identifier);
+        assert_eq!(ev.fingerprint, None);
     }
 
     // --- parse ---

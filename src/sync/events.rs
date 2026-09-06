@@ -73,7 +73,8 @@ pub async fn sync_project_events(
                 &storable.fingerprint,
                 sentry_event.json.get("groupID").and_then(|v| v.as_str()),
             ) {
-                queries::issues::set_sentry_group_id(pool, fp, group_id).await?;
+                queries::issues::set_sentry_group_id(pool, storable.project_id, fp, group_id)
+                    .await?;
             }
 
             if let Some(ts) = sentry_event.timestamp() {

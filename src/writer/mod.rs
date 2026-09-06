@@ -206,11 +206,7 @@ async fn writer_loop(
                 retry_pending_bytes = 0;
                 retry_backoff = RETRY_BACKOFF_INITIAL;
             } else if shutting_down || retry_backoff >= RETRY_BACKOFF_CAP {
-                let dropped = count_events_in(&retry_pending);
-                tracing::error!("dropping {dropped} events after repeated flush failures");
-                ingest_stats
-                    .events_dropped
-                    .fetch_add(dropped, Ordering::Relaxed);
+                account_dropped(ingest_stats, &retry_pending);
                 queued_bytes.fetch_sub(retry_pending_bytes, Ordering::Relaxed);
                 retry_pending.clear();
                 retry_pending_bytes = 0;
@@ -226,11 +222,7 @@ async fn writer_loop(
 
             msg = rx.recv() => match msg {
                 Some(Shutdown) | None => {
-                    if !accumulators.is_empty() {
-                        if let Err(e) = flush_aggregation(pool, &mut accumulators, notify_tx).await {
-                            tracing::error!("final aggregation flush failed: {e}");
-                        }
-                    }
+                    flush_remaining_aggregation(pool, &mut accumulators, notify_tx, "final").await;
                     return;
                 }
                 Some(msg) => msg,
@@ -240,20 +232,12 @@ async fn writer_loop(
             // biased-first, so pending data is always processed before this arm),
             // even if the Shutdown sentinel never made it into a full channel.
             _ = shutdown.cancelled() => {
-                if !accumulators.is_empty() {
-                    if let Err(e) = flush_aggregation(pool, &mut accumulators, notify_tx).await {
-                        tracing::error!("shutdown aggregation flush failed: {e}");
-                    }
-                }
+                flush_remaining_aggregation(pool, &mut accumulators, notify_tx, "shutdown").await;
                 return;
             }
 
             _ = tick.tick() => {
-                if !accumulators.is_empty() {
-                    if let Err(e) = flush_aggregation(pool, &mut accumulators, notify_tx).await {
-                        tracing::error!("periodic aggregation flush failed: {e}");
-                    }
-                }
+                flush_remaining_aggregation(pool, &mut accumulators, notify_tx, "periodic").await;
                 continue;
             }
         };
@@ -271,20 +255,12 @@ async fn writer_loop(
                 Ok(Shutdown) => {
                     let bytes = batch_bytes(&batch);
                     if !flush_batch(pool, &mut batch, &mut accumulators, notify_tx).await {
-                        // No further loop iteration to retry in; drop with accounting.
-                        let dropped = count_events_in(&batch);
-                        tracing::error!("dropping {dropped} events after repeated flush failures");
-                        ingest_stats
-                            .events_dropped
-                            .fetch_add(dropped, Ordering::Relaxed);
+                        // No further loop iteration to retry in.
+                        account_dropped(ingest_stats, &batch);
                     }
                     queued_bytes.fetch_sub(bytes, Ordering::Relaxed);
-                    if !accumulators.is_empty() {
-                        if let Err(e) = flush_aggregation(pool, &mut accumulators, notify_tx).await
-                        {
-                            tracing::error!("shutdown aggregation flush failed: {e}");
-                        }
-                    }
+                    flush_remaining_aggregation(pool, &mut accumulators, notify_tx, "shutdown")
+                        .await;
                     return;
                 }
                 Ok(msg @ Event(_)) | Ok(msg @ EventWithAttachments(_, _)) => {
@@ -294,20 +270,12 @@ async fn writer_loop(
                 Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
                     let bytes = batch_bytes(&batch);
                     if !flush_batch(pool, &mut batch, &mut accumulators, notify_tx).await {
-                        // No further loop iteration to retry in; drop with accounting.
-                        let dropped = count_events_in(&batch);
-                        tracing::error!("dropping {dropped} events after repeated flush failures");
-                        ingest_stats
-                            .events_dropped
-                            .fetch_add(dropped, Ordering::Relaxed);
+                        // No further loop iteration to retry in.
+                        account_dropped(ingest_stats, &batch);
                     }
                     queued_bytes.fetch_sub(bytes, Ordering::Relaxed);
-                    if !accumulators.is_empty() {
-                        if let Err(e) = flush_aggregation(pool, &mut accumulators, notify_tx).await
-                        {
-                            tracing::error!("disconnect aggregation flush failed: {e}");
-                        }
-                    }
+                    flush_remaining_aggregation(pool, &mut accumulators, notify_tx, "disconnect")
+                        .await;
                     return;
                 }
             }
@@ -372,11 +340,7 @@ async fn insert_worker_loop(
                     forward_scratch(&agg_tx, scratch).await;
                 }
                 None if shutting_down || retry_backoff >= RETRY_BACKOFF_CAP => {
-                    let dropped = count_events_in(&retry_pending);
-                    tracing::error!("dropping {dropped} events after repeated flush failures");
-                    ingest_stats
-                        .events_dropped
-                        .fetch_add(dropped, Ordering::Relaxed);
+                    account_dropped(ingest_stats, &retry_pending);
                     queued_bytes.fetch_sub(retry_pending_bytes, Ordering::Relaxed);
                     retry_pending.clear();
                     retry_pending_bytes = 0;
@@ -429,12 +393,8 @@ async fn insert_worker_loop(
                 forward_scratch(&agg_tx, scratch).await;
             }
             None if shutdown_after => {
-                // No further loop iteration to retry in; drop with accounting.
-                let dropped = count_events_in(&batch);
-                tracing::error!("dropping {dropped} events after repeated flush failures");
-                ingest_stats
-                    .events_dropped
-                    .fetch_add(dropped, Ordering::Relaxed);
+                // No further loop iteration to retry in.
+                account_dropped(ingest_stats, &batch);
                 queued_bytes.fetch_sub(bytes, Ordering::Relaxed);
             }
             None => {
@@ -480,24 +440,41 @@ async fn aggregation_loop(
                     }
                 }
                 None => {
-                    if !accumulators.is_empty() {
-                        if let Err(e) = flush_aggregation(pool, &mut accumulators, notify_tx).await {
-                            tracing::error!("final aggregation flush failed: {e}");
-                        }
-                    }
+                    flush_remaining_aggregation(pool, &mut accumulators, notify_tx, "final").await;
                     return;
                 }
             },
 
             _ = tick.tick() => {
-                if !accumulators.is_empty() {
-                    if let Err(e) = flush_aggregation(pool, &mut accumulators, notify_tx).await {
-                        tracing::error!("periodic aggregation flush failed: {e}");
-                    }
-                }
+                flush_remaining_aggregation(pool, &mut accumulators, notify_tx, "periodic").await;
             }
         }
     }
+}
+
+/// Flush whatever the accumulators still hold on the way out of a loop;
+/// `label` names the exit so the log says which path lost the delta.
+async fn flush_remaining_aggregation(
+    pool: &DbPool,
+    accumulators: &mut Accumulators,
+    notify_tx: Option<&tokio::sync::mpsc::Sender<crate::notify::NotificationEvent>>,
+    label: &str,
+) {
+    if accumulators.is_empty() {
+        return;
+    }
+    if let Err(e) = flush_aggregation(pool, accumulators, notify_tx).await {
+        tracing::error!("{label} aggregation flush failed: {e}");
+    }
+}
+
+/// A batch that will never be retried: log it and count it as dropped.
+fn account_dropped(ingest_stats: &IngestStats, batch: &[WriteMsg]) {
+    let dropped = count_events_in(batch);
+    tracing::error!("dropping {dropped} events after repeated flush failures");
+    ingest_stats
+        .events_dropped
+        .fetch_add(dropped, Ordering::Relaxed);
 }
 
 #[cfg(test)]
@@ -973,7 +950,9 @@ mod tests {
         let mut batch1 = vec![WriteMsg::Event(e1)];
         assert!(flush_batch(&pool, &mut batch1, &mut acc, None).await);
         assert_eq!(
-            acc.issues.get("prior_fp").map(|d| d.event_count),
+            acc.issues
+                .get(&(1, "prior_fp".to_string()))
+                .map(|d| d.event_count),
             Some(1),
             "prior batch must be held in the accumulators"
         );
@@ -992,12 +971,14 @@ mod tests {
         );
 
         assert_eq!(
-            acc.issues.get("prior_fp").map(|d| d.event_count),
+            acc.issues
+                .get(&(1, "prior_fp".to_string()))
+                .map(|d| d.event_count),
             Some(1),
             "prior committed delta must survive a double failure"
         );
         assert!(
-            !acc.issues.contains_key("fail_fp"),
+            !acc.issues.contains_key(&(1, "fail_fp".to_string())),
             "the failed batch must not be merged into the accumulators"
         );
         assert!(

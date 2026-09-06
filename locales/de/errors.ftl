@@ -109,6 +109,7 @@ flash-queue-cancelled = Wartende Benachrichtigung verworfen
 
 # Lizenzaktivierung
 flash-license-activated = Lizenz aktiviert
+flash-org-cap-reached = Das Organisationslimit deiner Lizenz ist erreicht. Eine oder mehrere Organisationen wurden nicht angelegt.
 flash-license-deactivated = Lizenz entfernt
 flash-license-persist-failed = Die Lizenz wurde geprüft, konnte aber nicht gespeichert werden. Sieh ins Serverprotokoll.
 flash-license-clear-failed = Die Lizenz konnte nicht entfernt werden. Sieh ins Serverprotokoll.

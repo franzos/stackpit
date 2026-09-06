@@ -13,9 +13,6 @@ use crate::queries::types::{Integration, ProjectIntegration};
 use crate::queries::ProjectNavCounts;
 use crate::server::AppState;
 
-#[allow(unused_imports)]
-use crate::html::filters;
-
 /// Build the per-project recipient config JSON, validating a non-empty value is
 /// a real email address. Returns `Err(flash_key)` on an invalid address so the
 /// caller can surface it rather than store junk that only fails at send time.

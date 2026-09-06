@@ -8,7 +8,7 @@ use stackpit_auth::AuthContext;
 use crate::db::DbPool;
 use crate::html::chrome::{Localized, PageChrome};
 use crate::html::utils::Chrome;
-use crate::html::{filters, html_error, html_error_localized, render_template};
+use crate::html::{filters, html_error, html_error_localized, render_template, HtmlError};
 use crate::locale::LanguageIdentifier;
 use crate::orgs::extractor::{pack, ActiveOrg, ACTIVE_ORG_COOKIE};
 use crate::orgs::{OrgKind, Role, SYSTEM_ORG_ID};
@@ -17,7 +17,7 @@ use crate::queries::orgs::{
     create_native_org, delete_org_guarded, get_invite_preview, get_org, is_current_owner,
     list_all_orgs, list_memberships, list_org_invites, list_org_members, member_role,
     remove_member_guarded, rename_org_slug, revoke_invite, set_member_role_guarded, slugify,
-    DeleteOrgOutcome, RenameOutcome,
+    AcceptInviteError, DeleteOrgOutcome, RenameOutcome,
 };
 use crate::queries::users;
 use crate::server::AppState;
@@ -353,6 +353,7 @@ pub async fn get_invite_accept(
 pub async fn post_invite_accept(
     State(state): State<AppState>,
     opt_auth: Option<Extension<AuthContext>>,
+    Chrome(chrome): Chrome,
     Path(token): Path<String>,
 ) -> impl IntoResponse {
     let (iss, sub) = match opt_auth.as_ref().map(|e| &e.0) {
@@ -369,9 +370,37 @@ pub async fn post_invite_accept(
         }
     };
 
-    match accept_invite(&state.writer_pool, &token, user.user_id).await {
+    match accept_invite(
+        &state.writer_pool,
+        &token,
+        user.user_id,
+        user.email.as_deref(),
+    )
+    .await
+    {
         Ok(_) => Redirect::to("/web/").into_response(),
-        Err(e) => html_error(StatusCode::FORBIDDEN, &e.to_string()),
+        Err(AcceptInviteError::Internal(e)) => {
+            tracing::error!("accept_invite failed: {e:#}");
+            html_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to accept invite.",
+            )
+        }
+        Err(e) => {
+            let key = match e {
+                AcceptInviteError::AlreadyAccepted => "invite-error-accepted",
+                AcceptInviteError::Expired => "invite-error-expired",
+                AcceptInviteError::EmailMismatch => "invite-error-email-mismatch",
+                AcceptInviteError::NotFound
+                | AcceptInviteError::SystemOrg
+                | AcceptInviteError::Internal(_) => "orgs-err-invite-not-found",
+            };
+            html_error_localized(
+                StatusCode::FORBIDDEN,
+                &crate::i18n::lookup(&chrome.locale, key),
+                &chrome.locale,
+            )
+        }
     }
 }
 
@@ -436,17 +465,11 @@ pub async fn orgs_index(
     active_org: ActiveOrg,
     opt_auth: Option<Extension<AuthContext>>,
     Chrome(chrome): Chrome,
-) -> axum::response::Response {
+) -> Result<axum::response::Response, HtmlError> {
     let is_superuser = active_org.role.is_none();
 
     if is_superuser {
-        let orgs = match list_all_orgs(&state.pool).await {
-            Ok(o) => o,
-            Err(e) => {
-                tracing::error!("list_all_orgs failed: {e:#}");
-                return html_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to load orgs.");
-            }
-        };
+        let orgs = list_all_orgs(&state.pool).await?;
         let rows = orgs
             .into_iter()
             .map(|o| {
@@ -461,32 +484,21 @@ pub async fn orgs_index(
                 }
             })
             .collect();
-        return render_template(&OrgsTemplate {
+        return Ok(render_template(&OrgsTemplate {
             rows,
             show_create: false,
             chrome,
-        });
+        }));
     }
 
     let (iss, sub) = match opt_auth.as_ref().map(|e| &e.0) {
         Some(AuthContext::User { iss, sub, .. }) => (iss.as_str(), sub.as_str()),
-        _ => return StatusCode::FORBIDDEN.into_response(),
+        _ => return Ok(StatusCode::FORBIDDEN.into_response()),
     };
-    let user = match users::find_by_iss_sub(&state.pool, iss, sub).await {
-        Ok(Some(u)) => u,
-        Ok(None) => return StatusCode::FORBIDDEN.into_response(),
-        Err(e) => {
-            tracing::error!("find_by_iss_sub failed in orgs_index: {e:#}");
-            return html_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to load orgs.");
-        }
+    let Some(user) = users::find_by_iss_sub(&state.pool, iss, sub).await? else {
+        return Ok(StatusCode::FORBIDDEN.into_response());
     };
-    let memberships = match list_memberships(&state.pool, user.user_id).await {
-        Ok(m) => m,
-        Err(e) => {
-            tracing::error!("list_memberships failed in orgs_index: {e:#}");
-            return html_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to load orgs.");
-        }
-    };
+    let memberships = list_memberships(&state.pool, user.user_id).await?;
     let rows = memberships
         .into_iter()
         .map(|m| {
@@ -501,11 +513,11 @@ pub async fn orgs_index(
             }
         })
         .collect();
-    render_template(&OrgsTemplate {
+    Ok(render_template(&OrgsTemplate {
         rows,
         show_create: true,
         chrome,
-    })
+    }))
 }
 
 #[derive(Deserialize)]
@@ -522,51 +534,43 @@ pub async fn create_org(
     opt_auth: Option<Extension<AuthContext>>,
     Chrome(chrome): Chrome,
     Form(form): Form<CreateOrgForm>,
-) -> axum::response::Response {
+) -> Result<axum::response::Response, HtmlError> {
     // Only a real user can own an org; the admin token and every other context get 403.
     let (iss, sub) = match opt_auth.as_ref().map(|e| &e.0) {
         Some(AuthContext::User { iss, sub, .. }) => (iss.as_str(), sub.as_str()),
-        _ => return StatusCode::FORBIDDEN.into_response(),
+        _ => return Ok(StatusCode::FORBIDDEN.into_response()),
     };
 
     let name = form.name.trim();
     if name.is_empty() {
-        return html_error_localized(
+        return Ok(html_error_localized(
             StatusCode::BAD_REQUEST,
             &crate::i18n::lookup(&chrome.locale, "orgs-err-name-required"),
             &chrome.locale,
-        );
+        ));
     }
 
-    let user = match users::find_by_iss_sub(&state.pool, iss, sub).await {
-        Ok(Some(u)) => u,
-        Ok(None) => return StatusCode::FORBIDDEN.into_response(),
-        Err(e) => {
-            tracing::error!("find_by_iss_sub failed in create_org: {e:#}");
-            return html_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to create organization.",
-            );
-        }
+    let Some(user) = users::find_by_iss_sub(&state.pool, iss, sub).await? else {
+        return Ok(StatusCode::FORBIDDEN.into_response());
     };
 
     let cap = state.config.filter.max_native_orgs_per_user;
-    match count_user_native_orgs(&state.pool, user.user_id).await {
-        Ok(n) if n >= i64::from(cap) => {
-            return html_error_localized(
-                StatusCode::FORBIDDEN,
-                &chrome.tv_count("orgs-err-limit-reached", i64::from(cap)),
-                &chrome.locale,
-            );
-        }
-        Ok(_) => {}
-        Err(e) => {
-            tracing::error!("count_user_native_orgs failed: {e:#}");
-            return html_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to create organization.",
-            );
-        }
+    if count_user_native_orgs(&state.pool, user.user_id).await? >= i64::from(cap) {
+        return Ok(html_error_localized(
+            StatusCode::FORBIDDEN,
+            &chrome.tv_count("orgs-err-limit-reached", i64::from(cap)),
+            &chrome.locale,
+        ));
+    }
+
+    let licensed = crate::queries::orgs::count_licensed_orgs(&state.pool).await?;
+    let current = u32::try_from(licensed).unwrap_or(u32::MAX);
+    if !crate::commercial::license::evaluate_org_cap(&state.license.status(), current) {
+        return Ok(html_error_localized(
+            StatusCode::FORBIDDEN,
+            &crate::i18n::lookup(&chrome.locale, "orgs-err-license-cap-reached"),
+            &chrome.locale,
+        ));
     }
 
     let slug_src = form
@@ -577,16 +581,8 @@ pub async fn create_org(
         .unwrap_or(name);
     let slug = slugify(slug_src);
 
-    match create_native_org(&state.writer_pool, user.user_id, &slug, name).await {
-        Ok(_) => Redirect::to("/web/organizations").into_response(),
-        Err(e) => {
-            tracing::error!("create_native_org failed: {e:#}");
-            html_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to create organization.",
-            )
-        }
-    }
+    create_native_org(&state.writer_pool, user.user_id, &slug, name).await?;
+    Ok(Redirect::to("/web/organizations").into_response())
 }
 
 #[derive(Deserialize)]
@@ -738,95 +734,60 @@ pub async fn org_members(
     opt_auth: Option<Extension<AuthContext>>,
     Path(org_id): Path<i64>,
     Chrome(chrome): Chrome,
-) -> impl IntoResponse {
-    let is_superuser = active_org.role.is_none();
-
-    let caller_id: Option<i64> = if is_superuser {
-        None
+) -> Result<axum::response::Response, HtmlError> {
+    // Who is asking, resolved once: the superuser path has no user row to look up.
+    enum Caller {
+        Superuser,
+        User(i64),
+    }
+    let caller = if active_org.role.is_none() {
+        Caller::Superuser
     } else {
         let (iss, sub) = match opt_auth.as_ref().map(|e| &e.0) {
             Some(AuthContext::User { iss, sub, .. }) => (iss.as_str(), sub.as_str()),
-            _ => return StatusCode::FORBIDDEN.into_response(),
+            _ => return Ok(StatusCode::FORBIDDEN.into_response()),
         };
-        let user = match users::find_by_iss_sub(&state.pool, iss, sub).await {
-            Ok(Some(u)) => u,
-            Ok(None) => return StatusCode::FORBIDDEN.into_response(),
-            Err(e) => {
-                tracing::error!("find_by_iss_sub failed in org_members: {e:#}");
-                return html_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to load members.");
-            }
+        let Some(user) = users::find_by_iss_sub(&state.pool, iss, sub).await? else {
+            return Ok(StatusCode::FORBIDDEN.into_response());
         };
-        Some(user.user_id)
+        Caller::User(user.user_id)
+    };
+
+    let not_found = || {
+        html_error_localized(
+            StatusCode::NOT_FOUND,
+            &crate::i18n::lookup(&chrome.locale, "orgs-err-org-not-found"),
+            &chrome.locale,
+        )
     };
 
     // View gate: non-members get 404 to avoid leaking org existence.
-    if !is_superuser {
-        match member_role(&state.pool, caller_id.unwrap(), org_id).await {
-            Ok(None) => {
-                return html_error_localized(
-                    StatusCode::NOT_FOUND,
-                    &crate::i18n::lookup(&chrome.locale, "orgs-err-org-not-found"),
-                    &chrome.locale,
-                )
-            }
-            Ok(Some(_)) => {}
-            Err(e) => {
-                tracing::error!("member_role check failed in org_members: {e:#}");
-                return html_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to load members.");
-            }
+    if let Caller::User(caller_id) = caller {
+        if member_role(&state.pool, caller_id, org_id).await?.is_none() {
+            return Ok(not_found());
         }
     }
 
-    let org = match get_org(&state.pool, org_id).await {
-        Ok(Some(o)) => o,
-        Ok(None) => {
-            return html_error_localized(
-                StatusCode::NOT_FOUND,
-                &crate::i18n::lookup(&chrome.locale, "orgs-err-org-not-found"),
-                &chrome.locale,
-            )
-        }
-        Err(e) => {
-            tracing::error!("get_org failed in org_members: {e:#}");
-            return html_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to load org.");
-        }
+    let Some(org) = get_org(&state.pool, org_id).await? else {
+        return Ok(not_found());
     };
 
     let kind = OrgKind::classify(org.org_id, org.is_personal, org.ext_iss.is_some());
     let is_native = kind == OrgKind::Native;
 
-    let is_org_owner = if is_superuser {
-        true
-    } else {
-        match is_current_owner(&state.pool, caller_id.unwrap(), org_id).await {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::error!("is_current_owner check failed in org_members: {e:#}");
-                return html_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to load members.");
-            }
-        }
+    let is_org_owner = match caller {
+        Caller::Superuser => true,
+        Caller::User(caller_id) => is_current_owner(&state.pool, caller_id, org_id).await?,
     };
     let can_manage = is_org_owner && is_native;
     // Owners may rename native and personal org slugs; system/Forseti slugs are managed elsewhere.
     let can_rename = is_org_owner && matches!(kind, OrgKind::Native | OrgKind::Personal);
     let current_slug = org.slug.clone();
 
-    let raw_members = match list_org_members(&state.pool, org_id).await {
-        Ok(m) => m,
-        Err(e) => {
-            tracing::error!("list_org_members failed in org_members: {e:#}");
-            return html_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to load members.");
-        }
-    };
+    let raw_members = list_org_members(&state.pool, org_id).await?;
 
     let owner_count = if can_manage {
-        match count_owners(&state.pool, org_id).await {
-            Ok(n) => n,
-            Err(e) => {
-                tracing::error!("count_owners failed in org_members: {e:#}");
-                return html_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to load members.");
-            }
-        }
+        count_owners(&state.pool, org_id).await?
     } else {
         0
     };
@@ -860,32 +821,27 @@ pub async fn org_members(
 
     let invites = if can_manage {
         let now = chrono::Utc::now().timestamp();
-        match list_org_invites(&state.pool, org_id).await {
-            Ok(rows) => rows
-                .into_iter()
-                .map(|r| {
-                    let status = if r.accepted_at.is_some() {
-                        "accepted".to_owned()
-                    } else if now > r.expires_at {
-                        "expired".to_owned()
-                    } else {
-                        "pending".to_owned()
-                    };
-                    InviteView {
-                        invite_id: r.invite_id,
-                        role: r.role,
-                        email: r.email,
-                        created_at: r.created_at,
-                        expires_at: r.expires_at,
-                        status,
-                    }
-                })
-                .collect(),
-            Err(e) => {
-                tracing::error!("list_org_invites failed in org_members: {e:#}");
-                return html_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to load invites.");
-            }
-        }
+        list_org_invites(&state.pool, org_id)
+            .await?
+            .into_iter()
+            .map(|r| {
+                let status = if r.accepted_at.is_some() {
+                    "accepted".to_owned()
+                } else if now > r.expires_at {
+                    "expired".to_owned()
+                } else {
+                    "pending".to_owned()
+                };
+                InviteView {
+                    invite_id: r.invite_id,
+                    role: r.role,
+                    email: r.email,
+                    created_at: r.created_at,
+                    expires_at: r.expires_at,
+                    status,
+                }
+            })
+            .collect()
     } else {
         vec![]
     };
@@ -893,20 +849,14 @@ pub async fn org_members(
     let can_delete = is_org_owner && matches!(kind, OrgKind::Native | OrgKind::Forseti);
     let member_count = members.len() as i64;
     let project_count = if can_delete {
-        match count_projects_in_org(&state.pool, org_id).await {
-            Ok(n) => n,
-            Err(e) => {
-                tracing::error!("count_projects_in_org failed in org_members: {e:#}");
-                return html_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to load members.");
-            }
-        }
+        count_projects_in_org(&state.pool, org_id).await?
     } else {
         0
     };
     let slug = current_slug.clone();
 
     let org_name = org.name.unwrap_or_else(|| org.slug.clone());
-    render_template(&OrgMembersTemplate {
+    Ok(render_template(&OrgMembersTemplate {
         org_id,
         org_name,
         kind: kind.label().to_owned(),
@@ -921,7 +871,7 @@ pub async fn org_members(
         project_count,
         member_count,
         slug,
-    })
+    }))
 }
 
 #[derive(Deserialize)]
@@ -1195,6 +1145,77 @@ mod tests {
         assert!(
             res.is_err(),
             "non-numeric ttl must not be silently swallowed"
+        );
+    }
+
+    // Native creation is refused with the localized message once the licence's
+    // org cap is reached, and allowed again when the licence lifts it.
+    #[tokio::test]
+    async fn create_org_is_refused_at_the_licence_cap() {
+        let pool = crate::db::open_test_pool().await;
+        let (state, _channels) = AppState::for_test(pool.clone());
+        let iss = "https://idp.test";
+        let user = users::upsert_from_oidc(&pool, iss, "cap-user", None, None)
+            .await
+            .unwrap();
+        let personal = crate::queries::orgs::ensure_personal_org(&pool, user.user_id)
+            .await
+            .unwrap();
+
+        let capped =
+            crate::commercial::LicenseStatus::Active(crate::commercial::license::License {
+                license_id: "t".into(),
+                customer: "T".into(),
+                email: "t@e.test".into(),
+                issued_at: chrono::Utc::now(),
+                expires_at: Some(chrono::Utc::now() + chrono::Duration::days(30)),
+                features: Vec::new(),
+                max_orgs: Some(0),
+                tier: "business".into(),
+                product: "stackpit".into(),
+            });
+        state.license.swap(capped);
+
+        let call = |name: &str| {
+            create_org(
+                State(state.clone()),
+                ActiveOrg::bare(personal, Some(Role::Owner)),
+                Some(Extension(AuthContext::User {
+                    iss: iss.into(),
+                    sub: "cap-user".into(),
+                    principal_id: stackpit_auth::PrincipalId::Session(uuid::Uuid::new_v4()),
+                })),
+                Chrome(chrome(&langid!("en"))),
+                Form(CreateOrgForm {
+                    name: name.into(),
+                    slug: None,
+                }),
+            )
+        };
+
+        let resp = call("Capped").await.into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body = String::from_utf8_lossy(&body);
+        assert!(
+            body.contains("organization limit is reached"),
+            "expected the localized cap message, got: {body}"
+        );
+        assert_eq!(
+            count_user_native_orgs(&pool, user.user_id).await.unwrap(),
+            0
+        );
+
+        state
+            .license
+            .swap(crate::commercial::LicenseStatus::Unlicensed);
+        let resp = call("Allowed").await.into_response();
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            count_user_native_orgs(&pool, user.user_id).await.unwrap(),
+            1
         );
     }
 }

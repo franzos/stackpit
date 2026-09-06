@@ -110,6 +110,7 @@ flash-queue-replay-failed = فشلت إعادة الإرسال: { $error }
 flash-queue-cancelled = تم تجاهل الإشعار الموجود في الطابور
 flash-queue-replay-failed-generic = فشلت إعادة الإرسال. السبب مذكور على العنصر في الطابور، تحت «خطأ».
 flash-license-activated = تم تفعيل الترخيص
+flash-org-cap-reached = تم بلوغ حد المؤسسات في ترخيصك. لم يتم إنشاء مؤسسة واحدة أو أكثر.
 flash-license-deactivated = تمت إزالة الترخيص
 flash-license-persist-failed = تم التحقق من الترخيص لكن تعذّر حفظه. راجع سجل الخادم.
 flash-license-clear-failed = تعذّرت إزالة الترخيص. راجع سجل الخادم.

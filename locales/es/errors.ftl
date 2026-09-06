@@ -108,6 +108,7 @@ flash-queue-replay-failed = Fallo al reenviar: { $error }
 flash-queue-cancelled = Notificación en cola descartada
 flash-queue-replay-failed-generic = El reenvío falló. El motivo está en el elemento en cola, bajo Error.
 flash-license-activated = Licencia activada
+flash-org-cap-reached = Se alcanzó el límite de organizaciones de tu licencia. Una o más organizaciones no se crearon.
 flash-license-deactivated = Licencia eliminada
 flash-license-persist-failed = La licencia se verificó pero no se pudo guardar. Revisa el registro del servidor.
 flash-license-clear-failed = No se pudo eliminar la licencia. Revisa el registro del servidor.

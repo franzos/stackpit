@@ -32,15 +32,9 @@ pub async fn list_for_issue(
     Path(fingerprint): Path<String>,
     Query(params): Query<Pagination>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let pid = crate::queries::orgs::project_of_fingerprint(&pool, &fingerprint)
-        .await
-        .map_err(ApiError::internal)?
-        .ok_or_else(|| ApiError::not_found("not found"))?;
-    crate::orgs::extractor::require_project_scope(&active, &pool, pid)
-        .await
-        .map_err(|_| ApiError::not_found("not found"))?;
+    let (pid, _) = super::resolve_issue_project(&active, &pool, &fingerprint).await?;
     let page = params.page();
-    let events = queries::events::list_events_for_issue(&pool, &fingerprint, &page)
+    let events = queries::events::list_events_for_issue(&pool, pid, &fingerprint, &page)
         .await
         .map_err(ApiError::internal)?;
     Ok(axum::Json(events))
@@ -52,14 +46,8 @@ pub async fn latest_for_issue(
     ReadPool(pool): ReadPool,
     Path(fingerprint): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let pid = crate::queries::orgs::project_of_fingerprint(&pool, &fingerprint)
-        .await
-        .map_err(ApiError::internal)?
-        .ok_or_else(|| ApiError::not_found("not found"))?;
-    crate::orgs::extractor::require_project_scope(&active, &pool, pid)
-        .await
-        .map_err(|_| ApiError::not_found("not found"))?;
-    let event = queries::events::get_latest_event_for_issue(&pool, &fingerprint)
+    let (pid, _) = super::resolve_issue_project(&active, &pool, &fingerprint).await?;
+    let event = queries::events::get_latest_event_for_issue(&pool, pid, &fingerprint)
         .await
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::not_found("no events found for issue"))?;
@@ -88,10 +76,10 @@ pub async fn get(
 
 #[cfg(test)]
 mod tests {
+    use crate::api::resolve_issue_project;
     use crate::db::sql;
     use crate::orgs::extractor::{require_project_scope, ActiveOrg};
     use crate::orgs::Role;
-    use crate::queries::orgs::project_of_fingerprint;
     use crate::queries::test_helpers::insert_test_issue;
     use sqlx::Row;
 
@@ -131,18 +119,22 @@ mod tests {
         insert_project(&pool, 5001, org_a).await;
         insert_test_issue(&pool, "evts-fp-1", 5001, None, None, 0, 0, 0, "unresolved").await;
 
-        let pid = project_of_fingerprint(&pool, "evts-fp-1")
-            .await
-            .unwrap()
-            .unwrap();
-
         let member_a =
             ActiveOrg::with_memberships(org_a, Some(Role::Member), vec![(org_a, Role::Member)]);
         let member_b =
             ActiveOrg::with_memberships(org_b, Some(Role::Member), vec![(org_b, Role::Member)]);
 
-        assert!(require_project_scope(&member_a, &pool, pid).await.is_ok());
-        assert!(require_project_scope(&member_b, &pool, pid).await.is_err());
+        let (pid, _) = resolve_issue_project(&member_a, &pool, "evts-fp-1")
+            .await
+            .ok()
+            .expect("member of org A resolves the issue");
+        assert_eq!(pid, 5001);
+        assert!(require_project_scope(&member_b, &pool, pid as i64)
+            .await
+            .is_err());
+        assert!(resolve_issue_project(&member_b, &pool, "evts-fp-1")
+            .await
+            .is_err());
     }
 
     // Superuser skips scope check even for a fingerprint owned by a different org.
@@ -153,13 +145,15 @@ mod tests {
         insert_project(&pool, 5002, org_a).await;
         insert_test_issue(&pool, "evts-fp-su", 5002, None, None, 0, 0, 0, "unresolved").await;
 
-        let pid = project_of_fingerprint(&pool, "evts-fp-su")
-            .await
-            .unwrap()
-            .unwrap();
-
         let superuser = ActiveOrg::bare(999, None);
-        assert!(require_project_scope(&superuser, &pool, pid).await.is_ok());
+        let (pid, _) = resolve_issue_project(&superuser, &pool, "evts-fp-su")
+            .await
+            .ok()
+            .expect("superuser resolves a single-project fingerprint");
+        assert_eq!(pid, 5002);
+        assert!(require_project_scope(&superuser, &pool, pid as i64)
+            .await
+            .is_ok());
     }
 
     // project_of_event returns None for an unknown event_id (handler maps to 404).

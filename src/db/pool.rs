@@ -485,4 +485,177 @@ mod tests {
             ]
         );
     }
+
+    /// Pool stopped at 028 with one issue, its discard, one tag row and one
+    /// orphaned tag row, all under fingerprint `fp-shared` in project 900, plus
+    /// a second org with project 901 that 029 must let reuse the fingerprint.
+    async fn seeded_at_028() -> DbPool {
+        let pool = seeded_at_022().await;
+        run_migrations_to(&pool, 28).await.unwrap();
+
+        sqlx::query("INSERT INTO organizations (org_id, slug, name) VALUES (4, 'beta', 'Beta')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO projects (project_id, status, source, org_id) VALUES (901, 'active', 'manual', 4)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO issues (fingerprint, project_id, title, first_seen, last_seen, event_count)
+             VALUES ('fp-shared', 900, 'Shared', 1700000000, 1700000001, 3)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO discarded_fingerprints (fingerprint, project_id) VALUES ('fp-shared', 900)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO issue_tag_values (fingerprint, tag_key, tag_value, count)
+             VALUES ('fp-shared', 'browser', 'chrome', 2), ('fp-orphan', 'browser', 'chrome', 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        pool
+    }
+
+    #[tokio::test]
+    async fn migration_029_backfills_tag_values_and_drops_orphans() {
+        let pool = seeded_at_028().await;
+        run_migrations_to(&pool, 29).await.unwrap();
+
+        let rows: Vec<(i64, String, String, String, i64)> = sqlx::query_as(
+            "SELECT project_id, fingerprint, tag_key, tag_value, count FROM issue_tag_values ORDER BY fingerprint",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            rows,
+            vec![(
+                900,
+                "fp-shared".into(),
+                "browser".into(),
+                "chrome".into(),
+                2
+            )],
+            "029 must backfill project_id from issues and drop the orphan"
+        );
+
+        let (pid, count): (i64, i64) = sqlx::query_as(
+            "SELECT project_id, event_count FROM issues WHERE fingerprint = 'fp-shared'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!((pid, count), (900, 3));
+
+        let discards: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM discarded_fingerprints WHERE project_id = 900 AND fingerprint = 'fp-shared'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(discards, 1);
+    }
+
+    #[tokio::test]
+    async fn migration_029_composite_key_allows_the_same_fingerprint_in_two_projects() {
+        let pool = seeded_at_028().await;
+        run_migrations_to(&pool, 29).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO issues (fingerprint, project_id, title, first_seen, last_seen, event_count)
+             VALUES ('fp-shared', 901, 'Other', 1700000005, 1700000006, 1)",
+        )
+        .execute(&pool)
+        .await
+        .expect("the same fingerprint in a second project is a distinct issue");
+        sqlx::query(
+            "INSERT INTO discarded_fingerprints (fingerprint, project_id) VALUES ('fp-shared', 901)",
+        )
+        .execute(&pool)
+        .await
+        .expect("a discard is scoped to its project");
+        sqlx::query(
+            "INSERT INTO issue_tag_values (project_id, fingerprint, tag_key, tag_value, count)
+             VALUES (901, 'fp-shared', 'browser', 'chrome', 7)",
+        )
+        .execute(&pool)
+        .await
+        .expect("tag counts are scoped to their project");
+
+        // A true duplicate within one project still collides.
+        sqlx::query(
+            "INSERT INTO issues (fingerprint, project_id, title, first_seen, last_seen)
+             VALUES ('fp-shared', 900, 'Dup', 1, 2)",
+        )
+        .execute(&pool)
+        .await
+        .expect_err("(project_id, fingerprint) must stay unique");
+
+        let (title, count): (String, i64) = sqlx::query_as(
+            "SELECT title, event_count FROM issues WHERE project_id = 900 AND fingerprint = 'fp-shared'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            (title.as_str(), count),
+            ("Shared", 3),
+            "project 900's row must be untouched"
+        );
+        let tag_count: i64 = sqlx::query_scalar(
+            "SELECT count FROM issue_tag_values WHERE project_id = 900 AND fingerprint = 'fp-shared'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(tag_count, 2);
+    }
+
+    /// SQLite drops indexes with the table, so the rebuild has to recreate every one.
+    #[tokio::test]
+    async fn migration_029_recreates_every_index() {
+        let pool = seeded_at_028().await;
+        run_migrations_to(&pool, 29).await.unwrap();
+
+        async fn index_names(pool: &DbPool, table: &str) -> Vec<String> {
+            sqlx::query_scalar(
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ?1 AND name NOT LIKE 'sqlite_%' ORDER BY name",
+            )
+            .bind(table)
+            .fetch_all(pool)
+            .await
+            .unwrap()
+        }
+
+        assert_eq!(
+            index_names(&pool, "issues").await,
+            vec![
+                "idx_issues_fingerprint".to_string(),
+                "idx_issues_project_status".to_string(),
+                "idx_issues_project_time".to_string(),
+                "idx_issues_project_type".to_string(),
+                "idx_issues_sentry_group_id".to_string(),
+            ]
+        );
+        assert_eq!(
+            index_names(&pool, "discarded_fingerprints").await,
+            vec!["idx_discarded_fp_project".to_string()]
+        );
+        assert_eq!(
+            index_names(&pool, "issue_tag_values").await,
+            vec!["idx_issue_tag_values_project_fp_key_count".to_string()]
+        );
+    }
 }

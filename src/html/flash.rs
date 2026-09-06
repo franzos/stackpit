@@ -86,6 +86,8 @@ const CATALOGUE: &[(&str, FlashKind)] = &[
     ("queue-cancelled", FlashKind::Success),
     // Projects
     ("project-name-required", FlashKind::Error),
+    // Organizations
+    ("org-cap-reached", FlashKind::Error),
     // Licence activation
     ("license-activated", FlashKind::Success),
     ("license-deactivated", FlashKind::Success),

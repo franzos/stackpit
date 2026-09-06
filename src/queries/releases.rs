@@ -102,7 +102,6 @@ pub struct ReleaseUpsert<'a> {
 }
 
 /// Look up a release by project + version.
-#[allow(dead_code)]
 pub async fn get_release(pool: &DbPool, project_id: u64, version: &str) -> Result<Option<Release>> {
     let row = sqlx::query(sql!(
         "SELECT id, project_id, version, commit_sha, date_released, first_event, last_event, new_groups, created_at

@@ -219,22 +219,6 @@ async fn list_projects_inner(
         OrgScope::Orgs(ids) => ids,
     };
 
-    // Org ids occupy ?1..?n, so the time filter binds at ?n+1. Getting this wrong is
-    // invisible on SQLite and fatal on PostgreSQL, where `sql!`/`dyn_sql` rewrite
-    // positional params to $n.
-    let org_filter = if org_ids.is_empty() {
-        String::new()
-    } else {
-        let params: Vec<String> = (1..=org_ids.len()).map(|i| format!("?{i}")).collect();
-        format!("WHERE p.org_id IN ({})", params.join(", "))
-    };
-
-    let time_filter = if since.is_some() {
-        format!("WHERE timestamp >= ?{}", org_ids.len() + 1)
-    } else {
-        String::new()
-    };
-
     #[cfg(feature = "sqlite")]
     let platform_agg = "GROUP_CONCAT(DISTINCT platform)";
     #[cfg(not(feature = "sqlite"))]
@@ -243,7 +227,7 @@ async fn list_projects_inner(
     // Driven from `projects`, not from the event aggregate: a project that received
     // nothing in the period (newly created, dormant) still gets a row, with NULL
     // counts the mapper folds to zero.
-    let sql = format!(
+    let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new(format!(
         "SELECT
             p.project_id,
             p.name,
@@ -273,9 +257,14 @@ async fn list_projects_inner(
                 SUM(CASE WHEN item_type NOT IN ('event', 'transaction', 'session', 'sessions') THEN 1 ELSE 0 END) AS other_count,
                 MAX(timestamp) AS last_seen,
                 {platform_agg} AS platforms
-            FROM events
-            {time_filter}
-            GROUP BY project_id
+            FROM events"
+    ));
+    if let Some(ts) = since {
+        qb.push(" WHERE timestamp >= ");
+        qb.push_bind(ts);
+    }
+    qb.push(
+        " GROUP BY project_id
          ) e ON e.project_id = p.project_id
          LEFT JOIN (
             SELECT project_id, MIN(timestamp) AS first_seen
@@ -296,20 +285,23 @@ async fn list_projects_inner(
                        ) AS rn
                 FROM releases
             ) ranked WHERE rn = 1
-         ) lr ON lr.project_id = p.project_id
-         {org_filter}
-         ORDER BY CASE WHEN fs.first_seen IS NULL THEN 1 ELSE 0 END, {order_expr} DESC, p.project_id DESC"
+         ) lr ON lr.project_id = p.project_id",
     );
+    if !org_ids.is_empty() {
+        qb.push(" WHERE p.org_id IN (");
+        {
+            let mut sep = qb.separated(", ");
+            for id in org_ids {
+                sep.push_bind(*id);
+            }
+        }
+        qb.push(")");
+    }
+    qb.push(format!(
+        " ORDER BY CASE WHEN fs.first_seen IS NULL THEN 1 ELSE 0 END, {order_expr} DESC, p.project_id DESC"
+    ));
 
-    // Bind order must mirror the placeholder numbering above: orgs first, then `since`.
-    let mut q = sqlx::query(crate::db::dyn_sql(&sql));
-    for id in org_ids {
-        q = q.bind(*id);
-    }
-    if let Some(ts) = since {
-        q = q.bind(ts);
-    }
-    let rows = q.fetch_all(pool).await?;
+    let rows = qb.build().fetch_all(pool).await?;
 
     let mut projects: Vec<ProjectSummary> = rows.iter().map(map_project_row).collect();
     filter_projects_by_query(&mut projects, query);
@@ -985,14 +977,15 @@ pub async fn upsert_synced_key(
 
 /// Project-scoped tables deleted by a plain `WHERE project_id = ?1`. Excludes
 /// `projects` itself and the child tables reached via subquery (attachments,
-/// issue_tag_values, alert_state). The guard test below fails if a new
-/// `project_id`-bearing table is added without being listed here.
+/// alert_state). The guard test below fails if a new `project_id`-bearing
+/// table is added without being listed here.
 const PROJECT_SCOPED_TABLES: &[&str] = &[
     "events",
     "logs",
     "spans",
     "metrics",
     "issues",
+    "issue_tag_values",
     "project_keys",
     "project_repos",
     "releases",
@@ -1030,15 +1023,6 @@ pub async fn delete_project_in_tx(
     sqlx::query(sql!(
         "DELETE FROM attachments WHERE event_id IN (
             SELECT event_id FROM events WHERE project_id = ?1
-        )"
-    ))
-    .bind(pid)
-    .execute(&mut **tx)
-    .await?;
-
-    sqlx::query(sql!(
-        "DELETE FROM issue_tag_values WHERE fingerprint IN (
-            SELECT fingerprint FROM issues WHERE project_id = ?1
         )"
     ))
     .bind(pid)

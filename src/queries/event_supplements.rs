@@ -6,7 +6,7 @@ use crate::db::DbPool;
 
 use super::types::{
     AttachmentInfo, EventDetail, EventNav, EventSupplements, ExtractedEventData, ProjectRepo,
-    Release, UserReportData,
+    UserReportData,
 };
 
 /// Fetch all supplementary data for an event detail page (nav links,
@@ -14,7 +14,7 @@ use super::types::{
 pub async fn get_event_supplements(pool: &DbPool, event: &EventDetail) -> Result<EventSupplements> {
     let nav_fut = async {
         if let Some(fp) = event.fingerprint.as_deref() {
-            get_adjacent_events(pool, fp, event.timestamp, &event.event_id)
+            get_adjacent_events(pool, event.project_id, fp, event.timestamp, &event.event_id)
                 .await
                 .unwrap_or_default()
         } else {
@@ -36,7 +36,7 @@ pub async fn get_event_supplements(pool: &DbPool, event: &EventDetail) -> Result
 
     let commit_sha_fut = async {
         if let Some(version) = event.release.as_deref() {
-            get_release(pool, event.project_id, version)
+            super::releases::get_release(pool, event.project_id, version)
                 .await
                 .ok()
                 .flatten()
@@ -110,23 +110,25 @@ pub async fn list_user_reports_for_event(
 /// Combines total count, prev, and next into a single query.
 pub async fn get_adjacent_events(
     pool: &DbPool,
+    project_id: u64,
     fingerprint: &str,
     timestamp: i64,
     event_id: &str,
 ) -> Result<EventNav> {
     let row = sqlx::query(sql!(
         "SELECT
-            (SELECT COUNT(*) FROM events WHERE fingerprint = ?1) AS total,
-            (SELECT event_id FROM events WHERE fingerprint = ?1
+            (SELECT COUNT(*) FROM events WHERE project_id = ?4 AND fingerprint = ?1) AS total,
+            (SELECT event_id FROM events WHERE project_id = ?4 AND fingerprint = ?1
              AND (timestamp > ?2 OR (timestamp = ?2 AND event_id < ?3))
              ORDER BY timestamp ASC, event_id DESC LIMIT 1) AS prev_event_id,
-            (SELECT event_id FROM events WHERE fingerprint = ?1
+            (SELECT event_id FROM events WHERE project_id = ?4 AND fingerprint = ?1
              AND (timestamp < ?2 OR (timestamp = ?2 AND event_id > ?3))
              ORDER BY timestamp DESC, event_id ASC LIMIT 1) AS next_event_id"
     ))
     .bind(fingerprint)
     .bind(timestamp)
     .bind(event_id)
+    .bind(project_id as i64)
     .fetch_one(pool)
     .await?;
 
@@ -360,29 +362,6 @@ fn extract_user_feedback(payload: &serde_json::Value) -> crate::queries::types::
         comments: str_at(Some(payload), "comments").or_else(|| str_at(fb, "message")),
         event_id: str_at(Some(payload), "event_id").or_else(|| str_at(fb, "associated_event_id")),
     }
-}
-
-async fn get_release(pool: &DbPool, project_id: u64, version: &str) -> Result<Option<Release>> {
-    let row = sqlx::query(sql!(
-        "SELECT id, project_id, version, commit_sha, date_released, first_event, last_event, new_groups, created_at
-         FROM releases WHERE project_id = ?1 AND version = ?2"
-    ))
-    .bind(project_id as i64)
-    .bind(version)
-    .fetch_optional(pool)
-    .await?;
-
-    Ok(row.map(|r| Release {
-        id: r.get("id"),
-        project_id: r.get::<i64, _>("project_id") as u64,
-        version: r.get("version"),
-        commit_sha: r.get("commit_sha"),
-        date_released: r.get("date_released"),
-        first_event: r.get("first_event"),
-        last_event: r.get("last_event"),
-        new_groups: r.get::<i64, _>("new_groups") as u64,
-        created_at: r.get("created_at"),
-    }))
 }
 
 async fn get_project_repos(pool: &DbPool, project_id: u64) -> Result<Vec<ProjectRepo>> {

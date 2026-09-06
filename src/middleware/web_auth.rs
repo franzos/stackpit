@@ -55,9 +55,10 @@ pub async fn web_auth_middleware(
     // config validation already enforces loopback + ack at startup.
     if admin_token.is_none() && !oauth_configured {
         if state.config.server.no_auth_loopback_acknowledged {
-            // CSRF still wants something to compare against; pass-through
-            // auth means the token is a constant, not a secret.
-            req.extensions_mut().insert(CsrfToken("noauth".to_string()));
+            // Pass-through auth still needs a CSRF token a foreign page cannot
+            // guess; the per-process value is minted at boot.
+            req.extensions_mut()
+                .insert(CsrfToken(state.noauth_csrf_token.to_string()));
             req.extensions_mut()
                 .insert(crate::orgs::extractor::ActiveOrg::bare(1, None));
             return next.run(req).await;
@@ -355,6 +356,53 @@ fn handle_to_uuid(handle: &GrantHandle) -> uuid::Uuid {
 #[cfg(test)]
 mod tests {
     use super::{is_public_path, session_expired};
+
+    // No-auth loopback mode: the literal `noauth` token must be refused and the
+    // per-process boot token accepted, so a foreign page cannot forge a POST.
+    #[tokio::test]
+    async fn noauth_mode_rejects_the_literal_token_and_accepts_the_boot_token() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use axum::routing::post;
+        use axum::Router;
+        use tower::ServiceExt;
+
+        let pool = crate::db::open_test_pool().await;
+        let (mut state, _chans) = crate::server::AppState::for_test(pool);
+        let mut config = crate::config::Config::default();
+        config.server.admin_token = None;
+        config.server.no_auth_loopback_acknowledged = true;
+        state.config = std::sync::Arc::new(config);
+        let boot_token = state.noauth_csrf_token.to_string();
+
+        let app = Router::new()
+            .route("/web/projects/", post(|| async { StatusCode::OK }))
+            .layer(axum::middleware::from_fn_with_state(
+                crate::middleware::CsrfConfig {
+                    max_body_size: 64 * 1024,
+                },
+                crate::middleware::csrf_middleware,
+            ))
+            .layer(axum::middleware::from_fn_with_state(
+                state,
+                super::web_auth_middleware,
+            ));
+
+        let submit = |body: String| {
+            app.clone().oneshot(
+                Request::post("/web/projects/")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+        };
+
+        let literal = submit("csrf_token=noauth".to_string()).await.unwrap();
+        assert_eq!(literal.status(), StatusCode::FORBIDDEN);
+
+        let minted = submit(format!("csrf_token={boot_token}")).await.unwrap();
+        assert_eq!(minted.status(), StatusCode::OK);
+    }
 
     #[tokio::test]
     async fn resolve_active_org_reads_personal_org_and_backfills_when_missing() {

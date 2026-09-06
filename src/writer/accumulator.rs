@@ -136,9 +136,11 @@ impl TxnDelta {
 /// Holds in-memory issue and tag deltas until we're ready to flush them to SQLite.
 #[derive(Clone)]
 pub(super) struct Accumulators {
-    pub issues: HashMap<String, IssueDelta>,
-    /// Tag counts -- keyed by (fingerprint, tag_key, tag_value)
-    pub tags: HashMap<(String, String, String), u64>,
+    /// Issue deltas -- keyed by (project_id, fingerprint), so two projects
+    /// sharing a fingerprint never merge before the upsert.
+    pub issues: HashMap<(u64, String), IssueDelta>,
+    /// Tag counts -- keyed by (project_id, fingerprint, tag_key, tag_value)
+    pub tags: HashMap<(u64, String, String, String), u64>,
     /// Session rollups -- keyed by (project_id, release, environment, day_bucket)
     pub session_aggregates: HashMap<(u64, String, String, i64), SessionDelta>,
     /// Transaction perf rollups -- keyed by (project_id, transaction_name, hour_bucket)
@@ -173,18 +175,21 @@ impl Accumulators {
             None => return,
         };
 
-        let delta = self.issues.entry(fp.clone()).or_insert_with(|| IssueDelta {
-            project_id: event.project_id,
-            event_count: 0,
-            first_seen: i64::MAX,
-            last_seen: i64::MIN,
-            title: None,
-            level: None,
-            item_type: event.item_type.as_str().to_string(),
-            hll: HyperLogLog::new(),
-            has_hll_data: false,
-            environments: BTreeSet::new(),
-        });
+        let delta = self
+            .issues
+            .entry((event.project_id, fp.clone()))
+            .or_insert_with(|| IssueDelta {
+                project_id: event.project_id,
+                event_count: 0,
+                first_seen: i64::MAX,
+                last_seen: i64::MIN,
+                title: None,
+                level: None,
+                item_type: event.item_type.as_str().to_string(),
+                hll: HyperLogLog::new(),
+                has_hll_data: false,
+                environments: BTreeSet::new(),
+            });
 
         if let Some(env) = event.environment.as_deref() {
             if !env.is_empty() && delta.environments.len() < MAX_DELTA_ENVIRONMENTS {
@@ -214,7 +219,7 @@ impl Accumulators {
         for (key, value) in event.tags.iter().take(MAX_TAGS_PER_EVENT) {
             *self
                 .tags
-                .entry((fp.clone(), key.clone(), value.clone()))
+                .entry((event.project_id, fp.clone(), key.clone(), value.clone()))
                 .or_insert(0) += 1;
         }
     }
@@ -351,8 +356,8 @@ impl Accumulators {
 
     /// Fold `other` (a batch-local scratch) into `self` with the same combination semantics as `accumulate`, iterating only `other`'s batch-bounded entries and leaving `last_flush` untouched.
     pub fn merge(&mut self, other: &Accumulators) {
-        for (fp, src) in &other.issues {
-            match self.issues.get_mut(fp) {
+        for (key, src) in &other.issues {
+            match self.issues.get_mut(key) {
                 Some(dst) => {
                     dst.event_count += src.event_count;
                     dst.first_seen = dst.first_seen.min(src.first_seen);
@@ -373,7 +378,7 @@ impl Accumulators {
                     }
                 }
                 None => {
-                    self.issues.insert(fp.clone(), src.clone());
+                    self.issues.insert(key.clone(), src.clone());
                 }
             }
         }
@@ -674,8 +679,9 @@ mod tests {
 
         // Issues.
         assert_eq!(direct.issues.len(), merged.issues.len());
-        for (fp, d) in &direct.issues {
-            let m = merged.issues.get(fp).expect("fingerprint present");
+        for (key, d) in &direct.issues {
+            let m = merged.issues.get(key).expect("fingerprint present");
+            let fp = &key.1;
             assert_eq!(d.event_count, m.event_count, "event_count {fp}");
             assert_eq!(d.first_seen, m.first_seen, "first_seen {fp}");
             assert_eq!(d.last_seen, m.last_seen, "last_seen {fp}");
@@ -738,10 +744,35 @@ mod tests {
         scratch.accumulate(&issue_event("b", "fp", 300, Some("u2")));
         base.merge(&scratch);
 
-        let d = base.issues.get("fp").unwrap();
+        let d = base.issues.get(&(1, "fp".to_string())).unwrap();
         assert_eq!(d.event_count, 2);
         assert_eq!(d.first_seen, 100);
         assert_eq!(d.last_seen, 300);
         assert_eq!(d.hll.count(), 2);
+    }
+
+    /// The same fingerprint in two projects is two deltas, never one.
+    #[test]
+    fn same_fingerprint_in_two_projects_stays_separate() {
+        let mut acc = Accumulators::new();
+        let mut a = issue_event("a", "fp", 100, Some("u1"));
+        a.tags = vec![("k".into(), "v".into())];
+        let mut b = issue_event("b", "fp", 200, Some("u1"));
+        b.project_id = 2;
+        b.tags = vec![("k".into(), "v".into())];
+        acc.accumulate(&a);
+        acc.accumulate(&b);
+
+        assert_eq!(acc.issues.len(), 2);
+        assert_eq!(acc.issues[&(1, "fp".to_string())].event_count, 1);
+        assert_eq!(acc.issues[&(2, "fp".to_string())].event_count, 1);
+        assert_eq!(
+            acc.tags[&(1, "fp".to_string(), "k".to_string(), "v".to_string())],
+            1
+        );
+        assert_eq!(
+            acc.tags[&(2, "fp".to_string(), "k".to_string(), "v".to_string())],
+            1
+        );
     }
 }

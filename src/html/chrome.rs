@@ -20,6 +20,9 @@ pub(crate) struct PageChrome {
     // Name of the org the request is scoped to. The active org is a mode, so it needs a
     // persistent indicator; None on the admin-token and loopback paths, which have no name.
     pub(crate) active_org: Option<String>,
+    // True when the caller is a plain member of the active org: the sidebar hides
+    // owner-only links so a member never lands on a 403.
+    pub(crate) is_org_member: bool,
     // Banner carried here from a `?flash=` key, already resolved against `locale`.
     // A page that builds its own message renders that instead; see the `flash` macro.
     pub(crate) flash: Option<crate::html::flash::Flash>,
@@ -76,8 +79,14 @@ impl PageChrome {
             path,
             license_watermark: None,
             active_org: None,
+            is_org_member: false,
             flash: None,
         }
+    }
+
+    pub(crate) fn with_org_member(mut self, is_org_member: bool) -> Self {
+        self.is_org_member = is_org_member;
+        self
     }
 
     /// Resolves a `?flash=` token against the request locale. An unknown token
@@ -283,6 +292,16 @@ mod tests {
         assert_eq!(
             chrome_for(langid!("de")).t("common-action-save"),
             "Speichern"
+        );
+    }
+
+    #[test]
+    fn org_member_flag_defaults_off_and_follows_the_setter() {
+        assert!(!chrome_for(langid!("en")).is_org_member);
+        assert!(
+            chrome_for(langid!("en"))
+                .with_org_member(true)
+                .is_org_member
         );
     }
 

@@ -1,4 +1,3 @@
-use crate::db::sql;
 use crate::queries::event_writes;
 use anyhow::Result;
 use sqlx::QueryBuilder;
@@ -10,42 +9,54 @@ use super::alerting::{ThresholdCandidate, TRIGGER_CHUNK_SIZE};
 /// Stored (users_hll, users_crashed_hll) blobs for a session-aggregate row.
 type HllPair = (Option<Vec<u8>>, Option<Vec<u8>>);
 
-/// Max issues per multi-row INSERT chunk. 9 bind params per issue;
-/// 32766 / 9 = 3640, use 3600 for margin.
-const ISSUE_UPSERT_CHUNK_SIZE: usize = 3600;
+/// Max issues per multi-row INSERT chunk. 10 bind params per issue;
+/// 32766 / 10 = 3276, use 3200 for margin.
+const ISSUE_UPSERT_CHUNK_SIZE: usize = 3200;
 
-/// Batch-fetch existing issue statuses for a set of fingerprints.
+/// The sketch to bind for a row: the stored registers merged with this flush's,
+/// or `None` when nothing changed so the upsert's COALESCE leaves the row alone.
+fn merged_sketch(stored: Option<&[u8]>, fresh: &simple_hll::HyperLogLog<12>) -> Option<Vec<u8>> {
+    use crate::ingest::models::HLL_REGISTER_COUNT;
+    match stored {
+        Some(buf) if buf.len() == HLL_REGISTER_COUNT => {
+            let mut base = simple_hll::HyperLogLog::<12>::with_registers(buf.to_vec());
+            base.merge(fresh);
+            let merged = base.get_registers().to_vec();
+            (merged != buf).then_some(merged)
+        }
+        _ => Some(fresh.get_registers().to_vec()),
+    }
+}
+
+/// Batch-fetch existing issue statuses for a set of `(project_id, fingerprint)` keys.
 ///
-/// Returns a map of fingerprint -> status string. Fingerprints not present
-/// in the map don't exist in the issues table yet.
+/// Keys not present in the map don't exist in the issues table yet.
 async fn detect_existing_issue_statuses(
     tx: &mut sqlx::Transaction<'_, crate::db::Db>,
-    fingerprints: &[&str],
-) -> Result<HashMap<String, String>> {
+    keys: &[(i64, String)],
+) -> Result<HashMap<(u64, String), String>> {
     use sqlx::Row;
 
-    let mut statuses = HashMap::with_capacity(fingerprints.len());
-    if fingerprints.is_empty() {
+    let mut statuses = HashMap::with_capacity(keys.len());
+    if keys.is_empty() {
         return Ok(statuses);
     }
 
-    for chunk in fingerprints.chunks(TRIGGER_CHUNK_SIZE) {
+    // Two binds per key.
+    for chunk in keys.chunks(TRIGGER_CHUNK_SIZE / 2) {
         let mut builder = QueryBuilder::<crate::db::Db>::new(
-            "SELECT fingerprint, status FROM issues WHERE fingerprint IN (",
+            "SELECT project_id, fingerprint, status FROM issues WHERE ",
         );
-        let mut sep = builder.separated(", ");
-        for fp in chunk {
-            sep.push_bind(*fp);
-        }
-        sep.push_unseparated(")");
+        crate::queries::retention::push_pair_in_list(&mut builder, chunk);
 
         // Propagate so a transient DB error aborts the tx (and retries) instead of returning a partial map that misreads existing issues as new.
         let rows = builder.build().fetch_all(&mut **tx).await?;
 
         for row in &rows {
+            let project_id: i64 = row.get("project_id");
             let fp: String = row.get("fingerprint");
             let status: String = row.get("status");
-            statuses.insert(fp, status);
+            statuses.insert((project_id as u64, fp), status);
         }
     }
 
@@ -61,20 +72,24 @@ pub(super) async fn flush_aggregation_inner(
     pending: &mut Vec<crate::notify::NotificationEvent>,
 ) -> Result<Vec<ThresholdCandidate>> {
     use crate::ingest::models::HLL_REGISTER_COUNT;
-    use simple_hll::HyperLogLog;
     use sqlx::Row;
 
     let issue_count = accumulators.issues.len();
     let tag_count = accumulators.tags.len();
     let mut threshold_candidates = Vec::new();
 
-    let fingerprints: Vec<&str> = accumulators.issues.keys().map(|s| s.as_str()).collect();
-    let existing_statuses = detect_existing_issue_statuses(tx, &fingerprints).await?;
+    let issue_keys: Vec<(i64, String)> = accumulators
+        .issues
+        .keys()
+        .map(|(pid, fp)| (*pid as i64, fp.clone()))
+        .collect();
+    let existing_statuses = detect_existing_issue_statuses(tx, &issue_keys).await?;
 
     let now = chrono::Utc::now().timestamp();
 
-    for (fingerprint, delta) in &accumulators.issues {
-        match existing_statuses.get(fingerprint.as_str()) {
+    for (key, delta) in &accumulators.issues {
+        let fingerprint = &key.1;
+        match existing_statuses.get(key) {
             None => {
                 pending.push(crate::notify::NotificationEvent {
                     trigger: crate::notify::NotifyTrigger::NewIssue,
@@ -114,6 +129,35 @@ pub(super) async fn flush_aggregation_inner(
         }
     }
 
+    // Stored sketches for the issues carrying user data this flush, read in
+    // batches so the merged blob can ride the upsert below.
+    let mut hll_keys: Vec<(i64, String)> = accumulators
+        .issues
+        .iter()
+        .filter(|(_, d)| d.has_hll_data)
+        .map(|((pid, fp), _)| (*pid as i64, fp.clone()))
+        .collect();
+    hll_keys.sort_unstable();
+    let mut existing_hlls: HashMap<(u64, String), Vec<u8>> = HashMap::new();
+    for chunk in hll_keys.chunks(TRIGGER_CHUNK_SIZE / 2) {
+        let mut builder = QueryBuilder::<crate::db::Db>::new(
+            "SELECT project_id, fingerprint, user_hll FROM issues WHERE user_hll IS NOT NULL AND ",
+        );
+        crate::queries::retention::push_pair_in_list(&mut builder, chunk);
+
+        let hll_rows = builder.build().fetch_all(&mut **tx).await?;
+        for row in &hll_rows {
+            let project_id: i64 = row.get("project_id");
+            let fp: String = row.get("fingerprint");
+            let hll_data: Option<Vec<u8>> = row.get("user_hll");
+            if let Some(data) = hll_data {
+                if data.len() == HLL_REGISTER_COUNT {
+                    existing_hlls.insert((project_id as u64, fp), data);
+                }
+            }
+        }
+    }
+
     struct IssueRow<'a> {
         fingerprint: &'a str,
         project_id: i64,
@@ -123,10 +167,11 @@ pub(super) async fn flush_aggregation_inner(
         last_seen: i64,
         event_count: i64,
         item_type: &'a str,
+        user_hll: Option<Vec<u8>>,
     }
 
     let mut rows: Vec<IssueRow<'_>> = Vec::with_capacity(accumulators.issues.len());
-    for (fingerprint, delta) in &accumulators.issues {
+    for (key, delta) in &accumulators.issues {
         let first_seen = if delta.first_seen == i64::MAX {
             now
         } else {
@@ -137,8 +182,13 @@ pub(super) async fn flush_aggregation_inner(
         } else {
             delta.last_seen
         };
+        let user_hll = if delta.has_hll_data {
+            merged_sketch(existing_hlls.get(key).map(Vec::as_slice), &delta.hll)
+        } else {
+            None
+        };
         rows.push(IssueRow {
-            fingerprint,
+            fingerprint: &key.1,
             project_id: delta.project_id as i64,
             title: delta.title.as_deref(),
             level: delta.level.as_ref().map(|l| l.as_str()),
@@ -146,14 +196,15 @@ pub(super) async fn flush_aggregation_inner(
             last_seen,
             event_count: delta.event_count as i64,
             item_type: &delta.item_type,
+            user_hll,
         });
     }
     // Deterministic key order so concurrent writers acquire row locks in the same order.
-    rows.sort_unstable_by(|a, b| a.fingerprint.cmp(b.fingerprint));
+    rows.sort_unstable_by(|a, b| (a.project_id, a.fingerprint).cmp(&(b.project_id, b.fingerprint)));
 
     for chunk in rows.chunks(ISSUE_UPSERT_CHUNK_SIZE) {
         let mut builder = QueryBuilder::<crate::db::Db>::new(
-            "INSERT INTO issues (fingerprint, project_id, title, level, first_seen, last_seen, event_count, status, item_type) ",
+            "INSERT INTO issues (fingerprint, project_id, title, level, first_seen, last_seen, event_count, status, item_type, user_hll) ",
         );
 
         builder.push_values(chunk.iter(), |mut b, row| {
@@ -166,84 +217,34 @@ pub(super) async fn flush_aggregation_inner(
             b.push_bind(row.event_count);
             b.push_bind("unresolved");
             b.push_bind(row.item_type);
+            b.push_bind(row.user_hll.clone());
         });
 
+        // A NULL sketch means "unchanged this flush": COALESCE keeps the stored one.
         #[cfg(feature = "sqlite")]
         builder.push(
-            " ON CONFLICT(fingerprint) DO UPDATE SET \
+            " ON CONFLICT(project_id, fingerprint) DO UPDATE SET \
                  first_seen = MIN(issues.first_seen, excluded.first_seen), \
                  last_seen = MAX(issues.last_seen, excluded.last_seen), \
                  event_count = issues.event_count + excluded.event_count, \
                  title = COALESCE(excluded.title, issues.title), \
                  level = COALESCE(excluded.level, issues.level), \
-                 status = CASE WHEN issues.status = 'resolved' THEN 'unresolved' ELSE issues.status END",
+                 status = CASE WHEN issues.status = 'resolved' THEN 'unresolved' ELSE issues.status END, \
+                 user_hll = COALESCE(excluded.user_hll, issues.user_hll)",
         );
         #[cfg(not(feature = "sqlite"))]
         builder.push(
-            " ON CONFLICT(fingerprint) DO UPDATE SET \
+            " ON CONFLICT(project_id, fingerprint) DO UPDATE SET \
                  first_seen = LEAST(issues.first_seen, excluded.first_seen), \
                  last_seen = GREATEST(issues.last_seen, excluded.last_seen), \
                  event_count = issues.event_count + excluded.event_count, \
                  title = COALESCE(excluded.title, issues.title), \
                  level = COALESCE(excluded.level, issues.level), \
-                 status = CASE WHEN issues.status = 'resolved' THEN 'unresolved' ELSE issues.status END",
+                 status = CASE WHEN issues.status = 'resolved' THEN 'unresolved' ELSE issues.status END, \
+                 user_hll = COALESCE(excluded.user_hll, issues.user_hll)",
         );
 
         builder.build().execute(&mut **tx).await?;
-    }
-
-    let mut hll_fingerprints: Vec<&str> = accumulators
-        .issues
-        .iter()
-        .filter(|(_, d)| d.has_hll_data)
-        .map(|(fp, _)| fp.as_str())
-        .collect();
-    hll_fingerprints.sort_unstable();
-
-    if !hll_fingerprints.is_empty() {
-        let mut existing_hlls: HashMap<String, Vec<u8>> = HashMap::new();
-        for chunk in hll_fingerprints.chunks(TRIGGER_CHUNK_SIZE) {
-            let mut builder = QueryBuilder::<crate::db::Db>::new(
-                "SELECT fingerprint, user_hll FROM issues WHERE user_hll IS NOT NULL AND fingerprint IN (",
-            );
-            let mut sep = builder.separated(", ");
-            for fp in chunk {
-                sep.push_bind(*fp);
-            }
-            sep.push_unseparated(")");
-
-            let hll_rows = builder.build().fetch_all(&mut **tx).await?;
-            for row in &hll_rows {
-                let fp: String = row.get("fingerprint");
-                let hll_data: Option<Vec<u8>> = row.get("user_hll");
-                if let Some(data) = hll_data {
-                    if data.len() == HLL_REGISTER_COUNT {
-                        existing_hlls.insert(fp, data);
-                    }
-                }
-            }
-        }
-
-        // write back individually: each row has unique blob data
-        for fp in &hll_fingerprints {
-            let delta = &accumulators.issues[*fp];
-            let merged = match existing_hlls.get(*fp) {
-                Some(buf) => {
-                    let mut base = HyperLogLog::with_registers(buf.clone());
-                    base.merge(&delta.hll);
-                    base
-                }
-                None => delta.hll.clone(),
-            };
-
-            sqlx::query(sql!(
-                "UPDATE issues SET user_hll = ?1 WHERE fingerprint = ?2"
-            ))
-            .bind(merged.get_registers())
-            .bind(*fp)
-            .execute(&mut **tx)
-            .await?;
-        }
     }
 
     event_writes::bulk_upsert_tag_counts(tx, &accumulators.tags).await?;
@@ -323,23 +324,65 @@ async fn flush_releases(
     Ok(())
 }
 
-/// Max session-aggregate rows per multi-row INSERT chunk. 11 bind params per
-/// row; 32766 / 11 = 2978, use 2700 for margin.
-const SESSION_UPSERT_CHUNK_SIZE: usize = 2700;
+/// Max session-aggregate rows per multi-row INSERT chunk. 13 bind params per
+/// row; 32766 / 13 = 2520, use 2400 for margin.
+const SESSION_UPSERT_CHUNK_SIZE: usize = 2400;
 
-/// UPSERT session rollups and merge their user HLL sketches in place.
+/// Session-aggregate keys per batched sketch read: 4 binds per key.
+const SESSION_HLL_READ_CHUNK: usize = 4000;
+
+/// UPSERT session rollups, merging their user HLL sketches in the same statement.
 async fn flush_session_aggregates(
     tx: &mut sqlx::Transaction<'_, crate::db::Db>,
     accumulators: &Accumulators,
 ) -> Result<()> {
-    use crate::ingest::models::HLL_REGISTER_COUNT;
-    use simple_hll::HyperLogLog;
+    use sqlx::Row;
 
     if accumulators.session_aggregates.is_empty() {
         return Ok(());
     }
 
     let now = chrono::Utc::now().timestamp();
+
+    // Stored sketches for the keys carrying user data this flush.
+    let mut hll_keys: Vec<&(u64, String, String, i64)> = accumulators
+        .session_aggregates
+        .iter()
+        .filter(|(_, d)| d.has_user_data)
+        .map(|(k, _)| k)
+        .collect();
+    hll_keys.sort_unstable();
+    let mut existing: HashMap<(u64, String, String, i64), HllPair> = HashMap::new();
+    for chunk in hll_keys.chunks(SESSION_HLL_READ_CHUNK) {
+        let mut builder = QueryBuilder::<crate::db::Db>::new(
+            "SELECT project_id, release, environment, day_bucket, users_hll, users_crashed_hll \
+             FROM session_aggregates WHERE (project_id, release, environment, day_bucket) IN (",
+        );
+        {
+            let mut sep = builder.separated(", ");
+            for (project_id, release, environment, day_bucket) in chunk.iter().copied() {
+                sep.push("(")
+                    .push_bind_unseparated(*project_id as i64)
+                    .push_unseparated(", ")
+                    .push_bind_unseparated(release.as_str())
+                    .push_unseparated(", ")
+                    .push_bind_unseparated(environment.as_str())
+                    .push_unseparated(", ")
+                    .push_bind_unseparated(*day_bucket)
+                    .push_unseparated(")");
+            }
+        }
+        builder.push(")");
+        for row in builder.build().fetch_all(&mut **tx).await? {
+            let key = (
+                row.get::<i64, _>("project_id") as u64,
+                row.get::<String, _>("release"),
+                row.get::<String, _>("environment"),
+                row.get::<i64, _>("day_bucket"),
+            );
+            existing.insert(key, (row.get("users_hll"), row.get("users_crashed_hll")));
+        }
+    }
 
     struct SessRow<'a> {
         project_id: i64,
@@ -353,11 +396,13 @@ async fn flush_session_aggregates(
         has_aggregate: i64,
         first_seen: i64,
         last_seen: i64,
+        users_hll: Option<Vec<u8>>,
+        users_crashed_hll: Option<Vec<u8>>,
     }
 
     let mut rows: Vec<SessRow<'_>> = Vec::with_capacity(accumulators.session_aggregates.len());
-    for ((project_id, release, environment, day_bucket), delta) in &accumulators.session_aggregates
-    {
+    for (key, delta) in &accumulators.session_aggregates {
+        let (project_id, release, environment, day_bucket) = key;
         let first_seen = if delta.first_seen == i64::MAX {
             now
         } else {
@@ -367,6 +412,18 @@ async fn flush_session_aggregates(
             now
         } else {
             delta.last_seen
+        };
+        let (users_hll, users_crashed_hll) = if delta.has_user_data {
+            let (stored_users, stored_crashed) = existing
+                .get(key)
+                .map(|(u, c)| (u.as_deref(), c.as_deref()))
+                .unwrap_or((None, None));
+            (
+                merged_sketch(stored_users, &delta.users_hll),
+                merged_sketch(stored_crashed, &delta.users_crashed_hll),
+            )
+        } else {
+            (None, None)
         };
         rows.push(SessRow {
             project_id: *project_id as i64,
@@ -380,6 +437,8 @@ async fn flush_session_aggregates(
             has_aggregate: i64::from(delta.has_aggregate),
             first_seen,
             last_seen,
+            users_hll,
+            users_crashed_hll,
         });
     }
     // Deterministic key order so concurrent writers acquire row locks in the same order.
@@ -394,7 +453,7 @@ async fn flush_session_aggregates(
 
     for chunk in rows.chunks(SESSION_UPSERT_CHUNK_SIZE) {
         let mut builder = QueryBuilder::<crate::db::Db>::new(
-            "INSERT INTO session_aggregates (project_id, release, environment, day_bucket, sessions_total, sessions_crashed, sessions_errored, sessions_abnormal, has_aggregate, first_seen, last_seen) ",
+            "INSERT INTO session_aggregates (project_id, release, environment, day_bucket, sessions_total, sessions_crashed, sessions_errored, sessions_abnormal, has_aggregate, first_seen, last_seen, users_hll, users_crashed_hll) ",
         );
 
         builder.push_values(chunk.iter(), |mut b, row| {
@@ -409,8 +468,11 @@ async fn flush_session_aggregates(
             b.push_bind(row.has_aggregate);
             b.push_bind(row.first_seen);
             b.push_bind(row.last_seen);
+            b.push_bind(row.users_hll.clone());
+            b.push_bind(row.users_crashed_hll.clone());
         });
 
+        // A NULL sketch means "unchanged this flush": COALESCE keeps the stored one.
         #[cfg(feature = "sqlite")]
         builder.push(
             " ON CONFLICT(project_id, release, environment, day_bucket) DO UPDATE SET \
@@ -420,7 +482,9 @@ async fn flush_session_aggregates(
                  sessions_abnormal = session_aggregates.sessions_abnormal + excluded.sessions_abnormal, \
                  has_aggregate = MAX(session_aggregates.has_aggregate, excluded.has_aggregate), \
                  first_seen = MIN(session_aggregates.first_seen, excluded.first_seen), \
-                 last_seen = MAX(session_aggregates.last_seen, excluded.last_seen)",
+                 last_seen = MAX(session_aggregates.last_seen, excluded.last_seen), \
+                 users_hll = COALESCE(excluded.users_hll, session_aggregates.users_hll), \
+                 users_crashed_hll = COALESCE(excluded.users_crashed_hll, session_aggregates.users_crashed_hll)",
         );
         #[cfg(not(feature = "sqlite"))]
         builder.push(
@@ -431,84 +495,78 @@ async fn flush_session_aggregates(
                  sessions_abnormal = session_aggregates.sessions_abnormal + excluded.sessions_abnormal, \
                  has_aggregate = GREATEST(session_aggregates.has_aggregate, excluded.has_aggregate), \
                  first_seen = LEAST(session_aggregates.first_seen, excluded.first_seen), \
-                 last_seen = GREATEST(session_aggregates.last_seen, excluded.last_seen)",
+                 last_seen = GREATEST(session_aggregates.last_seen, excluded.last_seen), \
+                 users_hll = COALESCE(excluded.users_hll, session_aggregates.users_hll), \
+                 users_crashed_hll = COALESCE(excluded.users_crashed_hll, session_aggregates.users_crashed_hll)",
         );
 
         builder.build().execute(&mut **tx).await?;
     }
 
-    // HLL read-modify-write per (project, release, environment, day) with user data.
-    for ((project_id, release, environment, day_bucket), delta) in &accumulators.session_aggregates
-    {
-        if !delta.has_user_data {
-            continue;
-        }
-
-        let existing: Option<HllPair> = sqlx::query_as(sql!(
-            "SELECT users_hll, users_crashed_hll FROM session_aggregates \
-             WHERE project_id = ?1 AND release = ?2 AND environment = ?3 AND day_bucket = ?4"
-        ))
-        .bind(*project_id as i64)
-        .bind(release)
-        .bind(environment)
-        .bind(*day_bucket)
-        .fetch_optional(&mut **tx)
-        .await?;
-
-        let merge = |existing: Option<Vec<u8>>, fresh: &HyperLogLog<12>| -> Vec<u8> {
-            match existing {
-                Some(buf) if buf.len() == HLL_REGISTER_COUNT => {
-                    let mut base = HyperLogLog::with_registers(buf);
-                    base.merge(fresh);
-                    base.get_registers().to_vec()
-                }
-                _ => fresh.get_registers().to_vec(),
-            }
-        };
-
-        let (cur_users, cur_crashed) = existing.unwrap_or((None, None));
-        let users_blob = merge(cur_users, &delta.users_hll);
-        let crashed_blob = merge(cur_crashed, &delta.users_crashed_hll);
-
-        sqlx::query(sql!(
-            "UPDATE session_aggregates SET users_hll = ?1, users_crashed_hll = ?2 \
-             WHERE project_id = ?3 AND release = ?4 AND environment = ?5 AND day_bucket = ?6"
-        ))
-        .bind(users_blob)
-        .bind(crashed_blob)
-        .bind(*project_id as i64)
-        .bind(release)
-        .bind(environment)
-        .bind(*day_bucket)
-        .execute(&mut **tx)
-        .await?;
-    }
-
     Ok(())
 }
 
-/// Max transaction-metric rows per multi-row INSERT chunk. 32 bind params per
-/// row (3 key + count/sum/failed + 24 buckets + 2 seen); 32766 / 32 = 1023,
-/// use 1000 for margin.
-const TXN_UPSERT_CHUNK_SIZE: usize = 1000;
+/// Max transaction-metric rows per multi-row INSERT chunk. 33 bind params per
+/// row (3 key + count/sum/failed + 24 buckets + 2 seen + sketch); 32766 / 33 = 992,
+/// use 950 for margin.
+const TXN_UPSERT_CHUNK_SIZE: usize = 950;
+
+/// Transaction-metric keys per batched sketch read: 3 binds per key.
+const TXN_HLL_READ_CHUNK: usize = 5000;
 
 /// Column list for the histogram buckets, used by both INSERT and the
 /// `existing + excluded` UPDATE clause. Keep in lockstep with the migration.
 const TXN_BUCKET_COLS: &str = "bucket_0, bucket_1, bucket_2, bucket_3, bucket_4, bucket_5, bucket_6, bucket_7, bucket_8, bucket_9, bucket_10, bucket_11, bucket_12, bucket_13, bucket_14, bucket_15, bucket_16, bucket_17, bucket_18, bucket_19, bucket_20, bucket_21, bucket_22, bucket_23";
 
-/// UPSERT transaction perf rollups and merge their user HLL sketches in place.
+/// UPSERT transaction perf rollups, merging their user HLL sketches in the same statement.
 async fn flush_transaction_metrics(
     tx: &mut sqlx::Transaction<'_, crate::db::Db>,
     accumulators: &Accumulators,
 ) -> Result<()> {
-    use crate::ingest::models::HLL_REGISTER_COUNT;
-    use simple_hll::HyperLogLog;
+    use sqlx::Row;
 
     if accumulators.transaction_metrics.is_empty() {
         return Ok(());
     }
 
     let now = chrono::Utc::now().timestamp();
+
+    // Stored sketches for the keys carrying user data this flush.
+    let mut hll_keys: Vec<&(u64, String, i64)> = accumulators
+        .transaction_metrics
+        .iter()
+        .filter(|(_, d)| d.has_user_data)
+        .map(|(k, _)| k)
+        .collect();
+    hll_keys.sort_unstable();
+    let mut existing: HashMap<(u64, String, i64), Vec<u8>> = HashMap::new();
+    for chunk in hll_keys.chunks(TXN_HLL_READ_CHUNK) {
+        let mut builder = QueryBuilder::<crate::db::Db>::new(
+            "SELECT project_id, transaction_name, hour_bucket, users_hll FROM transaction_metrics \
+             WHERE users_hll IS NOT NULL AND (project_id, transaction_name, hour_bucket) IN (",
+        );
+        {
+            let mut sep = builder.separated(", ");
+            for (project_id, name, hour_bucket) in chunk.iter().copied() {
+                sep.push("(")
+                    .push_bind_unseparated(*project_id as i64)
+                    .push_unseparated(", ")
+                    .push_bind_unseparated(name.as_str())
+                    .push_unseparated(", ")
+                    .push_bind_unseparated(*hour_bucket)
+                    .push_unseparated(")");
+            }
+        }
+        builder.push(")");
+        for row in builder.build().fetch_all(&mut **tx).await? {
+            let key = (
+                row.get::<i64, _>("project_id") as u64,
+                row.get::<String, _>("transaction_name"),
+                row.get::<i64, _>("hour_bucket"),
+            );
+            existing.insert(key, row.get("users_hll"));
+        }
+    }
 
     struct TxnRow<'a> {
         project_id: i64,
@@ -520,10 +578,12 @@ async fn flush_transaction_metrics(
         buckets: [i64; 24],
         first_seen: i64,
         last_seen: i64,
+        users_hll: Option<Vec<u8>>,
     }
 
     let mut rows: Vec<TxnRow<'_>> = Vec::with_capacity(accumulators.transaction_metrics.len());
-    for ((project_id, name, hour_bucket), delta) in &accumulators.transaction_metrics {
+    for (key, delta) in &accumulators.transaction_metrics {
+        let (project_id, name, hour_bucket) = key;
         let first_seen = if delta.first_seen == i64::MAX {
             now
         } else {
@@ -538,6 +598,11 @@ async fn flush_transaction_metrics(
         for (i, b) in delta.buckets.iter().enumerate() {
             buckets[i] = *b as i64;
         }
+        let users_hll = if delta.has_user_data {
+            merged_sketch(existing.get(key).map(Vec::as_slice), &delta.users_hll)
+        } else {
+            None
+        };
         rows.push(TxnRow {
             project_id: *project_id as i64,
             name,
@@ -548,6 +613,7 @@ async fn flush_transaction_metrics(
             buckets,
             first_seen,
             last_seen,
+            users_hll,
         });
     }
     // Deterministic key order so concurrent writers acquire row locks in the same order.
@@ -566,6 +632,7 @@ async fn flush_transaction_metrics(
     #[cfg(not(feature = "sqlite"))]
     let (min_fn, max_fn) = ("LEAST", "GREATEST");
 
+    // A NULL sketch means "unchanged this flush": COALESCE keeps the stored one.
     let conflict_clause = format!(
         " ON CONFLICT(project_id, transaction_name, hour_bucket) DO UPDATE SET \
              count = transaction_metrics.count + excluded.count, \
@@ -573,11 +640,12 @@ async fn flush_transaction_metrics(
              failed_count = transaction_metrics.failed_count + excluded.failed_count, \
              {bucket_updates}, \
              first_seen = {min_fn}(transaction_metrics.first_seen, excluded.first_seen), \
-             last_seen = {max_fn}(transaction_metrics.last_seen, excluded.last_seen)"
+             last_seen = {max_fn}(transaction_metrics.last_seen, excluded.last_seen), \
+             users_hll = COALESCE(excluded.users_hll, transaction_metrics.users_hll)"
     );
 
     let insert_prefix = format!(
-        "INSERT INTO transaction_metrics (project_id, transaction_name, hour_bucket, count, sum_duration_ms, failed_count, {TXN_BUCKET_COLS}, first_seen, last_seen) "
+        "INSERT INTO transaction_metrics (project_id, transaction_name, hour_bucket, count, sum_duration_ms, failed_count, {TXN_BUCKET_COLS}, first_seen, last_seen, users_hll) "
     );
 
     for chunk in rows.chunks(TXN_UPSERT_CHUNK_SIZE) {
@@ -595,48 +663,140 @@ async fn flush_transaction_metrics(
             }
             b.push_bind(row.first_seen);
             b.push_bind(row.last_seen);
+            b.push_bind(row.users_hll.clone());
         });
 
         builder.push(&conflict_clause);
         builder.build().execute(&mut **tx).await?;
     }
 
-    // HLL read-modify-write per (project, transaction, hour) with user data.
-    for ((project_id, name, hour_bucket), delta) in &accumulators.transaction_metrics {
-        if !delta.has_user_data {
-            continue;
-        }
+    Ok(())
+}
 
-        let existing: Option<(Option<Vec<u8>>,)> = sqlx::query_as(sql!(
-            "SELECT users_hll FROM transaction_metrics \
-             WHERE project_id = ?1 AND transaction_name = ?2 AND hour_bucket = ?3"
-        ))
-        .bind(*project_id as i64)
-        .bind(name)
-        .bind(*hour_bucket)
-        .fetch_optional(&mut **tx)
-        .await?;
+#[cfg(test)]
+mod tests {
+    use super::super::accumulator::Accumulators;
+    use super::super::flush::{flush_aggregation, insert_event};
+    use crate::ingest::models::{ItemType, SessionBucket, StorableEvent};
+    use simple_hll::HyperLogLog;
+    use sqlx::Row;
 
-        let merged = match existing.and_then(|(b,)| b) {
-            Some(buf) if buf.len() == HLL_REGISTER_COUNT => {
-                let mut base = HyperLogLog::<12>::with_registers(buf);
-                base.merge(&delta.users_hll);
-                base.get_registers().to_vec()
-            }
-            _ => delta.users_hll.get_registers().to_vec(),
-        };
-
-        sqlx::query(sql!(
-            "UPDATE transaction_metrics SET users_hll = ?1 \
-             WHERE project_id = ?2 AND transaction_name = ?3 AND hour_bucket = ?4"
-        ))
-        .bind(merged)
-        .bind(*project_id as i64)
-        .bind(name)
-        .bind(*hour_bucket)
-        .execute(&mut **tx)
-        .await?;
+    fn session_event(event_id: &str, did: &str, crashed: u64) -> StorableEvent {
+        let mut e = StorableEvent::new(
+            event_id.to_string(),
+            ItemType::Session,
+            vec![0],
+            1,
+            "k".to_string(),
+        );
+        e.timestamp = 1000;
+        e.release = Some("app@1.0".to_string());
+        e.session_buckets = vec![SessionBucket {
+            release: "app@1.0".to_string(),
+            environment: "prod".to_string(),
+            started_ts: 1000,
+            total: 1,
+            crashed,
+            errored: 0,
+            abnormal: 0,
+            did: Some(did.to_string()),
+            is_aggregate: false,
+        }];
+        e
     }
 
-    Ok(())
+    fn txn_event(event_id: &str, user: &str) -> StorableEvent {
+        let mut e = StorableEvent::new(
+            event_id.to_string(),
+            ItemType::Transaction,
+            vec![0],
+            1,
+            "k".to_string(),
+        );
+        e.timestamp = 1000;
+        e.transaction_name = Some("/api/x".to_string());
+        e.duration_ms = Some(100);
+        e.user_identifier = Some(user.to_string());
+        e
+    }
+
+    fn issue_event(event_id: &str, user: &str) -> StorableEvent {
+        let mut e = StorableEvent::test_default(event_id);
+        e.fingerprint = Some("hll_fp".to_string());
+        e.user_identifier = Some(user.to_string());
+        e
+    }
+
+    async fn flush(pool: &crate::db::DbPool, events: &[StorableEvent]) {
+        let mut acc = Accumulators::new();
+        for e in events {
+            insert_event(pool, e).await.unwrap();
+            acc.accumulate(e);
+        }
+        flush_aggregation(pool, &mut acc, None).await.unwrap();
+    }
+
+    fn count(blob: Option<Vec<u8>>) -> u64 {
+        HyperLogLog::<12>::with_registers(blob.expect("sketch stored")).count() as u64
+    }
+
+    /// The stored sketch must be merged with, not replaced by, the next flush's.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn session_hll_merges_across_two_flushes() {
+        let pool = crate::db::open_test_pool().await;
+        flush(
+            &pool,
+            &[session_event("s1", "u1", 0), session_event("s2", "u2", 1)],
+        )
+        .await;
+        flush(&pool, &[session_event("s3", "u3", 0)]).await;
+
+        let row = sqlx::query(
+            "SELECT sessions_total, users_hll, users_crashed_hll FROM session_aggregates \
+             WHERE project_id = 1 AND release = 'app@1.0' AND environment = 'prod'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.get::<i64, _>("sessions_total"), 3);
+        assert_eq!(count(row.get("users_hll")), 3);
+        assert_eq!(count(row.get("users_crashed_hll")), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn transaction_hll_merges_across_two_flushes() {
+        let pool = crate::db::open_test_pool().await;
+        flush(&pool, &[txn_event("t1", "u1"), txn_event("t2", "u2")]).await;
+        flush(&pool, &[txn_event("t3", "u3")]).await;
+
+        let row = sqlx::query(
+            "SELECT count, users_hll FROM transaction_metrics \
+             WHERE project_id = 1 AND transaction_name = '/api/x'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.get::<i64, _>("count"), 3);
+        assert_eq!(count(row.get("users_hll")), 3);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn issue_hll_merges_across_two_flushes() {
+        let pool = crate::db::open_test_pool().await;
+        flush(&pool, &[issue_event("i1", "u1"), issue_event("i2", "u2")]).await;
+        flush(&pool, &[issue_event("i3", "u3")]).await;
+        // A flush without user data must leave the stored sketch alone.
+        let mut no_user = StorableEvent::test_default("i4");
+        no_user.fingerprint = Some("hll_fp".to_string());
+        flush(&pool, &[no_user]).await;
+
+        let row = sqlx::query(
+            "SELECT event_count, user_hll FROM issues WHERE project_id = 1 AND fingerprint = 'hll_fp'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.get::<i64, _>("event_count"), 4);
+        assert_eq!(count(row.get("user_hll")), 3);
+    }
 }

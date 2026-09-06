@@ -108,6 +108,7 @@ flash-queue-replay-failed = Reenvio falhou: { $error }
 flash-queue-cancelled = Notificação em fila descartada
 flash-queue-replay-failed-generic = O reenvio falhou. O motivo está no item em fila, em Erro.
 flash-license-activated = Licença ativada
+flash-org-cap-reached = O limite de organizações da sua licença foi atingido. Uma ou mais organizações não foram criadas.
 flash-license-deactivated = Licença removida
 flash-license-persist-failed = A licença foi verificada mas não foi possível guardá-la. Vê o registo do servidor.
 flash-license-clear-failed = Não foi possível remover a licença. Vê o registo do servidor.

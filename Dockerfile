@@ -13,21 +13,23 @@ WORKDIR /app
 # stub, then build for real once the sources land.
 COPY Cargo.toml Cargo.lock ./
 COPY stackpit-auth/Cargo.toml stackpit-auth/
-COPY stackpit-bench/Cargo.toml stackpit-bench/
-RUN mkdir src stackpit-auth/src stackpit-bench/src \
+RUN mkdir src stackpit-auth/src \
     && echo "fn main() {}" > src/main.rs \
-    && echo "fn main() {}" > stackpit-bench/src/main.rs \
     && touch src/lib.rs stackpit-auth/src/lib.rs \
     && cargo build --release --no-default-features --features "$DB_FEATURE" \
-    && rm -rf src stackpit-auth/src stackpit-bench/src
+    && rm -rf src stackpit-auth/src
 COPY . .
 RUN touch src/main.rs stackpit-auth/src/lib.rs \
     && cargo build --release --no-default-features --features "$DB_FEATURE"
 
 FROM debian:trixie-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --no-create-home --uid 10001 stackpit
 WORKDIR /app
 COPY --from=builder /app/target/release/stackpit /app/stackpit
+# The envelope, zip and minidump parsers handle untrusted bytes; keep them off root.
+RUN chown -R stackpit:stackpit /app
+USER stackpit
 EXPOSE 3000 3001
 
 # NOTE: Mount a volume at the configured storage.path (default: working dir)

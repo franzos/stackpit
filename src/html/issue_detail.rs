@@ -169,45 +169,33 @@ pub async fn handler(
         .await
         .map_err(|_| HtmlError(StatusCode::NOT_FOUND, "Not found".into()))?;
 
-    let issue = match queries::issues::get_issue(&pool, &fingerprint).await? {
+    let issue = match queries::issues::get_issue(&pool, project_id, &fingerprint).await? {
         Some(i) => i,
         None => return Err(HtmlError(StatusCode::NOT_FOUND, "Issue not found".into())),
     };
-
-    if issue.project_id != project_id {
-        return Err(HtmlError(
-            StatusCode::NOT_FOUND,
-            "Issue not found in this project".into(),
-        ));
-    }
 
     let tab = params.tab.unwrap_or_else(|| "details".to_string());
 
     let nav = state.nav_counts(project_id).await;
 
-    let is_discarded = queries::filters::is_fingerprint_discarded(&pool, &fingerprint)
-        .await
-        .unwrap_or(false);
-
-    let chart_data = match queries::events::event_histogram(&pool, &fingerprint, 30).await {
+    // Independent reads on a small pool: run them together rather than in sequence.
+    let (is_discarded, histogram, tag_facets, release_range, external_links, org_id) = tokio::join!(
+        queries::filters::is_fingerprint_discarded(&pool, project_id, &fingerprint),
+        queries::events::event_histogram(&pool, project_id, &fingerprint, 30),
+        queries::events::get_tag_facets(&pool, project_id, &fingerprint),
+        queries::issues::get_issue_release_range(&pool, project_id, &fingerprint),
+        queries::issue_links::links_for_issue(&pool, project_id as i64, &fingerprint),
+        queries::orgs::org_of_project(&pool, project_id as i64),
+    );
+    let is_discarded = is_discarded.unwrap_or(false);
+    let chart_data = match histogram {
         Ok(buckets) => charts::chart_json(&buckets, "Events"),
         Err(_) => String::new(),
     };
-
-    let tag_facets = queries::events::get_tag_facets(&pool, &fingerprint)
-        .await
-        .unwrap_or_default();
-
-    let (first_seen_release, last_seen_release) =
-        queries::issues::get_issue_release_range(&pool, &fingerprint)
-            .await
-            .unwrap_or_default();
-
-    let external_links =
-        queries::issue_links::links_for_issue(&pool, project_id as i64, &fingerprint)
-            .await
-            .unwrap_or_default();
-    let tracker_options = match queries::orgs::org_of_project(&pool, project_id as i64).await {
+    let tag_facets = tag_facets.unwrap_or_default();
+    let (first_seen_release, last_seen_release) = release_range.unwrap_or_default();
+    let external_links = external_links.unwrap_or_default();
+    let tracker_options = match org_id {
         Ok(Some(org_id)) => {
             let linked_ids: std::collections::HashSet<(i64, String)> = external_links
                 .iter()
@@ -224,7 +212,8 @@ pub async fn handler(
 
     if tab == "events" {
         let page = params.page.page();
-        let events = queries::events::list_events_for_issue(&pool, &fingerprint, &page).await?;
+        let events =
+            queries::events::list_events_for_issue(&pool, project_id, &fingerprint, &page).await?;
 
         let tmpl = IssueDetailTemplate {
             issue,
@@ -261,7 +250,7 @@ pub async fn handler(
         return Ok(render_template(&tmpl));
     }
 
-    let latest = queries::events::get_latest_event_for_issue(&pool, &fingerprint)
+    let latest = queries::events::get_latest_event_for_issue(&pool, project_id, &fingerprint)
         .await
         .ok()
         .flatten();
@@ -279,11 +268,12 @@ pub async fn handler(
         user_reports,
         raw_json,
     ) = if let Some(ref ev) = latest {
-        let supplements = event_supplements::get_event_supplements(&pool, ev)
-            .await
-            .unwrap_or_default();
-        let sourcemaps: std::collections::HashMap<String, ::sourcemap::SourceMap> =
-            event_supplements::preload_sourcemaps(&pool, &ev.payload, ev.project_id).await;
+        let (supplements, sourcemaps) = tokio::join!(
+            event_supplements::get_event_supplements(&pool, ev),
+            event_supplements::preload_sourcemaps(&pool, &ev.payload, ev.project_id),
+        );
+        let supplements = supplements.unwrap_or_default();
+        let sourcemaps: std::collections::HashMap<String, ::sourcemap::SourceMap> = sourcemaps;
         let resolver = move |debug_id: &str,
                              line: u32,
                              col: u32|
@@ -390,45 +380,39 @@ pub async fn toggle_discard(
     active: ActiveOrg,
     State(state): State<AppState>,
     Path((project_id, fingerprint)): Path<(u64, String)>,
-) -> axum::response::Response {
-    // Bind fingerprint to its owning project, then verify project belongs to active org.
-    let fp_project =
-        match crate::queries::orgs::project_of_fingerprint(&state.pool, &fingerprint).await {
-            Ok(Some(p)) => p,
-            Ok(None) => return html_error(StatusCode::NOT_FOUND, "Issue not found"),
-            Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-        };
-    if fp_project != project_id as i64 {
-        return html_error(StatusCode::NOT_FOUND, "Issue not found");
-    }
+) -> Result<axum::response::Response, HtmlError> {
     if let Err(r) =
         crate::orgs::extractor::require_project_owner(&active, &state.pool, project_id as i64).await
     {
-        return r;
+        return Ok(r);
+    }
+    if queries::issues::get_issue(&state.pool, project_id, &fingerprint)
+        .await?
+        .is_none()
+    {
+        return Ok(html_error(StatusCode::NOT_FOUND, "Issue not found"));
     }
 
-    let is_discarded = queries::filters::is_fingerprint_discarded(&state.pool, &fingerprint)
-        .await
-        .unwrap_or(false);
+    let is_discarded =
+        queries::filters::is_fingerprint_discarded(&state.pool, project_id, &fingerprint)
+            .await
+            .unwrap_or(false);
 
-    let result = if is_discarded {
-        queries::filters::undiscard_fingerprint(&state.writer_pool, &fingerprint).await
-    } else {
-        queries::filters::discard_fingerprint(&state.writer_pool, &fingerprint, project_id).await
-    };
-    if let Err(err) = result {
-        return html_error(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string());
-    }
     if is_discarded {
+        queries::filters::undiscard_fingerprint(&state.writer_pool, project_id, &fingerprint)
+            .await?;
         state
             .filter_engine
-            .remove_discarded_fingerprint(&fingerprint);
+            .remove_discarded_fingerprint(project_id, &fingerprint);
     } else {
-        state.filter_engine.add_discarded_fingerprint(&fingerprint);
+        queries::filters::discard_fingerprint(&state.writer_pool, &fingerprint, project_id).await?;
+        state
+            .filter_engine
+            .add_discarded_fingerprint(project_id, &fingerprint);
     }
 
     let redirect_url = format!("/web/projects/{project_id}/issues/{fingerprint}/");
-    Redirect::to(&redirect_url).into_response()
+    Ok(Redirect::to(&redirect_url).into_response())
 }
 
 pub async fn update_status(
@@ -436,21 +420,11 @@ pub async fn update_status(
     State(state): State<AppState>,
     Path((project_id, fingerprint)): Path<(u64, String)>,
     Form(form): Form<StatusForm>,
-) -> axum::response::Response {
-    // Bind fingerprint to its owning project, then verify project belongs to active org.
-    let fp_project =
-        match crate::queries::orgs::project_of_fingerprint(&state.pool, &fingerprint).await {
-            Ok(Some(p)) => p,
-            Ok(None) => return html_error(StatusCode::NOT_FOUND, "Issue not found"),
-            Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-        };
-    if fp_project != project_id as i64 {
-        return html_error(StatusCode::NOT_FOUND, "Issue not found");
-    }
+) -> Result<axum::response::Response, HtmlError> {
     if let Err(r) =
         crate::orgs::extractor::require_project_owner(&active, &state.pool, project_id as i64).await
     {
-        return r;
+        return Ok(r);
     }
 
     let status = match form.status.as_str() {
@@ -458,26 +432,25 @@ pub async fn update_status(
         "resolved" => IssueStatus::Resolved,
         "ignored" => IssueStatus::Ignored,
         _ => {
-            return html_error(
+            return Ok(html_error(
                 StatusCode::BAD_REQUEST,
                 &format!("Invalid status '{}'", form.status),
-            )
+            ))
         }
     };
 
-    match queries::issues::update_issue_status(&state.writer_pool, &fingerprint, status).await {
-        Ok(0) => {
-            return html_error(
-                StatusCode::NOT_FOUND,
-                &format!("not found: issue: {fingerprint}"),
-            )
-        }
-        Ok(_) => {}
-        Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    let affected =
+        queries::issues::update_issue_status(&state.writer_pool, project_id, &fingerprint, status)
+            .await?;
+    if affected == 0 {
+        return Ok(html_error(
+            StatusCode::NOT_FOUND,
+            &format!("not found: issue: {fingerprint}"),
+        ));
     }
 
     let redirect_url = format!("/web/projects/{project_id}/issues/{fingerprint}/");
-    Redirect::to(&redirect_url).into_response()
+    Ok(Redirect::to(&redirect_url).into_response())
 }
 
 pub async fn create_external_issue(
@@ -485,17 +458,7 @@ pub async fn create_external_issue(
     State(state): State<AppState>,
     Path((project_id, fingerprint)): Path<(u64, String)>,
     Form(form): Form<ExternalIssueForm>,
-) -> axum::response::Response {
-    // Bind fingerprint to its owning project, then verify project belongs to active org.
-    let fp_project =
-        match crate::queries::orgs::project_of_fingerprint(&state.pool, &fingerprint).await {
-            Ok(Some(p)) => p,
-            Ok(None) => return html_error(StatusCode::NOT_FOUND, "Issue not found"),
-            Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-        };
-    if fp_project != project_id as i64 {
-        return html_error(StatusCode::NOT_FOUND, "Issue not found");
-    }
+) -> Result<axum::response::Response, HtmlError> {
     let scope = match crate::orgs::extractor::require_project_owner(
         &active,
         &state.pool,
@@ -504,14 +467,14 @@ pub async fn create_external_issue(
     .await
     {
         Ok(s) => s,
-        Err(r) => return r,
+        Err(r) => return Ok(r),
     };
 
     let redirect_url = format!("/web/projects/{project_id}/issues/{fingerprint}/");
     let issue_url = format!("{}{redirect_url}", state.config.server.web_base());
 
     let Some((integration_id, repo_id)) = form.parse() else {
-        return html_error(StatusCode::BAD_REQUEST, "Invalid target");
+        return Ok(html_error(StatusCode::BAD_REQUEST, "Invalid target"));
     };
 
     let outcome = crate::trackers::link_issue(
@@ -530,7 +493,7 @@ pub async fn create_external_issue(
     )
     .await;
 
-    match outcome {
+    Ok(match outcome {
         Ok(_) => Redirect::to(&redirect_url).into_response(),
         Err(LinkError::IssueNotFound) => html_error(StatusCode::NOT_FOUND, "Issue not found"),
         Err(LinkError::IntegrationNotFound) => {
@@ -554,11 +517,8 @@ pub async fn create_external_issue(
             tracing::warn!("create_external_issue: tracker call failed: {e}");
             flash::redirect(&redirect_url, flash::TRACKER_CREATE_FAILED)
         }
-        Err(LinkError::Internal(e)) => {
-            tracing::error!("create_external_issue: {e:#}");
-            html_error(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
-        }
-    }
+        Err(LinkError::Internal(e)) => return Err(e.context("create_external_issue").into()),
+    })
 }
 
 /// Removes a filed link locally - the issue stays on the forge, since remote delete isn't portable.
@@ -566,33 +526,22 @@ pub async fn delete_external_link(
     active: ActiveOrg,
     State(state): State<AppState>,
     Path((project_id, fingerprint, link_id)): Path<(u64, String, i64)>,
-) -> axum::response::Response {
-    let fp_project =
-        match crate::queries::orgs::project_of_fingerprint(&state.pool, &fingerprint).await {
-            Ok(Some(p)) => p,
-            Ok(None) => return html_error(StatusCode::NOT_FOUND, "Issue not found"),
-            Err(e) => return html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-        };
-    if fp_project != project_id as i64 {
-        return html_error(StatusCode::NOT_FOUND, "Issue not found");
-    }
+) -> Result<axum::response::Response, HtmlError> {
     if let Err(r) =
         crate::orgs::extractor::require_project_owner(&active, &state.pool, project_id as i64).await
     {
-        return r;
+        return Ok(r);
     }
 
     let redirect_url = format!("/web/projects/{project_id}/issues/{fingerprint}/");
-    match crate::queries::issue_links::delete_link(&state.writer_pool, project_id as i64, link_id)
-        .await
-    {
-        Ok(0) => html_error(StatusCode::NOT_FOUND, "Link not found"),
-        Ok(_) => flash::redirect(&redirect_url, flash::TRACKER_UNLINKED),
-        Err(e) => {
-            tracing::error!("delete_external_link: {e:#}");
-            html_error(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
-        }
-    }
+    let deleted =
+        crate::queries::issue_links::delete_link(&state.writer_pool, project_id as i64, link_id)
+            .await?;
+    Ok(if deleted == 0 {
+        html_error(StatusCode::NOT_FOUND, "Link not found")
+    } else {
+        flash::redirect(&redirect_url, flash::TRACKER_UNLINKED)
+    })
 }
 
 #[cfg(test)]
@@ -859,7 +808,8 @@ mod tests {
                 target: target.clone(),
             }),
         )
-        .await;
+        .await
+        .into_response();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 
         let outsider = ActiveOrg {
@@ -874,7 +824,8 @@ mod tests {
             Path((7, "fp-h".to_string())),
             Form(ExternalIssueForm { target }),
         )
-        .await;
+        .await
+        .into_response();
         assert_ne!(resp.status(), StatusCode::SEE_OTHER);
     }
 
@@ -893,7 +844,8 @@ mod tests {
                 target: format!("{integration_id}:1"),
             }),
         )
-        .await;
+        .await
+        .into_response();
 
         let location = resp
             .headers()
@@ -922,7 +874,8 @@ mod tests {
                     target: bad.to_string(),
                 }),
             )
-            .await;
+            .await
+            .into_response();
             assert_eq!(
                 resp.status(),
                 StatusCode::BAD_REQUEST,
@@ -967,7 +920,8 @@ mod tests {
             State(state.clone()),
             Path((7, "fp-h".to_string(), link_id)),
         )
-        .await;
+        .await
+        .into_response();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
         assert_eq!(
             crate::queries::issue_links::links_for_issue(&pool, 7, "fp-h")
@@ -983,7 +937,8 @@ mod tests {
             State(state.clone()),
             Path((7, "fp-h".to_string(), link_id)),
         )
-        .await;
+        .await
+        .into_response();
         assert_eq!(resp.status(), StatusCode::SEE_OTHER);
         assert!(
             crate::queries::issue_links::links_for_issue(&pool, 7, "fp-h")
@@ -997,7 +952,8 @@ mod tests {
             State(state),
             Path((7, "fp-h".to_string(), link_id)),
         )
-        .await;
+        .await
+        .into_response();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 

@@ -83,8 +83,8 @@ impl FilterSnapshot {
 /// Lock-free snapshots for readers; discarded fingerprints in separate lock.
 pub struct FilterEngine {
     snapshot: arc_swap::ArcSwap<FilterSnapshot>,
-    /// Separate from snapshot: fingerprints get added/removed on the fly.
-    discarded: RwLock<HashSet<String>>,
+    /// Separate from snapshot: `(project_id, fingerprint)` keys get added/removed on the fly.
+    discarded: RwLock<HashSet<(u64, String)>>,
     /// Per-scope sliding windows.
     rate_windows: dashmap::DashMap<RateScope, SlidingWindow>,
     global_rate_limit: u32,
@@ -139,7 +139,11 @@ impl FilterEngine {
     pub fn check(&self, event: &StorableEvent) -> FilterVerdict {
         // Fingerprint discard has its own lock, separate from the snapshot.
         if let Some(ref fp) = event.fingerprint {
-            if self.discarded.read().contains(fp) {
+            if self
+                .discarded
+                .read()
+                .contains(&(event.project_id, fp.clone()))
+            {
                 return FilterVerdict::Drop {
                     reason: DropReason::DiscardedFingerprint,
                 };
@@ -436,14 +440,18 @@ impl FilterEngine {
 
     // Cache mutation helpers
 
-    /// Mark a fingerprint as discarded; future events with it get dropped.
-    pub fn add_discarded_fingerprint(&self, fingerprint: &str) {
-        self.discarded.write().insert(fingerprint.to_string());
+    /// Mark an issue as discarded; future events with that fingerprint in that project get dropped.
+    pub fn add_discarded_fingerprint(&self, project_id: u64, fingerprint: &str) {
+        self.discarded
+            .write()
+            .insert((project_id, fingerprint.to_string()));
     }
 
-    /// Un-discard a fingerprint so its events pass again.
-    pub fn remove_discarded_fingerprint(&self, fingerprint: &str) {
-        self.discarded.write().remove(fingerprint);
+    /// Un-discard an issue so its events pass again.
+    pub fn remove_discarded_fingerprint(&self, project_id: u64, fingerprint: &str) {
+        self.discarded
+            .write()
+            .remove(&(project_id, fingerprint.to_string()));
     }
 
     #[cfg(test)]
@@ -474,12 +482,18 @@ mod tests {
     #[test]
     fn check_discarded_fingerprint() {
         let mut data = FilterData::default();
-        data.discarded.insert("fp123".to_string());
+        data.discarded.insert((1, "fp123".to_string()));
         let engine = FilterEngine::new(data, 0, vec![], vec![]);
 
         let mut event = make_test_event();
+        event.project_id = 1;
         event.fingerprint = Some("fp123".to_string());
         assert!(engine.check(&event).is_drop());
+
+        // Same fingerprint in another project is a different issue.
+        event.project_id = 2;
+        assert!(!engine.check(&event).is_drop());
+        event.project_id = 1;
 
         event.fingerprint = Some("other".to_string());
         assert!(!engine.check(&event).is_drop());
@@ -771,7 +785,7 @@ mod tests {
         assert!(!engine.check(&event).is_drop());
 
         let mut data = FilterData::default();
-        data.discarded.insert("fp-test".to_string());
+        data.discarded.insert((1, "fp-test".to_string()));
         engine.apply_data(data);
 
         assert!(engine.check(&event).is_drop());
@@ -782,14 +796,15 @@ mod tests {
         let engine = empty_engine();
 
         let mut event = make_test_event();
+        event.project_id = 1;
         event.fingerprint = Some("dynamic-fp".to_string());
 
         assert!(!engine.check(&event).is_drop());
 
-        engine.add_discarded_fingerprint("dynamic-fp");
+        engine.add_discarded_fingerprint(1, "dynamic-fp");
         assert!(engine.check(&event).is_drop());
 
-        engine.remove_discarded_fingerprint("dynamic-fp");
+        engine.remove_discarded_fingerprint(1, "dynamic-fp");
         assert!(!engine.check(&event).is_drop());
     }
 

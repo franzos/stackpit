@@ -5,8 +5,8 @@ use axum::response::{IntoResponse, Redirect};
 
 use crate::domain::IssueStatus;
 use crate::extractors::ProjectPath;
-use crate::html::html_error;
 use crate::html::utils::period_to_timestamp;
+use crate::html::{html_error, HtmlError};
 use crate::orgs::extractor::{require_org_owner, require_project_owner, ActiveOrg};
 use crate::queries;
 use crate::queries::types::{EventFilter, IssueFilter};
@@ -99,7 +99,7 @@ fn bulk_result_redirect(
 ) -> axum::response::Response {
     match result {
         Ok(_) => Redirect::to(redirect_to).into_response(),
-        Err(err) => html_error(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()),
+        Err(err) => HtmlError::from(err).into_response(),
     }
 }
 

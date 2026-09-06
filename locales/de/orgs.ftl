@@ -67,6 +67,7 @@ invite-accept-btn = Einladung annehmen
 invite-decline = Ablehnen
 invite-error-accepted = Diese Einladung wurde bereits angenommen.
 invite-error-expired = Diese Einladung ist abgelaufen.
+invite-error-email-mismatch = Diese Einladung gilt für eine andere E-Mail-Adresse. Bitte um eine Einladung ohne E-Mail-Bindung oder melde dich mit dem passenden Konto an.
 
 # Validierungs-/Fehlermeldungen für die html_error-Seite, an den Aufrufstellen
 # mit Request-Locale übersetzt. Interne 5xx-Fehler bleiben englisch.
@@ -78,6 +79,7 @@ orgs-err-last-owner-remove = Der letzte Eigentümer kann nicht entfernt werden.
 orgs-err-last-owner-demote = Der letzte Eigentümer kann nicht herabgestuft werden.
 orgs-err-confirm-slug = Gib den Slug der Organisation zur Bestätigung des Löschens ein.
 orgs-err-not-deletable = Diese Organisation kann nicht gelöscht werden.
+orgs-err-license-cap-reached = Das Organisationslimit deiner Lizenz ist erreicht. Entferne eine Organisation oder erweitere die Lizenz, um eine weitere anzulegen.
 orgs-err-limit-reached = { $count ->
     [one] Du hast das Limit von { $count } Organisation erreicht.
    *[other] Du hast das Limit von { $count } Organisationen erreicht.

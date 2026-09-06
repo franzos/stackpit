@@ -108,6 +108,7 @@ flash-queue-replay-failed = Повторная отправка не удала�
 flash-queue-cancelled = Уведомление из очереди отброшено
 flash-queue-replay-failed-generic = Повторная отправка не удалась. Причина указана в самой записи очереди, в поле «Ошибка».
 flash-license-activated = Лицензия активирована
+flash-org-cap-reached = Достигнут лимит организаций вашей лицензии. Одна или несколько организаций не были созданы.
 flash-license-deactivated = Лицензия удалена
 flash-license-persist-failed = Лицензия прошла проверку, но не сохранилась. Посмотрите журнал сервера.
 flash-license-clear-failed = Не удалось удалить лицензию. Посмотрите журнал сервера.

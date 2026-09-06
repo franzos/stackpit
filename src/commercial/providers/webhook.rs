@@ -84,9 +84,32 @@ pub async fn send(
         req = req.header("X-Stackpit-Signature", signature);
     } else {
         tracing::warn!(
-            "webhook to {url} sent without signature — configure a secret for HMAC verification"
+            "webhook to {} sent without signature — configure a secret for HMAC verification",
+            webhook_log_host(url)
         );
     }
 
     super::send_and_check(req, "webhook").await
+}
+
+/// Host only: for Slack and most webhooks the URL path is the credential.
+fn webhook_log_host(url: &str) -> String {
+    reqwest::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_owned))
+        .unwrap_or_else(|| "unparseable-url".to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::webhook_log_host;
+
+    #[test]
+    fn log_host_drops_the_secret_path() {
+        assert_eq!(
+            webhook_log_host("https://hooks.slack.com/services/T000/B000/XXXXsecret"),
+            "hooks.slack.com"
+        );
+        assert_eq!(webhook_log_host("not a url"), "unparseable-url");
+    }
 }

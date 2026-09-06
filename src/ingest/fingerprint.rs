@@ -140,6 +140,8 @@ pub fn compute_fingerprint(
     compute_fingerprint_inner(project_id, &json)
 }
 
+// The hash is a grouping key, not a security boundary: a constructed collision
+// is bounded by the `(project_id, fingerprint)` key every issue table uses.
 fn compute_fingerprint_inner(project_id: u64, json: &Value) -> Option<String> {
     // SDK-provided fingerprint array wins, unless it's just ["{{ default }}"].
     if let Some(fp_array) = json.get("fingerprint").and_then(|v| v.as_array()) {

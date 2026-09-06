@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
 use crate::oidc::client::OidcClient;
-use crate::oidc::revocations::SqliteRevocationStore;
+use crate::oidc::revocations::DbRevocationStore;
 
 const BACKOFF_FLOOR: Duration = Duration::from_secs(1);
 const BACKOFF_CEILING: Duration = Duration::from_secs(60);
@@ -75,7 +75,7 @@ pub fn spawn_retry(
     slot: OidcSlot,
     cancel: CancellationToken,
     config: Arc<Config>,
-    revocations: Option<SqliteRevocationStore>,
+    revocations: Option<DbRevocationStore>,
 ) {
     crate::background::supervise("oidc_discovery_retry", async move {
         let mut backoff = BACKOFF_FLOOR;

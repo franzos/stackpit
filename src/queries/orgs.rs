@@ -45,6 +45,43 @@ async fn ensure_owner_membership(pool: &DbPool, user_id: i64, org_id: i64) -> Re
     Ok(())
 }
 
+/// Inserts an org under `base`, then `base-1`, `base-2`, ... until a row lands.
+/// `try_insert` runs the caller's `INSERT ... DO NOTHING RETURNING org_id` for
+/// one candidate slug (`None` on conflict); `on_conflict` looks for the row a
+/// concurrent caller may have created under the caller's own key, so a race
+/// joins it instead of minting a suffixed duplicate. A pure slug collision
+/// advances the suffix.
+async fn loop_insert_unique_slug<I, IF, C, CF>(
+    base: &str,
+    mut try_insert: I,
+    mut on_conflict: C,
+) -> Result<i64>
+where
+    I: FnMut(String) -> IF,
+    IF: std::future::Future<Output = Result<Option<i64>>>,
+    C: FnMut() -> CF,
+    CF: std::future::Future<Output = Result<Option<i64>>>,
+{
+    for attempt in 0u32..100 {
+        let candidate = if attempt == 0 {
+            base.to_owned()
+        } else {
+            format!("{base}-{attempt}")
+        };
+        if let Some(org_id) = try_insert(candidate).await? {
+            return Ok(org_id);
+        }
+        if let Some(org_id) = on_conflict().await? {
+            return Ok(org_id);
+        }
+    }
+    anyhow::bail!("slug {base:?} exhausted 100 suffix attempts")
+}
+
+fn returned_org_id(row: Option<crate::db::DbRow>) -> Option<i64> {
+    row.map(|r| r.get::<i64, _>("org_id"))
+}
+
 // Idempotent: an existing personal org is returned untouched so a renamed slug survives re-login; slug is a neutral random token deduped on collision.
 pub async fn ensure_personal_org(pool: &DbPool, user_id: i64) -> Result<i64> {
     if let Some(org_id) = personal_org_id(pool, user_id).await? {
@@ -57,44 +94,30 @@ pub async fn ensure_personal_org(pool: &DbPool, user_id: i64) -> Result<i64> {
     #[cfg(feature = "sqlite")]
     let ins = sql!(
         "INSERT OR IGNORE INTO organizations (slug, name, created_by, is_personal) \
-               VALUES (?1, 'Personal', ?2, 1)"
+               VALUES (?1, 'Personal', ?2, 1) RETURNING org_id"
     );
     #[cfg(not(feature = "sqlite"))]
     let ins = sql!(
         "INSERT INTO organizations (slug, name, created_by, is_personal) \
-               VALUES (?1, 'Personal', ?2, TRUE) ON CONFLICT DO NOTHING"
+               VALUES (?1, 'Personal', ?2, TRUE) ON CONFLICT DO NOTHING RETURNING org_id"
     );
 
-    for attempt in 0u32..100 {
-        let candidate = if attempt == 0 {
-            base.clone()
-        } else {
-            format!("{base}-{attempt}")
-        };
-
-        let result = sqlx::query(ins)
-            .bind(&candidate)
-            .bind(user_id)
-            .execute(pool)
-            .await?;
-
-        if result.rows_affected() > 0 {
-            let org_id = personal_org_id(pool, user_id)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("personal org vanished after insert"))?;
-            ensure_owner_membership(pool, user_id, org_id).await?;
-            return Ok(org_id);
-        }
-
-        // rows_affected == 0: a concurrent first login won the (created_by) race, or a pure slug collision.
-        if let Some(org_id) = personal_org_id(pool, user_id).await? {
-            ensure_owner_membership(pool, user_id, org_id).await?;
-            return Ok(org_id);
-        }
-        // Pure slug collision; advance the suffix.
-    }
-
-    anyhow::bail!("ensure_personal_org: slug {base:?} exhausted 100 suffix attempts")
+    let org_id = loop_insert_unique_slug(
+        &base,
+        |candidate| async move {
+            let row = sqlx::query(ins)
+                .bind(candidate)
+                .bind(user_id)
+                .fetch_optional(pool)
+                .await?;
+            Ok(returned_org_id(row))
+        },
+        // A concurrent first login may have won the (created_by) race.
+        || personal_org_id(pool, user_id),
+    )
+    .await?;
+    ensure_owner_membership(pool, user_id, org_id).await?;
+    Ok(org_id)
 }
 
 pub async fn list_memberships(pool: &DbPool, user_id: i64) -> Result<Vec<Membership>> {
@@ -222,53 +245,34 @@ pub async fn provision_forseti_org(
     let ins = sql!(
         "INSERT OR IGNORE INTO organizations \
                (slug, name, ext_iss, ext_org_id, created_by, role_sync) \
-               VALUES (?1, ?2, ?3, ?4, ?5, 1)"
+               VALUES (?1, ?2, ?3, ?4, ?5, 1) RETURNING org_id"
     );
     #[cfg(not(feature = "sqlite"))]
     let ins = sql!(
         "INSERT INTO organizations \
                (slug, name, ext_iss, ext_org_id, created_by, role_sync) \
-               VALUES (?1, ?2, ?3, ?4, ?5, TRUE) ON CONFLICT (slug) DO NOTHING"
+               VALUES (?1, ?2, ?3, ?4, ?5, TRUE) ON CONFLICT (slug) DO NOTHING RETURNING org_id"
     );
 
-    for attempt in 0u32..100 {
-        let candidate = if attempt == 0 {
-            slug.to_owned()
-        } else {
-            format!("{slug}-{attempt}")
-        };
-
-        let result = sqlx::query(ins)
-            .bind(&candidate)
-            .bind(name)
-            .bind(ext_iss)
-            .bind(ext_org_id)
-            .bind(user_id)
-            .execute(pool)
-            .await?;
-
-        if result.rows_affected() > 0 {
-            let row = sqlx::query(sql!(
-                "SELECT org_id FROM organizations WHERE ext_iss = ?1 AND ext_org_id = ?2"
-            ))
-            .bind(ext_iss)
-            .bind(ext_org_id)
-            .fetch_one(pool)
-            .await?;
-            let org_id: i64 = row.get("org_id");
-            add_member(pool, user_id, org_id, Role::Owner).await?;
-            return Ok(org_id);
-        }
-
-        // rows_affected == 0: slug taken, or ext key raced in concurrently.
-        if let Some(org_id) = org_by_ext(pool, ext_iss, ext_org_id).await? {
-            add_member(pool, user_id, org_id, Role::Owner).await?;
-            return Ok(org_id);
-        }
-        // Pure slug collision; try next suffix.
-    }
-
-    anyhow::bail!("provision_forseti_org: slug {slug:?} exhausted 100 suffix attempts")
+    let org_id = loop_insert_unique_slug(
+        slug,
+        |candidate| async move {
+            let row = sqlx::query(ins)
+                .bind(candidate)
+                .bind(name)
+                .bind(ext_iss)
+                .bind(ext_org_id)
+                .bind(user_id)
+                .fetch_optional(pool)
+                .await?;
+            Ok(returned_org_id(row))
+        },
+        // The ext key may have raced in concurrently.
+        || org_by_ext(pool, ext_iss, ext_org_id),
+    )
+    .await?;
+    add_member(pool, user_id, org_id, Role::Owner).await?;
+    Ok(org_id)
 }
 
 pub struct InvitePreview {
@@ -333,33 +337,84 @@ pub async fn create_invite(
 
 /// Accepts an invite: adds membership with the invite role and marks the row accepted.
 /// Returns the org_id on success.
-pub async fn accept_invite(pool: &DbPool, token: &str, user_id: i64) -> Result<i64> {
+/// Why an invite could not be accepted. `Internal` is a database failure.
+#[derive(Debug)]
+pub enum AcceptInviteError {
+    NotFound,
+    AlreadyAccepted,
+    Expired,
+    SystemOrg,
+    /// The invite names an email and the user's verified email is absent or different.
+    EmailMismatch,
+    Internal(anyhow::Error),
+}
+
+impl std::fmt::Display for AcceptInviteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound => write!(f, "invite not found or invalid"),
+            Self::AlreadyAccepted => write!(f, "invite already accepted"),
+            Self::Expired => write!(f, "invite expired"),
+            Self::SystemOrg => write!(f, "cannot accept invite for the system org"),
+            Self::EmailMismatch => write!(f, "invite is bound to a different email"),
+            Self::Internal(e) => write!(f, "{e:#}"),
+        }
+    }
+}
+
+impl From<sqlx::Error> for AcceptInviteError {
+    fn from(e: sqlx::Error) -> Self {
+        Self::Internal(e.into())
+    }
+}
+
+impl From<anyhow::Error> for AcceptInviteError {
+    fn from(e: anyhow::Error) -> Self {
+        Self::Internal(e)
+    }
+}
+
+/// Accept an invite for `user_id`. An invite that names an email is only valid
+/// for a user whose verified email matches it (case-insensitively); invites
+/// without an email keep bearer-link semantics.
+pub async fn accept_invite(
+    pool: &DbPool,
+    token: &str,
+    user_id: i64,
+    user_email: Option<&str>,
+) -> Result<i64, AcceptInviteError> {
     let hash = token_hash(token);
     let now = chrono::Utc::now().timestamp();
 
     let row = sqlx::query(sql!(
-        "SELECT invite_id, org_id, role, expires_at, accepted_at \
+        "SELECT invite_id, org_id, role, email, expires_at, accepted_at \
          FROM invites WHERE token_hash = ?1"
     ))
     .bind(&hash)
     .fetch_optional(pool)
     .await?;
 
-    let row = row.ok_or_else(|| anyhow::anyhow!("invite not found or invalid"))?;
+    let row = row.ok_or(AcceptInviteError::NotFound)?;
     let invite_id: i64 = row.get("invite_id");
     let org_id: i64 = row.get("org_id");
     let role_str: String = row.get("role");
+    let required_email: Option<String> = row.get("email");
     let expires_at: i64 = row.get("expires_at");
     let accepted_at: Option<i64> = row.get("accepted_at");
 
     if accepted_at.is_some() {
-        anyhow::bail!("invite already accepted");
+        return Err(AcceptInviteError::AlreadyAccepted);
     }
     if now > expires_at {
-        anyhow::bail!("invite expired");
+        return Err(AcceptInviteError::Expired);
     }
     if org_id == SYSTEM_ORG_ID {
-        anyhow::bail!("cannot accept invite for the system org");
+        return Err(AcceptInviteError::SystemOrg);
+    }
+    if let Some(required) = required_email.as_deref() {
+        if !user_email.is_some_and(|e| e.eq_ignore_ascii_case(required)) {
+            return Err(AcceptInviteError::EmailMismatch);
+        }
     }
 
     let role = Role::parse(&role_str);
@@ -833,43 +888,32 @@ pub async fn create_native_org(
     let ins = sql!(
         "INSERT OR IGNORE INTO organizations \
                (slug, name, created_by, is_personal, role_sync) \
-               VALUES (?1, ?2, ?3, 0, 0)"
+               VALUES (?1, ?2, ?3, 0, 0) RETURNING org_id"
     );
     #[cfg(not(feature = "sqlite"))]
     let ins = sql!(
         "INSERT INTO organizations \
                (slug, name, created_by, is_personal, role_sync) \
-               VALUES (?1, ?2, ?3, FALSE, FALSE) ON CONFLICT (slug) DO NOTHING"
+               VALUES (?1, ?2, ?3, FALSE, FALSE) ON CONFLICT (slug) DO NOTHING RETURNING org_id"
     );
 
-    for attempt in 0u32..100 {
-        let candidate = if attempt == 0 {
-            slug.to_owned()
-        } else {
-            format!("{slug}-{attempt}")
-        };
-
-        let result = sqlx::query(ins)
-            .bind(&candidate)
-            .bind(name)
-            .bind(created_by)
-            .execute(pool)
-            .await?;
-
-        if result.rows_affected() > 0 {
-            // Re-select keys on the just-inserted slug and only on success: never an existing row.
-            let row = sqlx::query(sql!("SELECT org_id FROM organizations WHERE slug = ?1"))
-                .bind(&candidate)
-                .fetch_one(pool)
+    let org_id = loop_insert_unique_slug(
+        slug,
+        |candidate| async move {
+            let row = sqlx::query(ins)
+                .bind(candidate)
+                .bind(name)
+                .bind(created_by)
+                .fetch_optional(pool)
                 .await?;
-            let org_id: i64 = row.get("org_id");
-            add_member(pool, created_by, org_id, Role::Owner).await?;
-            return Ok(org_id);
-        }
-        // rows_affected == 0: slug taken by another org; advance the suffix.
-    }
-
-    anyhow::bail!("create_native_org: slug {slug:?} exhausted 100 suffix attempts")
+            Ok(returned_org_id(row))
+        },
+        // A native org has no key of its own to race on: a conflict is always another slug.
+        || async { Ok(None) },
+    )
+    .await?;
+    add_member(pool, created_by, org_id, Role::Owner).await?;
+    Ok(org_id)
 }
 
 /// Outcome of an owner-initiated slug rename. `Taken` means the chosen slug is in use elsewhere.
@@ -923,6 +967,19 @@ pub async fn rename_org_slug(pool: &DbPool, org_id: i64, requested: &str) -> Res
     Ok(RenameOutcome::Renamed)
 }
 
+/// Orgs the licence's `max_orgs` counts: everything except the system org and
+/// the per-user personal orgs.
+pub async fn count_licensed_orgs(pool: &DbPool) -> Result<i64> {
+    let row = sqlx::query(sql!(
+        "SELECT COUNT(*) AS cnt FROM organizations WHERE org_id != ?1 AND is_personal = ?2"
+    ))
+    .bind(SYSTEM_ORG_ID)
+    .bind(false)
+    .fetch_one(pool)
+    .await?;
+    Ok(row.get("cnt"))
+}
+
 /// Counts the user's native orgs (excludes their personal org and Forseti orgs). Enforces the cap.
 pub async fn count_user_native_orgs(pool: &DbPool, user_id: i64) -> Result<i64> {
     let row = sqlx::query(sql!(
@@ -966,13 +1023,18 @@ pub async fn assert_project_in_org(
     }
 }
 
-/// Returns the `project_id` that owns `fingerprint`, or `None` if unknown.
-pub async fn project_of_fingerprint(pool: &DbPool, fingerprint: &str) -> Result<Option<i64>> {
-    let row = sqlx::query(sql!("SELECT project_id FROM issues WHERE fingerprint = ?1"))
-        .bind(fingerprint)
-        .fetch_optional(pool)
-        .await?;
-    Ok(row.map(|r| r.get("project_id")))
+/// Every `project_id` holding an issue with `fingerprint`. Issues are keyed by
+/// `(project_id, fingerprint)`, so a fingerprint alone can match several
+/// projects; callers narrow the list to what they may see and proceed only on
+/// exactly one hit.
+pub async fn projects_of_fingerprint(pool: &DbPool, fingerprint: &str) -> Result<Vec<i64>> {
+    let rows = sqlx::query(sql!(
+        "SELECT project_id FROM issues WHERE fingerprint = ?1 ORDER BY project_id"
+    ))
+    .bind(fingerprint)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.iter().map(|r| r.get("project_id")).collect())
 }
 
 /// Returns the `project_id` that owns `event_id`, or `None` if unknown.
@@ -1434,6 +1496,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn count_licensed_orgs_excludes_system_and_personal_orgs() {
+        let pool = crate::db::open_test_pool().await;
+        assert_eq!(count_licensed_orgs(&pool).await.unwrap(), 0);
+
+        let u = crate::queries::users::upsert_from_oidc(&pool, "iss", "sub-count-lic", None, None)
+            .await
+            .unwrap();
+        ensure_personal_org(&pool, u.user_id).await.unwrap();
+        assert_eq!(count_licensed_orgs(&pool).await.unwrap(), 0);
+
+        provision_forseti_org(&pool, u.user_id, "https://idp", "org-lic", "lic", "Lic")
+            .await
+            .unwrap();
+        create_native_org(&pool, u.user_id, "n-lic", "N")
+            .await
+            .unwrap();
+        assert_eq!(count_licensed_orgs(&pool).await.unwrap(), 2);
+    }
+
+    #[tokio::test]
     async fn list_all_orgs_includes_system() {
         let pool = crate::db::open_test_pool().await;
         let u = crate::queries::users::upsert_from_oidc(&pool, "iss", "sub-listall", None, None)
@@ -1541,12 +1623,91 @@ mod tests {
             .await
             .unwrap();
 
-        let returned_org = accept_invite(&pool, &token, invitee.user_id).await.unwrap();
+        let returned_org = accept_invite(&pool, &token, invitee.user_id, None)
+            .await
+            .unwrap();
         assert_eq!(returned_org, org_id);
 
         let ms = list_memberships(&pool, invitee.user_id).await.unwrap();
         let m = ms.iter().find(|m| m.org_id == org_id).unwrap();
         assert_eq!(m.role, "member");
+    }
+
+    async fn emailed_invite(pool: &DbPool, slug: &str, email: &str) -> (i64, String) {
+        let owner = crate::queries::users::upsert_from_oidc(
+            pool,
+            "iss",
+            &format!("sub-{slug}-owner"),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let org_id = insert_native_org(pool, slug).await;
+        let token = create_invite(pool, org_id, Role::Member, Some(email), owner.user_id, 3600)
+            .await
+            .unwrap();
+        (org_id, token)
+    }
+
+    #[tokio::test]
+    async fn accept_invite_rejects_a_user_whose_email_does_not_match() {
+        let pool = crate::db::open_test_pool().await;
+        let (org_id, token) = emailed_invite(&pool, "inv-mismatch", "invitee@example.com").await;
+        let other = crate::queries::users::upsert_from_oidc(
+            &pool,
+            "iss",
+            "sub-inv-mismatch",
+            Some("someone-else@example.com"),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let err = accept_invite(&pool, &token, other.user_id, other.email.as_deref())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AcceptInviteError::EmailMismatch), "got {err}");
+        assert!(list_memberships(&pool, other.user_id)
+            .await
+            .unwrap()
+            .iter()
+            .all(|m| m.org_id != org_id));
+    }
+
+    #[tokio::test]
+    async fn accept_invite_rejects_a_user_with_no_verified_email_when_the_invite_names_one() {
+        let pool = crate::db::open_test_pool().await;
+        let (_, token) = emailed_invite(&pool, "inv-noemail", "invitee@example.com").await;
+        let unverified =
+            crate::queries::users::upsert_from_oidc(&pool, "iss", "sub-inv-noemail", None, None)
+                .await
+                .unwrap();
+
+        let err = accept_invite(&pool, &token, unverified.user_id, None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AcceptInviteError::EmailMismatch), "got {err}");
+    }
+
+    #[tokio::test]
+    async fn accept_invite_matches_email_case_insensitively() {
+        let pool = crate::db::open_test_pool().await;
+        let (org_id, token) = emailed_invite(&pool, "inv-case", "Invitee@Example.com").await;
+        let invitee = crate::queries::users::upsert_from_oidc(
+            &pool,
+            "iss",
+            "sub-inv-case",
+            Some("invitee@example.com"),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let joined = accept_invite(&pool, &token, invitee.user_id, invitee.email.as_deref())
+            .await
+            .unwrap();
+        assert_eq!(joined, org_id);
     }
 
     #[tokio::test]
@@ -1564,9 +1725,11 @@ mod tests {
             .await
             .unwrap();
 
-        let err = accept_invite(&pool, &token, u2.user_id).await.unwrap_err();
+        let err = accept_invite(&pool, &token, u2.user_id, None)
+            .await
+            .unwrap_err();
         assert!(
-            err.to_string().contains("expired"),
+            matches!(err, AcceptInviteError::Expired),
             "expected expiry rejection, got: {err}"
         );
     }
@@ -1590,11 +1753,15 @@ mod tests {
             .await
             .unwrap();
 
-        accept_invite(&pool, &token, u2.user_id).await.unwrap();
+        accept_invite(&pool, &token, u2.user_id, None)
+            .await
+            .unwrap();
 
-        let err = accept_invite(&pool, &token, u3.user_id).await.unwrap_err();
+        let err = accept_invite(&pool, &token, u3.user_id, None)
+            .await
+            .unwrap_err();
         assert!(
-            err.to_string().contains("already accepted"),
+            matches!(err, AcceptInviteError::AlreadyAccepted),
             "expected already-accepted rejection, got: {err}"
         );
     }
@@ -1615,7 +1782,9 @@ mod tests {
         let token = create_invite(&pool, native_id, Role::Member, None, owner.user_id, 3600)
             .await
             .unwrap();
-        accept_invite(&pool, &token, invitee.user_id).await.unwrap();
+        accept_invite(&pool, &token, invitee.user_id, None)
+            .await
+            .unwrap();
 
         let row = sqlx::query(sql!(
             "SELECT COUNT(*) AS cnt FROM organization_members WHERE org_id = ?1"
@@ -1655,7 +1824,7 @@ mod tests {
         .await
         .unwrap()
         .get("invite_id");
-        accept_invite(&pool, &accepted_tok, acceptor.user_id)
+        accept_invite(&pool, &accepted_tok, acceptor.user_id, None)
             .await
             .unwrap();
 
@@ -1851,7 +2020,9 @@ mod tests {
             .await
             .unwrap();
 
-        accept_invite(&pool, &tok1, acceptor.user_id).await.unwrap();
+        accept_invite(&pool, &tok1, acceptor.user_id, Some("a@x.com"))
+            .await
+            .unwrap();
 
         let rows = list_org_invites(&pool, org_a).await.unwrap();
         assert_eq!(rows.len(), 2, "only org_a invites");
@@ -1953,11 +2124,10 @@ mod tests {
         insert_test_issue(&pool, "fp-org-b", 402, None, None, 0, 0, 0, "unresolved").await;
 
         // fp-org-b belongs to project 402, not 401: mismatch detected
-        let fp_project = project_of_fingerprint(&pool, "fp-org-b").await.unwrap();
-        assert_eq!(fp_project, Some(402));
-        assert_ne!(
-            fp_project.unwrap(),
-            401,
+        let fp_projects = projects_of_fingerprint(&pool, "fp-org-b").await.unwrap();
+        assert_eq!(fp_projects, vec![402]);
+        assert!(
+            !fp_projects.contains(&401),
             "cross-project fingerprint must be detected"
         );
 
@@ -1967,17 +2137,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn project_of_fingerprint_hit_and_miss() {
+    async fn projects_of_fingerprint_hit_miss_and_shared() {
         use crate::queries::test_helpers::insert_test_issue;
         let pool = crate::db::open_test_pool().await;
         insert_test_project(&pool, 200, 1).await;
+        insert_test_project(&pool, 201, 1).await;
         insert_test_issue(&pool, "fp-abc", 200, None, None, 0, 0, 0, "unresolved").await;
+        insert_test_issue(&pool, "fp-shared", 201, None, None, 0, 0, 0, "unresolved").await;
+        insert_test_issue(&pool, "fp-shared", 200, None, None, 0, 0, 0, "unresolved").await;
 
-        let found = project_of_fingerprint(&pool, "fp-abc").await.unwrap();
-        assert_eq!(found, Some(200));
-
-        let missing = project_of_fingerprint(&pool, "fp-unknown").await.unwrap();
-        assert_eq!(missing, None);
+        assert_eq!(
+            projects_of_fingerprint(&pool, "fp-abc").await.unwrap(),
+            vec![200]
+        );
+        assert_eq!(
+            projects_of_fingerprint(&pool, "fp-shared").await.unwrap(),
+            vec![200, 201]
+        );
+        assert!(projects_of_fingerprint(&pool, "fp-unknown")
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]

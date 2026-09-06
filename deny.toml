@@ -12,8 +12,4 @@ ignore = [
     # no private-key decryption — so the key-recovery attack doesn't apply. No
     # fixed rsa release exists yet.
     "RUSTSEC-2023-0071",
-    # ttf-parser (via charts-rs -> fontdue): author declared the crate
-    # unmaintained; no fixed release or drop-in replacement exists. Only used
-    # for server-side chart rendering of our own fonts, not untrusted input.
-    "RUSTSEC-2026-0192",
 ]

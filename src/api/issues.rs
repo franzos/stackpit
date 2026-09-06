@@ -61,14 +61,8 @@ pub async fn get(
     ReadPool(pool): ReadPool,
     Path(fingerprint): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let pid = crate::queries::orgs::project_of_fingerprint(&pool, &fingerprint)
-        .await
-        .map_err(ApiError::internal)?
-        .ok_or_else(|| ApiError::not_found("issue not found"))?;
-    crate::orgs::extractor::require_project_scope(&active, &pool, pid)
-        .await
-        .map_err(|_| ApiError::not_found("not found"))?;
-    let issue = queries::issues::get_issue(&pool, &fingerprint)
+    let (pid, _) = super::resolve_issue_project(&active, &pool, &fingerprint).await?;
+    let issue = queries::issues::get_issue(&pool, pid, &fingerprint)
         .await
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::not_found("issue not found"))?;
@@ -82,23 +76,17 @@ pub async fn update_status(
     Path(fingerprint): Path<String>,
     Json(body): Json<UpdateBody>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let pid = crate::queries::orgs::project_of_fingerprint(&state.pool, &fingerprint)
-        .await
-        .map_err(ApiError::internal)?
-        .ok_or_else(|| ApiError::not_found("issue not found"))?;
-    let scope = crate::orgs::extractor::require_project_scope(&active, &state.pool, pid)
-        .await
-        .map_err(|_| ApiError::not_found("not found"))?;
+    let (pid, scope) = super::resolve_issue_project(&active, &state.pool, &fingerprint).await?;
     crate::orgs::extractor::require_owner(&scope)
         .map_err(|_| ApiError::new(StatusCode::FORBIDDEN, "forbidden"))?;
     let affected =
-        queries::issues::update_issue_status(&state.writer_pool, &fingerprint, body.status)
+        queries::issues::update_issue_status(&state.writer_pool, pid, &fingerprint, body.status)
             .await
             .map_err(ApiError::internal)?;
     if affected == 0 {
         return Err(ApiError::not_found("issue not found"));
     }
-    let issue = queries::issues::get_issue(&state.pool, &fingerprint)
+    let issue = queries::issues::get_issue(&state.pool, pid, &fingerprint)
         .await
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::not_found("issue not found"))?;
@@ -107,10 +95,10 @@ pub async fn update_status(
 
 #[cfg(test)]
 mod tests {
+    use crate::api::resolve_issue_project;
     use crate::db::sql;
     use crate::orgs::extractor::{require_owner, require_project_scope, ActiveOrg, ProjectScope};
     use crate::orgs::Role;
-    use crate::queries::orgs::project_of_fingerprint;
     use crate::queries::test_helpers::insert_test_issue;
     use sqlx::Row;
 
@@ -183,18 +171,62 @@ mod tests {
         )
         .await;
 
-        let pid = project_of_fingerprint(&pool, "iss-fp-guard")
-            .await
-            .unwrap()
-            .unwrap();
-
         let owner_a =
             ActiveOrg::with_memberships(org_a, Some(Role::Owner), vec![(org_a, Role::Owner)]);
         let owner_b =
             ActiveOrg::with_memberships(org_b, Some(Role::Owner), vec![(org_b, Role::Owner)]);
 
-        assert!(require_project_scope(&owner_a, &pool, pid).await.is_ok());
-        assert!(require_project_scope(&owner_b, &pool, pid).await.is_err());
+        let (pid, _) = resolve_issue_project(&owner_a, &pool, "iss-fp-guard")
+            .await
+            .ok()
+            .expect("owner of the org resolves the issue");
+        assert_eq!(pid, 6001);
+        assert!(require_project_scope(&owner_b, &pool, pid as i64)
+            .await
+            .is_err());
+        assert!(resolve_issue_project(&owner_b, &pool, "iss-fp-guard")
+            .await
+            .is_err());
+    }
+
+    // The same fingerprint in two projects: a member of one org sees exactly
+    // that one, a member of neither gets 404, and a superuser who can see both
+    // gets 404 rather than a guess.
+    #[tokio::test]
+    async fn resolve_issue_project_handles_a_fingerprint_shared_across_projects() {
+        let pool = crate::db::open_test_pool().await;
+        let org_a = insert_org(&pool, "iss-amb-a").await;
+        let org_b = insert_org(&pool, "iss-amb-b").await;
+        let org_c = insert_org(&pool, "iss-amb-c").await;
+        insert_project(&pool, 6011, org_a).await;
+        insert_project(&pool, 6012, org_b).await;
+        insert_test_issue(&pool, "iss-fp-amb", 6011, None, None, 0, 0, 0, "unresolved").await;
+        insert_test_issue(&pool, "iss-fp-amb", 6012, None, None, 0, 0, 0, "unresolved").await;
+
+        let member_a =
+            ActiveOrg::with_memberships(org_a, Some(Role::Member), vec![(org_a, Role::Member)]);
+        let (pid, _) = resolve_issue_project(&member_a, &pool, "iss-fp-amb")
+            .await
+            .ok()
+            .expect("member of org A resolves to A's project");
+        assert_eq!(pid, 6011);
+
+        let member_c =
+            ActiveOrg::with_memberships(org_c, Some(Role::Member), vec![(org_c, Role::Member)]);
+        assert!(resolve_issue_project(&member_c, &pool, "iss-fp-amb")
+            .await
+            .is_err());
+
+        let superuser = ActiveOrg::bare(999, None);
+        assert!(
+            resolve_issue_project(&superuser, &pool, "iss-fp-amb")
+                .await
+                .is_err(),
+            "two visible candidates is ambiguous, not a guess"
+        );
+        assert!(resolve_issue_project(&superuser, &pool, "iss-fp-none")
+            .await
+            .is_err());
     }
 
     // Full update_status guard sequence: member of the correct org is blocked.
@@ -205,16 +237,15 @@ mod tests {
         insert_project(&pool, 6002, org).await;
         insert_test_issue(&pool, "iss-fp-upd", 6002, None, None, 0, 0, 0, "unresolved").await;
 
-        let pid = project_of_fingerprint(&pool, "iss-fp-upd")
-            .await
-            .unwrap()
-            .unwrap();
-
         let member =
             ActiveOrg::with_memberships(org, Some(Role::Member), vec![(org, Role::Member)]);
 
         // Scope check passes (correct org), owner check blocks.
-        let scope = require_project_scope(&member, &pool, pid).await.unwrap();
+        let (pid, scope) = resolve_issue_project(&member, &pool, "iss-fp-upd")
+            .await
+            .ok()
+            .expect("member resolves the issue");
+        assert_eq!(pid, 6002);
         assert!(require_owner(&scope).is_err());
     }
 }

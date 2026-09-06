@@ -54,10 +54,9 @@ where
             .map(|p| p.as_str())
             .unwrap_or("/web/projects/")
             .to_string();
-        let active_org = parts
-            .extensions
-            .get::<crate::orgs::extractor::ActiveOrg>()
-            .and_then(|a| a.org_name.clone());
+        let active = parts.extensions.get::<crate::orgs::extractor::ActiveOrg>();
+        let active_org = active.and_then(|a| a.org_name.clone());
+        let is_org_member = active.is_some_and(|a| a.role == Some(crate::orgs::Role::Member));
         let flash = parts
             .uri
             .query()
@@ -69,6 +68,7 @@ where
             PageChrome::new(csrf, locale, path)
                 .with_license_watermark(&status)
                 .with_active_org(active_org)
+                .with_org_member(is_org_member)
                 .with_flash(flash.as_deref()),
         ))
     }

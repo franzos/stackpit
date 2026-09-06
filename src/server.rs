@@ -78,6 +78,9 @@ pub struct AppState {
     pub license: crate::commercial::LicenseHandle,
     pub metrics_handle: metrics_exporter_prometheus::PrometheusHandle,
     pub metrics_scrape_token: Option<secrecy::SecretString>,
+    /// CSRF token for the no-auth loopback mode, random per process so a page
+    /// in the operator's browser cannot forge a POST with a known constant.
+    pub noauth_csrf_token: Arc<str>,
 }
 
 impl AppState {
@@ -145,6 +148,7 @@ impl AppState {
             license: crate::commercial::fully_licensed(),
             metrics_handle: crate::metrics::install_metrics_recorder(),
             metrics_scrape_token: None,
+            noauth_csrf_token: crate::util::crypto::random_hex::<32>().into(),
         };
         (
             state,
@@ -230,6 +234,13 @@ async fn not_found_fallback(uri: axum::http::Uri) -> axum::response::Response {
         api::ApiError::not_found("not found").into_response()
     }
 }
+
+/// Ceiling on producing an ingest response; SDK uploads are bounded by size, not time.
+const INGEST_REQUEST_TIMEOUT_SECS: u64 = 30;
+
+/// Ceiling on producing an admin response. Generous because bulk deletes run
+/// inline in 5,000-row chunks with a pause between them.
+const ADMIN_REQUEST_TIMEOUT_SECS: u64 = 300;
 
 pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
     let db_url = config.storage.database_url();
@@ -356,11 +367,7 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
         .map(Arc::new);
 
     if encryptor.is_none() {
-        let (count,): (i64,) = sqlx::query_as(db::sql!(
-            "SELECT COUNT(*) FROM integrations WHERE encrypted = TRUE"
-        ))
-        .fetch_one(&pool)
-        .await?;
+        let count = crate::queries::integrations::count_encrypted(&pool).await?;
 
         if count > 0 {
             anyhow::bail!(
@@ -390,7 +397,7 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
 
     // Built from config, not from a successful discovery, so a later retry still has one.
     let revocation_store = oauth_configured
-        .then(|| crate::oidc::revocations::SqliteRevocationStore::new(auth_pool.clone()));
+        .then(|| crate::oidc::revocations::DbRevocationStore::new(auth_pool.clone()));
 
     // Discovery failure retries in the background unless `required=true`.
     let boot_client = if oauth_configured {
@@ -513,6 +520,7 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
         license,
         metrics_handle,
         metrics_scrape_token,
+        noauth_csrf_token: crate::util::crypto::random_hex::<32>().into(),
     };
 
     // Rate limiting: handled by filter engine at handler level.
@@ -556,7 +564,7 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
         .merge(cors_scoped)
         .layer(TimeoutLayer::with_status_code(
             axum::http::StatusCode::REQUEST_TIMEOUT,
-            std::time::Duration::from_secs(30),
+            std::time::Duration::from_secs(INGEST_REQUEST_TIMEOUT_SECS),
         ))
         .layer(axum::middleware::from_fn(
             crate::metrics::track_http_metrics,
@@ -590,11 +598,20 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
     } else {
         let rate_limiter = middleware::new_rate_limiter_state(state.trusted_proxies.clone());
 
+        // MCP is merged further down, outside this layer, so its streaming
+        // responses are not cut off.
+        let web_and_api = Router::new()
+            .merge(api::routes())
+            .merge(html::routes())
+            .layer(TimeoutLayer::with_status_code(
+                axum::http::StatusCode::REQUEST_TIMEOUT,
+                std::time::Duration::from_secs(ADMIN_REQUEST_TIMEOUT_SECS),
+            ));
+
         let admin_app = Router::new()
             .route("/health", get(health_handler))
             .route("/metrics", get(crate::metrics::metrics_handler))
-            .merge(api::routes())
-            .merge(html::routes())
+            .merge(web_and_api)
             .layer(RequestBodyLimitLayer::new(config.server.max_body_size))
             .layer(RequestDecompressionLayer::new())
             .layer(RequestBodyLimitLayer::new(
@@ -746,7 +763,7 @@ fn build_mcp_runtime(
     config: &Config,
     oidc: Option<&Arc<OidcClient>>,
     writer_pool: DbPool,
-    revocation_store: Option<crate::oidc::revocations::SqliteRevocationStore>,
+    revocation_store: Option<crate::oidc::revocations::DbRevocationStore>,
 ) -> Result<Option<Arc<McpRuntime>>> {
     if !config.auth.mcp.is_enabled() {
         return Ok(None);
@@ -866,7 +883,7 @@ fn build_mcp_runtime(
 pub(crate) fn build_web_bearer_gate(
     oidc: &Arc<OidcClient>,
     config: &Config,
-    revocation_store: Option<crate::oidc::revocations::SqliteRevocationStore>,
+    revocation_store: Option<crate::oidc::revocations::DbRevocationStore>,
 ) -> Option<BearerGate> {
     let issuer = config.auth.oauth.issuer_url.as_deref()?.to_string();
     let client_id = config

@@ -119,11 +119,11 @@ async fn bulk_delete_events_chunked(
             return Ok(0);
         }
 
-        // Collect distinct fingerprints that will be affected before deleting.
-        let mut affected_fps: Vec<String> = Vec::new();
+        // Collect distinct issue keys that will be affected before deleting.
+        let mut affected_fps: Vec<(i64, String)> = Vec::new();
         for chunk in ids.chunks(500) {
             let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new(
-                "SELECT DISTINCT fingerprint FROM events WHERE fingerprint IS NOT NULL AND event_id IN (",
+                "SELECT DISTINCT project_id, fingerprint FROM events WHERE fingerprint IS NOT NULL AND event_id IN (",
             );
             let mut sep = qb.separated(", ");
             for id in chunk {
@@ -139,7 +139,10 @@ async fn bulk_delete_events_chunked(
                 qb.push_bind(pid as i64);
             }
             let rows = qb.build().fetch_all(pool).await?;
-            affected_fps.extend(rows.into_iter().map(|row| row.get::<String, _>(0)));
+            affected_fps.extend(
+                rows.into_iter()
+                    .map(|row| (row.get::<i64, _>(0), row.get::<String, _>(1))),
+            );
         }
 
         // Delete one id-chunk per short transaction so the writer actor can interleave.
@@ -245,9 +248,10 @@ async fn bulk_delete_events_chunked(
             || f.query.is_some()
             || f.item_type.is_some();
 
-        // Collect distinct fingerprints that will be affected before deleting.
-        let mut sel_qb =
-            sqlx::QueryBuilder::<crate::db::Db>::new("SELECT DISTINCT fingerprint FROM events");
+        // Collect distinct issue keys that will be affected before deleting.
+        let mut sel_qb = sqlx::QueryBuilder::<crate::db::Db>::new(
+            "SELECT DISTINCT project_id, fingerprint FROM events",
+        );
         push_filter!(sel_qb, f);
         if let Some(oid) = org_id {
             if f.project_id.is_none() {
@@ -261,12 +265,15 @@ async fn bulk_delete_events_chunked(
                 sel_qb.push(")");
             }
         }
-        let affected_fps: Vec<String> = sel_qb
+        let affected_fps: Vec<(i64, String)> = sel_qb
             .build()
             .fetch_all(pool)
             .await?
             .into_iter()
-            .filter_map(|row| row.get::<Option<String>, _>(0))
+            .filter_map(|row| {
+                row.get::<Option<String>, _>(1)
+                    .map(|fp| (row.get::<i64, _>(0), fp))
+            })
             .collect();
 
         // Chunked delete: each chunk is its own short transaction so the writer actor can interleave flushes, with scoping entirely in the inner SELECT so the outer DELETE only touches in-scope rows.
@@ -384,8 +391,10 @@ async fn bulk_delete_issues_chunked(
 
     for chunk in fps.chunks(500) {
         let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new(
-            "DELETE FROM issue_tag_values WHERE fingerprint IN (",
+            "DELETE FROM issue_tag_values WHERE project_id = ",
         );
+        qb.push_bind(project_id as i64);
+        qb.push(" AND fingerprint IN (");
         let mut sep = qb.separated(", ");
         for fp in chunk {
             sep.push_bind(fp.as_str());

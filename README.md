@@ -126,9 +126,9 @@ The repo ships `stackpit-bench`, an open-loop load generator that ramps Sentry e
 To reproduce (fresh database; `mode = "open"` auto-provisions the project on the first envelope). In `stackpit.toml`, set `ingest_bind = "127.0.0.1:3001"` and `rate_limit = 0` under `[filter]` first: `stackpit init` writes a default rate limit, and unlimited open-mode ingest requires a loopback bind (or an explicit `open_ingest_unlimited_acknowledged = true`):
 
 ```bash
-cargo build --release -p stackpit-bench
+cargo build --release --manifest-path stackpit-bench/Cargo.toml
 stackpit serve &
-./target/release/stackpit-bench \
+./stackpit-bench/target/release/stackpit-bench \
   --url http://127.0.0.1:3001 --project 1 --key 0123456789abcdef0123456789abcdef \
   --db stackpit.db --ramp-start 10000 --ramp-step 2000 --ramp-interval 60 \
   --out bench-results

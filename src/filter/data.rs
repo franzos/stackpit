@@ -7,7 +7,8 @@ use super::rules::FilterRule;
 /// `queries::filters::load_filter_data()`, consumed by `FilterEngine::apply_data()`.
 #[derive(Default)]
 pub struct FilterData {
-    pub discarded: HashSet<String>,
+    /// Discarded issues, keyed by `(project_id, fingerprint)`.
+    pub discarded: HashSet<(u64, String)>,
     pub inbound_filters: HashMap<u64, HashSet<String>>,
     pub message_filters: HashMap<u64, Vec<String>>,
     pub rate_limits: HashMap<String, u32>,

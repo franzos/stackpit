@@ -15,6 +15,16 @@ use super::msg::WriteMsg;
 /// runtime's cooperative budget where the runtime allows it. Shares
 /// `should_compress_payload` with the accept path so the two can't diverge.
 fn compress_batch(batch: &mut [WriteMsg]) {
+    // The retry re-entry arrives fully compressed; skip the blocking section then.
+    let pending = batch.iter().any(|msg| match msg {
+        WriteMsg::Event(event) | WriteMsg::EventWithAttachments(event, _) => {
+            !event.compressed && event.should_compress_payload()
+        }
+        _ => false,
+    });
+    if !pending {
+        return;
+    }
     super::block_in_place_if_multi_thread(|| {
         for msg in batch.iter_mut() {
             if let WriteMsg::Event(event) | WriteMsg::EventWithAttachments(event, _) = msg {
@@ -352,6 +362,34 @@ mod tests {
     use super::*;
     use crate::ingest::models::{ItemType, StorableEvent};
     use crate::queries::events::decompress_payload;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn compress_batch_is_a_noop_when_everything_is_already_compressed() {
+        let raw =
+            serde_json::to_vec(&serde_json::json!({"event_id": "noop1", "message": "x"})).unwrap();
+        let event = StorableEvent::new(
+            "noop1".to_string(),
+            ItemType::Event,
+            raw,
+            1,
+            "k".to_string(),
+        );
+        let mut batch = vec![WriteMsg::Event(event)];
+        compress_batch(&mut batch);
+        let WriteMsg::Event(first) = &batch[0] else {
+            panic!("expected event");
+        };
+        assert!(first.compressed);
+        let bytes = first.payload.clone();
+
+        // Second pass (the retry re-entry) must leave the bytes untouched.
+        compress_batch(&mut batch);
+        let WriteMsg::Event(second) = &batch[0] else {
+            panic!("expected event");
+        };
+        assert!(second.compressed);
+        assert_eq!(second.payload, bytes);
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn compress_batch_is_idempotent() {

@@ -136,11 +136,16 @@ pub async fn get_rate_limit(pool: &crate::db::DbPool, project_id: u64) -> Result
     Ok(row.map(|r| r.get::<i32, _>(0) as u32).unwrap_or(0))
 }
 
-/// Check if a fingerprint has been explicitly discarded.
-pub async fn is_fingerprint_discarded(pool: &crate::db::DbPool, fingerprint: &str) -> Result<bool> {
+/// Check if a fingerprint has been explicitly discarded in a project.
+pub async fn is_fingerprint_discarded(
+    pool: &crate::db::DbPool,
+    project_id: u64,
+    fingerprint: &str,
+) -> Result<bool> {
     let row = sqlx::query(sql!(
-        "SELECT COUNT(*) FROM discarded_fingerprints WHERE fingerprint = ?1"
+        "SELECT COUNT(*) FROM discarded_fingerprints WHERE project_id = ?1 AND fingerprint = ?2"
     ))
+    .bind(project_id as i64)
     .bind(fingerprint)
     .fetch_optional(pool)
     .await?;
@@ -193,7 +198,7 @@ pub async fn discard_fingerprint(
         "INSERT OR IGNORE INTO discarded_fingerprints (fingerprint, project_id) VALUES (?1, ?2)"
     );
     #[cfg(not(feature = "sqlite"))]
-    let query = sql!("INSERT INTO discarded_fingerprints (fingerprint, project_id) VALUES (?1, ?2) ON CONFLICT (fingerprint) DO NOTHING");
+    let query = sql!("INSERT INTO discarded_fingerprints (fingerprint, project_id) VALUES (?1, ?2) ON CONFLICT (project_id, fingerprint) DO NOTHING");
 
     sqlx::query(query)
         .bind(fingerprint)
@@ -203,10 +208,15 @@ pub async fn discard_fingerprint(
     Ok(())
 }
 
-pub async fn undiscard_fingerprint(pool: &crate::db::DbPool, fingerprint: &str) -> Result<()> {
+pub async fn undiscard_fingerprint(
+    pool: &crate::db::DbPool,
+    project_id: u64,
+    fingerprint: &str,
+) -> Result<()> {
     sqlx::query(sql!(
-        "DELETE FROM discarded_fingerprints WHERE fingerprint = ?1"
+        "DELETE FROM discarded_fingerprints WHERE project_id = ?1 AND fingerprint = ?2"
     ))
+    .bind(project_id as i64)
     .bind(fingerprint)
     .execute(pool)
     .await?;
@@ -443,11 +453,14 @@ pub async fn load_filter_data(pool: &crate::db::DbPool) -> Result<crate::filter:
 
     // Tier 1: discarded fingerprints -- cheapest check, bail early
     {
-        let rows = sqlx::query(sql!("SELECT fingerprint FROM discarded_fingerprints"))
-            .fetch_all(pool)
-            .await?;
+        let rows = sqlx::query(sql!(
+            "SELECT project_id, fingerprint FROM discarded_fingerprints"
+        ))
+        .fetch_all(pool)
+        .await?;
         for row in &rows {
-            data.discarded.insert(row.get::<String, _>(0));
+            data.discarded
+                .insert((row.get::<i64, _>(0) as u64, row.get::<String, _>(1)));
         }
     }
 
@@ -770,5 +783,31 @@ mod tests {
 
         set_rate_limit(&pool, project_id, None, 0).await.unwrap();
         assert_eq!(get_rate_limit(&pool, project_id).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn discard_in_one_project_does_not_hide_the_same_fingerprint_in_another() {
+        let pool = open_test_db().await;
+
+        discard_fingerprint(&pool, "fp-shared", 1).await.unwrap();
+        assert!(is_fingerprint_discarded(&pool, 1, "fp-shared")
+            .await
+            .unwrap());
+        assert!(!is_fingerprint_discarded(&pool, 2, "fp-shared")
+            .await
+            .unwrap());
+
+        discard_fingerprint(&pool, "fp-shared", 2).await.unwrap();
+        let data = load_filter_data(&pool).await.unwrap();
+        assert!(data.discarded.contains(&(1, "fp-shared".to_string())));
+        assert!(data.discarded.contains(&(2, "fp-shared".to_string())));
+
+        undiscard_fingerprint(&pool, 1, "fp-shared").await.unwrap();
+        assert!(!is_fingerprint_discarded(&pool, 1, "fp-shared")
+            .await
+            .unwrap());
+        assert!(is_fingerprint_discarded(&pool, 2, "fp-shared")
+            .await
+            .unwrap());
     }
 }

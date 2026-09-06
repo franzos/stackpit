@@ -45,9 +45,18 @@ impl Feature {
 
 /// True when `current` is strictly below `cap`. `None` (unlimited) is
 /// always under.
-#[allow(dead_code)]
 pub fn org_cap_allows(cap: Option<u32>, current: u32) -> bool {
     cap.is_none_or(|c| current < c)
+}
+
+/// Whether one more licensed org may be created given `current` existing ones.
+/// The cap is a property of the tier, so an unlicensed or expired install has
+/// none; only Active and Grace enforce `max_orgs`.
+pub(crate) fn evaluate_org_cap(status: &LicenseStatus, current: u32) -> bool {
+    match status {
+        LicenseStatus::Unlicensed | LicenseStatus::Expired(_) => true,
+        LicenseStatus::Active(l) | LicenseStatus::Grace(l) => org_cap_allows(l.max_orgs, current),
+    }
 }
 
 /// Normalised, post-verification license. Held by [`LicenseStatus`] —
@@ -241,6 +250,39 @@ mod tests {
             tier: "business".into(),
             product: "stackpit".into(),
         })
+    }
+
+    fn capped(status: fn(License) -> LicenseStatus, max_orgs: Option<u32>) -> LicenseStatus {
+        let mut l = license_with(Some(Utc::now() + Duration::days(30)));
+        l.max_orgs = max_orgs;
+        status(l)
+    }
+
+    #[test]
+    fn org_cap_reached_when_active_at_cap() {
+        let s = capped(LicenseStatus::Active, Some(3));
+        assert!(evaluate_org_cap(&s, 2));
+        assert!(!evaluate_org_cap(&s, 3));
+        assert!(!evaluate_org_cap(&s, 4));
+        let g = capped(LicenseStatus::Grace, Some(3));
+        assert!(!evaluate_org_cap(&g, 3));
+    }
+
+    #[test]
+    fn org_cap_lifted_when_expired() {
+        let s = capped(LicenseStatus::Expired, Some(1));
+        assert!(evaluate_org_cap(&s, 50));
+    }
+
+    #[test]
+    fn org_cap_lifted_when_unlicensed() {
+        assert!(evaluate_org_cap(&LicenseStatus::Unlicensed, 50));
+    }
+
+    #[test]
+    fn org_cap_absent_is_unlimited() {
+        let s = capped(LicenseStatus::Active, None);
+        assert!(evaluate_org_cap(&s, u32::MAX));
     }
 
     #[test]

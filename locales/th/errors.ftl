@@ -111,6 +111,7 @@ flash-queue-replay-failed = ส่งซ้ำไม่สำเร็จ: { $er
 flash-queue-cancelled = ทิ้งการแจ้งเตือนในคิวแล้ว
 flash-queue-replay-failed-generic = ส่งซ้ำไม่สำเร็จ ดูสาเหตุได้ที่รายการในคิว ใต้หัวข้อข้อผิดพลาด
 flash-license-activated = เปิดใช้งานสัญญาอนุญาตแล้ว
+flash-org-cap-reached = ถึงขีดจำกัดจำนวนองค์กรของสัญญาอนุญาตแล้ว องค์กรบางแห่งจึงไม่ถูกสร้าง
 flash-license-deactivated = นำสัญญาอนุญาตออกแล้ว
 flash-license-persist-failed = ตรวจสอบสัญญาอนุญาตผ่านแล้วแต่บันทึกไม่สำเร็จ ดูบันทึกของเซิร์ฟเวอร์
 flash-license-clear-failed = นำสัญญาอนุญาตออกไม่สำเร็จ ดูบันทึกของเซิร์ฟเวอร์

@@ -186,3 +186,26 @@ impl axum::response::IntoResponse for ApiError {
         (self.status, Json(json!({ "detail": self.detail }))).into_response()
     }
 }
+
+/// Resolve a bare fingerprint to the one project the caller may see it in.
+/// Issues are keyed by `(project_id, fingerprint)`, so the same fingerprint can
+/// exist in several projects; anything but exactly one visible hit is a 404.
+pub(crate) async fn resolve_issue_project(
+    active: &crate::orgs::extractor::ActiveOrg,
+    pool: &DbPool,
+    fingerprint: &str,
+) -> Result<(u64, crate::orgs::extractor::ProjectScope), ApiError> {
+    let candidates = crate::queries::orgs::projects_of_fingerprint(pool, fingerprint)
+        .await
+        .map_err(ApiError::internal)?;
+    let mut visible = Vec::new();
+    for pid in candidates {
+        if let Ok(scope) = crate::orgs::extractor::require_project_scope(active, pool, pid).await {
+            visible.push((pid as u64, scope));
+        }
+    }
+    match visible.len() {
+        1 => Ok(visible.pop().expect("one element")),
+        _ => Err(ApiError::not_found("issue not found")),
+    }
+}

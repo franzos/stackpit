@@ -130,14 +130,24 @@ pub(super) fn latest_output() -> Value {
 pub(super) async fn get_latest_event(
     ctx: &ToolCtx,
     args: &Value,
-    _target: Target,
+    target: Target,
 ) -> Result<Value, ToolError> {
     let fingerprint = str_arg(args, "fingerprint")?;
+    let Target::Project(project_id) = target else {
+        return Err(internal(
+            "get_latest_event",
+            "issue target is not a project",
+        ));
+    };
 
-    let event = crate::queries::events::get_latest_event_for_issue(&ctx.pool, fingerprint)
-        .await
-        .map_err(|e| internal("get_latest_event", format!("{e:#}")))?
-        .ok_or_else(|| ToolError::NotFound("not found".to_string()))?;
+    let event = crate::queries::events::get_latest_event_for_issue(
+        &ctx.pool,
+        project_id as u64,
+        fingerprint,
+    )
+    .await
+    .map_err(|e| internal("get_latest_event", format!("{e:#}")))?
+    .ok_or_else(|| ToolError::NotFound("not found".to_string()))?;
 
     event_json(ctx, "get_latest_event", event).await
 }
@@ -835,5 +845,46 @@ mod tests {
         .await
         .expect_err("unknown sort");
         assert!(matches!(err, ToolError::Invalid(_)), "got {err:?}");
+    }
+
+    // The same fingerprint in a second project must not pull that project's
+    // events into the caller's view: the event comes from the target project.
+    #[tokio::test]
+    async fn get_latest_event_reads_only_the_target_project() {
+        let pool = crate::db::open_test_pool().await;
+        let org = setup(&pool, "events-shared-a", 6060, rich_payload(1, 1)).await;
+        let other = seed_org(&pool, "events-shared-b").await;
+        seed_project(&pool, 6061, other, "events-shared-b").await;
+        insert_test_issue(
+            &pool,
+            "fp-event",
+            6061,
+            Some("other"),
+            Some("error"),
+            1,
+            1,
+            1,
+            "unresolved",
+        )
+        .await;
+        sqlx::query(sql!(
+            "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, received_at, fingerprint)
+             VALUES ('e-other', 'event', ?1, 6061, 'k', 9000, 9000, 'fp-event')"
+        ))
+        .bind(zstd::encode_all(b"{}".as_slice(), 3).unwrap())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let out = call(
+            &pool,
+            McpPrincipal::for_test(SCOPE_EVENTS_READ, vec![(org, Role::Owner)]),
+            "get_latest_event",
+            json!({ "fingerprint": "fp-event" }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out["event_id"], "e-rich");
+        assert_eq!(out["project_id"], 6060);
     }
 }

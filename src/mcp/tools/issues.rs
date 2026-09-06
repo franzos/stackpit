@@ -17,14 +17,29 @@ const TREND_BUCKETS: usize = 24;
 const TREND_BUCKET_SECS: i64 = 3_600;
 
 /// An issue is addressed by fingerprint, so the project it belongs to has to be
-/// looked up before the caller can be authorized against it.
+/// looked up before the caller can be authorized against it. Issues are keyed
+/// by `(project_id, fingerprint)`, so the candidates are narrowed to the orgs
+/// the principal may read and exactly one must remain; `authorize_tool` still
+/// performs the real scope check on the target this returns.
 pub(super) async fn fingerprint_target(ctx: &ToolCtx, args: &Value) -> Result<Target, ToolError> {
     let fingerprint = str_arg(args, "fingerprint")?;
-    let project_id = crate::queries::orgs::project_of_fingerprint(&ctx.pool, fingerprint)
+    let candidates = crate::queries::orgs::projects_of_fingerprint(&ctx.pool, fingerprint)
         .await
-        .map_err(|e| internal("fingerprint_target", format!("{e:#}")))?
-        .ok_or_else(|| ToolError::NotFound("not found".to_string()))?;
-    Ok(Target::Project(project_id))
+        .map_err(|e| internal("fingerprint_target", format!("{e:#}")))?;
+    let accessible = ctx.principal.accessible_org_ids();
+    let mut visible = Vec::new();
+    for pid in candidates {
+        let org = crate::queries::orgs::org_of_project(&ctx.pool, pid)
+            .await
+            .map_err(|e| internal("fingerprint_target", format!("{e:#}")))?;
+        if org.is_some_and(|o| accessible.contains(&o)) {
+            visible.push(pid);
+        }
+    }
+    match visible.as_slice() {
+        [project_id] => Ok(Target::Project(*project_id)),
+        _ => Err(ToolError::NotFound("not found".to_string())),
+    }
 }
 
 fn issue_json(issue: &IssueSummary, report: &mut Report) -> Value {
@@ -214,7 +229,7 @@ pub(super) async fn get_issue(
         return Err(internal("get_issue", "issue target is not a project"));
     };
 
-    let issue = crate::queries::issues::get_issue(&ctx.pool, fingerprint)
+    let issue = crate::queries::issues::get_issue(&ctx.pool, project_id as u64, fingerprint)
         .await
         .map_err(|e| internal("get_issue", format!("{e:#}")))?
         .ok_or_else(|| ToolError::NotFound("not found".to_string()))?;
@@ -302,15 +317,19 @@ pub(super) async fn update_issue_status(
         return Err(internal("update_issue_status", "target is not a project"));
     };
 
-    let before = crate::queries::issues::get_issue(&ctx.pool, fingerprint)
+    let before = crate::queries::issues::get_issue(&ctx.pool, project_id as u64, fingerprint)
         .await
         .map_err(|e| internal("update_issue_status", format!("{e:#}")))?
         .ok_or_else(|| ToolError::NotFound("not found".to_string()))?;
 
-    let affected =
-        crate::queries::issues::update_issue_status(&ctx.writer_pool, fingerprint, status)
-            .await
-            .map_err(|e| internal("update_issue_status", format!("{e:#}")))?;
+    let affected = crate::queries::issues::update_issue_status(
+        &ctx.writer_pool,
+        project_id as u64,
+        fingerprint,
+        status,
+    )
+    .await
+    .map_err(|e| internal("update_issue_status", format!("{e:#}")))?;
     if affected == 0 {
         return Err(ToolError::NotFound("not found".to_string()));
     }
@@ -537,7 +556,7 @@ mod tests {
         assert_eq!(out["status"], "resolved");
         assert_eq!(out["project_id"], 7070);
 
-        let stored = crate::queries::issues::get_issue(&pool, "fp-update")
+        let stored = crate::queries::issues::get_issue(&pool, 7070, "fp-update")
             .await
             .unwrap()
             .unwrap();
@@ -563,7 +582,7 @@ mod tests {
         .expect_err("members cannot change status");
         assert!(matches!(err, ToolError::Forbidden(_)));
 
-        let stored = crate::queries::issues::get_issue(&pool, "fp-member")
+        let stored = crate::queries::issues::get_issue(&pool, 7080, "fp-member")
             .await
             .unwrap()
             .unwrap();
@@ -610,10 +629,57 @@ mod tests {
         .expect_err("unknown status");
         assert!(matches!(err, ToolError::Invalid(_)), "got {err:?}");
 
-        let stored = crate::queries::issues::get_issue(&pool, "fp-badstatus")
+        let stored = crate::queries::issues::get_issue(&pool, 7100, "fp-badstatus")
             .await
             .unwrap()
             .unwrap();
         assert_eq!(stored.status.as_str(), "unresolved");
+    }
+
+    // One fingerprint in two projects: a member of one org resolves to that
+    // org's issue, a member of neither gets not-found, and someone who can see
+    // both gets not-found rather than a guess.
+    #[tokio::test]
+    async fn get_issue_disambiguates_a_shared_fingerprint_by_the_callers_orgs() {
+        let pool = crate::db::open_test_pool().await;
+        let org_a = seed(&pool, "issues-amb-a", 7110).await;
+        let org_b = seed(&pool, "issues-amb-b", 7111).await;
+        let org_c = seed_org(&pool, "issues-amb-c").await;
+        issue(&pool, "fp-shared", 7110, "in A").await;
+        issue(&pool, "fp-shared", 7111, "in B").await;
+
+        let out = call(
+            &pool,
+            McpPrincipal::for_test(SCOPE_EVENTS_READ, vec![(org_a, Role::Member)]),
+            "get_issue",
+            json!({ "fingerprint": "fp-shared" }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out["project_id"], 7110);
+        assert_eq!(out["title"], "in A");
+
+        let err = call(
+            &pool,
+            McpPrincipal::for_test(SCOPE_EVENTS_READ, vec![(org_c, Role::Owner)]),
+            "get_issue",
+            json!({ "fingerprint": "fp-shared" }),
+        )
+        .await
+        .expect_err("member of neither org");
+        assert_eq!(err, ToolError::NotFound("not found".to_string()));
+
+        let err = call(
+            &pool,
+            McpPrincipal::for_test(
+                SCOPE_EVENTS_READ,
+                vec![(org_a, Role::Owner), (org_b, Role::Owner)],
+            ),
+            "get_issue",
+            json!({ "fingerprint": "fp-shared" }),
+        )
+        .await
+        .expect_err("two visible candidates");
+        assert_eq!(err, ToolError::NotFound("not found".to_string()));
     }
 }

@@ -18,7 +18,7 @@ use crate::oidc::cookies::{
 };
 use crate::oidc::grants::{self, NewGrant};
 use crate::oidc::login_state::{self, LoginState};
-use crate::oidc::{logout, revocations};
+use crate::oidc::logout;
 use crate::queries::users;
 use crate::server::AppState;
 use stackpit_auth::read_cookie;
@@ -296,21 +296,6 @@ pub async fn backchannel_logout(
             axum::http::StatusCode::BAD_REQUEST.into_response()
         }
     }
-}
-
-/// Self-service "log out everywhere": writes a sub-scoped revocation marker
-/// + deletes every grant for this user. Exposed for future settings UI.
-#[allow(dead_code)]
-pub async fn revoke_all_for_user(
-    pool: &crate::db::DbPool,
-    iss: &str,
-    sub: &str,
-    ttl_secs: i64,
-) -> anyhow::Result<()> {
-    let expires_at = chrono::Utc::now().timestamp() + ttl_secs;
-    revocations::insert_sub(pool, iss, sub, expires_at).await?;
-    grants::delete_by_sub(pool, iss, sub).await?;
-    Ok(())
 }
 
 fn login_error(code: &str) -> Response {

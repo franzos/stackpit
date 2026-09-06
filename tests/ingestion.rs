@@ -88,7 +88,7 @@ async fn ingest_event_then_query_back() {
     let detail = detail.unwrap();
     assert_eq!(detail.event_id, "evt-001");
 
-    let issue = stackpit::queries::issues::get_issue(&pool, "fp-001")
+    let issue = stackpit::queries::issues::get_issue(&pool, 1, "fp-001")
         .await
         .unwrap();
     assert!(issue.is_some(), "issue should exist for the fingerprint");
@@ -144,6 +144,7 @@ async fn ingest_and_update_issue_status() {
 
     let rows = stackpit::queries::issues::update_issue_status(
         &pool,
+        1,
         "fp-status-001",
         stackpit::queries::IssueStatus::Resolved,
     )
@@ -154,7 +155,7 @@ async fn ingest_and_update_issue_status() {
     let _ = writer.shutdown();
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
-    let issue = stackpit::queries::issues::get_issue(&pool, "fp-status-001")
+    let issue = stackpit::queries::issues::get_issue(&pool, 1, "fp-status-001")
         .await
         .unwrap();
     assert!(issue.is_some());

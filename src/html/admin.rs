@@ -1,12 +1,11 @@
 use askama::Template;
 use axum::extract::{Form, Path, State};
-use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect};
 use serde::Deserialize;
 
 use crate::html::chrome::PageChrome;
 use crate::html::utils::Chrome;
-use crate::html::{html_error, render_template};
+use crate::html::{render_template, HtmlError};
 use crate::orgs::extractor::{require_superuser, ActiveOrg};
 use crate::queries::orgs::{list_non_system_orgs, OrgSummary};
 use crate::queries::projects::{list_unassigned_projects, reassign_project, UnassignedProject};
@@ -25,32 +24,17 @@ pub async fn unassigned_view(
     State(state): State<AppState>,
     active: ActiveOrg,
     Chrome(chrome): Chrome,
-) -> axum::response::Response {
+) -> Result<axum::response::Response, HtmlError> {
     if let Err(r) = require_superuser(&active) {
-        return r;
+        return Ok(r);
     }
-    let projects = match list_unassigned_projects(&state.pool).await {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::error!("list_unassigned_projects failed: {e:#}");
-            return html_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to load projects.",
-            );
-        }
-    };
-    let orgs = match list_non_system_orgs(&state.pool).await {
-        Ok(o) => o,
-        Err(e) => {
-            tracing::error!("list_non_system_orgs failed: {e:#}");
-            return html_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to load orgs.");
-        }
-    };
-    render_template(&UnassignedTemplate {
+    let projects = list_unassigned_projects(&state.pool).await?;
+    let orgs = list_non_system_orgs(&state.pool).await?;
+    Ok(render_template(&UnassignedTemplate {
         projects,
         orgs,
         chrome,
-    })
+    }))
 }
 
 #[derive(Deserialize)]
@@ -64,17 +48,12 @@ pub async fn assign_project(
     active: ActiveOrg,
     Path(project_id): Path<i64>,
     Form(form): Form<AssignForm>,
-) -> axum::response::Response {
+) -> Result<axum::response::Response, HtmlError> {
     if let Err(r) = require_superuser(&active) {
-        return r;
+        return Ok(r);
     }
-    match reassign_project(&state.writer_pool, project_id, form.org_id).await {
-        Ok(_) => Redirect::to("/web/admin/unassigned").into_response(),
-        Err(e) => {
-            tracing::error!("reassign_project failed: {e:#}");
-            html_error(StatusCode::INTERNAL_SERVER_ERROR, "Reassignment failed.")
-        }
-    }
+    reassign_project(&state.writer_pool, project_id, form.org_id).await?;
+    Ok(Redirect::to("/web/admin/unassigned").into_response())
 }
 
 #[cfg(test)]

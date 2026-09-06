@@ -23,7 +23,7 @@ postgres = ["sqlx/postgres"]
 integration-tests = []
 
 [workspace]
-members = ["stackpit-auth", "stackpit-bench"]
+members = ["stackpit-auth"]
 
 [lib]
 name = "stackpit"

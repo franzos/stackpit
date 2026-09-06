@@ -231,32 +231,93 @@ pub async fn provision_submit(
 
     let signed_ids: Vec<String> = ps.orgs.iter().map(|o| o.id.clone()).collect();
     let allowed_ids = intersect_provisionable(&signed_ids, &submitted);
+    let claims: Vec<&OrgClaim> = allowed_ids
+        .iter()
+        .filter_map(|id| ps.orgs.iter().find(|o| &o.id == id))
+        .collect();
 
-    for id in &allowed_ids {
-        let Some(claim) = ps.orgs.iter().find(|o| &o.id == id) else {
-            continue;
-        };
+    // iss from the signed cookie, never from the form or AuthContext
+    let cap_hit = match provision_claims(
+        &state.pool,
+        &state.writer_pool,
+        &state.license.status(),
+        user.user_id,
+        &ps.iss,
+        &claims,
+    )
+    .await
+    {
+        Ok(hit) => hit,
+        Err(e) => {
+            tracing::error!("count_licensed_orgs failed during provision: {e:#}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    // Single-use: clear the cookie on every POST (success, partial, or skip).
+    let mut resp = if cap_hit {
+        crate::html::flash::redirect("/web/", ORG_CAP_REACHED)
+    } else {
+        Redirect::to("/web/").into_response()
+    };
+    resp.headers_mut()
+        .append(SET_COOKIE, clear_provision_cookie(secure));
+    resp
+}
+
+const ORG_CAP_REACHED: &str = "org-cap-reached";
+
+/// Provision every claim the user picked. Joining an org that already exists
+/// is never capped; a claim that would create a new org is skipped once the
+/// licence's `max_orgs` is reached. Returns whether any claim was skipped.
+async fn provision_claims(
+    pool: &crate::db::DbPool,
+    writer_pool: &crate::db::DbPool,
+    license: &crate::commercial::LicenseStatus,
+    user_id: i64,
+    iss: &str,
+    claims: &[&OrgClaim],
+) -> anyhow::Result<bool> {
+    let mut licensed_orgs =
+        u32::try_from(orgs_queries::count_licensed_orgs(pool).await?).unwrap_or(u32::MAX);
+    let mut cap_hit = false;
+
+    for claim in claims {
         let name = claim.name.as_deref().unwrap_or(claim.slug.as_str());
-        // iss from the signed cookie, never from the form or AuthContext
-        if let Err(e) = orgs_queries::provision_forseti_org(
-            &state.writer_pool,
-            user.user_id,
-            &ps.iss,
+        let is_new = match orgs_queries::org_by_ext(pool, iss, &claim.id).await {
+            Ok(existing) => existing.is_none(),
+            Err(e) => {
+                tracing::error!("org_by_ext failed for org {}: {e:#}", claim.id);
+                continue;
+            }
+        };
+        if is_new && !crate::commercial::license::evaluate_org_cap(license, licensed_orgs) {
+            tracing::warn!(
+                target: "stackpit::audit",
+                user_id,
+                ext_org_id = %claim.id,
+                "refused provision: licence org cap reached"
+            );
+            cap_hit = true;
+            continue;
+        }
+        match orgs_queries::provision_forseti_org(
+            writer_pool,
+            user_id,
+            iss,
             &claim.id,
             &claim.slug,
             name,
         )
         .await
         {
-            tracing::error!("provision_forseti_org failed for org {}: {e:#}", claim.id);
+            Ok(_) if is_new => licensed_orgs = licensed_orgs.saturating_add(1),
+            Ok(_) => {}
+            Err(e) => tracing::error!("provision_forseti_org failed for org {}: {e:#}", claim.id),
         }
     }
 
-    // Single-use: clear the cookie on every POST (success, partial, or skip).
-    let mut resp = Redirect::to("/web/").into_response();
-    resp.headers_mut()
-        .append(SET_COOKIE, clear_provision_cookie(secure));
-    resp
+    Ok(cap_hit)
 }
 
 #[cfg(test)]
@@ -398,5 +459,98 @@ mod tests {
         let submitted = vec!["acme".to_string()];
         let allowed = intersect_provisionable(&[], &submitted);
         assert!(allowed.is_empty());
+    }
+
+    fn capped_license(max_orgs: Option<u32>) -> crate::commercial::LicenseStatus {
+        crate::commercial::LicenseStatus::Active(crate::commercial::license::License {
+            license_id: "t".into(),
+            customer: "T".into(),
+            email: "t@e.test".into(),
+            issued_at: chrono::Utc::now(),
+            expires_at: Some(chrono::Utc::now() + chrono::Duration::days(30)),
+            features: Vec::new(),
+            max_orgs,
+            tier: "business".into(),
+            product: "stackpit".into(),
+        })
+    }
+
+    fn claim(id: &str) -> OrgClaim {
+        OrgClaim {
+            id: id.into(),
+            slug: id.into(),
+            role: "owner".into(),
+            name: None,
+        }
+    }
+
+    // At the cap, a claim that would create a new org is skipped while a claim
+    // for an org that already exists still joins it; without a cap the same
+    // new claim is provisioned.
+    #[tokio::test]
+    async fn provisioning_skips_only_the_over_cap_new_claim() {
+        use sqlx::Row;
+        let pool = crate::db::open_test_pool().await;
+        let iss = "https://idp.test";
+        let founder = users::upsert_from_oidc(&pool, iss, "founder", None, None)
+            .await
+            .unwrap();
+        let existing = orgs_queries::provision_forseti_org(
+            &pool,
+            founder.user_id,
+            iss,
+            "org-existing",
+            "existing",
+            "Existing",
+        )
+        .await
+        .unwrap();
+        let joiner = users::upsert_from_oidc(&pool, iss, "joiner", None, None)
+            .await
+            .unwrap();
+
+        let claims = [claim("org-existing"), claim("org-new")];
+        let refs: Vec<&OrgClaim> = claims.iter().collect();
+        let hit = provision_claims(
+            &pool,
+            &pool,
+            &capped_license(Some(1)),
+            joiner.user_id,
+            iss,
+            &refs,
+        )
+        .await
+        .unwrap();
+        assert!(hit, "the new claim must be refused at the cap");
+        assert!(orgs_queries::org_by_ext(&pool, iss, "org-new")
+            .await
+            .unwrap()
+            .is_none());
+        let joined: i64 = sqlx::query(crate::db::sql!(
+            "SELECT COUNT(*) AS cnt FROM organization_members WHERE org_id = ?1 AND user_id = ?2"
+        ))
+        .bind(existing)
+        .bind(joiner.user_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+        .get("cnt");
+        assert_eq!(joined, 1, "joining an existing org is never capped");
+
+        let hit = provision_claims(
+            &pool,
+            &pool,
+            &crate::commercial::LicenseStatus::Unlicensed,
+            joiner.user_id,
+            iss,
+            &refs[1..],
+        )
+        .await
+        .unwrap();
+        assert!(!hit);
+        assert!(orgs_queries::org_by_ext(&pool, iss, "org-new")
+            .await
+            .unwrap()
+            .is_some());
     }
 }

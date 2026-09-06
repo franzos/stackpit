@@ -67,6 +67,7 @@ invite-accept-btn = Accept invite
 invite-decline = Decline
 invite-error-accepted = This invite has already been accepted.
 invite-error-expired = This invite has expired.
+invite-error-email-mismatch = This invite is for a different email address. Ask for an invite without an email restriction, or sign in with the matching account.
 
 # Validation/error messages rendered on the html_error page, localized at the
 # call sites that carry a request locale. Internal 5xx failures stay English.
@@ -78,6 +79,7 @@ orgs-err-last-owner-remove = The last owner cannot be removed.
 orgs-err-last-owner-demote = The last owner cannot be demoted.
 orgs-err-confirm-slug = Type the organization slug to confirm deletion.
 orgs-err-not-deletable = This organization cannot be deleted.
+orgs-err-license-cap-reached = Your license's organization limit is reached. Remove an organization or upgrade the license to create another.
 orgs-err-limit-reached = { $count ->
     [one] You have reached the limit of { $count } organization.
    *[other] You have reached the limit of { $count } organizations.

@@ -27,29 +27,29 @@ pub async fn delete_old_events(pool: &DbPool, retention_days: u32) -> Result<usi
             )"
         );
 
-        // Fingerprints of the rows about to be deleted, for issue reconcile.
+        // Issue keys of the rows about to be deleted, for issue reconcile.
         #[cfg(feature = "sqlite")]
         let fp_sql = sql!(
-            "SELECT DISTINCT fingerprint FROM events \
+            "SELECT DISTINCT project_id, fingerprint FROM events \
              WHERE fingerprint IS NOT NULL AND rowid IN (\
                  SELECT rowid FROM events WHERE received_at < ?1 ORDER BY received_at, rowid LIMIT ?2\
              )"
         );
         #[cfg(not(feature = "sqlite"))]
         let fp_sql = sql!(
-            "SELECT DISTINCT fingerprint FROM events \
+            "SELECT DISTINCT project_id, fingerprint FROM events \
              WHERE fingerprint IS NOT NULL AND ctid IN (\
                  SELECT ctid FROM events WHERE received_at < ?1 ORDER BY received_at, ctid LIMIT ?2\
              )"
         );
 
-        let affected_fingerprints: Vec<String> = sqlx::query(fp_sql)
+        let affected_fingerprints: Vec<(i64, String)> = sqlx::query(fp_sql)
             .bind(cutoff)
             .bind(CHUNK_LIMIT)
             .fetch_all(&mut *tx)
             .await?
             .into_iter()
-            .map(|row| row.get::<String, _>(0))
+            .map(|row| (row.get::<i64, _>(0), row.get::<String, _>(1)))
             .collect();
 
         let deleted = sqlx::query(delete_sql)
@@ -300,52 +300,61 @@ async fn delete_old_discard_stats(pool: &DbPool, cutoff: i64) -> Result<usize> {
     Ok(total)
 }
 
+/// Push `(project_id, fingerprint) IN ((?, ?), ...)` for `pairs`. Two binds per
+/// pair, so callers chunk accordingly.
+pub(crate) fn push_pair_in_list(
+    qb: &mut sqlx::QueryBuilder<crate::db::Db>,
+    pairs: &[(i64, String)],
+) {
+    qb.push("(project_id, fingerprint) IN (");
+    let mut sep = qb.separated(", ");
+    for (project_id, fingerprint) in pairs {
+        sep.push("(")
+            .push_bind_unseparated(*project_id)
+            .push_unseparated(", ")
+            .push_bind_unseparated(fingerprint.as_str())
+            .push_unseparated(")");
+    }
+    qb.push(")");
+}
+
 /// Reconcile issues touched by a retention delete: remove orphans and recount the rest.
 async fn reconcile_affected_issues(
     tx: &mut sqlx::Transaction<'_, crate::db::Db>,
-    fingerprints: &[String],
+    issue_keys: &[(i64, String)],
 ) -> Result<()> {
     // Chunk to stay within the DB's bind-variable limit.
-    for chunk in fingerprints.chunks(500) {
+    for chunk in issue_keys.chunks(500) {
         let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new(
             "UPDATE issues SET event_count = (
-                SELECT COUNT(*) FROM events WHERE events.fingerprint = issues.fingerprint
-            ) WHERE fingerprint IN (",
+                SELECT COUNT(*) FROM events
+                WHERE events.project_id = issues.project_id AND events.fingerprint = issues.fingerprint
+            ) WHERE ",
         );
-        let mut sep = qb.separated(", ");
-        for fp in chunk {
-            sep.push_bind(fp.as_str());
-        }
-        qb.push(")");
+        push_pair_in_list(&mut qb, chunk);
         qb.build().execute(&mut **tx).await?;
 
-        // Drop tag values for all affected fingerprints: counts can't be partially
+        // Drop tag values for all affected issues: counts can't be partially
         // recalculated (tags aren't per-event queryable); the accumulator rebuilds them.
-        let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new(
-            "DELETE FROM issue_tag_values WHERE fingerprint IN (",
-        );
-        let mut sep = qb.separated(", ");
-        for fp in chunk {
-            sep.push_bind(fp.as_str());
-        }
-        qb.push(")");
+        let mut qb =
+            sqlx::QueryBuilder::<crate::db::Db>::new("DELETE FROM issue_tag_values WHERE ");
+        push_pair_in_list(&mut qb, chunk);
         qb.build().execute(&mut **tx).await?;
 
-        let mut qb =
-            sqlx::QueryBuilder::<crate::db::Db>::new("DELETE FROM issues WHERE fingerprint IN (");
-        let mut sep = qb.separated(", ");
-        for fp in chunk {
-            sep.push_bind(fp.as_str());
-        }
-        qb.push(") AND event_count = 0");
+        let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new("DELETE FROM issues WHERE ");
+        push_pair_in_list(&mut qb, chunk);
+        qb.push(" AND event_count = 0");
         qb.build().execute(&mut **tx).await?;
     }
 
     Ok(())
 }
 
-/// Targeted reconcile of the given fingerprints in its own transaction.
-pub async fn reconcile_after_event_delete(pool: &DbPool, fingerprints: &[String]) -> Result<()> {
+/// Targeted reconcile of the given `(project_id, fingerprint)` keys in its own transaction.
+pub async fn reconcile_after_event_delete(
+    pool: &DbPool,
+    fingerprints: &[(i64, String)],
+) -> Result<()> {
     if fingerprints.is_empty() {
         return Ok(());
     }
@@ -363,11 +372,16 @@ mod tests {
     use crate::queries::test_helpers::*;
 
     async fn insert_issue(pool: &DbPool, fingerprint: &str, event_count: i64) {
+        insert_issue_in(pool, 1, fingerprint, event_count).await;
+    }
+
+    async fn insert_issue_in(pool: &DbPool, project_id: i64, fingerprint: &str, event_count: i64) {
         sqlx::query(sql!(
             "INSERT INTO issues (fingerprint, project_id, title, level, first_seen, last_seen, event_count)
-             VALUES (?1, 1, 'test', 'error', 0, 0, ?2)"
+             VALUES (?1, ?2, 'test', 'error', 0, 0, ?3)"
         ))
         .bind(fingerprint)
+        .bind(project_id)
         .bind(event_count)
         .execute(pool)
         .await
@@ -375,9 +389,14 @@ mod tests {
     }
 
     async fn issue_count(pool: &DbPool, fingerprint: &str) -> Option<i64> {
+        issue_count_in(pool, 1, fingerprint).await
+    }
+
+    async fn issue_count_in(pool: &DbPool, project_id: i64, fingerprint: &str) -> Option<i64> {
         sqlx::query_scalar::<_, i64>(sql!(
-            "SELECT event_count FROM issues WHERE fingerprint = ?1"
+            "SELECT event_count FROM issues WHERE project_id = ?1 AND fingerprint = ?2"
         ))
+        .bind(project_id)
         .bind(fingerprint)
         .fetch_optional(pool)
         .await
@@ -429,6 +448,42 @@ mod tests {
         assert_eq!(event_rows(&pool).await, 1);
         assert_eq!(issue_count(&pool, "fp1").await, Some(1));
         assert_eq!(issue_count(&pool, "fp2").await, None); // reconciled to 0, dropped
+    }
+
+    // A fingerprint shared across projects: sweeping project 1's old events must
+    // recount and drop only project 1's issue, never touch project 2's.
+    #[tokio::test]
+    async fn reconcile_keys_issues_by_project_and_fingerprint() {
+        let pool = open_test_db().await;
+        let old = 1_000;
+        let now = chrono::Utc::now().timestamp();
+
+        insert_test_event(&pool, "a1", 1, old, Some("fp-shared"), Some("error"), None).await;
+        insert_test_event(&pool, "a2", 1, old, Some("fp-shared"), Some("error"), None).await;
+        insert_issue_in(&pool, 1, "fp-shared", 2).await;
+
+        insert_test_event(&pool, "b1", 2, now, Some("fp-shared"), Some("error"), None).await;
+        insert_test_event(&pool, "b2", 2, now, Some("fp-shared"), Some("error"), None).await;
+        insert_issue_in(&pool, 2, "fp-shared", 2).await;
+        sqlx::query(sql!(
+            "INSERT INTO issue_tag_values (project_id, fingerprint, tag_key, tag_value, count)
+             VALUES (1, 'fp-shared', 'k', 'v', 2), (2, 'fp-shared', 'k', 'v', 2)"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(delete_old_events(&pool, 1).await.unwrap(), 2);
+        assert_eq!(issue_count_in(&pool, 1, "fp-shared").await, None);
+        assert_eq!(issue_count_in(&pool, 2, "fp-shared").await, Some(2));
+
+        let tag_rows: Vec<i64> = sqlx::query_scalar(sql!(
+            "SELECT project_id FROM issue_tag_values WHERE fingerprint = 'fp-shared'"
+        ))
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(tag_rows, vec![2]);
     }
 
     #[tokio::test]

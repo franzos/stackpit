@@ -41,10 +41,10 @@ const METRIC_BULK_CHUNK_SIZE: usize = 4000;
 /// 32766 / 11 = 2978, use 2900 for margin.
 const LOG_BULK_CHUNK_SIZE: usize = 2900;
 
-/// Max tags per multi-row INSERT chunk. 4 bind params per tag;
-/// SQLite's SQLITE_MAX_VARIABLE_NUMBER is 32766, so 32766 / 4 = 8191.
-/// We use 8000 for a comfortable margin.
-const TAG_CHUNK_SIZE: usize = 8000;
+/// Max tags per multi-row INSERT chunk. 5 bind params per tag;
+/// SQLite's SQLITE_MAX_VARIABLE_NUMBER is 32766, so 32766 / 5 = 6553.
+/// We use 6000 for a comfortable margin.
+const TAG_CHUNK_SIZE: usize = 6000;
 
 /// Single source of truth for the `events` insert column list. The bind order in
 /// `push_event_row` must match this exactly.
@@ -652,7 +652,7 @@ pub async fn upsert_issue_from_event(pool: &DbPool, event: &StorableEvent) -> Re
     let upsert_sql = sql!(
         "INSERT INTO issues (fingerprint, project_id, title, level, first_seen, last_seen, event_count, status, item_type)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'unresolved', ?8)
-         ON CONFLICT(fingerprint) DO UPDATE SET
+         ON CONFLICT(project_id, fingerprint) DO UPDATE SET
              first_seen = MIN(issues.first_seen, excluded.first_seen),
              last_seen = MAX(issues.last_seen, excluded.last_seen),
              event_count = issues.event_count + excluded.event_count,
@@ -664,7 +664,7 @@ pub async fn upsert_issue_from_event(pool: &DbPool, event: &StorableEvent) -> Re
     let upsert_sql = sql!(
         "INSERT INTO issues (fingerprint, project_id, title, level, first_seen, last_seen, event_count, status, item_type)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'unresolved', ?8)
-         ON CONFLICT(fingerprint) DO UPDATE SET
+         ON CONFLICT(project_id, fingerprint) DO UPDATE SET
              first_seen = LEAST(issues.first_seen, excluded.first_seen),
              last_seen = GREATEST(issues.last_seen, excluded.last_seen),
              event_count = issues.event_count + excluded.event_count,
@@ -686,11 +686,12 @@ pub async fn upsert_issue_from_event(pool: &DbPool, event: &StorableEvent) -> Re
 
     for (key, value) in event.tags.iter().take(MAX_TAGS_PER_EVENT) {
         sqlx::query(sql!(
-            "INSERT INTO issue_tag_values (fingerprint, tag_key, tag_value, count)
-             VALUES (?1, ?2, ?3, 1)
-             ON CONFLICT(fingerprint, tag_key, tag_value) DO UPDATE SET
+            "INSERT INTO issue_tag_values (project_id, fingerprint, tag_key, tag_value, count)
+             VALUES (?1, ?2, ?3, ?4, 1)
+             ON CONFLICT(project_id, fingerprint, tag_key, tag_value) DO UPDATE SET
                  count = issue_tag_values.count + 1"
         ))
+        .bind(event.project_id as i64)
         .bind(fp)
         .bind(key)
         .bind(value)
@@ -700,11 +701,13 @@ pub async fn upsert_issue_from_event(pool: &DbPool, event: &StorableEvent) -> Re
 
     // HLL read-modify-write inside the transaction to avoid lost-update races.
     if let Some(ref user_id) = event.user_identifier {
-        let existing: Option<(Vec<u8>,)> =
-            sqlx::query_as(sql!("SELECT user_hll FROM issues WHERE fingerprint = ?1"))
-                .bind(fp)
-                .fetch_optional(&mut *tx)
-                .await?;
+        let existing: Option<(Vec<u8>,)> = sqlx::query_as(sql!(
+            "SELECT user_hll FROM issues WHERE project_id = ?1 AND fingerprint = ?2"
+        ))
+        .bind(event.project_id as i64)
+        .bind(fp)
+        .fetch_optional(&mut *tx)
+        .await?;
 
         let mut hll: HyperLogLog<12> = match existing {
             Some((buf,)) if buf.len() == HLL_REGISTER_COUNT => HyperLogLog::with_registers(buf),
@@ -713,9 +716,10 @@ pub async fn upsert_issue_from_event(pool: &DbPool, event: &StorableEvent) -> Re
         hll.add_object(user_id);
 
         sqlx::query(sql!(
-            "UPDATE issues SET user_hll = ?1 WHERE fingerprint = ?2"
+            "UPDATE issues SET user_hll = ?1 WHERE project_id = ?2 AND fingerprint = ?3"
         ))
         .bind(hll.get_registers())
+        .bind(event.project_id as i64)
         .bind(fp)
         .execute(&mut *tx)
         .await?;
@@ -727,11 +731,11 @@ pub async fn upsert_issue_from_event(pool: &DbPool, event: &StorableEvent) -> Re
 
 /// Bulk-upsert accumulated tag counts using multi-row INSERT ... ON CONFLICT.
 ///
-/// Tags are chunked to stay within the database's bind-parameter limit
-/// (4 params per tag, chunks of 8000).
+/// Keys are `(project_id, fingerprint, tag_key, tag_value)`. Tags are chunked
+/// to stay within the database's bind-parameter limit (5 params per tag).
 pub async fn bulk_upsert_tag_counts(
     tx: &mut sqlx::Transaction<'_, crate::db::Db>,
-    tags: &HashMap<(String, String, String), u64>,
+    tags: &HashMap<(u64, String, String, String), u64>,
 ) -> Result<()> {
     if tags.is_empty() {
         return Ok(());
@@ -743,18 +747,22 @@ pub async fn bulk_upsert_tag_counts(
 
     for chunk in entries.chunks(TAG_CHUNK_SIZE) {
         let mut builder = QueryBuilder::<crate::db::Db>::new(
-            "INSERT INTO issue_tag_values (fingerprint, tag_key, tag_value, count) ",
+            "INSERT INTO issue_tag_values (project_id, fingerprint, tag_key, tag_value, count) ",
         );
 
-        builder.push_values(chunk.iter(), |mut b, ((fingerprint, key, value), count)| {
-            b.push_bind(fingerprint.as_str());
-            b.push_bind(key.as_str());
-            b.push_bind(value.as_str());
-            b.push_bind(**count as i64);
-        });
+        builder.push_values(
+            chunk.iter(),
+            |mut b, ((project_id, fingerprint, key, value), count)| {
+                b.push_bind(*project_id as i64);
+                b.push_bind(fingerprint.as_str());
+                b.push_bind(key.as_str());
+                b.push_bind(value.as_str());
+                b.push_bind(**count as i64);
+            },
+        );
 
         builder.push(
-            " ON CONFLICT(fingerprint, tag_key, tag_value) DO UPDATE SET \
+            " ON CONFLICT(project_id, fingerprint, tag_key, tag_value) DO UPDATE SET \
              count = issue_tag_values.count + excluded.count",
         );
 

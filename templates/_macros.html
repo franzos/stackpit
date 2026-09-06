@@ -150,10 +150,12 @@
     <div class="text-on-surface text-sm font-semibold">{{ chrome.t("nav-settings") }}</div>
   </div>
   <div class="px-2 space-y-0.5">
-    <a href="/web/settings/integrations/"
-       class="sidebar-link{% if active == "integrations" %} sidebar-link-active{% endif %}">
-      <span>{{ chrome.t("nav-integrations") }}</span>
-    </a>
+    {% if !chrome.is_org_member %}
+      <a href="/web/settings/integrations/"
+         class="sidebar-link{% if active == "integrations" %} sidebar-link-active{% endif %}">
+        <span>{{ chrome.t("nav-integrations") }}</span>
+      </a>
+    {% endif %}
     <a href="/web/settings/alerts/"
        class="sidebar-link{% if active == "alerts" %} sidebar-link-active{% endif %}">
       <span>{{ chrome.t("nav-alerts-digests") |safe }}</span>

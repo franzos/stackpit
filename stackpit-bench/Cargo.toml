@@ -7,6 +7,10 @@ publish = false
 description = "Open-loop ingestion benchmark for stackpit (SQLite, Postgres)"
 license = "MIT"
 
+# Its own workspace: the bench pulls both sqlx backends and charts-rs, none of
+# which belong in the app's lock graph or its advisory audit.
+[workspace]
+
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }

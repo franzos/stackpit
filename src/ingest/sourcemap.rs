@@ -475,19 +475,20 @@ pub async fn load_sourcemaps(
         return Ok(std::collections::HashMap::new());
     }
 
-    let placeholders: Vec<String> = (1..=debug_ids.len()).map(|i| format!("?{i}")).collect();
-    let pid_idx = debug_ids.len() + 1;
-    let query = format!(
-        "SELECT debug_id, data FROM sourcemaps WHERE project_id = ?{pid_idx} AND debug_id IN ({})",
-        placeholders.join(", ")
+    let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new(
+        "SELECT debug_id, data FROM sourcemaps WHERE project_id = ",
     );
-    let mut q = sqlx::query(crate::db::dyn_sql(&query));
-    for id in debug_ids {
-        q = q.bind(id.clone());
+    qb.push_bind(project_id as i64);
+    qb.push(" AND debug_id IN (");
+    {
+        let mut sep = qb.separated(", ");
+        for id in debug_ids {
+            sep.push_bind(id.as_str());
+        }
     }
-    q = q.bind(project_id as i64);
+    qb.push(")");
 
-    let rows = q.fetch_all(pool).await?;
+    let rows = qb.build().fetch_all(pool).await?;
     let compressed: Vec<(String, Vec<u8>)> = rows
         .iter()
         .map(|r| (r.get("debug_id"), r.get("data")))

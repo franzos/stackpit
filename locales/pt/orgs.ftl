@@ -68,6 +68,7 @@ invite-accept-btn = Aceitar convite
 invite-decline = Recusar
 invite-error-accepted = Este convite já foi aceite.
 invite-error-expired = Este convite expirou.
+invite-error-email-mismatch = Este convite é para outro endereço de e-mail. Peça um convite sem restrição de e-mail ou entre com a conta correspondente.
 
 # Mensagens de validação/erro renderizadas na página html_error, localizadas nos
 # pontos de chamada que carregam um locale de pedido. As falhas 5xx internas
@@ -80,6 +81,7 @@ orgs-err-last-owner-remove = O último proprietário não pode ser removido.
 orgs-err-last-owner-demote = O último proprietário não pode ser despromovido.
 orgs-err-confirm-slug = Escreva o slug da organização para confirmar a eliminação.
 orgs-err-not-deletable = Esta organização não pode ser eliminada.
+orgs-err-license-cap-reached = O limite de organizações da sua licença foi atingido. Remova uma organização ou atualize a licença para criar outra.
 orgs-err-limit-reached = { $count ->
     [one] Atingiu o limite de { $count } organização.
    *[other] Atingiu o limite de { $count } organizações.

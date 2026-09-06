@@ -95,9 +95,6 @@ async fn require_nonempty(
     }
 }
 
-#[allow(unused_imports)]
-use crate::html::filters;
-
 #[derive(Template)]
 #[template(path = "project_settings_filters.html")]
 struct ProjectFiltersTemplate {

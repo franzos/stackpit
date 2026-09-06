@@ -185,24 +185,32 @@ pub async fn list_events(
     Ok(PagedResult::from_page(items, total, page))
 }
 
-/// All events for a given issue fingerprint, paginated.
+/// All events for a given issue, paginated. The total is the issue row's
+/// `event_count`, which the writer maintains and every delete path recomputes;
+/// it can trail the live table by one aggregation flush.
 pub async fn list_events_for_issue(
     pool: &crate::db::DbPool,
+    project_id: u64,
     fingerprint: &str,
     page: &Page,
 ) -> Result<PagedResult<EventSummary>> {
-    let total: i64 = sqlx::query(sql!("SELECT COUNT(*) FROM events WHERE fingerprint = ?1"))
-        .bind(fingerprint)
-        .fetch_one(pool)
-        .await?
-        .get::<i64, _>(0);
+    let total: i64 = sqlx::query(sql!(
+        "SELECT event_count FROM issues WHERE project_id = ?1 AND fingerprint = ?2"
+    ))
+    .bind(project_id as i64)
+    .bind(fingerprint)
+    .fetch_optional(pool)
+    .await?
+    .map(|r| r.get::<i64, _>(0))
+    .unwrap_or(0);
 
     let rows = sqlx::query(sql!(
         "SELECT event_id, item_type, project_id, fingerprint, timestamp, level, title, platform, release, environment
-         FROM events WHERE fingerprint = ?1
+         FROM events WHERE project_id = ?1 AND fingerprint = ?2
          ORDER BY timestamp DESC
-         LIMIT ?2 OFFSET ?3"
+         LIMIT ?3 OFFSET ?4"
     ))
+    .bind(project_id as i64)
     .bind(fingerprint)
     .bind(page.limit as i64)
     .bind(page.offset as i64)
@@ -221,6 +229,7 @@ pub async fn list_events_for_issue(
 /// Returns (date_label, count) pairs in chronological order.
 pub async fn event_histogram(
     pool: &crate::db::DbPool,
+    project_id: u64,
     fingerprint: &str,
     days: u32,
 ) -> Result<Vec<(String, f32)>> {
@@ -231,11 +240,12 @@ pub async fn event_histogram(
     let rows = sqlx::query(sql!(
         "SELECT CAST((timestamp - ?1) / 86400 AS BIGINT) AS bucket, COUNT(*)
          FROM events
-         WHERE fingerprint = ?2 AND timestamp >= ?1
+         WHERE project_id = ?2 AND fingerprint = ?3 AND timestamp >= ?1
          GROUP BY bucket
          ORDER BY bucket"
     ))
     .bind(start_ts)
+    .bind(project_id as i64)
     .bind(fingerprint)
     .fetch_all(pool)
     .await?;
@@ -382,7 +392,7 @@ fn push_issue_filter_on_events(qb: &mut sqlx::QueryBuilder<crate::db::Db>, filte
         qb.push(")");
     }
     if let Some((ref key, ref value)) = filter.tag {
-        qb.push(" AND EXISTS (SELECT 1 FROM issue_tag_values itv WHERE itv.fingerprint = events.fingerprint AND itv.tag_key = ");
+        qb.push(" AND EXISTS (SELECT 1 FROM issue_tag_values itv WHERE itv.project_id = events.project_id AND itv.fingerprint = events.fingerprint AND itv.tag_key =");
         qb.push_bind(key.as_str());
         qb.push(" AND itv.tag_value = ");
         qb.push_bind(value.as_str());
@@ -415,14 +425,16 @@ pub async fn list_environments_for_project(
 /// Grab the most recent event for an issue.
 pub async fn get_latest_event_for_issue(
     pool: &crate::db::DbPool,
+    project_id: u64,
     fingerprint: &str,
 ) -> Result<Option<EventDetail>> {
     let row = sqlx::query(sql!(
         "SELECT event_id, item_type, project_id, fingerprint, timestamp, level, title, platform, release, environment, server_name, transaction_name, sdk_name, sdk_version, received_at, payload
-         FROM events WHERE fingerprint = ?1
+         FROM events WHERE project_id = ?1 AND fingerprint = ?2
          ORDER BY timestamp DESC
          LIMIT 1"
     ))
+    .bind(project_id as i64)
     .bind(fingerprint)
     .fetch_optional(pool)
     .await?;
@@ -488,14 +500,19 @@ pub async fn tail_events(
 }
 
 /// Tag facets for an issue -- grouped by key, top 5 values each.
-pub async fn get_tag_facets(pool: &crate::db::DbPool, fingerprint: &str) -> Result<Vec<TagFacet>> {
+pub async fn get_tag_facets(
+    pool: &crate::db::DbPool,
+    project_id: u64,
+    fingerprint: &str,
+) -> Result<Vec<TagFacet>> {
     let rows = sqlx::query(sql!(
         "SELECT tag_key, tag_value, count
          FROM issue_tag_values
-         WHERE fingerprint = ?1
+         WHERE project_id = ?1 AND fingerprint = ?2
          ORDER BY tag_key, count DESC
          LIMIT 1000"
     ))
+    .bind(project_id as i64)
     .bind(fingerprint)
     .fetch_all(pool)
     .await?;
@@ -815,19 +832,48 @@ mod tests {
         )
         .await;
 
+        insert_test_issue(
+            &pool,
+            "fp1",
+            1,
+            Some("Error A"),
+            None,
+            100,
+            200,
+            2,
+            "unresolved",
+        )
+        .await;
+
         let page = Page::new(None, None);
-        let result = list_events_for_issue(&pool, "fp1", &page).await.unwrap();
+        let result = list_events_for_issue(&pool, 1, "fp1", &page).await.unwrap();
         assert_eq!(result.total, 2);
         assert_eq!(result.items.len(), 2);
         assert_eq!(result.items[0].event_id, "e2");
         assert_eq!(result.items[1].event_id, "e1");
     }
 
+    // The total is the writer-maintained `issues.event_count`, not a live COUNT(*).
+    #[tokio::test]
+    async fn list_events_for_issue_total_comes_from_the_issue_row() {
+        let pool = open_test_db().await;
+        insert_test_event(&pool, "e1", 1, 100, Some("fp1"), Some("error"), None).await;
+        insert_test_issue(&pool, "fp1", 1, None, None, 100, 100, 7, "unresolved").await;
+        // Same fingerprint in another project must not leak into the total.
+        insert_test_issue(&pool, "fp1", 2, None, None, 100, 100, 50, "unresolved").await;
+
+        let result = list_events_for_issue(&pool, 1, "fp1", &Page::new(None, None))
+            .await
+            .unwrap();
+        assert_eq!(result.total, 7);
+        assert_eq!(result.items.len(), 1);
+    }
+
     #[tokio::test]
     async fn list_events_for_issue_empty() {
         let pool = open_test_db().await;
         let page = Page::new(None, None);
-        let result = list_events_for_issue(&pool, "nonexistent", &page)
+        let result = list_events_for_issue(&pool, 1, "nonexistent", &page)
             .await
             .unwrap();
         assert!(result.items.is_empty());
@@ -908,7 +954,7 @@ mod tests {
         )
         .await;
 
-        let latest = get_latest_event_for_issue(&pool, "fp1")
+        let latest = get_latest_event_for_issue(&pool, 1, "fp1")
             .await
             .unwrap()
             .unwrap();
@@ -920,7 +966,7 @@ mod tests {
     #[tokio::test]
     async fn get_latest_event_for_issue_not_found() {
         let pool = open_test_db().await;
-        assert!(get_latest_event_for_issue(&pool, "nonexistent")
+        assert!(get_latest_event_for_issue(&pool, 1, "nonexistent")
             .await
             .unwrap()
             .is_none());

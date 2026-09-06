@@ -158,12 +158,9 @@ pub async fn download_attachment(
                 .into_response()
         }
         Ok(None) => html_error(StatusCode::NOT_FOUND, "Attachment not found"),
-        Err(e) => {
-            tracing::error!(
-                project_id, event_id = %event_id, filename = %filename,
-                "attachment lookup failed: {e:#}"
-            );
-            html_error(StatusCode::INTERNAL_SERVER_ERROR, "Attachment unavailable")
-        }
+        Err(e) => HtmlError::from(e.context(format!(
+            "attachment lookup failed: project {project_id} event {event_id} file {filename}"
+        )))
+        .into_response(),
     }
 }

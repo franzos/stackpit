@@ -145,7 +145,7 @@ pub async fn list_alert_rules(
     Ok(rows.iter().map(map_alert_rule).collect())
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub async fn get_alert_rule(pool: &DbPool, id: i64) -> Result<Option<AlertRule>> {
     let row = sqlx::query(sql!(
         "SELECT id, project_id, fingerprint, trigger_kind, threshold_count, window_secs, cooldown_secs, enabled, created_at
@@ -319,7 +319,6 @@ pub async fn list_digest_schedules(
     Ok(rows.iter().map(map_digest_schedule).collect())
 }
 
-#[allow(dead_code)]
 pub async fn get_digest_schedule(pool: &DbPool, id: i64) -> Result<Option<DigestSchedule>> {
     let row = sqlx::query(sql!(
         "SELECT id, org_id, project_id, interval_secs, last_sent, enabled, created_at

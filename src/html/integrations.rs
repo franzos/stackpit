@@ -13,7 +13,7 @@ use crate::queries;
 use crate::queries::types::Integration;
 use crate::server::AppState;
 
-use super::html_error;
+use super::{html_error, HtmlError};
 
 #[allow(unused_imports)]
 use crate::html::filters;
@@ -38,6 +38,10 @@ pub async fn handler(
     Chrome(chrome): Chrome,
     active: ActiveOrg,
 ) -> axum::response::Response {
+    // The list shows each integration's URL, which for Slack and most webhooks is the credential.
+    if let Err(r) = require_org_owner(&active) {
+        return r;
+    }
     let org_filter = active.role.as_ref().map(|_| active.session_org_id);
     render_list(&state, org_filter, None, &chrome).await
 }
@@ -876,8 +880,8 @@ pub async fn test_integration(
         {
             Ok(c) => c,
             Err(e) => {
-                tracing::error!("failed to build pinned reqwest client: {e}");
-                return html_error(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
+                let e = anyhow::Error::from(e).context("failed to build pinned reqwest client");
+                return axum::response::IntoResponse::into_response(HtmlError::from(e));
             }
         };
 
@@ -1322,6 +1326,24 @@ mod tests {
             org_name: None,
             memberships: vec![(org_id, crate::orgs::Role::Owner)],
         }
+    }
+
+    #[tokio::test]
+    async fn list_handler_rejects_members_with_403() {
+        let pool = crate::db::open_test_pool().await;
+        let (state, _chans) = crate::server::AppState::for_test(pool.clone());
+        let chrome = PageChrome::new("csrf".into(), langid!("en"), "/web/projects/".into());
+        let member = ActiveOrg {
+            session_org_id: 5,
+            role: Some(crate::orgs::Role::Member),
+            org_name: None,
+            memberships: vec![(5, crate::orgs::Role::Member)],
+        };
+        let resp = handler(State(state.clone()), Chrome(chrome.clone()), member).await;
+        assert_eq!(resp.status(), axum::http::StatusCode::FORBIDDEN);
+
+        let resp = handler(State(state), Chrome(chrome), owner_session(5)).await;
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
     }
 
     #[tokio::test]

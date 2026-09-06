@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.4.1] - 2026-09-06
+
+### Security
+- Issues, discards and tag counts are keyed by project and fingerprint, so a crafted fingerprint collision from one project can no longer rewrite or hide an issue in another. **The SQLite migration rebuilds the `issues`, `discarded_fingerprints` and `issue_tag_values` tables; back up your database before upgrading.**
+- An invite created for an email address can only be accepted by an account with that verified email
+- The integrations list is owner-only; the URLs it shows are credentials for Slack and most webhooks
+- No-auth loopback mode uses a random per-process CSRF token instead of a constant
+- Unsigned webhook deliveries log only the destination host
+- The container runs as an unprivileged user
+
+### Changed
+- The licence's organisation limit is enforced when creating an organisation or provisioning one from the IdP
+- Admin and web requests time out after five minutes
+- `stackpit-bench` is built from its own directory (`--manifest-path stackpit-bench/Cargo.toml`)
+
+### Fixed
+- Aggregation flushes wrote user sketches one row at a time while holding the write lock
+- Profile items were fully parsed on ingest to read a few header fields
+- The issue page ran its reads one after another and recounted events on every render
+
 ## [0.4.0] - 2026-09-05
 
 ### Breaking

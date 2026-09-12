@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.4.2] - 2026-09-12
+
+### Added
+- Time range filter on spans, replays, client reports, logs, profiles and user reports
+
+### Fixed
+- The default time range was ignored on transactions, release health and releases
+- Bulk "delete selected" never submitted the ticked rows on events, client reports, user reports and monitor check-ins
+- Picking "All time" reverted to the default time range when paging
+
 ## [0.4.1] - 2026-09-06
 
 ### Security

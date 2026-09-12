@@ -788,4 +788,73 @@ mod tests {
             "Error: project not found: 42"
         );
     }
+
+    // A nested <form> is invalid HTML: the parser drops the inner start tag and
+    // lets the inner </form> close the outer one. On the bulk-action pages that
+    // silently stranded the row checkboxes outside their form (so "delete
+    // selected" could never submit an id) and dropped the inner form's layout
+    // classes. Cheap to reintroduce, invisible in review, so guard the sources.
+    #[test]
+    fn no_template_nests_a_form() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("templates");
+        let mut offenders = Vec::new();
+
+        for entry in std::fs::read_dir(&dir).expect("templates dir") {
+            let path = entry.expect("dir entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("html") {
+                continue;
+            }
+            let src = strip_comments(&std::fs::read_to_string(&path).expect("read template"));
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+
+            let mut depth = 0i32;
+            for (idx, _) in src.match_indices('<') {
+                let rest = &src[idx..];
+                if rest.starts_with("</form") {
+                    depth -= 1;
+                } else if rest.starts_with("<form")
+                    && rest[5..].starts_with(|c: char| c.is_whitespace() || c == '>')
+                {
+                    depth += 1;
+                    if depth > 1 {
+                        let line = src[..idx].matches('\n').count() + 1;
+                        offenders.push(format!("{name}:{line} opens a form inside another"));
+                    }
+                }
+            }
+            assert_eq!(depth, 0, "unbalanced <form> tags in {name}");
+        }
+
+        assert!(offenders.is_empty(), "nested forms: {offenders:?}");
+    }
+
+    /// Drops Askama `{# … #}` and HTML `<!-- … -->` comments, so a `<form>`
+    /// mentioned in prose does not count as markup.
+    fn strip_comments(src: &str) -> String {
+        let mut out = String::with_capacity(src.len());
+        let mut rest = src;
+        loop {
+            let next = [("{#", "#}"), ("<!--", "-->")]
+                .into_iter()
+                .filter_map(|(open, close)| rest.find(open).map(|at| (at, open, close)))
+                .min_by_key(|(at, _, _)| *at);
+            let Some((at, open, close)) = next else {
+                out.push_str(rest);
+                return out;
+            };
+            out.push_str(&rest[..at]);
+            match rest[at + open.len()..].find(close) {
+                // Keep the newlines so reported line numbers stay true.
+                Some(end) => {
+                    let body = &rest[at..at + open.len() + end + close.len()];
+                    out.extend(std::iter::repeat_n('\n', body.matches('\n').count()));
+                    rest = &rest[at + open.len() + end + close.len()..];
+                }
+                None => {
+                    out.push_str(&rest[at..]);
+                    return out;
+                }
+            }
+        }
+    }
 }

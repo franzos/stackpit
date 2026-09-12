@@ -29,6 +29,28 @@
     </div>
   {% else %}
 
+    {# Sibling of the per-row form below, never nested in it: a nested <form> is
+       dropped by the parser, which would strand the row checkboxes outside it. #}
+    {% if result.total > 0 %}
+      <form class="flex gap-2 mb-3 items-center flex-wrap"
+            method="post"
+            action="/web/projects/{{ project_id }}/user-reports/bulk">
+        <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+        <input type="hidden" name="action" value="delete">
+        <input type="hidden" name="mode" value="all_matching">
+        {# "All matching" has to mean the window on screen, not the whole table. #}
+        <input type="hidden" name="period" value="{{ period }}">
+        <label class="select-all-gate">
+          <input type="checkbox">
+          <span>{{ chrome.tv_count("common-select-all-matching", result.total as i64) }}</span>
+        </label>
+        <button type="submit"
+                class="btn btn-danger"
+                disabled
+                data-confirm="{{ chrome.tv_count("user-reports-delete-all-confirm", result.total as i64) }}">{{ chrome.tv_count("user-reports-delete-all", result.total as i64) }}</button>
+      </form>
+    {% endif %}
+
     <form method="post"
           action="/web/projects/{{ project_id }}/user-reports/bulk">
       <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
@@ -39,26 +61,6 @@
                 class="btn btn-danger"
                 data-confirm="{{ chrome.t("user-reports-delete-selected-confirm") }}">{{ chrome.t("user-reports-delete") }}</button>
       </div>
-
-      {% if result.total > 0 %}
-        <form class="mb-3 flex gap-2 items-center flex-wrap"
-              method="post"
-              action="/web/projects/{{ project_id }}/user-reports/bulk">
-          <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
-          <input type="hidden" name="action" value="delete">
-          <input type="hidden" name="mode" value="all_matching">
-          {# "All matching" has to mean the window on screen, not the whole table. #}
-          <input type="hidden" name="period" value="{{ period }}">
-          <label class="select-all-gate">
-            <input type="checkbox">
-            <span>{{ chrome.tv_count("common-select-all-matching", result.total as i64) }}</span>
-          </label>
-          <button type="submit"
-                  class="btn btn-danger"
-                  disabled
-                  data-confirm="{{ chrome.tv_count("user-reports-delete-all-confirm", result.total as i64) }}">{{ chrome.tv_count("user-reports-delete-all", result.total as i64) }}</button>
-        </form>
-      {% endif %}
       <div class="card overflow-hidden">
         <div class="table-wrap">
           <table class="table">

@@ -1,11 +1,11 @@
 use askama::Template;
-use axum::extract::Query;
+use axum::extract::{Query, RawQuery};
 use serde::Deserialize;
 
-use crate::extractors::ProjectPageCtx;
+use crate::extractors::{BrowserDefaults, ProjectPageCtx};
 use crate::html::chrome::PageChrome;
 use crate::html::render_template;
-use crate::html::utils::{period_to_timestamp, ListParams};
+use crate::html::utils::{defaults_redirect, period_or_default, period_to_timestamp, ListParams};
 use crate::queries;
 use crate::queries::types::{
     IssueSummary, PagedResult, Pagination, SpanAggregation, TransactionDistribution,
@@ -60,10 +60,20 @@ pub struct DetailParams {
 
 pub async fn list_handler(
     ctx: ProjectPageCtx,
+    BrowserDefaults(defaults): BrowserDefaults,
+    RawQuery(raw_qs): RawQuery,
     Query(params): Query<ListParams>,
 ) -> Result<axum::response::Response, HtmlError> {
+    if let Some(redirect) = defaults_redirect(
+        &format!("/web/projects/{}/transactions/", ctx.project_id),
+        raw_qs.as_deref(),
+        &defaults,
+        &["period"],
+    ) {
+        return Ok(redirect);
+    }
     let sort = params.sort.clone().unwrap_or_else(|| "p95".to_string());
-    let period = params.period.clone().unwrap_or_else(|| "7d".to_string());
+    let period = period_or_default(params.period.as_deref());
     let since = period_to_timestamp(&period).unwrap_or(0);
 
     let items =
@@ -81,10 +91,20 @@ pub async fn list_handler(
 
 pub async fn detail_handler(
     ctx: ProjectPageCtx,
+    BrowserDefaults(defaults): BrowserDefaults,
+    RawQuery(raw_qs): RawQuery,
     Query(params): Query<DetailParams>,
 ) -> Result<axum::response::Response, HtmlError> {
+    if let Some(redirect) = defaults_redirect(
+        &format!("/web/projects/{}/transactions/detail", ctx.project_id),
+        raw_qs.as_deref(),
+        &defaults,
+        &["period"],
+    ) {
+        return Ok(redirect);
+    }
     let name = params.name.unwrap_or_default();
-    let period = params.period.clone().unwrap_or_else(|| "7d".to_string());
+    let period = period_or_default(params.period.as_deref());
     let since = period_to_timestamp(&period).unwrap_or(0);
     let page = params.page.page();
 

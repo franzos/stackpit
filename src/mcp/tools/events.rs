@@ -346,6 +346,7 @@ pub(super) async fn search_events(
         query: opt_str_arg(args, "query")?.map(str::to_string),
         sort: sort.map(str::to_string),
         item_type: opt_str_arg(args, "item_type")?.map(str::to_string),
+        since_ts: None,
     };
     let limit = clamp_limit(opt_u64_arg(args, "limit")?);
     let page = Page::new(opt_u64_arg(args, "offset")?, Some(limit));

@@ -20,6 +20,9 @@
     <h1>{{ chrome.t("user-reports-heading") }}</h1>
   </div>
 
+  {% call m::period_filter(chrome, project_id, "user-reports", period) %}
+  {% endcall %}
+
   {% if result.items.is_empty() %}
     <div class="card">
       <p class="empty">{{ chrome.t("user-reports-empty") }}</p>
@@ -44,6 +47,8 @@
           <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
           <input type="hidden" name="action" value="delete">
           <input type="hidden" name="mode" value="all_matching">
+          {# "All matching" has to mean the window on screen, not the whole table. #}
+          <input type="hidden" name="period" value="{{ period }}">
           <label class="select-all-gate">
             <input type="checkbox">
             <span>{{ chrome.tv_count("common-select-all-matching", result.total as i64) }}</span>
@@ -108,11 +113,11 @@
   <span class="flex gap-2">
     {% if result.has_prev() %}
       <a class="btn btn-ghost"
-         href="/web/projects/{{ project_id }}/user-reports/?offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}">{{ chrome.t("events-pagination-prev") }}</a>
+         href="/web/projects/{{ project_id }}/user-reports/?offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}&amp;period={{ period }}">{{ chrome.t("events-pagination-prev") }}</a>
     {% endif %}
     {% if result.has_next() %}
       <a class="btn btn-ghost"
-         href="/web/projects/{{ project_id }}/user-reports/?offset={{ result.next_offset() }}&amp;limit={{ result.limit }}">{{ chrome.t("events-pagination-next") }}</a>
+         href="/web/projects/{{ project_id }}/user-reports/?offset={{ result.next_offset() }}&amp;limit={{ result.limit }}&amp;period={{ period }}">{{ chrome.t("events-pagination-next") }}</a>
     {% endif %}
   </span>
 </nav>

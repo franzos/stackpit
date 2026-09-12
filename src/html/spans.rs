@@ -1,10 +1,12 @@
 use askama::Template;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query, RawQuery, State};
 
-use crate::extractors::{ProjectPageCtx, ReadPool};
+use crate::extractors::{BrowserDefaults, ProjectPageCtx, ReadPool};
 use crate::html::chrome::PageChrome;
 use crate::html::render_template;
-use crate::html::utils::{Chrome, ListParams};
+use crate::html::utils::{
+    defaults_redirect, period_or_default, period_to_timestamp, Chrome, ListParams,
+};
 use crate::orgs::extractor::ActiveOrg;
 use crate::queries;
 use crate::queries::types::{
@@ -26,6 +28,7 @@ struct SpanListTemplate {
     traces: PagedResult<TraceSummary>,
     aggregates: SpanAggregation,
     agg_cap: usize,
+    period: String,
     nav: ProjectNavCounts,
     chrome: PageChrome,
 }
@@ -48,15 +51,27 @@ struct TraceDetailTemplate {
 
 pub async fn list_handler(
     ctx: ProjectPageCtx,
+    BrowserDefaults(defaults): BrowserDefaults,
+    RawQuery(raw_qs): RawQuery,
     Query(params): Query<ListParams>,
 ) -> Result<axum::response::Response, HtmlError> {
+    if let Some(redirect) = defaults_redirect(
+        &format!("/web/projects/{}/spans/", ctx.project_id),
+        raw_qs.as_deref(),
+        &defaults,
+        &["period"],
+    ) {
+        return Ok(redirect);
+    }
     let page = params.page.page();
     let trace_page = params.trace_page.page();
+    let period = period_or_default(params.period.as_deref());
+    let since = period_to_timestamp(&period);
 
     let (span_result, trace_result, agg_result) = tokio::join!(
-        queries::spans::list_spans(&ctx.pool, ctx.project_id, &page),
-        queries::spans::list_traces(&ctx.pool, ctx.project_id, &trace_page),
-        queries::spans::aggregate_spans(&ctx.pool, ctx.project_id),
+        queries::spans::list_spans(&ctx.pool, ctx.project_id, &page, since),
+        queries::spans::list_traces(&ctx.pool, ctx.project_id, &trace_page, since),
+        queries::spans::aggregate_spans(&ctx.pool, ctx.project_id, since),
     );
 
     let result = span_result?;
@@ -69,6 +84,7 @@ pub async fn list_handler(
         traces,
         aggregates,
         agg_cap: queries::spans::MAX_SPAN_GROUPS,
+        period,
         nav: ctx.nav,
         chrome: ctx.chrome,
     };

@@ -23,6 +23,9 @@ common-period-14d = Последние 14 дней
 common-period-30d = Последние 30 дней
 common-period-90d = Последние 90 дней
 common-period-365d = Последние 365 дней
+# Shared labels for `m::period_filter`, the pages whose only filter is the window.
+common-period-label = Период времени
+common-filter-submit = Фильтровать
 
 common-select-all-matching = { $count ->
     [one] Выбрать { $count } строку, соответствующую фильтру

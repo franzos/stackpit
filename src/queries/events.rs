@@ -77,6 +77,11 @@ fn push_event_filter_conditions(
         qb.push("events.item_type = ");
         qb.push_bind(item_type.as_str());
     }
+    if let Some(since_ts) = filter.since_ts {
+        push_conjunction(qb);
+        qb.push("events.timestamp >= ");
+        qb.push_bind(since_ts);
+    }
     if let Some(ids) = org_ids {
         push_conjunction(qb);
         super::push_org_scope_predicate(qb, "events.project_id", ids);
@@ -1195,5 +1200,29 @@ mod tests {
             .unwrap();
         assert_eq!(none.total, 0);
         assert!(none.items.is_empty());
+    }
+
+    // The per-item-type list pages (user reports, client reports) filter through
+    // `EventFilter`, so the window has to bind in both the count and the page.
+    #[tokio::test]
+    async fn event_filter_since_ts_windows_count_and_page() {
+        let pool = open_test_db().await;
+        insert_test_event(&pool, "old", 1, 100, None, Some("error"), Some("A")).await;
+        insert_test_event(&pool, "new", 1, 900, None, Some("error"), Some("B")).await;
+
+        let page = Page::new(Some(0), Some(25));
+
+        let all = list_all_events(&pool, &EventFilter::default(), &page, None)
+            .await
+            .unwrap();
+        assert_eq!(all.total, 2);
+
+        let filter = EventFilter {
+            since_ts: Some(500),
+            ..Default::default()
+        };
+        let windowed = list_all_events(&pool, &filter, &page, None).await.unwrap();
+        assert_eq!(windowed.total, 1);
+        assert_eq!(windowed.items[0].event_id, "new");
     }
 }

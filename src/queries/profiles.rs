@@ -5,26 +5,33 @@ use crate::db::sql;
 
 use super::types::{Page, PagedResult, ProfileDetail, ProfileSummary};
 
+/// `since_ts` of `None` means all time.
 pub async fn list_profiles(
     pool: &crate::db::DbPool,
     project_id: u64,
     page: &Page,
+    since_ts: Option<i64>,
 ) -> Result<PagedResult<ProfileSummary>> {
+    let since = since_ts.unwrap_or(0);
     let total: i64 = sqlx::query(sql!(
-        "SELECT COUNT(*) FROM events WHERE project_id = ?1 AND item_type IN ('profile', 'profile_chunk')"
+        "SELECT COUNT(*) FROM events
+         WHERE project_id = ?1 AND item_type IN ('profile', 'profile_chunk') AND timestamp >= ?2"
     ))
     .bind(project_id as i64)
+    .bind(since)
     .fetch_one(pool)
     .await?
     .get::<i64, _>(0);
 
     let rows = sqlx::query(sql!(
         "SELECT event_id, project_id, timestamp, transaction_name, platform, release, environment
-         FROM events WHERE project_id = ?1 AND item_type IN ('profile', 'profile_chunk')
+         FROM events
+         WHERE project_id = ?1 AND item_type IN ('profile', 'profile_chunk') AND timestamp >= ?2
          ORDER BY timestamp DESC
-         LIMIT ?2 OFFSET ?3"
+         LIMIT ?3 OFFSET ?4"
     ))
     .bind(project_id as i64)
+    .bind(since)
     .bind(page.limit as i64)
     .bind(page.offset as i64)
     .fetch_all(pool)

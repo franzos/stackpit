@@ -185,6 +185,7 @@ async fn bulk_delete_events_chunked(
             query: filter.query.clone(),
             sort: None,
             item_type: filter.item_type.clone(),
+            since_ts: filter.since_ts,
         };
         if f.project_id.is_none() {
             f.project_id = project_id;
@@ -229,10 +230,16 @@ async fn bulk_delete_events_chunked(
                     $qb.push("item_type = ");
                     $qb.push_bind(item_type.clone());
                 }
+                if let Some(since_ts) = $f.since_ts {
+                    push_sep!();
+                    $qb.push("timestamp >= ");
+                    $qb.push_bind(since_ts);
+                }
             }};
         }
 
-        // Refuse to delete everything when no constraints apply at all.
+        // Refuse to delete everything when no constraints apply at all. A time
+        // window alone does not count: `since_ts` of 0 selects every row.
         if f.level.is_none()
             && f.project_id.is_none()
             && f.query.is_none()
@@ -246,7 +253,8 @@ async fn bulk_delete_events_chunked(
         let has_field_filter = f.level.is_some()
             || f.project_id.is_some()
             || f.query.is_some()
-            || f.item_type.is_some();
+            || f.item_type.is_some()
+            || f.since_ts.is_some();
 
         // Collect distinct issue keys that will be affected before deleting.
         let mut sel_qb = sqlx::QueryBuilder::<crate::db::Db>::new(

@@ -39,6 +39,12 @@
       <option value="debug"{% if level == "debug" %} selected{% endif %}>debug</option>
       <option value="trace"{% if level == "trace" %} selected{% endif %}>trace</option>
     </select>
+    <select class="select w-auto"
+            name="period"
+            aria-label="{{ chrome.t("common-period-label") }}">
+      {% call m::period_options(chrome, period, chrome.t("common-period-all")) %}
+      {% endcall %}
+    </select>
     <button class="btn btn-secondary" type="submit">{{ chrome.t("logs-filter-submit") }}</button>
   </form>
 

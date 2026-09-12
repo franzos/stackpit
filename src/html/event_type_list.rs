@@ -1,10 +1,10 @@
 use askama::Template;
-use axum::extract::Query;
+use axum::extract::{Query, RawQuery};
 
-use crate::extractors::ProjectPageCtx;
+use crate::extractors::{BrowserDefaults, ProjectPageCtx};
 use crate::html::chrome::PageChrome;
 use crate::html::render_template;
-use crate::html::utils::ListParams;
+use crate::html::utils::{defaults_redirect, period_or_default, period_to_timestamp, ListParams};
 use crate::queries;
 use crate::queries::types::{EventFilter, EventSummary, PagedResult};
 use crate::queries::ProjectNavCounts;
@@ -19,6 +19,7 @@ use crate::html::filters;
 struct UserReportListTemplate {
     project_id: u64,
     result: PagedResult<EventSummary>,
+    period: String,
     nav: ProjectNavCounts,
     chrome: PageChrome,
 }
@@ -29,17 +30,30 @@ struct ClientReportListTemplate {
     project_id: u64,
     result: PagedResult<crate::queries::client_reports::ClientReportRow>,
     outcomes: Vec<crate::queries::client_reports::ClientReportOutcome>,
+    period: String,
     nav: ProjectNavCounts,
     chrome: PageChrome,
 }
 
 pub async fn user_reports_handler(
     ctx: ProjectPageCtx,
+    BrowserDefaults(defaults): BrowserDefaults,
+    RawQuery(raw_qs): RawQuery,
     Query(params): Query<ListParams>,
 ) -> Result<axum::response::Response, HtmlError> {
+    if let Some(redirect) = defaults_redirect(
+        &format!("/web/projects/{}/user-reports/", ctx.project_id),
+        raw_qs.as_deref(),
+        &defaults,
+        &["period"],
+    ) {
+        return Ok(redirect);
+    }
+    let period = period_or_default(params.period.as_deref());
     let filter = EventFilter {
         project_id: Some(ctx.project_id),
         item_type: Some("user_report".to_string()),
+        since_ts: period_to_timestamp(&period),
         ..Default::default()
     };
     let page = params.page.page();
@@ -50,6 +64,7 @@ pub async fn user_reports_handler(
     let tmpl = UserReportListTemplate {
         project_id: ctx.project_id,
         result,
+        period,
         nav: ctx.nav,
         chrome: ctx.chrome,
     };
@@ -58,22 +73,41 @@ pub async fn user_reports_handler(
 
 pub async fn client_reports_handler(
     ctx: ProjectPageCtx,
+    BrowserDefaults(defaults): BrowserDefaults,
+    RawQuery(raw_qs): RawQuery,
     Query(params): Query<ListParams>,
 ) -> Result<axum::response::Response, HtmlError> {
+    if let Some(redirect) = defaults_redirect(
+        &format!("/web/projects/{}/client-reports/", ctx.project_id),
+        raw_qs.as_deref(),
+        &defaults,
+        &["period"],
+    ) {
+        return Ok(redirect);
+    }
     let page = params.page.page();
+    let period = period_or_default(params.period.as_deref());
+    let since = period_to_timestamp(&period);
 
     // project_id already pins scope; ProjectPageCtx enforces org membership
     let result =
-        queries::client_reports::list_client_reports(&ctx.pool, ctx.project_id, &page).await?;
+        queries::client_reports::list_client_reports(&ctx.pool, ctx.project_id, &page, since)
+            .await?;
 
-    let since = chrono::Utc::now().timestamp() - 30 * 86400;
-    let outcomes =
-        queries::client_reports::summarize_client_reports(&ctx.pool, ctx.project_id, since).await?;
+    // The dropped-events rollup covers the same window as the table below it,
+    // so the two can't disagree about what the page is showing.
+    let outcomes = queries::client_reports::summarize_client_reports(
+        &ctx.pool,
+        ctx.project_id,
+        since.unwrap_or(0),
+    )
+    .await?;
 
     let tmpl = ClientReportListTemplate {
         project_id: ctx.project_id,
         result,
         outcomes,
+        period,
         nav: ctx.nav,
         chrome: ctx.chrome,
     };
@@ -106,6 +140,7 @@ mod tests {
             let tmpl = UserReportListTemplate {
                 project_id: 1,
                 result: empty_result(),
+                period: "7d".into(),
                 nav: ProjectNavCounts::default(),
                 chrome: chrome_for(lang.clone()),
             };
@@ -146,6 +181,7 @@ mod tests {
                     limit: result.limit,
                 },
                 outcomes: Vec::new(),
+                period: "7d".into(),
                 nav: ProjectNavCounts::default(),
                 chrome: chrome_for(lang.clone()),
             };

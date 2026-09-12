@@ -1,10 +1,10 @@
 use askama::Template;
-use axum::extract::Query;
+use axum::extract::{Query, RawQuery};
 
-use crate::extractors::ProjectPageCtx;
+use crate::extractors::{BrowserDefaults, ProjectPageCtx};
 use crate::html::chrome::PageChrome;
 use crate::html::render_template;
-use crate::html::utils::{period_to_timestamp, ListParams};
+use crate::html::utils::{defaults_redirect, period_or_default, period_to_timestamp, ListParams};
 use crate::queries;
 use crate::queries::releases::ReleaseHealthSort;
 use crate::queries::types::ReleaseHealth;
@@ -95,9 +95,19 @@ fn error_free_pct(total: u64, ok: u64) -> Option<f64> {
 
 pub async fn handler(
     ctx: ProjectPageCtx,
+    BrowserDefaults(defaults): BrowserDefaults,
+    RawQuery(raw_qs): RawQuery,
     Query(params): Query<ListParams>,
 ) -> Result<axum::response::Response, HtmlError> {
-    let period = params.period.clone().unwrap_or_else(|| "7d".to_string());
+    if let Some(redirect) = defaults_redirect(
+        &format!("/web/projects/{}/health/", ctx.project_id),
+        raw_qs.as_deref(),
+        &defaults,
+        &["period"],
+    ) {
+        return Ok(redirect);
+    }
+    let period = period_or_default(params.period.as_deref());
     let sort = ReleaseHealthSort::parse(params.sort.as_deref());
     // `session_aggregates` is rolled up per day, so the window snaps down to a
     // day boundary; a sub-day period would otherwise select nothing at all.

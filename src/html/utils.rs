@@ -172,6 +172,7 @@ pub fn event_filter_from_params(params: &ListParams) -> queries::types::EventFil
         query: non_empty(params.query.clone()),
         sort: non_empty(params.sort.clone()),
         item_type: non_empty(params.item_type.clone()),
+        since_ts: None,
     }
 }
 
@@ -244,6 +245,26 @@ pub fn cross_org_scope(
     }
 }
 
+/// The windows every list page offers, mirroring `m::period_options`. The empty
+/// string is the "all time" option and is deliberately not in here.
+pub const PERIODS: [&str; 7] = ["1h", "24h", "7d", "14d", "30d", "90d", "365d"];
+
+/// Window a list page falls back to when neither `?period=` nor the browser
+/// default picks one.
+pub const DEFAULT_PERIOD: &str = "7d";
+
+/// Resolves the window a list page renders. An explicit `?period=` wins,
+/// including the blank value that means "all time". Anything outside the
+/// canonical set falls back to [`DEFAULT_PERIOD`], which is also what keeps the
+/// result safe to echo straight back into a pager link.
+pub fn period_or_default(period: Option<&str>) -> String {
+    match period {
+        Some("") => String::new(),
+        Some(p) if PERIODS.contains(&p) => p.to_string(),
+        _ => DEFAULT_PERIOD.to_string(),
+    }
+}
+
 /// Turns period strings like "1h", "24h", "7d" into a Unix timestamp cutoff.
 pub fn period_to_timestamp(period: &str) -> Option<i64> {
     let now = chrono::Utc::now().timestamp();
@@ -262,10 +283,15 @@ pub fn period_to_timestamp(period: &str) -> Option<i64> {
 
 /// Builds the query strings for pagination and filtering. `sort` belongs
 /// only in filter_qs, not in pagination links.
+///
+/// Blank values drop out, with one exception: a blank `period` means "all time"
+/// rather than "unset", so it has to stay in the link. Dropping it would leave
+/// the next page with no `period` key at all, and the browser default would
+/// silently re-narrow the window the reader just widened.
 pub fn build_filter_qs(params: &[(&str, &str)], sort: &str) -> (String, String) {
     let mut base_parts = Vec::new();
     for (name, value) in params {
-        if !value.is_empty() {
+        if !value.is_empty() || *name == "period" {
             base_parts.push(format!("&{}={}", name, urlencoded(value)));
         }
     }
@@ -350,11 +376,45 @@ pub fn defaults_redirect_url(
     Some(format!("{path}?{merged}"))
 }
 
+/// [`defaults_redirect_url`] as a ready response, so a handler bounces the
+/// request in one line.
+pub fn defaults_redirect(
+    path: &str,
+    raw_qs: Option<&str>,
+    defaults: &HashMap<String, String>,
+    applicable_keys: &[&str],
+) -> Option<axum::response::Response> {
+    use axum::response::IntoResponse;
+    defaults_redirect_url(path, raw_qs, defaults, applicable_keys)
+        .map(|url| axum::response::Redirect::to(&url).into_response())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::orgs::extractor::{ActiveOrg, ProjectScope};
     use crate::orgs::{Role, SYSTEM_ORG_ID};
+
+    #[test]
+    fn period_falls_back_only_when_the_query_says_nothing() {
+        assert_eq!(period_or_default(None), DEFAULT_PERIOD);
+        assert_eq!(period_or_default(Some("30d")), "30d");
+        // Blank is the "all time" option, not an absent param.
+        assert_eq!(period_or_default(Some("")), "");
+        // Anything off the canonical set is not echoed back into pager links.
+        assert_eq!(period_or_default(Some("9d&sort=evil")), DEFAULT_PERIOD);
+    }
+
+    // The pager has to carry an explicit "all time", or the next page would find
+    // no `period` key and the browser default would re-narrow the window.
+    #[test]
+    fn pager_keeps_a_blank_period_but_drops_other_blanks() {
+        let (base_qs, _) = build_filter_qs(&[("query", ""), ("period", "")], "");
+        assert_eq!(base_qs, "&period=");
+
+        let (base_qs, _) = build_filter_qs(&[("query", "boom"), ("period", "14d")], "");
+        assert_eq!(base_qs, "&query=boom&period=14d");
+    }
 
     #[test]
     fn superuser_reads_every_org() {

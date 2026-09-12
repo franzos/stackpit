@@ -121,6 +121,8 @@ pub struct EventFilter {
     pub query: Option<String>,
     pub sort: Option<String>,
     pub item_type: Option<String>,
+    /// Lower bound on `timestamp`; `None` means all time.
+    pub since_ts: Option<i64>,
 }
 
 #[derive(Debug, Default)]
@@ -140,6 +142,8 @@ pub struct LogFilter {
     pub level: Option<String>,
     pub query: Option<String>,
     pub trace_id: Option<String>,
+    /// Lower bound on `timestamp`; `None` means all time.
+    pub since_ts: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]

@@ -41,7 +41,7 @@ fn validated(key: &str, val: &str) -> bool {
     match key {
         "status" => matches!(val, "unresolved" | "resolved" | "ignored"),
         "level" => matches!(val, "fatal" | "error" | "warning" | "info" | "debug"),
-        "period" => matches!(val, "1h" | "24h" | "7d" | "14d" | "30d" | "90d" | "365d"),
+        "period" => crate::html::utils::PERIODS.contains(&val),
         _ => false,
     }
 }

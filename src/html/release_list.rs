@@ -1,11 +1,12 @@
 use askama::Template;
-use axum::extract::{Query, State};
+use axum::extract::{Query, RawQuery, State};
 
-use crate::extractors::ReadPool;
+use crate::extractors::{BrowserDefaults, ReadPool};
 use crate::html::chrome::PageChrome;
 use crate::html::render_template;
 use crate::html::utils::{
-    build_filter_qs, cross_org_scope, period_to_timestamp, Chrome, CrossOrgScope, ListParams,
+    build_filter_qs, cross_org_scope, defaults_redirect, period_or_default, period_to_timestamp,
+    Chrome, CrossOrgScope, ListParams,
 };
 use crate::orgs::extractor::ActiveOrg;
 use crate::queries;
@@ -39,13 +40,20 @@ pub async fn handler(
     State(state): State<AppState>,
     ReadPool(pool): ReadPool,
     Chrome(chrome): Chrome,
+    BrowserDefaults(defaults): BrowserDefaults,
+    RawQuery(raw_qs): RawQuery,
     Query(params): Query<ListParams>,
     active: ActiveOrg,
 ) -> Result<axum::response::Response, HtmlError> {
+    if let Some(redirect) =
+        defaults_redirect("/web/releases/", raw_qs.as_deref(), &defaults, &["period"])
+    {
+        return Ok(redirect);
+    }
     let query_str = params.query.clone().unwrap_or_default();
     let project_id_str = params.project_id.map(|p| p.to_string()).unwrap_or_default();
     let sort_str = params.sort.clone().unwrap_or_default();
-    let period_str = params.period.clone().unwrap_or_else(|| "7d".to_string());
+    let period_str = period_or_default(params.period.as_deref());
 
     // Keep the project sidebar when scoped to a project the caller can access.
     let project_scope = match params.project_id {

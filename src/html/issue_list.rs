@@ -8,8 +8,8 @@ use crate::extractors::{BrowserDefaults, ProjectPath, ReadPool};
 use crate::html::chrome::PageChrome;
 use crate::html::render_template;
 use crate::html::utils::{
-    build_filter_qs, defaults_redirect_url, issue_filter_from_params, period_to_timestamp, Chrome,
-    ListParams,
+    build_filter_qs, defaults_redirect_url, issue_filter_from_params, period_or_default,
+    period_to_timestamp, Chrome, ListParams,
 };
 use crate::orgs::extractor::ActiveOrg;
 use crate::queries;
@@ -89,7 +89,7 @@ async fn issue_or_transaction_handler(
     let release_str = params.release.clone().unwrap_or_default();
     let environment_str = params.environment.clone().unwrap_or_default();
     let tag_str = params.tag.clone().unwrap_or_default();
-    let period_str = params.period.clone().unwrap_or_else(|| "7d".to_string());
+    let period_str = period_or_default(params.period.as_deref());
 
     let since = period_to_timestamp(&period_str);
 

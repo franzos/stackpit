@@ -9,24 +9,37 @@ use super::types::{
     TraceSummary, Waterfall, WaterfallGap, WaterfallRow,
 };
 
+/// `None` means all time. Bound as 0 rather than branching the SQL: event
+/// timestamps are Unix seconds, so `>= 0` matches every row and the
+/// (project_id, timestamp) index still drives the scan.
+fn since_bound(since_ts: Option<i64>) -> i64 {
+    since_ts.unwrap_or(0)
+}
+
 pub async fn list_spans(
     pool: &crate::db::DbPool,
     project_id: u64,
     page: &Page,
+    since_ts: Option<i64>,
 ) -> Result<PagedResult<SpanSummary>> {
-    let count_row = sqlx::query(sql!("SELECT COUNT(*) FROM spans WHERE project_id = ?1"))
-        .bind(project_id as i64)
-        .fetch_one(pool)
-        .await?;
+    let since = since_bound(since_ts);
+    let count_row = sqlx::query(sql!(
+        "SELECT COUNT(*) FROM spans WHERE project_id = ?1 AND timestamp >= ?2"
+    ))
+    .bind(project_id as i64)
+    .bind(since)
+    .fetch_one(pool)
+    .await?;
     let total = count_row.get::<i64, _>(0);
 
     let rows = sqlx::query(sql!(
         "SELECT span_id, trace_id, timestamp, op, description, duration_ms
-         FROM spans WHERE project_id = ?1
+         FROM spans WHERE project_id = ?1 AND timestamp >= ?2
          ORDER BY timestamp DESC
-         LIMIT ?2 OFFSET ?3"
+         LIMIT ?3 OFFSET ?4"
     ))
     .bind(project_id as i64)
+    .bind(since)
     .bind(page.limit as i64)
     .bind(page.offset as i64)
     .fetch_all(pool)
@@ -48,8 +61,8 @@ pub async fn list_spans(
 }
 
 /// Newest spans to scan when aggregating (by (op, description) or by trace).
-/// Bounds the read so a busy project can't force an unbounded table scan; the
-/// spans page has no period filter, so we cap on recency via the
+/// Bounds the read so a busy project can't force an unbounded table scan even
+/// on the widest window the period filter offers; the cap rides the
 /// (project_id, timestamp) index.
 pub(crate) const SPAN_AGG_SCAN_LIMIT: i64 = 50_000;
 /// Most (op, description) groups to render; the tail is dropped and flagged.
@@ -123,15 +136,20 @@ pub(crate) fn fold_span_rows(rows: &[crate::db::DbRow]) -> SpanAggregation {
 /// percentiles in Rust from raw `duration_ms`. Rows with NULL durations are
 /// skipped. Sorted by count desc (p95 desc tiebreak) and capped to
 /// `MAX_SPAN_GROUPS`.
-pub async fn aggregate_spans(pool: &crate::db::DbPool, project_id: u64) -> Result<SpanAggregation> {
+pub async fn aggregate_spans(
+    pool: &crate::db::DbPool,
+    project_id: u64,
+    since_ts: Option<i64>,
+) -> Result<SpanAggregation> {
     let rows = sqlx::query(sql!(
         "SELECT op, description, duration_ms
          FROM spans
-         WHERE project_id = ?1 AND duration_ms IS NOT NULL
+         WHERE project_id = ?1 AND timestamp >= ?2 AND duration_ms IS NOT NULL
          ORDER BY timestamp DESC
-         LIMIT ?2"
+         LIMIT ?3"
     ))
     .bind(project_id as i64)
+    .bind(since_bound(since_ts))
     .bind(SPAN_AGG_SCAN_LIMIT)
     .fetch_all(pool)
     .await?;
@@ -537,25 +555,29 @@ pub async fn list_traces(
     pool: &crate::db::DbPool,
     project_id: u64,
     page: &Page,
+    since_ts: Option<i64>,
 ) -> Result<PagedResult<TraceSummary>> {
-    list_traces_with_scan_limit(pool, project_id, page, SPAN_AGG_SCAN_LIMIT).await
+    list_traces_with_scan_limit(pool, project_id, page, since_ts, SPAN_AGG_SCAN_LIMIT).await
 }
 
 async fn list_traces_with_scan_limit(
     pool: &crate::db::DbPool,
     project_id: u64,
     page: &Page,
+    since_ts: Option<i64>,
     scan_limit: i64,
 ) -> Result<PagedResult<TraceSummary>> {
+    let since = since_bound(since_ts);
     // Count over the same recency window as the listing so pagination stays consistent with what the bounded scan can return.
     let count_row = sqlx::query(sql!(
         "SELECT COUNT(DISTINCT trace_id) FROM (
             SELECT trace_id FROM spans
-            WHERE project_id = ?1 AND trace_id IS NOT NULL
+            WHERE project_id = ?1 AND timestamp >= ?2 AND trace_id IS NOT NULL
             ORDER BY timestamp DESC
-            LIMIT ?2) recent"
+            LIMIT ?3) recent"
     ))
     .bind(project_id as i64)
+    .bind(since)
     .bind(scan_limit)
     .fetch_one(pool)
     .await?;
@@ -569,14 +591,15 @@ async fn list_traces_with_scan_limit(
                 MAX(start_ms + COALESCE(duration_ms, 0)) - MIN(start_ms) AS span_extent_ms
          FROM (SELECT trace_id, timestamp, start_ms, duration_ms
                FROM spans
-               WHERE project_id = ?1 AND trace_id IS NOT NULL
+               WHERE project_id = ?1 AND timestamp >= ?2 AND trace_id IS NOT NULL
                ORDER BY timestamp DESC
-               LIMIT ?2) recent
+               LIMIT ?3) recent
          GROUP BY trace_id
          ORDER BY last_timestamp DESC
-         LIMIT ?3 OFFSET ?4"
+         LIMIT ?4 OFFSET ?5"
     ))
     .bind(project_id as i64)
+    .bind(since)
     .bind(scan_limit)
     .bind(page.limit as i64)
     .bind(page.offset as i64)
@@ -1166,7 +1189,7 @@ mod tests {
             offset: 0,
             limit: 50,
         };
-        let res = list_traces(&pool, 1, &page).await.unwrap();
+        let res = list_traces(&pool, 1, &page, None).await.unwrap();
         assert_eq!(res.items.len(), 1);
         let t = &res.items[0];
         assert_eq!(t.trace_id, "t1");
@@ -1193,7 +1216,7 @@ mod tests {
             offset: 0,
             limit: 50,
         };
-        let bounded = list_traces_with_scan_limit(&pool, 1, &page, 2)
+        let bounded = list_traces_with_scan_limit(&pool, 1, &page, None, 2)
             .await
             .unwrap();
         assert_eq!(bounded.total, 1, "count must respect the scan bound");
@@ -1201,7 +1224,7 @@ mod tests {
         assert_eq!(bounded.items[0].trace_id, "t_new");
         assert_eq!(bounded.items[0].span_count, 2);
 
-        let unbounded = list_traces_with_scan_limit(&pool, 1, &page, 1000)
+        let unbounded = list_traces_with_scan_limit(&pool, 1, &page, None, 1000)
             .await
             .unwrap();
         assert_eq!(unbounded.total, 2);
@@ -1233,6 +1256,55 @@ mod tests {
         assert_eq!(empty.p50_ms, 0);
         assert_eq!(empty.p95_ms, 0);
         assert_eq!(empty.avg_ms, 0);
+    }
+
+    // The spans page had no window at all and read the whole table; all three of
+    // its reads have to agree on the one the page is showing.
+    #[tokio::test]
+    async fn span_reads_honour_the_time_window() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        insert_span(
+            &pool,
+            "old",
+            "t-old",
+            None,
+            1,
+            100,
+            0,
+            10,
+            Some("db.query"),
+            Some("SELECT 1"),
+        )
+        .await;
+        insert_span(
+            &pool,
+            "new",
+            "t-new",
+            None,
+            1,
+            900,
+            0,
+            20,
+            Some("db.query"),
+            Some("SELECT 1"),
+        )
+        .await;
+
+        let page = Page::new(Some(0), Some(25));
+
+        let all = list_spans(&pool, 1, &page, None).await.unwrap();
+        assert_eq!(all.total, 2);
+        let windowed = list_spans(&pool, 1, &page, Some(500)).await.unwrap();
+        assert_eq!(windowed.total, 1);
+        assert_eq!(windowed.items[0].span_id, "new");
+
+        let traces = list_traces(&pool, 1, &page, Some(500)).await.unwrap();
+        assert_eq!(traces.total, 1);
+        assert_eq!(traces.items[0].trace_id, "t-new");
+
+        let agg = aggregate_spans(&pool, 1, Some(500)).await.unwrap();
+        assert_eq!(agg.groups.len(), 1);
+        assert_eq!(agg.groups[0].count, 1);
     }
 
     #[tokio::test]
@@ -1302,7 +1374,7 @@ mod tests {
         .await
         .unwrap();
 
-        let agg = aggregate_spans(&pool, 1).await.unwrap();
+        let agg = aggregate_spans(&pool, 1, None).await.unwrap();
         assert!(!agg.truncated);
         assert_eq!(agg.groups.len(), 2);
         // Sorted count desc: the 3-sample db.query group leads.

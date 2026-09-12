@@ -9,15 +9,21 @@ use super::types::{Page, PagedResult, ReplayDetail, ReplayError, ReplaySummary};
 /// Cap on `error_ids` resolved per replay, bounding the IN-list.
 const MAX_REPLAY_ERROR_IDS: usize = 50;
 
+/// `since_ts` of `None` means all time; bound as 0, which every real event
+/// timestamp clears.
 pub async fn list_replays(
     pool: &crate::db::DbPool,
     project_id: u64,
     page: &Page,
+    since_ts: Option<i64>,
 ) -> Result<PagedResult<ReplaySummary>> {
+    let since = since_ts.unwrap_or(0);
     let total: i64 = sqlx::query(sql!(
-        "SELECT COUNT(*) FROM events WHERE project_id = ?1 AND item_type = 'replay_event'"
+        "SELECT COUNT(*) FROM events
+         WHERE project_id = ?1 AND item_type = 'replay_event' AND timestamp >= ?2"
     ))
     .bind(project_id as i64)
+    .bind(since)
     .fetch_one(pool)
     .await?
     .get::<i64, _>(0);
@@ -29,11 +35,12 @@ pub async fn list_replays(
                 m.duration_ms, m.url, m.user_label, m.browser, m.os, m.error_count
          FROM events e
          LEFT JOIN replay_metadata m ON m.event_id = e.event_id
-         WHERE e.project_id = ?1 AND e.item_type = 'replay_event'
+         WHERE e.project_id = ?1 AND e.item_type = 'replay_event' AND e.timestamp >= ?2
          ORDER BY e.timestamp DESC
-         LIMIT ?2 OFFSET ?3"
+         LIMIT ?3 OFFSET ?4"
     ))
     .bind(project_id as i64)
+    .bind(since)
     .bind(page.limit as i64)
     .bind(page.offset as i64)
     .fetch_all(pool)

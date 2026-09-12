@@ -131,6 +131,7 @@ pub async fn events_bulk(
         query: opt(&form.query),
         sort: None,
         item_type: opt(&form.item_type),
+        since_ts: form.period.as_deref().and_then(period_to_timestamp),
     });
 
     let result = queries::bulk::bulk_delete_events(
@@ -288,12 +289,15 @@ async fn handle_event_type_bulk(
         return html_error(StatusCode::BAD_REQUEST, "Invalid action");
     }
 
-    let (ids, filter) = resolve_targets(form, |_| EventFilter {
+    // Mirrors the list page's window so "all matching" deletes what the reader
+    // was looking at, not every row of that type in the project.
+    let (ids, filter) = resolve_targets(form, |form| EventFilter {
         level: None,
         project_id: Some(project_id),
         query: None,
         sort: None,
         item_type: Some(item_type.to_string()),
+        since_ts: form.period.as_deref().and_then(period_to_timestamp),
     });
 
     let result = queries::bulk::bulk_delete_events(
@@ -333,6 +337,7 @@ pub async fn monitor_checkins_bulk(
         query: None,
         sort: None,
         item_type: Some("check_in".to_string()),
+        since_ts: None,
     });
 
     let redirect = format!("/web/projects/{project_id}/monitors/{slug}/");

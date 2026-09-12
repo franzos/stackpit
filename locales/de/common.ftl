@@ -29,6 +29,9 @@ common-period-14d = Letzte 14 Tage
 common-period-30d = Letzte 30 Tage
 common-period-90d = Letzte 90 Tage
 common-period-365d = Letzte 365 Tage
+# Shared labels for `m::period_filter`, the pages whose only filter is the window.
+common-period-label = Zeitraum
+common-filter-submit = Filtern
 
 common-select-all-matching = { $count ->
     [one] Die { $count } Zeile auswählen, die diesem Filter entspricht

@@ -1,9 +1,12 @@
 use askama::Template;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query, RawQuery, State};
 
-use crate::extractors::{ProjectPath, ReadPool};
+use crate::extractors::{BrowserDefaults, ProjectPath, ReadPool};
 use crate::html::chrome::PageChrome;
-use crate::html::utils::{render_project_detail, render_project_list, Chrome, ListParams};
+use crate::html::utils::{
+    defaults_redirect, period_or_default, period_to_timestamp, render_project_detail,
+    render_project_list, Chrome, ListParams,
+};
 use crate::orgs::extractor::ActiveOrg;
 use crate::queries;
 use crate::queries::types::{PagedResult, ReplaySummary};
@@ -20,23 +23,39 @@ use crate::html::filters;
 struct ReplayListTemplate {
     project_id: u64,
     result: PagedResult<ReplaySummary>,
+    period: String,
     nav: ProjectNavCounts,
     chrome: PageChrome,
 }
 
+// axum extractors, not a real argument list
+#[allow(clippy::too_many_arguments)]
 pub async fn list_handler(
     active: ActiveOrg,
     State(state): State<AppState>,
     ReadPool(pool): ReadPool,
     Chrome(chrome): Chrome,
+    BrowserDefaults(defaults): BrowserDefaults,
+    RawQuery(raw_qs): RawQuery,
     ProjectPath(project_id): ProjectPath,
     Query(params): Query<ListParams>,
 ) -> Result<axum::response::Response, HtmlError> {
     crate::orgs::extractor::require_project_scope(&active, &pool, project_id as i64)
         .await
         .map_err(|_| HtmlError(axum::http::StatusCode::NOT_FOUND, "Not found".into()))?;
+    if let Some(redirect) = defaults_redirect(
+        &format!("/web/projects/{project_id}/replays/"),
+        raw_qs.as_deref(),
+        &defaults,
+        &["period"],
+    ) {
+        return Ok(redirect);
+    }
     let page = params.page.page();
-    let result = queries::replays::list_replays(&pool, project_id, &page).await?;
+    let period = period_or_default(params.period.as_deref());
+    let result =
+        queries::replays::list_replays(&pool, project_id, &page, period_to_timestamp(&period))
+            .await?;
 
     Ok(render_project_list(
         &pool,
@@ -47,6 +66,7 @@ pub async fn list_handler(
         |project_id, result, nav, chrome| ReplayListTemplate {
             project_id,
             result,
+            period,
             nav,
             chrome,
         },

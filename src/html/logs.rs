@@ -1,11 +1,13 @@
 use askama::Template;
-use axum::extract::Query;
+use axum::extract::{Query, RawQuery};
 use serde::Deserialize;
 
-use crate::extractors::ProjectPageCtx;
+use crate::extractors::{BrowserDefaults, ProjectPageCtx};
 use crate::html::chrome::PageChrome;
 use crate::html::render_template;
-use crate::html::utils::build_filter_qs;
+use crate::html::utils::{
+    build_filter_qs, defaults_redirect, period_or_default, period_to_timestamp,
+};
 use crate::queries;
 use crate::queries::types::{LogEntry, LogFilter, PagedResult, Pagination};
 use crate::queries::ProjectNavCounts;
@@ -19,6 +21,7 @@ use crate::html::filters;
 pub struct LogListParams {
     pub query: Option<String>,
     pub level: Option<String>,
+    pub period: Option<String>,
     #[serde(flatten)]
     pub page: Pagination,
 }
@@ -30,6 +33,7 @@ struct LogListTemplate {
     result: PagedResult<LogEntry>,
     query: String,
     level: String,
+    period: String,
     filter_qs: String,
     nav: ProjectNavCounts,
     chrome: PageChrome,
@@ -37,27 +41,48 @@ struct LogListTemplate {
 
 pub async fn list_handler(
     ctx: ProjectPageCtx,
+    BrowserDefaults(defaults): BrowserDefaults,
+    RawQuery(raw_qs): RawQuery,
     Query(params): Query<LogListParams>,
 ) -> Result<axum::response::Response, HtmlError> {
+    if let Some(redirect) = defaults_redirect(
+        &format!("/web/projects/{}/logs/", ctx.project_id),
+        raw_qs.as_deref(),
+        &defaults,
+        &["period"],
+    ) {
+        return Ok(redirect);
+    }
     let query_str = params.query.clone().unwrap_or_default();
     let level_str = params.level.clone().unwrap_or_default();
+    let period_str = period_or_default(params.period.as_deref());
 
     let filter = LogFilter {
         level: params.level.filter(|s| !s.is_empty()),
         query: params.query.filter(|s| !s.is_empty()),
         trace_id: None,
+        since_ts: period_to_timestamp(&period_str),
     };
     let page = params.page.page();
 
     let result = queries::logs::list_logs(&ctx.pool, ctx.project_id, &filter, &page).await?;
 
-    let (filter_qs, _) = build_filter_qs(&[("query", &query_str), ("level", &level_str)], "");
+    // `period` rides in the pager links so paging past page 1 keeps the window.
+    let (filter_qs, _) = build_filter_qs(
+        &[
+            ("query", &query_str),
+            ("level", &level_str),
+            ("period", &period_str),
+        ],
+        "",
+    );
 
     Ok(render_template(&LogListTemplate {
         project_id: ctx.project_id,
         result,
         query: query_str,
         level: level_str,
+        period: period_str,
         filter_qs,
         nav: ctx.nav,
         chrome: ctx.chrome,
@@ -81,6 +106,7 @@ mod tests {
             },
             query: String::new(),
             level: String::new(),
+            period: "7d".into(),
             filter_qs: String::new(),
             nav: ProjectNavCounts::default(),
             chrome: PageChrome::new(String::new(), locale, "/web/projects/".into()),

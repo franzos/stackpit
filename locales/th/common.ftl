@@ -20,6 +20,9 @@ common-period-14d = 14 วันที่ผ่านมา
 common-period-30d = 30 วันที่ผ่านมา
 common-period-90d = 90 วันที่ผ่านมา
 common-period-365d = 365 วันที่ผ่านมา
+# Shared labels for `m::period_filter`, the pages whose only filter is the window.
+common-period-label = ช่วงเวลา
+common-filter-submit = กรอง
 
 common-select-all-matching = { $count ->
    *[other] เลือกทั้งหมด { $count } แถวที่ตรงกับตัวกรองนี้

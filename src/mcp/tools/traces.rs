@@ -71,7 +71,7 @@ pub(super) async fn list_traces(
     let limit = clamp_limit(opt_u64_arg(args, "limit")?);
     let page = Page::new(opt_u64_arg(args, "offset")?, Some(limit));
 
-    let result = crate::queries::spans::list_traces(&ctx.pool, project_id as u64, &page)
+    let result = crate::queries::spans::list_traces(&ctx.pool, project_id as u64, &page, None)
         .await
         .map_err(|e| internal("list_traces", format!("{e:#}")))?;
 

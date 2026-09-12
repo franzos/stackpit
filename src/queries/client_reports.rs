@@ -74,25 +74,31 @@ fn sorted_outcomes(totals: HashMap<(String, String), u64>) -> Vec<ClientReportOu
     out
 }
 
-/// Page of stored client reports, each decoded to its own dropped-event summary.
+/// Page of stored client reports, each decoded to its own dropped-event
+/// summary. `since_ts` of `None` means all time.
 pub async fn list_client_reports(
     pool: &DbPool,
     project_id: u64,
     page: &Page,
+    since_ts: Option<i64>,
 ) -> Result<PagedResult<ClientReportRow>> {
+    let since = since_ts.unwrap_or(0);
     let total: i64 = sqlx::query_scalar(sql!(
-        "SELECT COUNT(*) FROM events WHERE project_id = ?1 AND item_type = 'client_report'"
+        "SELECT COUNT(*) FROM events
+         WHERE project_id = ?1 AND item_type = 'client_report' AND timestamp >= ?2"
     ))
     .bind(project_id as i64)
+    .bind(since)
     .fetch_one(pool)
     .await?;
 
     let rows = sqlx::query(sql!(
         "SELECT event_id, payload, timestamp FROM events
-         WHERE project_id = ?1 AND item_type = 'client_report'
-         ORDER BY timestamp DESC LIMIT ?2 OFFSET ?3"
+         WHERE project_id = ?1 AND item_type = 'client_report' AND timestamp >= ?2
+         ORDER BY timestamp DESC LIMIT ?3 OFFSET ?4"
     ))
     .bind(project_id as i64)
+    .bind(since)
     .bind(page.limit as i64)
     .bind(page.offset as i64)
     .fetch_all(pool)
@@ -240,5 +246,25 @@ mod tests {
         .await;
         let out = summarize_client_reports(&pool, 1, 500).await.unwrap();
         assert!(out.is_empty());
+    }
+
+    // The reports table used to read the whole project while the rollup above it
+    // was pinned to 30 days, so the two disagreed about the page's window.
+    #[tokio::test]
+    async fn list_respects_since_window() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        let body = serde_json::json!({"discarded_events":[{"category":"error","reason":"x","quantity":1}]});
+        insert_client_report(&pool, "old", 1, 100, &body).await;
+        insert_client_report(&pool, "new", 1, 900, &body).await;
+
+        let page = Page::new(Some(0), Some(25));
+        let all = list_client_reports(&pool, 1, &page, None).await.unwrap();
+        assert_eq!(all.total, 2);
+
+        let windowed = list_client_reports(&pool, 1, &page, Some(500))
+            .await
+            .unwrap();
+        assert_eq!(windowed.total, 1);
+        assert_eq!(windowed.items[0].event_id, "new");
     }
 }

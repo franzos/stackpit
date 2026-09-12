@@ -25,6 +25,9 @@ common-period-14d = آخر 14 يومًا
 common-period-30d = آخر 30 يومًا
 common-period-90d = آخر 90 يومًا
 common-period-365d = آخر 365 يومًا
+# Shared labels for `m::period_filter`, the pages whose only filter is the window.
+common-period-label = النطاق الزمني
+common-filter-submit = ترشيح
 
 common-select-all-matching = { $count ->
     [zero] لا صفوف مطابقة لهذا المرشّح

@@ -258,3 +258,21 @@
   <option value="90d"{% if current == "90d" %} selected{% endif %}>{{ chrome.t("common-period-90d") }}</option>
   <option value="365d"{% if current == "365d" %} selected{% endif %}>{{ chrome.t("common-period-365d") }}</option>
 {% endmacro %}
+
+{# Whole time-range filter, for the list pages whose only filter is the window.
+   Pages that filter on more than the period keep their own form and call
+   `period_options` inside it. Must render above the empty-state branch, or an
+   empty window leaves no control to widen it with. #}
+{% macro period_filter(chrome, project_id, section, period) %}
+  <form class="filter-form"
+        method="get"
+        action="/web/projects/{{ project_id }}/{{ section }}/">
+    <select class="select w-auto"
+            name="period"
+            aria-label="{{ chrome.t("common-period-label") }}">
+      {% call period_options(chrome, period, chrome.t("common-period-all")) %}
+      {% endcall %}
+    </select>
+    <button class="btn btn-secondary" type="submit">{{ chrome.t("common-filter-submit") }}</button>
+  </form>
+{% endmacro %}

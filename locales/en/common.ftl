@@ -29,6 +29,9 @@ common-period-14d = Last 14 days
 common-period-30d = Last 30 days
 common-period-90d = Last 90 days
 common-period-365d = Last 365 days
+# Shared labels for `m::period_filter`, the pages whose only filter is the window.
+common-period-label = Time range
+common-filter-submit = Filter
 
 # Affirmation gate above the all-matching bulk actions.
 common-select-all-matching = { $count ->

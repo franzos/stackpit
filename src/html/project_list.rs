@@ -5,7 +5,9 @@ use axum::response::IntoResponse;
 use crate::extractors::{BrowserDefaults, ReadPool};
 use crate::html::chrome::PageChrome;
 use crate::html::render_template;
-use crate::html::utils::{defaults_redirect_url, period_to_timestamp, Chrome, ListParams};
+use crate::html::utils::{
+    defaults_redirect_url, period_or_default, period_to_timestamp, Chrome, ListParams,
+};
 use crate::orgs::extractor::ActiveOrg;
 use crate::queries;
 use crate::server::AppState;
@@ -47,7 +49,7 @@ pub async fn handler(
     }
     let sort_str = params.sort.clone().unwrap_or_default();
     let query_str = params.query.clone().unwrap_or_default();
-    let period_str = params.period.clone().unwrap_or_else(|| "7d".to_string());
+    let period_str = period_or_default(params.period.as_deref());
     let org_str = params.org.clone().unwrap_or_default();
 
     let since = period_to_timestamp(&period_str);

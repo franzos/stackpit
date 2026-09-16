@@ -39,11 +39,74 @@ pub async fn security_headers_middleware(
              form-action 'self'",
         ),
     );
-    if is_web {
+    // /web/ defaults to no-store so a new page can't be cached by accident. A
+    // handler that set its own value meant it -- the assets are served immutable
+    // under version-stamped URLs and must survive this.
+    if is_web && !h.contains_key("cache-control") {
         h.insert(
             "cache-control",
             HeaderValue::from_static("no-store, private"),
         );
     }
     resp
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use axum::response::IntoResponse;
+    use axum::routing::get;
+    use axum::Router;
+    use tower::ServiceExt;
+
+    async fn cache_control_for(path: &'static str, handler_value: Option<&'static str>) -> String {
+        let app = Router::new()
+            .route(
+                path,
+                get(move || async move {
+                    match handler_value {
+                        Some(v) => {
+                            ([(axum::http::header::CACHE_CONTROL, v)], "body").into_response()
+                        }
+                        None => "body".into_response(),
+                    }
+                }),
+            )
+            .layer(axum::middleware::from_fn(
+                super::security_headers_middleware,
+            ));
+
+        let resp = app
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        resp.headers()
+            .get("cache-control")
+            .map(|v| v.to_str().unwrap().to_string())
+            .unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn web_pages_default_to_no_store() {
+        assert_eq!(
+            cache_control_for("/web/projects/", None).await,
+            "no-store, private"
+        );
+    }
+
+    // The header the asset handler sets is the whole caching story; overwriting
+    // it made every font, stylesheet and script refetch on each page load.
+    #[tokio::test]
+    async fn assets_keep_their_own_cache_control() {
+        assert_eq!(
+            cache_control_for(
+                "/web/_assets/style.css",
+                Some("public, max-age=31536000, immutable")
+            )
+            .await,
+            "public, max-age=31536000, immutable"
+        );
+    }
 }

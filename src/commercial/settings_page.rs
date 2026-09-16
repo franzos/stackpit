@@ -223,7 +223,10 @@ mod tests {
             &active_status(),
             crate::commercial::GRACE_DAYS,
         );
-        insta::assert_snapshot!("license_active_en", tpl.render().unwrap());
+        insta::assert_snapshot!(
+            "license_active_en",
+            crate::html::redact_asset_version(tpl.render().unwrap())
+        );
     }
 
     #[test]
@@ -233,7 +236,10 @@ mod tests {
             &LicenseStatus::Unlicensed,
             crate::commercial::GRACE_DAYS,
         );
-        insta::assert_snapshot!("license_unlicensed_en", tpl.render().unwrap());
+        insta::assert_snapshot!(
+            "license_unlicensed_en",
+            crate::html::redact_asset_version(tpl.render().unwrap())
+        );
     }
 
     #[test]

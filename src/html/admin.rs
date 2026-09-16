@@ -72,7 +72,7 @@ mod snapshot_tests {
                 "/web/projects/".into(),
             ),
         };
-        insta::assert_snapshot!(tmpl.render().unwrap());
+        insta::assert_snapshot!(crate::html::redact_asset_version(tmpl.render().unwrap()));
     }
 
     // Populated render in en and de exercises the table-branch keys (columns,

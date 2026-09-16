@@ -257,6 +257,6 @@
 {% endblock %}
 
 {% block scripts %}
-  <script src="/web/_assets/chart.umd.min.js"></script>
-  <script src="/web/_assets/charts.js"></script>
+  <script src="/web/_assets/chart.umd.min.js?v={{ crate::html::ASSET_VERSION }}"></script>
+  <script src="/web/_assets/charts.js?v={{ crate::html::ASSET_VERSION }}"></script>
 {% endblock %}

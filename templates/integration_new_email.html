@@ -109,7 +109,7 @@
         {# SMTP is driven by the instance [email] provider, so email-provider.js
            hides the token field (and drops its `required`) when SMTP is picked.
            External asset because the CSP forbids inline scripts. #}
-        <script src="/web/_assets/email-provider.js" defer></script>
+        <script src="/web/_assets/email-provider.js?v={{ crate::html::ASSET_VERSION }}" defer></script>
       {% endif %}
 
       <div>

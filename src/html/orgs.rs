@@ -8,7 +8,9 @@ use stackpit_auth::AuthContext;
 use crate::db::DbPool;
 use crate::html::chrome::{Localized, PageChrome};
 use crate::html::utils::Chrome;
-use crate::html::{filters, html_error, html_error_localized, render_template, HtmlError};
+use crate::html::{
+    filters, html_error, html_error_localized, render_template, HtmlError, ASSET_VERSION,
+};
 use crate::locale::LanguageIdentifier;
 use crate::orgs::extractor::{pack, ActiveOrg, ACTIVE_ORG_COOKIE};
 use crate::orgs::{OrgKind, Role, SYSTEM_ORG_ID};
@@ -225,18 +227,19 @@ pub async fn create_org_invite(
     share_args.insert(std::borrow::Cow::Borrowed("ttl"), ttl_label.into());
     let share = crate::i18n::lookup_args(&locale, "invite-created-share", &share_args);
 
+    let asset_v = ASSET_VERSION;
     let body = format!(
         r#"<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><title>{page_title}</title>
 <link rel="preload" href="/web/_assets/fonts/Inter-Regular.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/web/_assets/fonts/Inter-SemiBold.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/web/_assets/style.css">
-<link rel="icon" type="image/png" href="/web/_assets/icon.png"></head>
+<link rel="stylesheet" href="/web/_assets/style.css?v={asset_v}">
+<link rel="icon" type="image/png" href="/web/_assets/icon.png?v={asset_v}"></head>
 <body class="min-h-screen flex items-center justify-center px-4">
 <div class="w-full max-w-md">
 <div class="flex flex-col items-center mb-6">
-<div class="flex items-center gap-2 mb-4"><img src="/web/_assets/icon.png" alt="" width="28" height="28"><span class="text-xl font-semibold tracking-tight">Stackpit</span></div>
+<div class="flex items-center gap-2 mb-4"><img src="/web/_assets/icon.png?v={asset_v}" alt="" width="28" height="28"><span class="text-xl font-semibold tracking-tight">Stackpit</span></div>
 <h1 class="page-h1">{heading}</h1>
 </div>
 <div class="card card-pad space-y-4">

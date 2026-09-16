@@ -164,7 +164,9 @@ mod snapshot_tests {
     // the render is deterministic.
     #[test]
     fn project_list_renders_stable() {
-        insta::assert_snapshot!(tmpl_for("en").render().unwrap());
+        insta::assert_snapshot!(crate::html::redact_asset_version(
+            tmpl_for("en").render().unwrap()
+        ));
     }
 
     // Proves the base.html chrome flip renders `lang="de" dir="ltr"` and that a

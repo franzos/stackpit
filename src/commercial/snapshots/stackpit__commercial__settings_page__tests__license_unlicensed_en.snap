@@ -19,12 +19,12 @@ expression: tpl.render().unwrap()
           as="font"
           type="font/woff2"
           crossorigin>
-    <link rel="stylesheet" href="/web/_assets/style.css">
-    <link rel="icon" type="image/png" href="/web/_assets/icon.png">
-    <script src="/web/_assets/bulk.js" defer></script>
-    <script src="/web/_assets/confirm.js" defer></script>
-    <script src="/web/_assets/select-all.js" defer></script>
-    <script src="/web/_assets/stop-propagation.js" defer></script>
+    <link rel="stylesheet" href="/web/_assets/style.css?v=ASSET_VERSION">
+    <link rel="icon" type="image/png" href="/web/_assets/icon.png?v=ASSET_VERSION">
+    <script src="/web/_assets/bulk.js?v=ASSET_VERSION" defer></script>
+    <script src="/web/_assets/confirm.js?v=ASSET_VERSION" defer></script>
+    <script src="/web/_assets/select-all.js?v=ASSET_VERSION" defer></script>
+    <script src="/web/_assets/stop-propagation.js?v=ASSET_VERSION" defer></script>
   </head>
   <body class="min-h-screen">
     
@@ -33,7 +33,7 @@ expression: tpl.render().unwrap()
                style="background: var(--color-surface-container-low)">
           <a href="/web/projects/"
              class="flex items-center gap-2 px-4 h-14 border-b border-outline-variant">
-            <img src="/web/_assets/icon.png" alt="" width="22" height="22">
+            <img src="/web/_assets/icon.png?v=ASSET_VERSION" alt="" width="22" height="22">
             <span class="font-semibold">Stackpit</span>
           </a>
           <nav class="flex-1 py-3 overflow-y-auto"

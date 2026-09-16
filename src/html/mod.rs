@@ -46,7 +46,7 @@ pub mod transactions;
 pub mod utils;
 
 pub fn routes() -> Router<AppState> {
-    let mut router = Router::new()
+    let router = Router::new()
         .route(
             "/",
             get(|| async { axum::response::Redirect::permanent("/web/projects/") }),
@@ -478,11 +478,38 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/web/{project_id}/", get(redirect_old_project));
 
-    // Static assets share one handler driven by the asset table below.
+    // Assets get their own router so compression reaches them and nothing else:
+    // pages echo the search query alongside the CSRF token (BREACH).
+    let mut assets = Router::new();
     for asset in ASSET_TABLE {
-        router = router.route(asset.path, get(move || async move { serve_asset(asset) }));
+        assets = assets.route(asset.path, get(move || async move { serve_asset(asset) }));
     }
-    router
+    router.merge(assets.layer(asset_compression()))
+}
+
+/// woff2 and png are already compressed; re-encoding them only burns CPU.
+fn asset_compression() -> tower_http::compression::CompressionLayer<AssetCompression> {
+    use tower_http::compression::predicate::{NotForContentType, Predicate, SizeAbove};
+
+    tower_http::compression::CompressionLayer::new().compress_when(
+        SizeAbove::new(512)
+            .and(NotForContentType::IMAGES)
+            .and(NotForContentType::const_new("font/")),
+    )
+}
+
+type AssetCompression = tower_http::compression::predicate::And<
+    tower_http::compression::predicate::And<
+        tower_http::compression::predicate::SizeAbove,
+        tower_http::compression::predicate::NotForContentType,
+    >,
+    tower_http::compression::predicate::NotForContentType,
+>;
+
+/// Pins the asset version in rendered HTML so snapshots survive a CSS rebuild.
+#[cfg(test)]
+pub(crate) fn redact_asset_version(html: String) -> String {
+    html.replace(ASSET_VERSION, "ASSET_VERSION")
 }
 
 async fn redirect_to_issue_stream(
@@ -509,16 +536,18 @@ async fn redirect_old_project(
     }
 }
 
-/// One bundled static asset: route path, content type, body, and the
-/// `Cache-Control` value (short for code, immutable+1yr for hashed fonts).
+/// One bundled static asset. All are served immutable: the templates stamp
+/// `?v=ASSET_VERSION` on the mutable ones, fonts are versioned by filename.
 struct Asset {
     path: &'static str,
     content_type: &'static str,
     body: &'static [u8],
-    cache_control: &'static str,
 }
 
-const CACHE_DAY: &str = "public, max-age=86400";
+/// Hash of the asset bytes, from build.rs. Edited CSS or JS gets a fresh URL,
+/// which is what lets the old one sit in the browser cache for a year.
+pub const ASSET_VERSION: &str = env!("STACKPIT_ASSET_VERSION");
+
 const CACHE_IMMUTABLE: &str = "public, max-age=31536000, immutable";
 const JS_CONTENT_TYPE: &str = "application/javascript; charset=utf-8";
 
@@ -527,97 +556,81 @@ static ASSET_TABLE: &[Asset] = &[
         path: "/web/_assets/style.css",
         content_type: "text/css",
         body: include_bytes!("../../templates/style.css"),
-        cache_control: CACHE_DAY,
     },
     Asset {
         path: "/web/_assets/icon.png",
         content_type: "image/png",
         body: include_bytes!("../../assets/icon.png"),
-        cache_control: CACHE_DAY,
     },
     Asset {
         path: "/web/_assets/bulk.js",
         content_type: JS_CONTENT_TYPE,
         body: include_bytes!("../../static/bulk.js"),
-        cache_control: CACHE_DAY,
     },
     Asset {
         path: "/web/_assets/chart.umd.min.js",
         content_type: JS_CONTENT_TYPE,
         body: include_bytes!("../../static/chart.umd.min.js"),
-        cache_control: CACHE_IMMUTABLE,
     },
     Asset {
         path: "/web/_assets/charts.js",
         content_type: JS_CONTENT_TYPE,
         body: include_bytes!("../../static/charts.js"),
-        cache_control: CACHE_DAY,
     },
     Asset {
         path: "/web/_assets/confirm.js",
         content_type: JS_CONTENT_TYPE,
         body: include_bytes!("../../static/confirm.js"),
-        cache_control: CACHE_DAY,
     },
     Asset {
         path: "/web/_assets/frames.js",
         content_type: JS_CONTENT_TYPE,
         body: include_bytes!("../../static/frames.js"),
-        cache_control: CACHE_DAY,
     },
     Asset {
         path: "/web/_assets/select-all.js",
         content_type: JS_CONTENT_TYPE,
         body: include_bytes!("../../static/select-all.js"),
-        cache_control: CACHE_DAY,
     },
     Asset {
         path: "/web/_assets/stop-propagation.js",
         content_type: JS_CONTENT_TYPE,
         body: include_bytes!("../../static/stop-propagation.js"),
-        cache_control: CACHE_DAY,
     },
     Asset {
         path: "/web/_assets/email-provider.js",
         content_type: JS_CONTENT_TYPE,
         body: include_bytes!("../../static/email-provider.js"),
-        cache_control: CACHE_DAY,
     },
     Asset {
         path: "/web/_assets/fonts/Inter-Regular.woff2",
         content_type: "font/woff2",
         body: include_bytes!("../../assets/fonts/Inter-Regular.woff2"),
-        cache_control: CACHE_IMMUTABLE,
     },
     Asset {
         path: "/web/_assets/fonts/Inter-Medium.woff2",
         content_type: "font/woff2",
         body: include_bytes!("../../assets/fonts/Inter-Medium.woff2"),
-        cache_control: CACHE_IMMUTABLE,
     },
     Asset {
         path: "/web/_assets/fonts/Inter-SemiBold.woff2",
         content_type: "font/woff2",
         body: include_bytes!("../../assets/fonts/Inter-SemiBold.woff2"),
-        cache_control: CACHE_IMMUTABLE,
     },
     Asset {
         path: "/web/_assets/fonts/Inter-Bold.woff2",
         content_type: "font/woff2",
         body: include_bytes!("../../assets/fonts/Inter-Bold.woff2"),
-        cache_control: CACHE_IMMUTABLE,
     },
     Asset {
         path: "/web/_assets/fonts/JetBrainsMono-Regular.woff2",
         content_type: "font/woff2",
         body: include_bytes!("../../assets/fonts/JetBrainsMono-Regular.woff2"),
-        cache_control: CACHE_IMMUTABLE,
     },
     Asset {
         path: "/web/_assets/fonts/JetBrainsMono-Medium.woff2",
         content_type: "font/woff2",
         body: include_bytes!("../../assets/fonts/JetBrainsMono-Medium.woff2"),
-        cache_control: CACHE_IMMUTABLE,
     },
 ];
 
@@ -625,7 +638,7 @@ fn serve_asset(asset: &Asset) -> impl IntoResponse {
     (
         [
             (header::CONTENT_TYPE, asset.content_type),
-            (header::CACHE_CONTROL, asset.cache_control),
+            (header::CACHE_CONTROL, CACHE_IMMUTABLE),
         ],
         asset.body,
     )
@@ -695,18 +708,19 @@ pub(crate) fn html_error_localized(
     let page_title = crate::i18n::lookup(locale, "error-page-title");
     let heading = crate::i18n::lookup(locale, "error-heading");
     let back = crate::i18n::lookup(locale, "error-back-projects");
+    let asset_v = ASSET_VERSION;
     let body = format!(
         r#"<!DOCTYPE html>
 <html lang="{lang}" dir="{dir}">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><title>{page_title}</title>
 <link rel="preload" href="/web/_assets/fonts/Inter-Regular.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/web/_assets/fonts/Inter-SemiBold.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/web/_assets/style.css">
-<link rel="icon" type="image/png" href="/web/_assets/icon.png"></head>
+<link rel="stylesheet" href="/web/_assets/style.css?v={asset_v}">
+<link rel="icon" type="image/png" href="/web/_assets/icon.png?v={asset_v}"></head>
 <body>
 <div class="min-h-screen flex items-center justify-center px-6">
 <div class="card card-pad max-w-lg w-full">
-<div class="flex items-center gap-2 mb-4"><img src="/web/_assets/icon.png" alt="" width="22" height="22"><span class="font-semibold">Stackpit</span></div>
+<div class="flex items-center gap-2 mb-4"><img src="/web/_assets/icon.png?v={asset_v}" alt="" width="22" height="22"><span class="font-semibold">Stackpit</span></div>
 <div class="page-h1 mb-2">{heading} {}</div>
 <p class="text-muted">{}</p>
 <div class="mt-6"><a href="/web/projects/" class="btn btn-secondary">{back}</a></div>

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.3] - 2026-09-16
+
+### Changed
+- Stylesheets and scripts are served compressed
+
+### Fixed
+- Fonts, stylesheets and scripts were refetched on every page load
+
 ## [0.4.2] - 2026-09-12
 
 ### Added

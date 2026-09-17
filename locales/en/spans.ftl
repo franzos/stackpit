@@ -67,6 +67,7 @@ trace-detail-lbl-span-id = Span ID
 trace-detail-lbl-parent = Parent span
 trace-detail-lbl-status = Status
 trace-detail-lbl-start = Start offset
+trace-detail-view-events = All events on this trace
 trace-detail-correlated-errors = Correlated errors
 trace-detail-col-level = Level
 trace-detail-col-title = Title

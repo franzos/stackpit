@@ -6,6 +6,8 @@
 transactions-title-suffix = — Stackpit
 
 # --- Transaction list ---
+transactions-list-search-placeholder = Search transaction names…
+transactions-list-search-label = Search transaction names
 transactions-time-range = Time range
 transactions-filter-submit = Filter
 transactions-list-empty = No transactions in this period.

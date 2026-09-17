@@ -5,7 +5,9 @@ use serde::Deserialize;
 use crate::extractors::{BrowserDefaults, ProjectPageCtx};
 use crate::html::chrome::PageChrome;
 use crate::html::render_template;
-use crate::html::utils::{defaults_redirect, period_or_default, period_to_timestamp, ListParams};
+use crate::html::utils::{
+    build_filter_qs, defaults_redirect, period_or_default, period_to_timestamp, ListParams,
+};
 use crate::queries;
 use crate::queries::types::{
     IssueSummary, PagedResult, Pagination, SpanAggregation, TransactionDistribution,
@@ -27,8 +29,10 @@ const RELATED_ISSUE_LIMIT: u32 = 10;
 struct TransactionListTemplate {
     project_id: u64,
     items: Vec<TransactionSummary>,
+    query: String,
     sort: String,
     period: String,
+    base_qs: String,
     nav: ProjectNavCounts,
     chrome: PageChrome,
 }
@@ -73,17 +77,29 @@ pub async fn list_handler(
         return Ok(redirect);
     }
     let sort = params.sort.clone().unwrap_or_else(|| "p95".to_string());
+    let query = params.query.clone().unwrap_or_default();
     let period = period_or_default(params.period.as_deref());
     let since = period_to_timestamp(&period).unwrap_or(0);
 
-    let items =
-        queries::transactions::list_transactions(&ctx.pool, ctx.project_id, since, &sort).await?;
+    let items = queries::transactions::list_transactions(
+        &ctx.pool,
+        ctx.project_id,
+        since,
+        &sort,
+        Some(query.as_str()).filter(|q| !q.is_empty()),
+    )
+    .await?;
+
+    // Carries the search and the window across the column sort links.
+    let (base_qs, _) = build_filter_qs(&[("query", &query), ("period", &period)], "");
 
     Ok(render_template(&TransactionListTemplate {
         project_id: ctx.project_id,
         items,
+        query,
         sort,
         period,
+        base_qs,
         nav: ctx.nav,
         chrome: ctx.chrome,
     }))

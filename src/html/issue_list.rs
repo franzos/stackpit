@@ -93,6 +93,19 @@ async fn issue_or_transaction_handler(
 
     let since = period_to_timestamp(&period_str);
 
+    // Issues carry no trace id, so a pasted one is only ever a lookup: send the
+    // reader to the waterfall instead of an empty stream.
+    if let Some(needle) = queries::trace_id_candidate(&query_str) {
+        if let Some((_, trace_id)) =
+            queries::events::resolve_trace_id(pool, &needle, Some(project_id), None).await?
+        {
+            return Ok(axum::response::Redirect::to(&format!(
+                "/web/projects/{project_id}/traces/{trace_id}/"
+            ))
+            .into_response());
+        }
+    }
+
     let filter = issue_filter_from_params(&params, item_type);
     let page = params.page.page();
 

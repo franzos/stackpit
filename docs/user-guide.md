@@ -35,6 +35,8 @@ Narrow the list with the filters:
 
 Sort by events, first seen, or last seen. If you arrived by clicking a tag value, a "Filtered by tag" chip shows at the top with an × to clear it.
 
+Paste a trace id into the search box and you land on that trace's waterfall instead of the list. A prefix works too, as long as it matches only one trace. The same holds for the cross-project Events search, which also takes a Trace ID filter to list every event on one trace.
+
 ## Reading an issue
 
 Click an issue to open it. The top-right corner has the status actions: Resolve or Ignore an unresolved issue, or Re-open / Un-ignore one that's already been actioned.

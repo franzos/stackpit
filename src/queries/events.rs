@@ -68,9 +68,24 @@ fn push_event_filter_conditions(
     }
     if let Some(ref query) = filter.query {
         push_conjunction(qb);
+        // A pasted trace id is still a search term, so it widens the predicate
+        // rather than replacing it; anything else never looks like one.
+        let as_trace = super::trace_id_candidate(query);
+        if as_trace.is_some() {
+            qb.push("(");
+        }
         qb.push("events.title LIKE ");
         qb.push_bind(super::like_contains(query));
         qb.push(" ESCAPE '\\'");
+        if let Some(ref trace_id) = as_trace {
+            qb.push(" OR ");
+            super::push_trace_id_predicate(qb, "events.trace_id", trace_id);
+            qb.push(")");
+        }
+    }
+    if let Some(ref trace_id) = filter.trace_id {
+        push_conjunction(qb);
+        super::push_trace_id_predicate(qb, "events.trace_id", trace_id);
     }
     if let Some(ref item_type) = filter.item_type {
         push_conjunction(qb);
@@ -156,6 +171,47 @@ async fn list_all_events_inner(
         .collect::<Result<Vec<_>>>()?;
 
     Ok(PagedResult::from_page(items, total, page))
+}
+
+/// Resolve a full or partial trace id to the project and trace it belongs to.
+/// `None` when nothing matches, and also when a prefix spans more than one
+/// trace: a lookup that could land on either is not a lookup.
+///
+/// `project_id` narrows to one project; `org_ids` is the same scope the event
+/// list uses, so a lookup can never point at a project the caller cannot open.
+pub async fn resolve_trace_id(
+    pool: &crate::db::DbPool,
+    trace_id: &str,
+    project_id: Option<u64>,
+    org_ids: Option<&[i64]>,
+) -> Result<Option<(u64, String)>> {
+    use sqlx::QueryBuilder;
+
+    if org_ids.is_some_and(<[i64]>::is_empty) {
+        return Ok(None);
+    }
+
+    let mut qb: QueryBuilder<crate::db::Db> =
+        QueryBuilder::new("SELECT DISTINCT events.project_id, events.trace_id FROM events WHERE ");
+    super::push_trace_id_predicate(&mut qb, "events.trace_id", trace_id);
+    if let Some(pid) = project_id {
+        qb.push(" AND events.project_id = ");
+        qb.push_bind(pid as i64);
+    }
+    if let Some(ids) = org_ids {
+        qb.push(" AND ");
+        super::push_org_scope_predicate(&mut qb, "events.project_id", ids);
+    }
+    qb.push(" LIMIT 2");
+
+    let rows = qb.build().fetch_all(pool).await?;
+    let [row] = rows.as_slice() else {
+        return Ok(None);
+    };
+    let Some(resolved) = row.get_opt_string("trace_id") else {
+        return Ok(None);
+    };
+    Ok(Some((row.get_u64("project_id"), resolved)))
 }
 
 /// List events for a single project, paginated.
@@ -1224,5 +1280,145 @@ mod tests {
         let windowed = list_all_events(&pool, &filter, &page, None).await.unwrap();
         assert_eq!(windowed.total, 1);
         assert_eq!(windowed.items[0].event_id, "new");
+    }
+
+    const TRACE_A: &str = "aaaaaaaabbbbbbbbccccccccdddddddd";
+    const TRACE_B: &str = "aaaaaaaabbbbbbbbcccccccc11111111";
+
+    async fn insert_traced_event(
+        pool: &crate::db::DbPool,
+        event_id: &str,
+        project_id: i64,
+        trace_id: &str,
+        title: &str,
+    ) {
+        insert_test_event(
+            pool,
+            event_id,
+            project_id,
+            100,
+            None,
+            Some("error"),
+            Some(title),
+        )
+        .await;
+        sqlx::query(sql!("UPDATE events SET trace_id = ?1 WHERE event_id = ?2"))
+            .bind(trace_id)
+            .bind(event_id)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    // The event list narrows to one trace on the full id and on a prefix, and
+    // the count has to narrow with it or the pager offers pages that cannot fill.
+    #[tokio::test]
+    async fn trace_filter_matches_full_id_and_prefix() {
+        let pool = open_test_db().await;
+        insert_traced_event(&pool, "ta1", 1, TRACE_A, "boom").await;
+        insert_traced_event(&pool, "ta2", 1, TRACE_A, "bang").await;
+        insert_traced_event(&pool, "tb1", 1, TRACE_B, "thud").await;
+        insert_test_event(&pool, "tn1", 1, 100, None, Some("error"), Some("no trace")).await;
+
+        let page = Page::new(None, None);
+
+        let exact = EventFilter {
+            trace_id: Some(TRACE_A.to_string()),
+            ..Default::default()
+        };
+        let got = list_all_events(&pool, &exact, &page, None).await.unwrap();
+        assert_eq!(got.total, 2);
+        assert_eq!(got.items.len(), 2);
+
+        // 24 shared characters: both traces, neither of the untraced rows.
+        let prefix = EventFilter {
+            trace_id: Some(TRACE_A[..24].to_string()),
+            ..Default::default()
+        };
+        let got = list_all_events(&pool, &prefix, &page, None).await.unwrap();
+        assert_eq!(got.total, 3);
+
+        let miss = EventFilter {
+            trace_id: Some("ffffffff".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            list_all_events(&pool, &miss, &page, None)
+                .await
+                .unwrap()
+                .total,
+            0
+        );
+    }
+
+    // Pasting a trace id into the search box must find the trace without
+    // costing the title search its own matches.
+    #[tokio::test]
+    async fn search_matches_trace_ids_as_well_as_titles() {
+        let pool = open_test_db().await;
+        insert_traced_event(&pool, "sa1", 1, TRACE_A, "boom").await;
+        insert_test_event(&pool, "sn1", 1, 100, None, Some("error"), Some("boom")).await;
+
+        let page = Page::new(None, None);
+
+        let by_trace = EventFilter {
+            query: Some(TRACE_A.to_uppercase()),
+            ..Default::default()
+        };
+        let got = list_all_events(&pool, &by_trace, &page, None)
+            .await
+            .unwrap();
+        assert_eq!(got.total, 1);
+        assert_eq!(got.items[0].event_id, "sa1");
+
+        let by_title = EventFilter {
+            query: Some("boom".to_string()),
+            ..Default::default()
+        };
+        let got = list_all_events(&pool, &by_title, &page, None)
+            .await
+            .unwrap();
+        assert_eq!(got.total, 2, "a word search still only reads the title");
+    }
+
+    // The lookup only redirects when it is unambiguous: a prefix shared by two
+    // traces has no single waterfall to land on.
+    #[tokio::test]
+    async fn resolve_trace_id_needs_a_single_match() {
+        let pool = open_test_db().await;
+        let org = insert_org(&pool, "trace-org").await;
+        let other = insert_org(&pool, "trace-org-other").await;
+        insert_project(&pool, 401, org).await;
+        insert_traced_event(&pool, "ra1", 401, TRACE_A, "boom").await;
+        insert_traced_event(&pool, "rb1", 401, TRACE_B, "bang").await;
+
+        let hit = resolve_trace_id(&pool, TRACE_A, None, None).await.unwrap();
+        assert_eq!(hit, Some((401, TRACE_A.to_string())));
+
+        // Unique prefix resolves to the full id.
+        let hit = resolve_trace_id(&pool, &TRACE_A[..25], None, None)
+            .await
+            .unwrap();
+        assert_eq!(hit, Some((401, TRACE_A.to_string())));
+
+        // Shared prefix is ambiguous.
+        assert!(resolve_trace_id(&pool, &TRACE_A[..24], None, None)
+            .await
+            .unwrap()
+            .is_none());
+
+        // Another org's trace is not reachable, and an empty entitlement reaches nothing.
+        assert!(resolve_trace_id(&pool, TRACE_A, None, Some(&[other]))
+            .await
+            .unwrap()
+            .is_none());
+        assert!(resolve_trace_id(&pool, TRACE_A, None, Some(&[]))
+            .await
+            .unwrap()
+            .is_none());
+        assert!(resolve_trace_id(&pool, TRACE_A, Some(999), None)
+            .await
+            .unwrap()
+            .is_none());
     }
 }

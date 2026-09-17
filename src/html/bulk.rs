@@ -20,6 +20,7 @@ pub struct BulkForm {
     level: Option<String>,
     status: Option<String>,
     item_type: Option<String>,
+    trace: Option<String>,
     release: Option<String>,
     environment: Option<String>,
     period: Option<String>,
@@ -34,6 +35,7 @@ impl BulkForm {
         let mut level = None;
         let mut status = None;
         let mut item_type = None;
+        let mut trace = None;
         let mut release = None;
         let mut environment = None;
         let mut period = None;
@@ -52,6 +54,7 @@ impl BulkForm {
                 "level" => level = Some(val.into_owned()),
                 "status" => status = Some(val.into_owned()),
                 "item_type" => item_type = Some(val.into_owned()),
+                "trace" => trace = Some(val.into_owned()),
                 "release" => release = Some(val.into_owned()),
                 "environment" => environment = Some(val.into_owned()),
                 "period" => period = Some(val.into_owned()),
@@ -67,6 +70,7 @@ impl BulkForm {
             level,
             status,
             item_type,
+            trace,
             release,
             environment,
             period,
@@ -131,6 +135,7 @@ pub async fn events_bulk(
         query: opt(&form.query),
         sort: None,
         item_type: opt(&form.item_type),
+        trace_id: opt(&form.trace),
         since_ts: form.period.as_deref().and_then(period_to_timestamp),
     });
 
@@ -297,6 +302,7 @@ async fn handle_event_type_bulk(
         query: None,
         sort: None,
         item_type: Some(item_type.to_string()),
+        trace_id: None,
         since_ts: form.period.as_deref().and_then(period_to_timestamp),
     });
 
@@ -337,6 +343,7 @@ pub async fn monitor_checkins_bulk(
         query: None,
         sort: None,
         item_type: Some("check_in".to_string()),
+        trace_id: None,
         since_ts: None,
     });
 

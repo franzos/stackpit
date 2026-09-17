@@ -43,6 +43,57 @@ pub(crate) fn like_contains(needle: &str) -> String {
     format!("%{escaped}%")
 }
 
+/// Wrap a search term as a `term%` LIKE pattern, escaping the LIKE
+/// metacharacters with `\`. Callers must keep the matching `ESCAPE '\\'` clause.
+pub(crate) fn like_prefix(needle: &str) -> String {
+    let escaped = needle
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    format!("{escaped}%")
+}
+
+/// Length of a W3C/Sentry trace id in hex characters.
+pub const TRACE_ID_LEN: usize = 32;
+
+/// Shortest prefix accepted as a trace-id lookup. Below this a hex string is
+/// far likelier to be a word someone meant to search for.
+const TRACE_ID_MIN_PREFIX: usize = 8;
+
+/// Read a string as a full or partial trace id, normalised for comparison.
+/// `None` when it cannot be one, which is what keeps an ordinary search term
+/// out of the trace path.
+pub fn trace_id_candidate(input: &str) -> Option<String> {
+    let trimmed = input.trim();
+    if !(TRACE_ID_MIN_PREFIX..=TRACE_ID_LEN).contains(&trimmed.len())
+        || !trimmed.chars().all(|c| c.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    // Stored ids are lowercase hex, and both `=` and PostgreSQL's `LIKE` are
+    // case-sensitive.
+    Some(trimmed.to_ascii_lowercase())
+}
+
+/// Push a trace-id match on `column`. A full id compares with `=` so it rides
+/// the trace index; a shorter one falls back to a prefix `LIKE`, which does not.
+/// `column` is `&'static str` so no caller can route input into the SQL text.
+pub(crate) fn push_trace_id_predicate(
+    qb: &mut sqlx::QueryBuilder<crate::db::Db>,
+    column: &'static str,
+    trace_id: &str,
+) {
+    qb.push(column);
+    if trace_id.len() >= TRACE_ID_LEN {
+        qb.push(" = ");
+        qb.push_bind(trace_id.to_string());
+    } else {
+        qb.push(" LIKE ");
+        qb.push_bind(like_prefix(trace_id));
+        qb.push(" ESCAPE '\\'");
+    }
+}
+
 /// Canonical form of an org-id list: sorted and deduped, so two callers with the
 /// same entitlements produce the same key and the same SQL.
 pub(crate) fn canonical_org_ids(mut ids: Vec<i64>) -> Vec<i64> {
@@ -139,5 +190,43 @@ pub(crate) mod test_helpers {
         .execute(pool)
         .await
         .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The sniff decides whether a search term is treated as a trace id at all,
+    // so it has to stay narrow enough that ordinary words fall through to the
+    // title search.
+    #[test]
+    fn only_trace_shaped_terms_are_read_as_trace_ids() {
+        let full = "0123456789abcdef0123456789abcdef";
+        assert_eq!(trace_id_candidate(full).as_deref(), Some(full));
+        assert_eq!(
+            trace_id_candidate(&format!("  {} ", full.to_uppercase())).as_deref(),
+            Some(full),
+            "pasted ids arrive padded and in either case"
+        );
+        assert_eq!(
+            trace_id_candidate("0123456789ab").as_deref(),
+            Some("0123456789ab")
+        );
+
+        assert!(trace_id_candidate("deadbee").is_none(), "too short");
+        assert!(
+            trace_id_candidate(&format!("{full}0")).is_none(),
+            "too long"
+        );
+        assert!(trace_id_candidate("TypeError").is_none());
+        assert!(trace_id_candidate("timeout!").is_none());
+        assert!(trace_id_candidate("").is_none());
+    }
+
+    #[test]
+    fn like_patterns_escape_their_metacharacters() {
+        assert_eq!(like_contains("100%_x"), "%100\\%\\_x%");
+        assert_eq!(like_prefix("a\\b"), "a\\\\b%");
     }
 }

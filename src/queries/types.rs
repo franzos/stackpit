@@ -121,6 +121,8 @@ pub struct EventFilter {
     pub query: Option<String>,
     pub sort: Option<String>,
     pub item_type: Option<String>,
+    /// Full trace id, or a prefix of one. Matched against `events.trace_id`.
+    pub trace_id: Option<String>,
     /// Lower bound on `timestamp`; `None` means all time.
     pub since_ts: Option<i64>,
 }

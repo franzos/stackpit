@@ -185,6 +185,7 @@ async fn bulk_delete_events_chunked(
             query: filter.query.clone(),
             sort: None,
             item_type: filter.item_type.clone(),
+            trace_id: filter.trace_id.clone(),
             since_ts: filter.since_ts,
         };
         if f.project_id.is_none() {
@@ -221,9 +222,24 @@ async fn bulk_delete_events_chunked(
                 }
                 if let Some(ref query) = $f.query {
                     push_sep!();
+                    // Same widening as the list page, so "delete all matching"
+                    // deletes exactly the rows the reader was shown.
+                    let as_trace = super::trace_id_candidate(query);
+                    if as_trace.is_some() {
+                        $qb.push("(");
+                    }
                     $qb.push("title LIKE ");
                     $qb.push_bind(super::like_contains(query));
                     $qb.push(" ESCAPE '\\'");
+                    if let Some(ref trace_id) = as_trace {
+                        $qb.push(" OR ");
+                        super::push_trace_id_predicate(&mut $qb, "trace_id", trace_id);
+                        $qb.push(")");
+                    }
+                }
+                if let Some(ref trace_id) = $f.trace_id {
+                    push_sep!();
+                    super::push_trace_id_predicate(&mut $qb, "trace_id", trace_id);
                 }
                 if let Some(ref item_type) = $f.item_type {
                     push_sep!();
@@ -244,6 +260,7 @@ async fn bulk_delete_events_chunked(
             && f.project_id.is_none()
             && f.query.is_none()
             && f.item_type.is_none()
+            && f.trace_id.is_none()
             && org_id.is_none()
         {
             return Ok(0);
@@ -254,6 +271,7 @@ async fn bulk_delete_events_chunked(
             || f.project_id.is_some()
             || f.query.is_some()
             || f.item_type.is_some()
+            || f.trace_id.is_some()
             || f.since_ts.is_some();
 
         // Collect distinct issue keys that will be affected before deleting.

@@ -173,12 +173,14 @@ fn distribution_buckets(buckets: &[u64; NUM_BUCKETS]) -> Vec<DurationBucket> {
 
 /// Roll up `transaction_metrics` rows by name and compute per-transaction
 /// percentiles, throughput, and failure rate. `sort` is one of
-/// `p95` (default), `throughput`, `failure_rate`, `count`.
+/// `p95` (default), `throughput`, `failure_rate`, `count`. `query` narrows to
+/// names containing it.
 pub async fn list_transactions(
     pool: &crate::db::DbPool,
     project_id: u64,
     since_ts: i64,
     sort: &str,
+    query: Option<&str>,
 ) -> Result<Vec<TransactionSummary>> {
     let hour_floor = (since_ts / 3600) * 3600;
 
@@ -187,16 +189,21 @@ pub async fn list_transactions(
         .collect::<Vec<_>>()
         .join(", ");
 
-    let raw = format!(
+    let mut raw = format!(
         "SELECT transaction_name, count, sum_duration_ms, failed_count, {bucket_cols}, users_hll \
          FROM transaction_metrics \
          WHERE project_id = ?1 AND hour_bucket >= ?2"
     );
-    let rows = sqlx::query(crate::db::dyn_sql(&raw))
+    if query.is_some() {
+        raw.push_str(" AND transaction_name LIKE ?3 ESCAPE '\\'");
+    }
+    let mut stmt = sqlx::query(crate::db::dyn_sql(&raw))
         .bind(project_id as i64)
-        .bind(hour_floor)
-        .fetch_all(pool)
-        .await?;
+        .bind(hour_floor);
+    if let Some(query) = query {
+        stmt = stmt.bind(super::like_contains(query));
+    }
+    let rows = stmt.fetch_all(pool).await?;
 
     let mut by_name: std::collections::HashMap<String, TxnAgg> = std::collections::HashMap::new();
 
@@ -1008,5 +1015,63 @@ mod tests {
         assert!((1..=2).contains(&p50), "p50={p50}");
         // p95 sits right at the boundary into the slow bucket.
         assert!(p95 >= 2, "p95={p95}");
+    }
+
+    async fn insert_metrics_row(pool: &crate::db::DbPool, project_id: i64, name: &str) {
+        sqlx::query(sql!(
+            "INSERT INTO transaction_metrics
+             (project_id, transaction_name, hour_bucket, count, sum_duration_ms, failed_count, bucket_7, first_seen, last_seen)
+             VALUES (?1, ?2, 3600, 1, 100, 0, 1, 3600, 3600)"
+        ))
+        .bind(project_id)
+        .bind(name)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    // The name search is a substring match, and it is escaped: a `%` in the term
+    // is a literal per cent, not a wildcard.
+    #[tokio::test]
+    async fn list_transactions_searches_names_by_substring() {
+        let pool = open_test_db().await;
+        for name in [
+            "enrollment.register",
+            "enrollment.claim",
+            "login.request",
+            "GET /100%/report",
+        ] {
+            insert_metrics_row(&pool, 1, name).await;
+        }
+
+        let names = |items: Vec<TransactionSummary>| {
+            let mut n: Vec<String> = items.into_iter().map(|t| t.name).collect();
+            n.sort();
+            n
+        };
+
+        let all = list_transactions(&pool, 1, 0, "count", None).await.unwrap();
+        assert_eq!(all.len(), 4);
+
+        let hits = list_transactions(&pool, 1, 0, "count", Some("enrollment"))
+            .await
+            .unwrap();
+        assert_eq!(names(hits), vec!["enrollment.claim", "enrollment.register"]);
+
+        // Mid-name substring, not just a prefix.
+        let hits = list_transactions(&pool, 1, 0, "count", Some("regist"))
+            .await
+            .unwrap();
+        assert_eq!(names(hits), vec!["enrollment.register"]);
+
+        let hits = list_transactions(&pool, 1, 0, "count", Some("100%"))
+            .await
+            .unwrap();
+        assert_eq!(names(hits), vec!["GET /100%/report"]);
+
+        assert!(list_transactions(&pool, 1, 0, "count", Some("nothing"))
+            .await
+            .unwrap()
+            .is_empty());
     }
 }

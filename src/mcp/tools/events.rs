@@ -271,8 +271,9 @@ const EVENT_SORTS: [&str; 4] = ["timestamp", "project_id", "level", "platform"];
 pub(super) fn search_input() -> Value {
     schema_object(
         json!({
-            "query": prop("string", "Substring match on the event title."),
+            "query": prop("string", "Substring match on the event title. A trace id also matches the trace."),
             "level": prop("string", "Only events at this level, e.g. `error` or `warning`."),
+            "trace_id": prop("string", "Only events on this trace. A prefix of the id works too."),
             "item_type": prop(
                 "string",
                 "Only items of this kind, e.g. `event`, `transaction`, `log` or `span`.",
@@ -346,6 +347,7 @@ pub(super) async fn search_events(
         query: opt_str_arg(args, "query")?.map(str::to_string),
         sort: sort.map(str::to_string),
         item_type: opt_str_arg(args, "item_type")?.map(str::to_string),
+        trace_id: opt_str_arg(args, "trace_id")?.map(str::to_string),
         since_ts: None,
     };
     let limit = clamp_limit(opt_u64_arg(args, "limit")?);

@@ -59,6 +59,13 @@
     </select>
     <input class="input w-auto"
            type="text"
+           name="trace"
+           placeholder="{{ chrome.t("events-list-trace-placeholder") }}"
+           value="{{ trace }}"
+           aria-label="{{ chrome.t("events-list-filter-trace") }}"
+           size="16">
+    <input class="input w-auto"
+           type="text"
            name="project_id"
            placeholder="{{ chrome.t("events-list-project-placeholder") }}"
            value="{{ project_id }}"
@@ -85,6 +92,7 @@
         {% if !query.is_empty() %}<input type="hidden" name="query" value="{{ query }}">{% endif %}
         {% if !level.is_empty() %}<input type="hidden" name="level" value="{{ level }}">{% endif %}
         {% if !item_type.is_empty() %}<input type="hidden" name="item_type" value="{{ item_type }}">{% endif %}
+        {% if !trace.is_empty() %}<input type="hidden" name="trace" value="{{ trace }}">{% endif %}
         <label class="select-all-gate">
           <input type="checkbox">
           <span>{{ chrome.tv_count("common-select-all-matching", result.total as i64) }}</span>

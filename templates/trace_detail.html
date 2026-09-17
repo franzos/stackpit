@@ -27,6 +27,10 @@
         {% if span_total > 0 %}· {{ waterfall.total_ms|format_duration }} {{ chrome.t("trace-detail-total") }}{% endif %}
         {% if waterfall.truncated %}· {{ chrome.t("trace-detail-showing-first") }} {{ span_shown }} {{ chrome.t("trace-detail-of") }} {{ span_total }}{% endif %}
       </p>
+      <p class="text-[13px] mt-1">
+        <a class="breadcrumb-link"
+           href="/web/events/?trace={{ trace_id|urlencode }}&amp;item_type=&amp;project_id={{ project_id }}">{{ chrome.t("trace-detail-view-events") }}</a>
+      </p>
     </div>
   </div>
 

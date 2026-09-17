@@ -27,6 +27,7 @@ struct EventListTemplate {
     level: String,
     project_id: String,
     item_type: String,
+    trace: String,
     sort: String,
     filter_qs: String,
     base_qs: String,
@@ -60,6 +61,7 @@ pub async fn handler(
     let level_str = params.level.clone().unwrap_or_default();
     let project_id_str = params.project_id.map(|p| p.to_string()).unwrap_or_default();
     let item_type_str = params.item_type.clone().unwrap_or_default();
+    let trace_str = params.trace.clone().unwrap_or_default();
     let sort_str = params.sort.clone().unwrap_or_default();
 
     let filter = event_filter_from_params(&params);
@@ -73,10 +75,27 @@ pub async fn handler(
             .ok(),
         None => None,
     };
+    let scope = cross_org_scope(&active, project_scope.as_ref());
+
+    // A pasted trace id is a lookup, so hand over the waterfall rather than the
+    // rows behind it. Missing the trace falls through to the ordinary search.
+    if let Some(needle) = queries::trace_id_candidate(&query_str) {
+        let org_ids = scope.org_ids();
+        if let Some((pid, trace_id)) =
+            queries::events::resolve_trace_id(&pool, &needle, params.project_id, org_ids.as_deref())
+                .await?
+        {
+            return Ok(axum::response::Redirect::to(&format!(
+                "/web/projects/{pid}/traces/{trace_id}/"
+            ))
+            .into_response());
+        }
+    }
+
     // Unscoped, this used to fall back to the session's own org, which owns no
     // projects for a user sitting in their personal org — so the whole cross-project
     // view rendered empty.
-    let result = match cross_org_scope(&active, project_scope.as_ref()) {
+    let result = match scope {
         CrossOrgScope::All => queries::events::list_all_events(&pool, &filter, &page, None).await?,
         CrossOrgScope::Project(org_id) => {
             queries::events::list_all_events(&pool, &filter, &page, Some(org_id)).await?
@@ -92,6 +111,7 @@ pub async fn handler(
             ("level", &level_str),
             ("project_id", &project_id_str),
             ("item_type", &item_type_str),
+            ("trace", &trace_str),
         ],
         &sort_str,
     );
@@ -102,6 +122,7 @@ pub async fn handler(
         level: level_str,
         project_id: project_id_str,
         item_type: item_type_str,
+        trace: trace_str,
         sort: sort_str,
         filter_qs,
         base_qs,
@@ -129,6 +150,7 @@ mod tests {
             level: String::new(),
             project_id: String::new(),
             item_type: String::new(),
+            trace: String::new(),
             sort: String::new(),
             filter_qs: String::new(),
             base_qs: String::new(),

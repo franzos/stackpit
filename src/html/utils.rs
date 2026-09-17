@@ -144,6 +144,8 @@ pub struct ListParams {
     pub release: Option<String>,
     pub environment: Option<String>,
     pub tag: Option<String>,
+    /// Full trace id, or a prefix of one, narrowing the event list to one trace.
+    pub trace: Option<String>,
     pub period: Option<String>,
     /// Org filter for the cross-org project list.
     pub org: Option<String>,
@@ -172,6 +174,9 @@ pub fn event_filter_from_params(params: &ListParams) -> queries::types::EventFil
         query: non_empty(params.query.clone()),
         sort: non_empty(params.sort.clone()),
         item_type: non_empty(params.item_type.clone()),
+        // Passed through even when it is not trace-shaped: a typo should come
+        // back as an empty list, not as the unfiltered one.
+        trace_id: non_empty(params.trace.as_ref().map(|t| t.trim().to_ascii_lowercase())),
         since_ts: None,
     }
 }
@@ -225,6 +230,18 @@ pub enum CrossOrgScope {
     Project(i64),
     /// Unscoped: every org the caller belongs to. Empty entitles them to nothing.
     Memberships(Vec<i64>),
+}
+
+impl CrossOrgScope {
+    /// The scope as a bindable org-id list, for queries that take one directly.
+    /// `None` is the superuser's "every org", never "no orgs".
+    pub fn org_ids(&self) -> Option<Vec<i64>> {
+        match self {
+            Self::All => None,
+            Self::Project(org_id) => Some(vec![*org_id]),
+            Self::Memberships(ids) => Some(ids.clone()),
+        }
+    }
 }
 
 /// Decide which orgs a cross-project list may read from.

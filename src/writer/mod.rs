@@ -1779,7 +1779,7 @@ mod tests {
         assert!(flush_batch(&pool, &mut batch, &mut acc, None).await);
 
         let summaries =
-            crate::queries::transactions::list_transactions(&pool, 1, now - 86400, "count")
+            crate::queries::transactions::list_transactions(&pool, 1, now - 86400, "count", None)
                 .await
                 .unwrap();
         assert_eq!(summaries.len(), 1);

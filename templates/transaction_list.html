@@ -26,6 +26,12 @@
     {% if !sort.is_empty() %}
       <input type="hidden" name="sort" value="{{ sort }}">
     {% endif %}
+    <input class="input"
+           type="text"
+           name="query"
+           placeholder="{{ chrome.t("transactions-list-search-placeholder") }}"
+           value="{{ query }}"
+           aria-label="{{ chrome.t("transactions-list-search-label") }}">
     <select class="select w-auto"
             name="period"
             aria-label="{{ chrome.t("transactions-time-range") }}">
@@ -47,21 +53,21 @@
             <tr>
               <th class="col-title">{{ chrome.t("transactions-col-name") }}</th>
               <th class="col-narrow">
-                <a href="/web/projects/{{ project_id }}/transactions/?sort=throughput&amp;period={{ period }}"
+                <a href="/web/projects/{{ project_id }}/transactions/?sort=throughput{{ base_qs }}"
                    {% if sort == "throughput" %}class="active-sort"{% endif %}>{{ chrome.t("transactions-col-throughput") }}</a>
               </th>
               <th class="col-narrow">p50</th>
               <th class="col-narrow">p75</th>
               <th class="col-narrow">
-                <a href="/web/projects/{{ project_id }}/transactions/?sort=p95&amp;period={{ period }}"
+                <a href="/web/projects/{{ project_id }}/transactions/?sort=p95{{ base_qs }}"
                    {% if sort == "p95" %}class="active-sort"{% endif %}>p95</a>
               </th>
               <th class="col-narrow">
-                <a href="/web/projects/{{ project_id }}/transactions/?sort=failure_rate&amp;period={{ period }}"
+                <a href="/web/projects/{{ project_id }}/transactions/?sort=failure_rate{{ base_qs }}"
                    {% if sort == "failure_rate" %}class="active-sort"{% endif %}>{{ chrome.t("transactions-col-failure") }}</a>
               </th>
               <th class="col-narrow">
-                <a href="/web/projects/{{ project_id }}/transactions/?sort=count&amp;period={{ period }}"
+                <a href="/web/projects/{{ project_id }}/transactions/?sort=count{{ base_qs }}"
                    {% if sort == "count" %}class="active-sort"{% endif %}>{{ chrome.t("transactions-col-count") }}</a>
               </th>
               <th class="col-narrow">{{ chrome.t("transactions-col-users") }}</th>

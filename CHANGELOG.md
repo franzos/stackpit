@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.4.4] - 2026-09-17
+
+### Security
+- Updated rustls for RUSTSEC-2026-0285
+
 ## [0.4.3] - 2026-09-16
 
 ### Changed

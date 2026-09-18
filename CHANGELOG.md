@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.5] - 2026-09-18
+
+### Added
+- Trace page showing every project on a trace, not just one
+- Project legend and a `?projects=` filter on the trace page
+- Per-project trace pages link to the full trace when other projects appear on it
+
+### Fixed
+- Pasting the id of a trace that spans several projects fell through to the event list
+- Trace ids that were not a full 32 hex characters rendered a page instead of a 404
+
+### Changed
+- Transactions store their span id, parent span id and start time as columns
+
 ## [0.4.4] - 2026-09-17
 
 ### Security

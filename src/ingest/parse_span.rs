@@ -51,7 +51,7 @@ pub(crate) fn extract_embedded_spans_from_value(json: &Value) -> Vec<EmbeddedSpa
                 payload: serde_json::to_vec(child).unwrap_or_default(),
                 timestamp: child
                     .get("timestamp")
-                    .and_then(Value::as_f64)
+                    .and_then(timestamp_secs)
                     .map(|f| f.round() as i64),
                 fields,
             })
@@ -95,9 +95,21 @@ pub(crate) fn extract_span_fields(payload: &[u8]) -> SpanFields {
 
 /// Extract span fields from an already-parsed JSON object (standalone span or
 /// an embedded child span of a transaction).
+/// Seconds since the epoch from either form the SDKs send: a float, or an
+/// RFC 3339 string (sentry-native).
+fn timestamp_secs(v: &Value) -> Option<f64> {
+    match v {
+        Value::Number(n) => n.as_f64(),
+        Value::String(s) => chrono::DateTime::parse_from_rfc3339(s)
+            .ok()
+            .map(|t| t.timestamp_micros() as f64 / 1_000_000.0),
+        _ => None,
+    }
+}
+
 pub(crate) fn extract_span_fields_from_value(v: &Value) -> SpanFields {
-    let start_f = v.get("start_timestamp").and_then(Value::as_f64);
-    let end_f = v.get("timestamp").and_then(Value::as_f64);
+    let start_f = v.get("start_timestamp").and_then(timestamp_secs);
+    let end_f = v.get("timestamp").and_then(timestamp_secs);
 
     let duration_ms = match (end_f, start_f) {
         (Some(end), Some(start)) => Some(((end - start) * 1000.0) as i64),
@@ -139,5 +151,31 @@ pub(crate) fn extract_span_fields_from_value(v: &Value) -> SpanFields {
             }),
         duration_ms,
         start_ms,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn rfc3339_span_timestamps_yield_a_duration() {
+        let span = json!({
+            "span_id": "3622ed28e50b40aa",
+            "start_timestamp": "2026-09-18T12:20:36.443124Z",
+            "timestamp": "2026-09-18T12:20:36.550913Z"
+        });
+        let fields = extract_span_fields_from_value(&span);
+        assert_eq!(fields.duration_ms, Some(107));
+        assert_eq!(fields.start_ms, Some(1789734036443));
+    }
+
+    #[test]
+    fn numeric_span_timestamps_still_parse() {
+        let span = json!({"span_id": "3622ed28e50b40aa", "start_timestamp": 1.0, "timestamp": 1.25});
+        let fields = extract_span_fields_from_value(&span);
+        assert_eq!(fields.duration_ms, Some(250));
+        assert_eq!(fields.start_ms, Some(1000));
     }
 }

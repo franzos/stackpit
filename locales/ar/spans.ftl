@@ -84,3 +84,27 @@ trace-detail-span-count = { $count ->
     [many] { $count } امتدادًا
    *[other] { $count } امتداد
 }
+trace-detail-legend-heading = المشاريع
+trace-detail-filter-active = مُصفّى
+trace-detail-filter-clear = عرض الكل
+trace-detail-col-project = المشروع
+trace-detail-parent-not-in-view = الامتداد الأصل خارج العرض
+trace-detail-txn-badge = معاملة
+trace-detail-other-projects-link = عرض التتبّع كاملًا
+trace-detail-other-projects-transactions = { $count ->
+    [zero] لا معاملات إضافية
+    [one] معاملة إضافية واحدة
+    [two] معاملتان إضافيتان
+    [few] { $count } معاملات إضافية
+    [many] { $count } معاملةً إضافية
+   *[other] { $count } معاملة إضافية
+}
+trace-detail-other-projects-count = { $count ->
+    [zero] في لا مشاريع أخرى
+    [one] في مشروع آخر
+    [two] في مشروعين آخرين
+    [few] في { $count } مشاريع أخرى
+    [many] في { $count } مشروعًا آخر
+   *[other] في { $count } مشروع آخر
+}
+trace-detail-view-events = كل الأحداث في هذا التتبّع

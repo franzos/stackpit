@@ -41,3 +41,5 @@ transactions-detail-count = { $count ->
    *[other] { $count } مثيل
 }
 transactions-detail-failure-label = الإخفاقات
+transactions-list-search-placeholder = البحث في أسماء المعاملات…
+transactions-list-search-label = البحث في أسماء المعاملات

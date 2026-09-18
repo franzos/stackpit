@@ -153,3 +153,5 @@ user-reports-count = { $count ->
     [one] { $count } rapport
    *[other] { $count } rapports
 }
+events-list-trace-placeholder = ID de trace
+events-list-filter-trace = Filtrer par trace

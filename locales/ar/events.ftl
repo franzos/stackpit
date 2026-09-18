@@ -178,3 +178,5 @@ user-reports-count = { $count ->
     [many] { $count } تقريرًا
    *[other] { $count } تقرير
 }
+events-list-trace-placeholder = معرّف التتبّع
+events-list-filter-trace = تصفية حسب التتبّع

@@ -146,3 +146,5 @@ user-reports-delete-all-confirm = { $count ->
 user-reports-count = { $count ->
    *[other] { $count } รายงาน
 }
+events-list-trace-placeholder = รหัสเทรซ
+events-list-filter-trace = กรองตามเทรซ

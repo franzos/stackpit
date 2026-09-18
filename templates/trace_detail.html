@@ -23,9 +23,9 @@
       <h1 class="text-mono">{{ trace_id|truncate_id }}</h1>
       <p class="text-muted text-[13px] mt-1 text-mono break-all">
         {{ chrome.t("trace-detail-trace-id-label") }} {{ trace_id }} ·
-        {{- " " }}{{ chrome.tv_count("trace-detail-span-count", span_total as i64) }}
-        {% if span_total > 0 %}· {{ waterfall.total_ms|format_duration }} {{ chrome.t("trace-detail-total") }}{% endif %}
-        {% if waterfall.truncated %}· {{ chrome.t("trace-detail-showing-first") }} {{ span_shown }} {{ chrome.t("trace-detail-of") }} {{ span_total }}{% endif %}
+        {{- " " }}{{ chrome.tv_count("trace-detail-span-count", view.span_total as i64) }}
+        {% if view.span_total > 0 %}· {{ view.waterfall.total_ms|format_duration }} {{ chrome.t("trace-detail-total") }}{% endif %}
+        {% if view.waterfall.truncated %}· {{ chrome.t("trace-detail-showing-first") }} {{ view.span_shown }} {{ chrome.t("trace-detail-of") }} {{ view.span_total }}{% endif %}
       </p>
       <p class="text-[13px] mt-1">
         <a class="breadcrumb-link"
@@ -34,176 +34,16 @@
     </div>
   </div>
 
-  {# correlated errors: surfaced above the waterfall so failures in the trace
-     are seen first, each linking to its event #}
-  {% if !errors.is_empty() %}
-    <div class="card overflow-hidden mb-4"
-         style="border-inline-start: 3px solid var(--color-error)">
-      <div class="card-pad pb-0">
-        <h2 class="text-[14px] font-semibold">{{ chrome.t("trace-detail-correlated-errors") }}</h2>
+  {# this trace continues in projects the caller can also read #}
+  {% match view.other_projects %}
+    {% when Some with (b) %}
+      <div class="card card-pad mb-4 text-[13px]">
+        {{ chrome.tv_count("trace-detail-other-projects-transactions", b.transactions as i64) }}
+        {{ chrome.tv_count("trace-detail-other-projects-count", b.projects as i64) }} ·
+        {{- " " }}<a class="breadcrumb-link" href="/web/traces/{{ trace_id }}/">{{ chrome.t("trace-detail-other-projects-link") }}</a>
       </div>
-      <div class="table-wrap">
-        <table class="table">
-          <thead>
-            <tr>
-              <th>{{ chrome.t("trace-detail-col-level") }}</th>
-              <th>{{ chrome.t("trace-detail-col-title") }}</th>
-              <th>{{ chrome.t("trace-detail-col-timestamp") }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for err in errors %}
-              <tr>
-                <td>
-                  {% match err.level %}{% when Some with (lvl) %}<span class="badge badge-{{ lvl }}">{{ lvl }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
-              </td>
-              <td class="truncate-cell">
-                <a class="breadcrumb-link"
-                   href="/web/projects/{{ project_id }}/events/{{ err.event_id }}/">
-                  {% match err.title %}{% when Some with (t) %}{{ t }}{% when None %}<span class="text-mono">{{ err.event_id|truncate_id }}</span>{% endmatch %}
-              </a>
-            </td>
-            <td class="text-muted">
-              <time datetime="{{ err.timestamp|format_ts }}"
-                    title="{{ err.timestamp|format_ts }}">{{ chrome.rel_time(err.timestamp) }}</time>
-            </td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</div>
-{% endif %}
+    {% when None %}
+  {% endmatch %}
 
-{% if waterfall.rows.is_empty() %}
-    <div class="card">
-      <p class="empty">{{ chrome.t("trace-detail-empty") }}</p>
-    </div>
-  {% else %}
-    <div class="card card-pad">
-      {# column header + time axis, aligned with the span rows below #}
-      <div class="flex items-end gap-3 pb-2 text-[11px] text-muted uppercase tracking-wide"
-           style="border-bottom: 1px solid var(--color-outline-variant)">
-        <div class="shrink-0" style="width: 260px">{{ chrome.t("trace-detail-col-span") }}</div>
-        <div class="grow relative" style="height: 14px">
-          <span class="absolute bottom-0 text-tabular normal-case" style="left: 0">0ms</span>
-          {% if !waterfall.compressed %}
-            <span class="absolute bottom-0 text-tabular normal-case"
-                  style="left: 25%;
-                         transform: translateX(-50%)">{{ (waterfall.total_ms / 4)|format_duration }}</span>
-            <span class="absolute bottom-0 text-tabular normal-case"
-                  style="left: 50%;
-                         transform: translateX(-50%)">{{ (waterfall.total_ms / 2)|format_duration }}</span>
-            <span class="absolute bottom-0 text-tabular normal-case"
-                  style="left: 75%;
-                         transform: translateX(-50%)">{{ (waterfall.total_ms * 3 / 4)|format_duration }}</span>
-          {% endif %}
-          <span class="absolute bottom-0 text-tabular normal-case" style="right: 0">{{ waterfall.total_ms|format_duration }}</span>
-        </div>
-        <div class="shrink-0 text-end" style="width: 60px">{{ chrome.t("trace-detail-col-duration") }}</div>
-      </div>
-
-      {% if waterfall.compressed %}
-        {# idle gaps collapsed on the axis; mark where and how much was removed #}
-        <div class="flex items-center gap-3 py-1 text-[10px] text-muted"
-             style="border-bottom: 1px solid var(--color-outline-variant)">
-          <div class="shrink-0" style="width: 260px">{{ chrome.t("trace-detail-compressed-note") }}</div>
-          <div class="grow relative" style="height: 14px">
-            {% for gap in waterfall.gaps %}
-              <span class="absolute bottom-0 text-tabular"
-                    title="{{ chrome.t("trace-detail-gap-title") }}"
-                    style="left: {{ gap.at_pct }}%;
-                           transform: translateX(-50%);
-                           padding: 0 3px;
-                           border-inline: 1px dashed var(--color-outline-variant)">{{ gap.real_ms|format_duration }}</span>
-            {% endfor %}
-          </div>
-          <div class="shrink-0" style="width: 60px"></div>
-        </div>
-      {% endif %}
-
-      {# root row: the transaction this trace belongs to, spanning the full width #}
-      {% match root %}
-      {% when Some with (r) %}
-      <div class="flex items-center gap-3 py-2"
-           style="border-bottom: 1px solid var(--color-outline-variant)">
-        <div class="shrink-0 font-semibold text-[12px]"
-             style="width: 260px;
-                    overflow: hidden;
-                    text-overflow: ellipsis;
-                    white-space: nowrap">
-          {% match r.name %}{% when Some with (n) %}{{ n }}{% when None %}<span class="text-muted">{{ chrome.t("trace-detail-root-fallback") }}</span>{% endmatch %}
-      </div>
-      <div class="grow relative"
-           style="height: 20px;
-                  background-image: linear-gradient(to right, var(--color-outline-variant) 1px, transparent 1px);
-                  background-size: 25% 100%">
-        <div class="rounded-sm"
-             style="position: absolute;
-                    top: 2px;
-                    left: 0;
-                    width: {{ waterfall.root_width_pct }}%;
-                    height: 16px;
-                    background-color: var(--color-primary);
-                    opacity: 0.85"></div>
-    </div>
-    <div class="shrink-0 text-end text-tabular text-[12px]"
-         style="width: 60px">
-      {% match r.duration_ms %}{% when Some with (ms) %}{{ ms|format_duration }}{% when None %}{{ waterfall.total_ms|format_duration }}{% endmatch %}
-  </div>
-</div>
-{% when None %}
-{% endmatch %}
-
-{# one row per span: label · timeline bar · duration, expandable for detail #}
-<div class="text-[12px]">
-  {% for row in waterfall.rows %}
-    <details class="span-row">
-      <summary class="flex items-center gap-3 py-1 cursor-pointer select-none"
-               style="border-bottom: 1px solid var(--color-outline-variant)">
-        <div class="shrink-0"
-             style="width: 260px;
-                    padding-left: {{ row.depth * 16 }}px;
-                    overflow: hidden;
-                    text-overflow: ellipsis;
-                    white-space: nowrap">
-          {% if row.is_error() %}<span title="{{ chrome.t("trace-detail-error-title") }}"
-        style="color: var(--color-error)">●</span>{% endif %}
-          {% match row.op %}{% when Some with (op) %}<span class="font-medium text-mono">{{ op }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
-        {% match row.description %}{% when Some with (d) %} <span class="text-muted">{{ d }}</span>{% when None %}{% endmatch %}
-    </div>
-    <div class="grow relative"
-         style="height: 20px;
-                background-image: linear-gradient(to right, var(--color-outline-variant) 1px, transparent 1px);
-                background-size: 25% 100%">
-      <div class="rounded-sm"
-           title="{% match row.op %}{% when Some with (op) %}{{ op }}{% when None %}{{ chrome.t("trace-detail-span-fallback") }}{% endmatch %} · {% match row.duration_ms %}{% when Some with (ms) %}{{ ms|format_duration }}{% when None %}?{% endmatch %}"
-           style="position: absolute;
-                  top: 2px;
-                  left: {{ row.offset_pct }}%;
-                  width: {{ row.width_pct }}%;
-                  height: 16px;
-                  background-color: {{ row.bar_color() }}"></div>
-  </div>
-  <div class="shrink-0 text-end text-tabular text-muted" style="width: 60px">
-    {% match row.duration_ms %}{% when Some with (ms) %}{{ ms|format_duration }}{% when None %}—{% endmatch %}
-  </div>
-</summary>
-<div class="span-detail">
-  <dl class="meta-grid">
-    <dt>{{ chrome.t("trace-detail-lbl-span-id") }}</dt>
-    <dd class="text-mono break-all">{{ row.span_id }}</dd>
-    {% match row.parent_span_id %}{% when Some with (p) %}<dt>{{ chrome.t("trace-detail-lbl-parent") }}</dt><dd class="text-mono break-all">{{ p }}</dd>{% when None %}{% endmatch %}
-    {% match row.op %}{% when Some with (op) %}<dt>{{ chrome.t("spans-col-op") }}</dt><dd class="text-mono">{{ op }}</dd>{% when None %}{% endmatch %}
-    {% match row.description %}{% when Some with (d) %}<dt>{{ chrome.t("spans-col-description") }}</dt><dd class="break-all">{{ d }}</dd>{% when None %}{% endmatch %}
-    {% match row.status %}{% when Some with (st) %}<dt>{{ chrome.t("trace-detail-lbl-status") }}</dt><dd>{{ st }}</dd>{% when None %}{% endmatch %}
-    {% match row.start_offset_ms %}{% when Some with (ms) %}<dt>{{ chrome.t("trace-detail-lbl-start") }}</dt><dd class="text-tabular">+{{ ms|format_duration }}</dd>{% when None %}{% endmatch %}
-    {% match row.duration_ms %}{% when Some with (ms) %}<dt>{{ chrome.t("spans-col-duration") }}</dt><dd class="text-tabular">{{ ms|format_duration }}</dd>{% when None %}{% endmatch %}
-  </dl>
-</div>
-</details>
-{% endfor %}
-</div>
-</div>
-{% endif %}
+  {% include "_trace_waterfall_body.html" %}
 {% endblock %}

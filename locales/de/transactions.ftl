@@ -38,3 +38,5 @@ transactions-detail-count = { $count ->
     [one] { $count } Instanz
    *[other] { $count } Instanzen
 }
+transactions-list-search-placeholder = Transaktionsnamen suchen…
+transactions-list-search-label = Transaktionsnamen suchen

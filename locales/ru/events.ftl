@@ -167,3 +167,5 @@ user-reports-count = { $count ->
     [many] { $count } отчётов
    *[other] { $count } отчёта
 }
+events-list-trace-placeholder = ID трейса
+events-list-filter-trace = Фильтр по трейсу

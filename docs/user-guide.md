@@ -37,6 +37,8 @@ Sort by events, first seen, or last seen. If you arrived by clicking a tag value
 
 Paste a trace id into the search box and you land on that trace's waterfall instead of the list. A prefix works too, as long as it matches only one trace. The same holds for the cross-project Events search, which also takes a Trace ID filter to list every event on one trace.
 
+One user flow often crosses several applications, each with its own project. Since the SDKs propagate the trace id across the hop, `/web/traces/{trace_id}/` draws the whole thing on one waterfall: every project you can read, with each application's transaction nested under the outbound `http.client` span of the app that called it. A legend above the waterfall lists the contributing projects with their transaction counts, and each entry toggles that project in the `?projects=` filter — the URL is the saved view, so it's bookmarkable and shareable, and nothing is stored on the server. A row whose parent span isn't on screen — filtered out, in a project you can't read, or never reported — is drawn as a root and marked "parent span not in view". The per-project trace page is unchanged and still where the links land; when other projects you can read also appear on the trace, it shows a banner with the count and a link to the full view.
+
 ## Reading an issue
 
 Click an issue to open it. The top-right corner has the status actions: Resolve or Ignore an unresolved issue, or Re-open / Un-ignore one that's already been actioned.

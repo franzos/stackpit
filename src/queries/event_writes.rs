@@ -24,10 +24,10 @@ use crate::ingest::parse_span::{
     extract_span_fields, extract_span_fields_from_value, SpanFields, MAX_EMBEDDED_SPANS,
 };
 
-/// Max events per multi-row INSERT chunk. 21 bind params per event;
-/// SQLite's SQLITE_MAX_VARIABLE_NUMBER is 32766, so 32766 / 21 = 1560.
-/// We use 1500 for a comfortable margin.
-const BULK_CHUNK_SIZE: usize = 1500;
+/// Max events per multi-row INSERT chunk. 24 bind params per event;
+/// SQLite's SQLITE_MAX_VARIABLE_NUMBER is 32766, so 32766 / 24 = 1365.
+/// We use 1300 for a comfortable margin.
+const BULK_CHUNK_SIZE: usize = 1300;
 
 /// Max spans per multi-row INSERT chunk. 14 bind params per span;
 /// 32766 / 14 = 2340, use 2300 for margin.
@@ -48,7 +48,7 @@ const TAG_CHUNK_SIZE: usize = 6000;
 
 /// Single source of truth for the `events` insert column list. The bind order in
 /// `push_event_row` must match this exactly.
-const EVENT_COLUMNS: &str = "event_id, item_type, payload, project_id, public_key, timestamp, level, platform, release, environment, server_name, transaction_name, title, sdk_name, sdk_version, fingerprint, monitor_slug, session_status, parent_event_id, trace_id, duration_ms";
+const EVENT_COLUMNS: &str = "event_id, item_type, payload, project_id, public_key, timestamp, level, platform, release, environment, server_name, transaction_name, title, sdk_name, sdk_version, fingerprint, monitor_slug, session_status, parent_event_id, trace_id, duration_ms, span_id, parent_span_id, start_ms";
 
 /// Push one event row's bind values in `EVENT_COLUMNS` order. Shared by the
 /// single-row and bulk insert paths so the column/bind order lives in one place.
@@ -77,6 +77,9 @@ fn push_event_row(
     b.push_bind(&event.parent_event_id);
     b.push_bind(&event.trace_id);
     b.push_bind(event.duration_ms);
+    b.push_bind(&event.span_id);
+    b.push_bind(&event.parent_span_id);
+    b.push_bind(event.start_ms);
 }
 
 /// Insert an event row (INSERT OR IGNORE). Returns `true` if it was actually new.

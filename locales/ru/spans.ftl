@@ -81,3 +81,23 @@ trace-detail-span-count = { $count ->
     [many] { $count } спанов
    *[other] { $count } спана
 }
+trace-detail-legend-heading = Проекты
+trace-detail-filter-active = отфильтровано
+trace-detail-filter-clear = Показать все
+trace-detail-col-project = Проект
+trace-detail-parent-not-in-view = Родительский спан вне представления
+trace-detail-txn-badge = Транзакция
+trace-detail-other-projects-link = Посмотреть весь трейс
+trace-detail-other-projects-transactions = { $count ->
+    [one] ещё { $count } транзакция
+    [few] ещё { $count } транзакции
+    [many] ещё { $count } транзакций
+   *[other] ещё { $count } транзакции
+}
+trace-detail-other-projects-count = { $count ->
+    [one] в { $count } другом проекте
+    [few] в { $count } других проектах
+    [many] в { $count } других проектах
+   *[other] в { $count } других проектах
+}
+trace-detail-view-events = Все события этого трейса

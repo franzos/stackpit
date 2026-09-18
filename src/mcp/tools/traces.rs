@@ -191,7 +191,7 @@ pub(super) async fn get_trace(
     // spans projects, and this caller is only entitled to one of them.
     let (spans, errors, root) = tokio::join!(
         crate::queries::spans::get_trace_spans_for_project(&ctx.pool, project_id as u64, trace_id),
-        crate::queries::spans::get_trace_errors(&ctx.pool, project_id as u64, trace_id),
+        crate::queries::spans::get_trace_errors_for_project(&ctx.pool, project_id as u64, trace_id),
         crate::queries::spans::get_trace_root(&ctx.pool, project_id as u64, trace_id),
     );
     let spans = spans.map_err(|e| internal("get_trace", format!("{e:#}")))?;

@@ -36,3 +36,5 @@ transactions-detail-count = { $count ->
    *[other] { $count } อินสแตนซ์
 }
 transactions-detail-failure-label = ล้มเหลว
+transactions-list-search-placeholder = ค้นหาชื่อทรานแซกชัน…
+transactions-list-search-label = ค้นหาชื่อทรานแซกชัน

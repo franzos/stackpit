@@ -71,3 +71,17 @@ trace-detail-col-timestamp = ประทับเวลา
 trace-detail-span-count = { $count ->
    *[other] { $count } สแปน
 }
+trace-detail-legend-heading = โปรเจกต์
+trace-detail-filter-active = กรองแล้ว
+trace-detail-filter-clear = แสดงทั้งหมด
+trace-detail-col-project = โปรเจกต์
+trace-detail-parent-not-in-view = ไม่พบสแปนหลักในมุมมองนี้
+trace-detail-txn-badge = ทรานแซกชัน
+trace-detail-other-projects-link = ดูเทรซทั้งหมด
+trace-detail-other-projects-transactions = { $count ->
+   *[other] อีก { $count } ทรานแซกชัน
+}
+trace-detail-other-projects-count = { $count ->
+   *[other] ใน { $count } โปรเจกต์อื่น
+}
+trace-detail-view-events = เหตุการณ์ทั้งหมดในเทรซนี้

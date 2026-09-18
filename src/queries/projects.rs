@@ -507,6 +507,64 @@ pub async fn project_label(pool: &crate::db::DbPool, project_id: u64) -> String 
     stored.unwrap_or_else(|| format!("Project {}", project_id))
 }
 
+/// A project's display label together with the org that owns it, for the
+/// cross-project trace legend.
+#[derive(Debug, Clone)]
+pub struct ProjectLabel {
+    pub label: String,
+    pub org_id: i64,
+    pub org_name: String,
+}
+
+/// Labels for a set of projects in one read. Ids that no longer resolve are
+/// absent from the map; callers fall back to `Project {id}` the way
+/// `project_label` does.
+///
+/// Scope-blind on purpose: it answers for any id it is given, so a project name
+/// and its org's name are an existence oracle. Callers must pass only ids that
+/// came back from a scoped read, never ids taken from the request.
+pub async fn labels_for(
+    pool: &crate::db::DbPool,
+    project_ids: &[i64],
+) -> Result<std::collections::HashMap<i64, ProjectLabel>> {
+    if project_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new(
+        "SELECT p.project_id, p.name, p.org_id, o.name AS org_name
+         FROM projects p LEFT JOIN organizations o ON o.org_id = p.org_id
+         WHERE p.project_id IN (",
+    );
+    let mut sep = qb.separated(", ");
+    for id in project_ids {
+        sep.push_bind(*id);
+    }
+    qb.push(")");
+
+    let rows = qb.build().fetch_all(pool).await?;
+    Ok(rows
+        .iter()
+        .map(|row| {
+            let project_id: i64 = row.get("project_id");
+            let name: Option<String> = row.get("name");
+            let org_name: Option<String> = row.get("org_name");
+            let org_id: i64 = row.get("org_id");
+            (
+                project_id,
+                ProjectLabel {
+                    label: name
+                        .filter(|n| !n.trim().is_empty())
+                        .unwrap_or_else(|| format!("Project {project_id}")),
+                    org_id,
+                    org_name: org_name
+                        .filter(|n| !n.trim().is_empty())
+                        .unwrap_or_else(|| format!("Org {org_id}")),
+                },
+            )
+        })
+        .collect())
+}
+
 /// Count distinct transaction names for a project's nav badge.
 pub async fn count_transactions(pool: &crate::db::DbPool, project_id: u64) -> Result<u64> {
     let row = sqlx::query(sql!(

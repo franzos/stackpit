@@ -38,3 +38,5 @@ transactions-detail-count = { $count ->
    *[other] { $count } istanze
 }
 transactions-detail-failure-label = Errori
+transactions-list-search-placeholder = Cerca nomi di transazione…
+transactions-list-search-label = Cerca nomi di transazione

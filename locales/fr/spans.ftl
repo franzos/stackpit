@@ -75,3 +75,19 @@ trace-detail-span-count = { $count ->
     [one] { $count } span
    *[other] { $count } spans
 }
+trace-detail-legend-heading = Projets
+trace-detail-filter-active = filtré
+trace-detail-filter-clear = Tout afficher
+trace-detail-col-project = Projet
+trace-detail-parent-not-in-view = Span parent hors de la vue
+trace-detail-txn-badge = Transaction
+trace-detail-other-projects-link = Voir la trace complète
+trace-detail-other-projects-transactions = { $count ->
+    [one] { $count } transaction de plus
+   *[other] { $count } transactions de plus
+}
+trace-detail-other-projects-count = { $count ->
+    [one] dans { $count } autre projet
+   *[other] dans { $count } autres projets
+}
+trace-detail-view-events = Tous les événements de cette trace

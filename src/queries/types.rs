@@ -579,6 +579,7 @@ pub struct SpanAggregation {
 
 #[derive(Debug, Clone)]
 pub struct TraceSpan {
+    pub project_id: i64,
     pub span_id: String,
     pub parent_span_id: Option<String>,
     pub op: Option<String>,
@@ -588,10 +589,26 @@ pub struct TraceSpan {
     pub start_ms: Option<i64>,
 }
 
+/// A transaction on a trace, as a waterfall row. Its `parent_span_id` is
+/// usually the `http.client` span of the calling app, which lives in another
+/// project; that is what stitches a trace across projects.
+#[derive(Debug, Clone)]
+pub struct TraceTransaction {
+    pub event_id: String,
+    pub project_id: i64,
+    pub transaction_name: Option<String>,
+    pub duration_ms: Option<i64>,
+    pub span_id: Option<String>,
+    pub parent_span_id: Option<String>,
+    pub start_ms: Option<i64>,
+}
+
 /// One rendered row of a span waterfall. Geometry is pre-computed as
 /// percentages so the template only emits inline `margin-left`/`width`.
 #[derive(Debug, Clone)]
 pub struct WaterfallRow {
+    pub project_id: i64,
+    pub kind: crate::queries::spans::SpanKind,
     pub span_id: String,
     pub parent_span_id: Option<String>,
     pub depth: usize,
@@ -603,6 +620,8 @@ pub struct WaterfallRow {
     pub start_offset_ms: Option<i64>,
     pub offset_pct: f64,
     pub width_pct: f64,
+    /// Errors captured on this exact span, counted by `attach_error_counts`.
+    pub error_count: usize,
 }
 
 impl WaterfallRow {
@@ -618,6 +637,10 @@ impl WaterfallRow {
     /// True when the span carries a non-ok, non-neutral status.
     pub fn is_error(&self) -> bool {
         matches!(self.status.as_deref(), Some(s) if !matches!(s, "ok" | "cancelled" | "unknown"))
+    }
+
+    pub fn is_transaction(&self) -> bool {
+        self.kind == crate::queries::spans::SpanKind::Transaction
     }
 }
 
@@ -657,9 +680,12 @@ pub struct Waterfall {
 #[derive(Debug)]
 pub struct TraceError {
     pub event_id: String,
+    pub project_id: i64,
     pub title: Option<String>,
     pub level: Option<String>,
     pub timestamp: i64,
+    /// The span active when the error was captured, when the SDK reported one.
+    pub span_id: Option<String>,
 }
 
 #[derive(Debug)]

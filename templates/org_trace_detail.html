@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+
+{% block title %}{{ chrome.t("trace-detail-title-prefix") }} {{ trace_id|truncate_id }} {{ chrome.t("trace-detail-title-suffix") }}{% endblock %}
+
+{% block sidebar_nav %}
+  {% call m::top_sidebar(chrome, "traces") %}
+  {% endcall %}
+{% endblock %}
+
+{% block breadcrumbs %}
+  <span class="breadcrumb-sep">/</span>
+  <span class="breadcrumb-current text-mono">{{ trace_id|truncate_id }}</span>
+{% endblock %}
+
+{% block content %}
+  <div class="page-header">
+    <div>
+      <h1 class="text-mono">{{ trace_id|truncate_id }}</h1>
+      <p class="text-muted text-[13px] mt-1 text-mono break-all">
+        {{ chrome.t("trace-detail-trace-id-label") }} {{ trace_id }} ·
+        {{- " " }}{{ chrome.tv_count("trace-detail-span-count", view.span_total as i64) }}
+        {% if view.span_total > 0 %}· {{ view.waterfall.total_ms|format_duration }} {{ chrome.t("trace-detail-total") }}{% endif %}
+        {% if view.waterfall.truncated %}· {{ chrome.t("trace-detail-showing-first") }} {{ view.span_shown }} {{ chrome.t("trace-detail-of") }} {{ view.span_total }}{% endif %}
+      </p>
+      <p class="text-[13px] mt-1">
+        <a class="breadcrumb-link"
+           href="/web/events/?trace={{ trace_id|urlencode }}&amp;item_type=">{{ chrome.t("trace-detail-view-events") }}</a>
+      </p>
+    </div>
+  </div>
+
+  {# legend: every contributing project, each entry toggling itself in ?projects= #}
+  {% if !view.legend.is_empty() %}
+    <div class="card card-pad mb-4">
+      <div class="flex items-center gap-2 flex-wrap text-[12px]">
+        <span class="text-muted uppercase tracking-wide text-[11px]">{{ chrome.t("trace-detail-legend-heading") }}</span>
+        {% for l in view.legend %}
+          <a href="/web/traces/{{ trace_id }}/{{ l.toggle_qs }}"
+             class="badge"
+             data-project="{{ l.project_id }}"
+             style="background-color: {{ l.color }}{% if l.selected %}1a{% else %}00{% endif %};
+                    color: {% if l.selected %}{{ l.color }}{% else %}var(--color-on-surface-variant){% endif %};
+                    border: 1px solid {{ l.color }}59">
+            <bdi>{{ l.label }}</bdi>
+            {%- match l.org_name %}{% when Some with (o) %} <span class="text-muted">· <bdi>{{ o }}</bdi></span>{% when None %}{% endmatch %}
+            <span class="text-tabular">({{ l.transaction_count }})</span>
+          </a>
+        {% endfor %}
+        {% if filtered %}
+          <span class="text-muted">{{ chrome.t("trace-detail-filter-active") }}</span>
+          <a class="breadcrumb-link" href="/web/traces/{{ trace_id }}/">{{ chrome.t("trace-detail-filter-clear") }}</a>
+        {% endif %}
+      </div>
+    </div>
+  {% endif %}
+
+  {% include "_trace_waterfall_body.html" %}
+{% endblock %}

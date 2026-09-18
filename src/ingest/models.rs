@@ -118,6 +118,14 @@ pub struct StorableEvent {
     pub duration_ms: Option<i64>,
     /// `contexts.trace.status`; drives transaction failure classification.
     pub trace_status: Option<String>,
+    /// `contexts.trace.span_id`: the transaction's own span, or for an error the
+    /// span that was active at capture.
+    pub span_id: Option<String>,
+    /// `contexts.trace.parent_span_id`; for a transaction this is the calling
+    /// app's `http.client` span, which is what stitches a trace across projects.
+    pub parent_span_id: Option<String>,
+    /// Absolute transaction start in epoch milliseconds, clock-drift corrected.
+    pub start_ms: Option<i64>,
     /// Child spans pre-extracted from a transaction payload at parse time;
     /// `None` when the event didn't come through envelope parsing, so the
     /// writer flush falls back to re-parsing the payload.
@@ -307,6 +315,9 @@ impl StorableEvent {
             trace_id: None,
             duration_ms: None,
             trace_status: None,
+            span_id: None,
+            parent_span_id: None,
+            start_ms: None,
             embedded_spans: None,
             span_fields: None,
             log_entries: None,
@@ -392,6 +403,9 @@ impl StorableEvent {
             trace_id: None,
             duration_ms: None,
             trace_status: None,
+            span_id: None,
+            parent_span_id: None,
+            start_ms: None,
             embedded_spans: None,
             span_fields: None,
             log_entries: None,

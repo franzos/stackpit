@@ -623,6 +623,42 @@ mod tests {
         assert_eq!(tag_count, 2);
     }
 
+    /// 030 is additive and deliberately does not backfill: a transaction
+    /// ingested before it must keep reading NULL rather than fail the migration.
+    #[tokio::test]
+    async fn migration_030_adds_nullable_trace_columns_and_leaves_old_rows_null() {
+        let pool = seeded_at_028().await;
+        run_migrations_to(&pool, 29).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, trace_id)
+             VALUES ('e1', 'transaction', x'00', 900, 'pk', 1700000000, 'aabbccddeeff00112233445566778899')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        run_migrations_to(&pool, 30).await.unwrap();
+
+        let (span_id, parent_span_id, start_ms): (Option<String>, Option<String>, Option<i64>) =
+            sqlx::query_as(
+                "SELECT span_id, parent_span_id, start_ms FROM events WHERE event_id = 'e1'",
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("030 must add all three columns");
+        assert_eq!((span_id, parent_span_id, start_ms), (None, None, None));
+
+        // Nullable, so a row can be written without them.
+        sqlx::query(
+            "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp)
+             VALUES ('e2', 'error', x'00', 900, 'pk', 1700000001)",
+        )
+        .execute(&pool)
+        .await
+        .expect("the three new columns must be nullable");
+    }
+
     /// SQLite drops indexes with the table, so the rebuild has to recreate every one.
     #[tokio::test]
     async fn migration_029_recreates_every_index() {

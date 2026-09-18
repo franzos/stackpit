@@ -105,9 +105,10 @@ pub(crate) fn canonical_org_ids(mut ids: Vec<i64>) -> Vec<i64> {
 /// Push `<column> IN (SELECT project_id FROM projects WHERE org_id IN (...))`,
 /// binding every id. The caller supplies its own `WHERE`/`AND`, and must have
 /// short-circuited an empty list: `IN ()` is invalid SQL on both backends.
+/// `project_column` is `&'static str` so no caller can route input into the SQL text.
 pub(crate) fn push_org_scope_predicate(
     qb: &mut sqlx::QueryBuilder<crate::db::Db>,
-    project_column: &str,
+    project_column: &'static str,
     org_ids: &[i64],
 ) {
     debug_assert!(!org_ids.is_empty(), "an empty org list must short-circuit");

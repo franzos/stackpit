@@ -6,7 +6,7 @@ use crate::db::DbRowExt;
 
 use super::types::{
     Page, PagedResult, SpanAggRow, SpanAggregation, SpanSummary, TraceError, TraceSpan,
-    TraceSummary, Waterfall, WaterfallGap, WaterfallRow,
+    TraceSummary, TraceTransaction, Waterfall, WaterfallGap, WaterfallRow,
 };
 
 /// `None` means all time. Bound as 0 rather than branching the SQL: event
@@ -157,30 +157,150 @@ pub async fn aggregate_spans(
     Ok(fold_span_rows(&rows))
 }
 
-/// A trace id is shared across projects in a distributed trace, so every read
-/// is project-scoped: a caller entitled to one project must not reach another's
-/// spans by presenting its id.
+/// Which projects' rows a trace read may touch. A trace id is shared across
+/// projects in a distributed trace, so the read has to be scoped: the invariant
+/// is that a read never leaves the caller's scope. An empty list entitles the
+/// caller to nothing, which is not the same as `All`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TraceScope {
+    Projects(Vec<i64>),
+    Orgs(Vec<i64>),
+    All,
+}
+
+impl TraceScope {
+    /// True when the scope selects no rows at all, so the query is skipped
+    /// rather than emitted with no predicate.
+    fn is_empty(&self) -> bool {
+        match self {
+            Self::Projects(ids) | Self::Orgs(ids) => ids.is_empty(),
+            Self::All => false,
+        }
+    }
+
+    /// Push `AND <predicate>` for everything but `All`, which needs none.
+    /// `project_column` is a caller-controlled literal, never user input.
+    fn push_predicate(
+        &self,
+        qb: &mut sqlx::QueryBuilder<crate::db::Db>,
+        project_column: &'static str,
+    ) {
+        match self {
+            Self::All => {}
+            Self::Orgs(org_ids) => {
+                qb.push(" AND ");
+                super::push_org_scope_predicate(qb, project_column, org_ids);
+            }
+            Self::Projects(project_ids) => {
+                qb.push(" AND ");
+                qb.push(project_column);
+                qb.push(" IN (");
+                let mut sep = qb.separated(", ");
+                for id in project_ids {
+                    sep.push_bind(*id);
+                }
+                qb.push(")");
+            }
+        }
+    }
+}
+
+/// Spans on this trace, within the caller's scope (LIMIT 10000 for the whole
+/// trace, not per project).
+pub async fn get_trace_spans(
+    pool: &crate::db::DbPool,
+    trace_id: &str,
+    scope: &TraceScope,
+) -> Result<Vec<TraceSpan>> {
+    if scope.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new(
+        "SELECT project_id, span_id, parent_span_id, op, description, status, duration_ms, start_ms
+         FROM spans WHERE trace_id = ",
+    );
+    qb.push_bind(trace_id.to_string());
+    scope.push_predicate(&mut qb, "project_id");
+    qb.push(" ORDER BY timestamp LIMIT 10000");
+
+    let rows = qb.build().fetch_all(pool).await?;
+    Ok(rows.iter().map(map_trace_span).collect())
+}
+
+/// Every transaction on this trace, within the caller's scope. Oldest first so
+/// the earliest hop leads. The payload is never read: the three stitching
+/// fields are columns.
+pub async fn get_trace_transactions(
+    pool: &crate::db::DbPool,
+    trace_id: &str,
+    scope: &TraceScope,
+) -> Result<Vec<TraceTransaction>> {
+    if scope.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new(
+        "SELECT event_id, project_id, transaction_name, duration_ms, span_id, parent_span_id, start_ms
+         FROM events WHERE item_type = 'transaction' AND trace_id = ",
+    );
+    qb.push_bind(trace_id.to_string());
+    scope.push_predicate(&mut qb, "project_id");
+    qb.push(" ORDER BY timestamp LIMIT 200");
+
+    let rows = qb.build().fetch_all(pool).await?;
+    Ok(rows
+        .iter()
+        .map(|row| TraceTransaction {
+            event_id: row.get("event_id"),
+            project_id: row.get("project_id"),
+            transaction_name: row.get("transaction_name"),
+            duration_ms: row.get("duration_ms"),
+            span_id: row.get("span_id"),
+            parent_span_id: row.get("parent_span_id"),
+            start_ms: row.get("start_ms"),
+        })
+        .collect())
+}
+
+/// Error events sharing this trace_id, within the caller's scope
+/// (LIMIT 50, newest first).
+pub async fn get_trace_errors(
+    pool: &crate::db::DbPool,
+    trace_id: &str,
+    scope: &TraceScope,
+) -> Result<Vec<TraceError>> {
+    if scope.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new(
+        "SELECT event_id, project_id, title, level, timestamp, span_id
+         FROM events WHERE item_type = 'event' AND trace_id = ",
+    );
+    qb.push_bind(trace_id.to_string());
+    scope.push_predicate(&mut qb, "project_id");
+    qb.push(" ORDER BY timestamp DESC LIMIT 50");
+
+    let rows = qb.build().fetch_all(pool).await?;
+    Ok(rows.iter().map(map_trace_error).collect())
+}
+
+/// One project's spans on a trace. The MCP path holds a per-project key, so it
+/// stays project-scoped.
 pub async fn get_trace_spans_for_project(
     pool: &crate::db::DbPool,
     project_id: u64,
     trace_id: &str,
 ) -> Result<Vec<TraceSpan>> {
-    let rows = sqlx::query(sql!(
-        "SELECT span_id, parent_span_id, op, description, status, duration_ms, start_ms
-         FROM spans WHERE project_id = ?1 AND trace_id = ?2
-         ORDER BY timestamp
-         LIMIT 10000"
-    ))
-    .bind(project_id as i64)
-    .bind(trace_id)
-    .fetch_all(pool)
-    .await?;
-
-    Ok(rows.iter().map(map_trace_span).collect())
+    get_trace_spans(
+        pool,
+        trace_id,
+        &TraceScope::Projects(vec![project_id as i64]),
+    )
+    .await
 }
 
 fn map_trace_span(row: &crate::db::DbRow) -> TraceSpan {
     TraceSpan {
+        project_id: row.get("project_id"),
         span_id: row.get("span_id"),
         parent_span_id: row.get("parent_span_id"),
         op: row.get("op"),
@@ -191,32 +311,30 @@ fn map_trace_span(row: &crate::db::DbRow) -> TraceSpan {
     }
 }
 
-/// Error events sharing this trace_id (LIMIT 50, newest first).
-pub async fn get_trace_errors(
+/// One project's correlated errors. Same project scoping as
+/// `get_trace_spans_for_project`, for the MCP path.
+pub async fn get_trace_errors_for_project(
     pool: &crate::db::DbPool,
     project_id: u64,
     trace_id: &str,
 ) -> Result<Vec<TraceError>> {
-    let rows = sqlx::query(sql!(
-        "SELECT event_id, title, level, timestamp FROM events
-         WHERE project_id = ?1 AND trace_id = ?2 AND item_type = 'event'
-         ORDER BY timestamp DESC
-         LIMIT 50"
-    ))
-    .bind(project_id as i64)
-    .bind(trace_id)
-    .fetch_all(pool)
-    .await?;
+    get_trace_errors(
+        pool,
+        trace_id,
+        &TraceScope::Projects(vec![project_id as i64]),
+    )
+    .await
+}
 
-    Ok(rows
-        .iter()
-        .map(|row| TraceError {
-            event_id: row.get("event_id"),
-            title: row.get("title"),
-            level: row.get("level"),
-            timestamp: row.get("timestamp"),
-        })
-        .collect())
+fn map_trace_error(row: &crate::db::DbRow) -> TraceError {
+    TraceError {
+        event_id: row.get("event_id"),
+        project_id: row.get("project_id"),
+        title: row.get("title"),
+        level: row.get("level"),
+        timestamp: row.get("timestamp"),
+        span_id: row.get("span_id"),
+    }
 }
 
 /// The transaction event that owns this trace (name + duration), for the
@@ -246,9 +364,19 @@ pub async fn get_trace_root(
 pub const MAX_WATERFALL_ROWS: usize = 2000;
 const MAX_DEPTH: usize = 64;
 
+/// What a waterfall row came from. A transaction is a whole app's slice of the
+/// trace and gets a project badge; a span is one operation inside it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpanKind {
+    Transaction,
+    Span,
+}
+
 /// Minimal projection the waterfall builder needs. Decoupled from `TraceSpan`
 /// so the algorithm stays pure and trivially testable.
 pub struct SpanRow {
+    pub project_id: i64,
+    pub kind: SpanKind,
     pub span_id: String,
     pub parent_span_id: Option<String>,
     pub op: Option<String>,
@@ -261,6 +389,8 @@ pub struct SpanRow {
 impl From<&TraceSpan> for SpanRow {
     fn from(s: &TraceSpan) -> Self {
         SpanRow {
+            project_id: s.project_id,
+            kind: SpanKind::Span,
             span_id: s.span_id.clone(),
             parent_span_id: s.parent_span_id.clone(),
             op: s.op.clone(),
@@ -269,6 +399,46 @@ impl From<&TraceSpan> for SpanRow {
             duration_ms: s.duration_ms,
             start_ms: s.start_ms,
         }
+    }
+}
+
+impl From<&TraceTransaction> for SpanRow {
+    fn from(t: &TraceTransaction) -> Self {
+        SpanRow {
+            project_id: t.project_id,
+            kind: SpanKind::Transaction,
+            // A transaction ingested before migration 030 has no span_id of its
+            // own. Falling back to the event id keeps it a distinct, unnestable
+            // row rather than colliding with another such transaction on "".
+            span_id: t.span_id.clone().unwrap_or_else(|| t.event_id.clone()),
+            parent_span_id: t.parent_span_id.clone(),
+            op: None,
+            description: t.transaction_name.clone(),
+            status: None,
+            duration_ms: t.duration_ms,
+            start_ms: t.start_ms,
+        }
+    }
+}
+
+/// Fold per-span error counts onto the rows they were captured in. An error
+/// whose span isn't rendered (filtered out, unreadable, or never reported) stays
+/// in the correlated-errors panel only, the way Sentry keeps orphan errors.
+pub fn attach_error_counts(rows: &mut [WaterfallRow], errors: &[TraceError]) {
+    if errors.is_empty() {
+        return;
+    }
+    let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for e in errors {
+        if let Some(sid) = e.span_id.as_deref() {
+            *counts.entry(sid).or_default() += 1;
+        }
+    }
+    for row in rows {
+        row.error_count = counts
+            .get(row.span_id.as_str())
+            .copied()
+            .unwrap_or_default();
     }
 }
 
@@ -510,9 +680,12 @@ pub fn build_waterfall(spans: &[SpanRow], root_duration_ms: i64) -> Waterfall {
         }
 
         rows.push(WaterfallRow {
+            project_id: s.project_id,
+            kind: s.kind,
             span_id: s.span_id.clone(),
             parent_span_id: s.parent_span_id.clone(),
             depth: depth.min(MAX_DEPTH),
+            error_count: 0,
             op: s.op.clone(),
             description: s.description.clone(),
             status: s.status.clone(),
@@ -765,6 +938,8 @@ mod tests {
 
     fn span(id: &str, parent: Option<&str>, start: Option<i64>, dur: Option<i64>) -> SpanRow {
         SpanRow {
+            project_id: 1,
+            kind: SpanKind::Span,
             span_id: id.to_string(),
             parent_span_id: parent.map(String::from),
             op: None,
@@ -772,6 +947,36 @@ mod tests {
             status: None,
             duration_ms: dur,
             start_ms: start,
+        }
+    }
+
+    fn txn(
+        project_id: i64,
+        event_id: &str,
+        span_id: Option<&str>,
+        parent: Option<&str>,
+        start: Option<i64>,
+        dur: Option<i64>,
+    ) -> SpanRow {
+        SpanRow::from(&TraceTransaction {
+            event_id: event_id.to_string(),
+            project_id,
+            transaction_name: Some(format!("GET /{event_id}")),
+            duration_ms: dur,
+            span_id: span_id.map(String::from),
+            parent_span_id: parent.map(String::from),
+            start_ms: start,
+        })
+    }
+
+    fn trace_error(event_id: &str, span_id: Option<&str>) -> TraceError {
+        TraceError {
+            event_id: event_id.to_string(),
+            project_id: 1,
+            title: None,
+            level: Some("error".into()),
+            timestamp: 0,
+            span_id: span_id.map(String::from),
         }
     }
 
@@ -784,9 +989,12 @@ mod tests {
 
     fn waterfall_row(status: Option<&str>) -> WaterfallRow {
         WaterfallRow {
+            project_id: 1,
+            kind: SpanKind::Span,
             span_id: "s".into(),
             parent_span_id: None,
             depth: 0,
+            error_count: 0,
             op: None,
             description: None,
             status: status.map(String::from),
@@ -997,6 +1205,116 @@ mod tests {
         assert_eq!(w.rows.len(), MAX_WATERFALL_ROWS);
         assert!(w.truncated);
         assert_eq!(w.span_count, MAX_WATERFALL_ROWS + 50);
+    }
+
+    // --- cross-project stitching ---
+
+    // The whole point of the org-level trace page: project B's transaction hangs
+    // off the `http.client` span project A opened to call it.
+    #[test]
+    fn transaction_nests_under_a_foreign_projects_client_span() {
+        let rows = vec![
+            txn(1, "ea", Some("a000"), None, Some(0), Some(300)),
+            span("a-http", Some("a000"), Some(10), Some(200)),
+            txn(2, "eb", Some("b000"), Some("a-http"), Some(20), Some(150)),
+            span("b-db", Some("b000"), Some(30), Some(50)),
+        ];
+        let w = build_waterfall(&rows, 0);
+
+        assert_eq!(row(&w, "a000").depth, 0);
+        assert_eq!(row(&w, "a-http").depth, 1);
+        assert_eq!(row(&w, "b000").depth, 2, "B's transaction nests under A");
+        assert_eq!(row(&w, "b-db").depth, 3, "and its own spans under it");
+
+        assert_eq!(row(&w, "b000").project_id, 2);
+        assert!(row(&w, "b000").is_transaction());
+        assert!(!row(&w, "a-http").is_transaction());
+        assert_eq!(
+            row(&w, "b000").description.as_deref(),
+            Some("GET /eb"),
+            "a transaction carries its name as the row description"
+        );
+    }
+
+    // The calling project is unreadable or filtered out: the row is still shown,
+    // as a root, and the template marks it. Nothing names the missing project.
+    #[test]
+    fn transaction_with_an_unreachable_parent_is_a_root() {
+        let rows = vec![
+            txn(
+                2,
+                "eb",
+                Some("b000"),
+                Some("not-in-view"),
+                Some(20),
+                Some(150),
+            ),
+            span("b-db", Some("b000"), Some(30), Some(50)),
+        ];
+        let w = build_waterfall(&rows, 0);
+        assert_eq!(row(&w, "b000").depth, 0);
+        assert_eq!(
+            row(&w, "b000").parent_span_id.as_deref(),
+            Some("not-in-view"),
+            "the parent pointer survives so the marker can be rendered"
+        );
+        assert_eq!(row(&w, "b-db").depth, 1);
+    }
+
+    // Ingested before migration 030: no span_id of its own, so nothing can nest
+    // under it and its children surface as roots -- exactly today's rendering.
+    #[test]
+    fn transaction_without_a_span_id_renders_unnested() {
+        let rows = vec![
+            txn(1, "ea", None, None, Some(0), Some(300)),
+            span("a-http", Some("a000"), Some(10), Some(200)),
+        ];
+        let w = build_waterfall(&rows, 0);
+        assert_eq!(row(&w, "ea").depth, 0, "keyed by event id, not an empty id");
+        assert_eq!(row(&w, "a-http").depth, 0, "its children stay roots");
+    }
+
+    #[test]
+    fn truncation_counts_transactions_too() {
+        let mut rows = Vec::new();
+        for i in 0..(MAX_WATERFALL_ROWS + 50) {
+            rows.push(txn(
+                1,
+                &format!("e{i}"),
+                Some(&format!("t{i}")),
+                None,
+                Some(i as i64),
+                Some(1),
+            ));
+        }
+        let w = build_waterfall(&rows, 0);
+        assert_eq!(w.rows.len(), MAX_WATERFALL_ROWS);
+        assert!(w.truncated);
+    }
+
+    #[test]
+    fn error_counts_land_on_their_span_and_orphans_on_none() {
+        let rows = vec![
+            txn(1, "ea", Some("a000"), None, Some(0), Some(300)),
+            span("a-http", Some("a000"), Some(10), Some(200)),
+        ];
+        let mut w = build_waterfall(&rows, 0);
+        let errors = vec![
+            trace_error("e1", Some("a-http")),
+            trace_error("e2", Some("a-http")),
+            trace_error("e3", Some("a000")),
+            trace_error("e4", Some("gone")),
+            trace_error("e5", None),
+        ];
+        attach_error_counts(&mut w.rows, &errors);
+
+        assert_eq!(row(&w, "a-http").error_count, 2);
+        assert_eq!(row(&w, "a000").error_count, 1);
+        assert_eq!(
+            w.rows.iter().map(|r| r.error_count).sum::<usize>(),
+            3,
+            "an error on no visible span stays in the panel only"
+        );
     }
 
     #[test]
@@ -1404,9 +1722,215 @@ mod tests {
         // second matching error, newer
         insert_evt(&pool, "e4", "event", 1, Some("t1"), 200).await;
 
-        let errors = get_trace_errors(&pool, 1, "t1").await.unwrap();
+        let errors = get_trace_errors_for_project(&pool, 1, "t1").await.unwrap();
         let ids: Vec<&str> = errors.iter().map(|e| e.event_id.as_str()).collect();
         assert_eq!(ids, vec!["e4", "e1"]); // newest first, only event/trace/project match
+    }
+
+    // --- scoped trace reads ---
+
+    async fn insert_org(pool: &crate::db::DbPool, org_id: i64, slug: &str) {
+        sqlx::query(sql!(
+            "INSERT INTO organizations (org_id, slug, name) VALUES (?1, ?2, ?2)"
+        ))
+        .bind(org_id)
+        .bind(slug)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn insert_project(pool: &crate::db::DbPool, project_id: i64, org_id: i64) {
+        sqlx::query(sql!(
+            "INSERT INTO projects (project_id, org_id) VALUES (?1, ?2)"
+        ))
+        .bind(project_id)
+        .bind(org_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// Projects 10 and 11 in org 20, project 12 in org 21; one span, one
+    /// transaction and one error on trace `t-x` in each.
+    async fn two_org_trace() -> crate::db::DbPool {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        insert_org(&pool, 20, "scope-a").await;
+        insert_org(&pool, 21, "scope-b").await;
+        for (project_id, org_id) in [(10, 20), (11, 20), (12, 21)] {
+            insert_project(&pool, project_id, org_id).await;
+            insert_span(
+                &pool,
+                &format!("sp{project_id}"),
+                "t-x",
+                None,
+                project_id,
+                100,
+                0,
+                10,
+                Some("db"),
+                None,
+            )
+            .await;
+            insert_txn(
+                &pool,
+                &format!("tx{project_id}"),
+                project_id,
+                "t-x",
+                100,
+                "GET /x",
+                10,
+                "http.server",
+            )
+            .await;
+            insert_evt(
+                &pool,
+                &format!("er{project_id}"),
+                "event",
+                project_id,
+                Some("t-x"),
+                100,
+            )
+            .await;
+        }
+        pool
+    }
+
+    fn sorted<T, F: Fn(&T) -> i64>(rows: &[T], key: F) -> Vec<i64> {
+        let mut v: Vec<i64> = rows.iter().map(key).collect();
+        v.sort_unstable();
+        v
+    }
+
+    #[tokio::test]
+    async fn org_scope_excludes_a_project_in_a_foreign_org() {
+        let pool = two_org_trace().await;
+        let scope = TraceScope::Orgs(vec![20]);
+
+        let spans = get_trace_spans(&pool, "t-x", &scope).await.unwrap();
+        assert_eq!(sorted(&spans, |s| s.project_id), vec![10, 11]);
+
+        let txns = get_trace_transactions(&pool, "t-x", &scope).await.unwrap();
+        assert_eq!(sorted(&txns, |t| t.project_id), vec![10, 11]);
+
+        let errors = get_trace_errors(&pool, "t-x", &scope).await.unwrap();
+        assert_eq!(sorted(&errors, |e| e.project_id), vec![10, 11]);
+    }
+
+    #[tokio::test]
+    async fn all_scope_returns_every_project() {
+        let pool = two_org_trace().await;
+        let scope = TraceScope::All;
+
+        assert_eq!(
+            sorted(&get_trace_spans(&pool, "t-x", &scope).await.unwrap(), |s| s
+                .project_id),
+            vec![10, 11, 12]
+        );
+        assert_eq!(
+            sorted(
+                &get_trace_transactions(&pool, "t-x", &scope).await.unwrap(),
+                |t| t.project_id
+            ),
+            vec![10, 11, 12]
+        );
+        assert_eq!(
+            sorted(
+                &get_trace_errors(&pool, "t-x", &scope).await.unwrap(),
+                |e| e.project_id
+            ),
+            vec![10, 11, 12]
+        );
+    }
+
+    #[tokio::test]
+    async fn project_scope_narrows_to_the_listed_projects() {
+        let pool = two_org_trace().await;
+        let scope = TraceScope::Projects(vec![11]);
+
+        assert_eq!(
+            sorted(&get_trace_spans(&pool, "t-x", &scope).await.unwrap(), |s| s
+                .project_id),
+            vec![11]
+        );
+        assert_eq!(
+            sorted(
+                &get_trace_transactions(&pool, "t-x", &scope).await.unwrap(),
+                |t| t.project_id
+            ),
+            vec![11]
+        );
+        assert_eq!(
+            sorted(
+                &get_trace_errors(&pool, "t-x", &scope).await.unwrap(),
+                |e| e.project_id
+            ),
+            vec![11]
+        );
+    }
+
+    // A caller entitled to nothing must read nothing. The dangerous failure mode
+    // is an empty list collapsing to "no predicate", i.e. every project.
+    #[tokio::test]
+    async fn an_empty_scope_returns_nothing() {
+        let pool = two_org_trace().await;
+        for scope in [
+            TraceScope::Projects(Vec::new()),
+            TraceScope::Orgs(Vec::new()),
+        ] {
+            assert!(get_trace_spans(&pool, "t-x", &scope)
+                .await
+                .unwrap()
+                .is_empty());
+            assert!(get_trace_transactions(&pool, "t-x", &scope)
+                .await
+                .unwrap()
+                .is_empty());
+            assert!(get_trace_errors(&pool, "t-x", &scope)
+                .await
+                .unwrap()
+                .is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn trace_transactions_read_the_stitching_columns_oldest_first() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        insert_txn(&pool, "tx-late", 1, "t-y", 200, "GET /b", 10, "http.server").await;
+        insert_txn(
+            &pool,
+            "tx-early",
+            1,
+            "t-y",
+            100,
+            "GET /a",
+            20,
+            "http.server",
+        )
+        .await;
+        // Only transactions: an error on the same trace must not surface here.
+        insert_evt(&pool, "er1", "event", 1, Some("t-y"), 150).await;
+        sqlx::query(sql!(
+            "UPDATE events SET span_id = 'b000', parent_span_id = 'a-http', start_ms = 1700000000000
+             WHERE event_id = 'tx-early'"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let txns = get_trace_transactions(&pool, "t-y", &TraceScope::All)
+            .await
+            .unwrap();
+        let ids: Vec<&str> = txns.iter().map(|t| t.event_id.as_str()).collect();
+        assert_eq!(ids, vec!["tx-early", "tx-late"], "oldest first");
+        assert_eq!(txns[0].span_id.as_deref(), Some("b000"));
+        assert_eq!(txns[0].parent_span_id.as_deref(), Some("a-http"));
+        assert_eq!(txns[0].start_ms, Some(1_700_000_000_000));
+        assert_eq!(txns[0].transaction_name.as_deref(), Some("GET /a"));
+        assert_eq!(
+            txns[1].span_id, None,
+            "a transaction ingested before 030 reads NULL"
+        );
     }
 
     /// A trace id is shared across projects in a distributed trace. The web

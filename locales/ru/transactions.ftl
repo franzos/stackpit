@@ -41,3 +41,5 @@ transactions-detail-count = { $count ->
    *[other] { $count } экземпляра
 }
 transactions-detail-failure-label = Ошибки
+transactions-list-search-placeholder = Поиск по именам транзакций…
+transactions-list-search-label = Поиск по именам транзакций

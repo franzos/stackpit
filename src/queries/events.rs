@@ -191,8 +191,12 @@ pub async fn resolve_trace_id(
         return Ok(None);
     }
 
-    let mut qb: QueryBuilder<crate::db::Db> =
-        QueryBuilder::new("SELECT DISTINCT events.project_id, events.trace_id FROM events WHERE ");
+    // Grouped by trace, not by (trace, project): a distributed trace lives in
+    // several projects at once, and landing on the lowest-numbered one is a
+    // lookup. Only a prefix matching two *traces* is ambiguous.
+    let mut qb: QueryBuilder<crate::db::Db> = QueryBuilder::new(
+        "SELECT events.trace_id, MIN(events.project_id) AS project_id FROM events WHERE ",
+    );
     super::push_trace_id_predicate(&mut qb, "events.trace_id", trace_id);
     if let Some(pid) = project_id {
         qb.push(" AND events.project_id = ");
@@ -202,7 +206,7 @@ pub async fn resolve_trace_id(
         qb.push(" AND ");
         super::push_org_scope_predicate(&mut qb, "events.project_id", ids);
     }
-    qb.push(" LIMIT 2");
+    qb.push(" GROUP BY events.trace_id LIMIT 2");
 
     let rows = qb.build().fetch_all(pool).await?;
     let [row] = rows.as_slice() else {
@@ -1417,6 +1421,37 @@ mod tests {
             .unwrap()
             .is_none());
         assert!(resolve_trace_id(&pool, TRACE_A, Some(999), None)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    /// A distributed trace is in several projects at once. Grouping by
+    /// (trace, project) made that read as ambiguous, so pasting the id of the
+    /// only kind of trace worth looking up fell through to the event list.
+    #[tokio::test]
+    async fn resolve_trace_id_lands_on_a_project_when_the_trace_spans_several() {
+        let pool = open_test_db().await;
+        let org = insert_org(&pool, "cross-org").await;
+        insert_project(&pool, 410, org).await;
+        insert_project(&pool, 411, org).await;
+        insert_traced_event(&pool, "c1", 411, TRACE_A, "boom").await;
+        insert_traced_event(&pool, "c2", 410, TRACE_A, "bang").await;
+
+        assert_eq!(
+            resolve_trace_id(&pool, TRACE_A, None, None).await.unwrap(),
+            Some((410, TRACE_A.to_string())),
+            "lowest project id, deterministically; the page banners the rest"
+        );
+
+        // Narrowing still wins, and the scope still holds.
+        assert_eq!(
+            resolve_trace_id(&pool, TRACE_A, Some(411), None)
+                .await
+                .unwrap(),
+            Some((411, TRACE_A.to_string()))
+        );
+        assert!(resolve_trace_id(&pool, TRACE_A, None, Some(&[]))
             .await
             .unwrap()
             .is_none());

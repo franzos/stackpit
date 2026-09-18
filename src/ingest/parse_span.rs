@@ -93,11 +93,9 @@ pub(crate) fn extract_span_fields(payload: &[u8]) -> SpanFields {
     }
 }
 
-/// Extract span fields from an already-parsed JSON object (standalone span or
-/// an embedded child span of a transaction).
 /// Seconds since the epoch from either form the SDKs send: a float, or an
 /// RFC 3339 string (sentry-native).
-fn timestamp_secs(v: &Value) -> Option<f64> {
+pub(crate) fn timestamp_secs(v: &Value) -> Option<f64> {
     match v {
         Value::Number(n) => n.as_f64(),
         Value::String(s) => chrono::DateTime::parse_from_rfc3339(s)
@@ -107,6 +105,8 @@ fn timestamp_secs(v: &Value) -> Option<f64> {
     }
 }
 
+/// Extract span fields from an already-parsed JSON object (standalone span or
+/// an embedded child span of a transaction).
 pub(crate) fn extract_span_fields_from_value(v: &Value) -> SpanFields {
     let start_f = v.get("start_timestamp").and_then(timestamp_secs);
     let end_f = v.get("timestamp").and_then(timestamp_secs);
@@ -173,7 +173,8 @@ mod tests {
 
     #[test]
     fn numeric_span_timestamps_still_parse() {
-        let span = json!({"span_id": "3622ed28e50b40aa", "start_timestamp": 1.0, "timestamp": 1.25});
+        let span =
+            json!({"span_id": "3622ed28e50b40aa", "start_timestamp": 1.0, "timestamp": 1.25});
         let fields = extract_span_fields_from_value(&span);
         assert_eq!(fields.duration_ms, Some(250));
         assert_eq!(fields.start_ms, Some(1000));

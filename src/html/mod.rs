@@ -408,6 +408,10 @@ pub fn routes() -> Router<AppState> {
         )
         // -- global views --
         .route("/web/events/", get(event_list::handler))
+        .route(
+            "/web/traces/{trace_id}/",
+            get(spans::org_trace_detail_handler),
+        )
         .route("/web/releases/", get(release_list::handler))
         // -- org switcher --
         .route(
@@ -646,6 +650,7 @@ fn serve_asset(asset: &Asset) -> impl IntoResponse {
 
 /// Error type for HTML handlers. Renders through `html_error` so the page
 /// looks identical. `From<anyhow::Error>` maps to 500 so query calls can use `?`.
+#[derive(Debug)]
 pub struct HtmlError(pub axum::http::StatusCode, pub String);
 
 impl IntoResponse for HtmlError {

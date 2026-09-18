@@ -81,6 +81,23 @@ fn translated_keys_are_subset_of_en() {
     }
 }
 
+/// Every locale is at 100% and stays there: a new `en` string has to land in all
+/// nine in the same change, not be caught later by the non-gating report below.
+#[test]
+fn translated_locales_are_at_full_parity() {
+    let en = collect_keys("en");
+
+    for lang in translated_locales() {
+        let keys = collect_keys(&lang);
+        let missing: Vec<&String> = en.difference(&keys).collect();
+        assert!(
+            missing.is_empty(),
+            "{lang} is missing {} en key(s): {missing:?}",
+            missing.len()
+        );
+    }
+}
+
 #[test]
 fn coverage_report() {
     // Non-gating: reports per-locale translation coverage without failing CI.

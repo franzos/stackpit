@@ -518,7 +518,7 @@ fn extract_fields_full(
     } else if *item_type == ItemType::Sessions {
         extract_session_aggregates(&json, event, drift);
     } else if *item_type == ItemType::Transaction {
-        extract_transaction_perf(&json, event);
+        extract_transaction_perf(&json, event, drift);
         let mut spans = crate::ingest::parse_span::extract_embedded_spans_from_value(&json);
         for span in &mut spans {
             if let Some(ts) = span.timestamp.as_mut() {
@@ -542,6 +542,17 @@ fn extract_fields_full(
             .and_then(|t| t.get("trace_id"))
             .and_then(|v| v.as_str())
             .map(String::from);
+    }
+
+    // For an error the same field names the span that was active at capture,
+    // which is what attaches it to a row in the waterfall.
+    if event.span_id.is_none() {
+        event.span_id = json
+            .get("contexts")
+            .and_then(|c| c.get("trace"))
+            .and_then(|t| t.get("span_id"))
+            .and_then(|v| v.as_str())
+            .and_then(crate::ingest::ids::sanitize_id);
     }
 
     if let Some(sdk) = json.get("sdk") {
@@ -600,10 +611,12 @@ fn shift_span_start(fields: &mut crate::ingest::parse_span::SpanFields, drift: i
     }
 }
 
-/// Pull trace_id, duration, and trace status off a transaction payload.
-/// Duration prefers `measurements.duration.value` (already ms); otherwise it's
-/// derived from the raw `start_timestamp`/`timestamp` floats (seconds).
-fn extract_transaction_perf(json: &Value, event: &mut StorableEvent) {
+/// Pull trace_id, span ids, start, duration, and trace status off a transaction
+/// payload. Duration prefers `measurements.duration.value` (already ms);
+/// otherwise it's derived from `start_timestamp`/`timestamp`, either float
+/// seconds or RFC 3339. `start_ms` carries the same drift correction as child
+/// spans so a waterfall drawn from both lines up.
+fn extract_transaction_perf(json: &Value, event: &mut StorableEvent, drift: i64) {
     let trace = json.get("contexts").and_then(|c| c.get("trace"));
     event.trace_id = trace
         .and_then(|t| t.get("trace_id"))
@@ -613,6 +626,24 @@ fn extract_transaction_perf(json: &Value, event: &mut StorableEvent) {
         .and_then(|t| t.get("status"))
         .and_then(|v| v.as_str())
         .map(String::from);
+    event.span_id = trace
+        .and_then(|t| t.get("span_id"))
+        .and_then(|v| v.as_str())
+        .and_then(crate::ingest::ids::sanitize_id);
+    event.parent_span_id = trace
+        .and_then(|t| t.get("parent_span_id"))
+        .and_then(|v| v.as_str())
+        .and_then(crate::ingest::ids::sanitize_id);
+    let start = json
+        .get("start_timestamp")
+        .and_then(crate::ingest::parse_span::timestamp_secs)
+        .filter(|f| f.is_finite());
+    let end = json
+        .get("timestamp")
+        .and_then(crate::ingest::parse_span::timestamp_secs)
+        .filter(|f| f.is_finite());
+
+    event.start_ms = start.map(|s| (s * 1000.0).round() as i64 + drift * 1000);
 
     let measured = json
         .get("measurements")
@@ -623,18 +654,10 @@ fn extract_transaction_perf(json: &Value, event: &mut StorableEvent) {
 
     event.duration_ms = match measured {
         Some(ms) => Some(ms.round() as i64),
-        None => {
-            let end = json.get("timestamp").and_then(serde_json::Value::as_f64);
-            let start = json
-                .get("start_timestamp")
-                .and_then(serde_json::Value::as_f64);
-            match (end, start) {
-                (Some(e), Some(s)) if e.is_finite() && s.is_finite() => {
-                    Some(((e - s) * 1000.0).round() as i64)
-                }
-                _ => None,
-            }
-        }
+        None => match (end, start) {
+            (Some(e), Some(s)) => Some(((e - s) * 1000.0).round() as i64),
+            _ => None,
+        },
     };
 }
 
@@ -1282,6 +1305,19 @@ mod tests {
         assert_eq!(event.trace_status.as_deref(), Some("ok"));
     }
 
+    // sentry-native sends both stamps as RFC 3339. Read as floats they yield
+    // nothing, and a transaction with no duration never enters the rollups.
+    #[test]
+    fn transaction_duration_from_rfc3339_timestamps() {
+        let payload = r#"{"type":"transaction","transaction":"login.request",
+            "start_timestamp":"2026-09-18T14:09:03.638690Z",
+            "timestamp":"2026-09-18T14:09:15.278476Z",
+            "contexts":{"trace":{"trace_id":"e6d1ca1c12064b13a907498d109a7dd8","status":"ok"}}}"#;
+        let event = extract_txn(payload);
+        assert_eq!(event.duration_ms, Some(11640));
+        assert_eq!(event.start_ms, Some(1789740543639));
+    }
+
     #[test]
     fn transaction_duration_falls_back_to_timestamps() {
         let payload = r#"{"type":"transaction","transaction":"/api/slow",
@@ -1573,6 +1609,73 @@ mod tests {
         assert_eq!(spans[0].fields.span_id.as_deref(), Some("c1"));
         assert_eq!(spans[0].fields.op.as_deref(), Some("db"));
         assert_eq!(spans[0].timestamp, Some(1_700_000_001));
+    }
+
+    // --- transaction stitching columns (span_id, parent_span_id, start_ms) ---
+
+    #[test]
+    fn transaction_carries_its_span_ids_and_absolute_start() {
+        let event = extract_txn(
+            r#"{"transaction":"/t","timestamp":1700000001.25,"start_timestamp":1700000000.0,
+                "contexts":{"trace":{"trace_id":"tr1","span_id":"a1b2c3d4e5f60718","parent_span_id":"1122334455667788"}}}"#,
+        );
+        assert_eq!(event.span_id.as_deref(), Some("a1b2c3d4e5f60718"));
+        assert_eq!(event.parent_span_id.as_deref(), Some("1122334455667788"));
+        assert_eq!(event.start_ms, Some(1_700_000_000_000));
+    }
+
+    #[test]
+    fn clock_drift_corrects_transaction_start_ms() {
+        let result = drifted_envelope(
+            "transaction",
+            r#"{"transaction":"/t","timestamp":1700000001.0,"start_timestamp":1700000000.0,"contexts":{"trace":{"trace_id":"tr1","span_id":"a1b2c3d4e5f60718"}}}"#,
+        );
+        let event = &result.events[0];
+        assert_eq!(
+            event.start_ms,
+            Some(1_700_000_000_000 + result.clock_drift_secs * 1000),
+            "a transaction's start must get the same correction as its child spans"
+        );
+        assert_eq!(event.parent_span_id, None);
+    }
+
+    #[test]
+    fn transaction_without_start_timestamp_has_no_start_ms() {
+        let event = extract_txn(
+            r#"{"transaction":"/t","timestamp":1700000001.0,
+                "contexts":{"trace":{"trace_id":"tr1","span_id":"a1b2c3d4e5f60718"}}}"#,
+        );
+        assert_eq!(event.start_ms, None);
+        assert_eq!(event.span_id.as_deref(), Some("a1b2c3d4e5f60718"));
+    }
+
+    // An error's `contexts.trace.span_id` is the span that was active at
+    // capture, which is what attaches it to a waterfall row.
+    #[test]
+    fn error_event_carries_span_id_only() {
+        let payload = r#"{"event_id":"e1","message":"boom",
+            "contexts":{"trace":{"trace_id":"tr1","span_id":"a1b2c3d4e5f60718","parent_span_id":"1122334455667788"}}}"#;
+        let mut event = StorableEvent::new(
+            String::new(),
+            ItemType::Event,
+            payload.as_bytes().to_vec(),
+            1,
+            "k".to_string(),
+        );
+        extract_fields(payload.as_bytes(), &ItemType::Event, &mut event, 0);
+        assert_eq!(event.span_id.as_deref(), Some("a1b2c3d4e5f60718"));
+        assert_eq!(event.parent_span_id, None, "errors never nest a subtree");
+        assert_eq!(event.start_ms, None);
+    }
+
+    #[test]
+    fn malformed_span_ids_are_rejected() {
+        let event = extract_txn(
+            r#"{"transaction":"/t","start_timestamp":1700000000.0,
+                "contexts":{"trace":{"trace_id":"tr1","span_id":"a1b2 ","parent_span_id":"péché"}}}"#,
+        );
+        assert_eq!(event.span_id, None);
+        assert_eq!(event.parent_span_id, None);
     }
 
     #[test]

@@ -11,7 +11,6 @@ login-token-placeholder = Saisissez votre jeton principal…
 login-submit = Se connecter
 login-token-help = Le jeton d'administration provient de <code class="text-mono">admin_token</code> dans <code class="text-mono">stackpit.toml</code>. Modifiez le fichier et redémarrez <code class="text-mono">stackpit serve</code> pour prendre en compte les changements.
 login-docs = Documentation
-login-selfhosting = Guide d'auto-hébergement
 
 # Bannière d'erreur (dérivée des codes ?error= de la redirection OAuth) et bannière d'info de déconnexion.
 login-error-state-mismatch = Votre session de connexion a été altérée ou a expiré. Veuillez réessayer.

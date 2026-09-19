@@ -11,7 +11,6 @@ login-token-placeholder = Master-Token eingeben…
 login-submit = Anmelden
 login-token-help = Das Admin-Token stammt aus <code class="text-mono">admin_token</code> in <code class="text-mono">stackpit.toml</code>. Bearbeite die Datei und starte <code class="text-mono">stackpit serve</code> neu, um Änderungen zu übernehmen.
 login-docs = Dokumentation
-login-selfhosting = Anleitung zum Selbst-Hosten
 
 # Fehler-Banner (aus OAuth-?error=-Codes abgeleitet) und Logout-Hinweis-Banner.
 login-error-state-mismatch = Deine Anmeldesitzung wurde manipuliert oder ist abgelaufen. Bitte versuche es erneut.

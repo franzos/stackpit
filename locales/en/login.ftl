@@ -11,7 +11,6 @@ login-token-placeholder = Enter your master token…
 login-submit = Sign in
 login-token-help = The admin token comes from <code class="text-mono">admin_token</code> in <code class="text-mono">stackpit.toml</code>. Edit the file and restart <code class="text-mono">stackpit serve</code> to pick up changes.
 login-docs = Documentation
-login-selfhosting = Self-hosting guide
 
 # Error banner (mapped from OAuth redirect ?error= codes) and logout info banner.
 login-error-state-mismatch = Your sign-in session was tampered with or expired. Please try again.

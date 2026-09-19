@@ -1,6 +1,6 @@
 ---
 source: src/html/admin.rs
-expression: tmpl.render().unwrap()
+expression: "crate::html::redact_versions(tmpl.render().unwrap())"
 ---
 <!DOCTYPE html>
 <html lang="en" dir="ltr">
@@ -124,6 +124,13 @@ expression: tmpl.render().unwrap()
   
 
           </main>
+          <footer class="h-8 shrink-0 border-t border-outline-variant px-6 flex items-center justify-between text-xs text-on-surface-variant"
+                  style="background: var(--color-surface)">
+            <span>
+              &copy; YEAR <a href="https://gofranz.com/" class="breadcrumb-link" target="_blank" rel="noopener">Franz Geffke</a>
+            </span>
+            <span class="text-mono">vVERSION</span>
+          </footer>
         </div>
       </div>
     

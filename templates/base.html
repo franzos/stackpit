@@ -88,6 +88,13 @@
           <main class="flex-1 px-6 py-6 min-w-0 overflow-y-auto">
             {% block content %}{% endblock %}
           </main>
+          <footer class="h-8 shrink-0 border-t border-outline-variant px-6 flex items-center justify-between text-xs text-on-surface-variant"
+                  style="background: var(--color-surface)">
+            <span>
+              &copy; {{ crate::html::current_year() }} <a href="https://gofranz.com/" class="breadcrumb-link" target="_blank" rel="noopener">Franz Geffke</a>
+            </span>
+            <span class="text-mono">v{{ crate::html::VERSION }}</span>
+          </footer>
         </div>
       </div>
     {% endblock %}

@@ -18,8 +18,8 @@
     <link rel="stylesheet" href="/web/_assets/style.css?v={{ crate::html::ASSET_VERSION }}">
     <link rel="icon" type="image/png" href="/web/_assets/icon.png?v={{ crate::html::ASSET_VERSION }}">
   </head>
-  <body class="min-h-screen flex items-center justify-center px-4">
-    <div class="w-full max-w-md">
+  <body class="min-h-screen flex flex-col px-4 py-6">
+    <div class="w-full max-w-md m-auto">
       <div class="flex flex-col items-center mb-6">
         <div class="flex items-center gap-2 mb-4">
           <img src="/web/_assets/icon.png?v={{ crate::html::ASSET_VERSION }}" alt="" width="28" height="28">
@@ -72,15 +72,7 @@
         {% endif %}
       </div>
 
-      <div class="mt-6 flex items-center justify-center gap-4 text-[12px] text-muted">
-        <a class="hover:text-on-surface"
-           href="https://github.com/franzos/stackpit">{{ self.t("login-docs") }}</a>
-        <span>·</span>
-        <a class="hover:text-on-surface"
-           href="https://github.com/franzos/stackpit#self-hosting">{{ self.t("login-selfhosting") }}</a>
-      </div>
-
-      <details class="mt-3 text-[12px] text-muted">
+      <details class="mt-6 text-[12px] text-muted">
         <summary class="cursor-pointer select-none flex justify-center gap-1">{{ self.locale_name() }}</summary>
         <div class="mt-2 flex flex-col items-center gap-1">
           {% for l in self.locales() %}
@@ -90,5 +82,17 @@
         </div>
       </details>
     </div>
+
+    <footer class="shrink-0 pt-6 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[12px] text-muted">
+      <span>
+        &copy; {{ crate::html::current_year() }}
+        <a class="hover:text-on-surface"
+           href="https://gofranz.com/"
+           target="_blank"
+           rel="noopener">Franz Geffke</a>
+      </span>
+      <a class="hover:text-on-surface"
+         href="https://github.com/franzos/stackpit">{{ self.t("login-docs") }}</a>
+    </footer>
   </body>
 </html>

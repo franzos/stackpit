@@ -11,7 +11,6 @@ login-token-placeholder = أدخل رمزك الرئيسي…
 login-submit = تسجيل الدخول
 login-token-help = يأتي رمز المسؤول من <code class="text-mono">admin_token</code> في <code class="text-mono">stackpit.toml</code>. حرّر الملف وأعد تشغيل <code class="text-mono">stackpit serve</code> لتطبيق التغييرات.
 login-docs = التوثيق
-login-selfhosting = دليل الاستضافة الذاتية
 
 # لافتة الخطأ (مشتقّة من رموز OAuth ‎?error=‎) ولافتة معلومات تسجيل الخروج.
 login-error-state-mismatch = تم العبث بجلسة تسجيل دخولك أو انتهت صلاحيتها. يرجى المحاولة مرة أخرى.

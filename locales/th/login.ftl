@@ -11,7 +11,6 @@ login-token-placeholder = กรอก master token ของคุณ…
 login-submit = เข้าสู่ระบบ
 login-token-help = Admin token มาจาก <code class="text-mono">admin_token</code> ใน <code class="text-mono">stackpit.toml</code> แก้ไขไฟล์แล้วรีสตาร์ท <code class="text-mono">stackpit serve</code> เพื่อให้การเปลี่ยนแปลงมีผล
 login-docs = เอกสารประกอบ
-login-selfhosting = คู่มือการโฮสต์ด้วยตนเอง
 
 # แบนเนอร์ข้อผิดพลาด (แปลงจากรหัส ?error= ของ OAuth) และแบนเนอร์แจ้งการออกจากระบบ
 login-error-state-mismatch = เซสชันการเข้าสู่ระบบของคุณถูกดัดแปลงหรือหมดอายุแล้ว กรุณาลองอีกครั้ง

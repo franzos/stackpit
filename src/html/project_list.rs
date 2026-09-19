@@ -164,7 +164,7 @@ mod snapshot_tests {
     // the render is deterministic.
     #[test]
     fn project_list_renders_stable() {
-        insta::assert_snapshot!(crate::html::redact_asset_version(
+        insta::assert_snapshot!(crate::html::redact_versions(
             tmpl_for("en").render().unwrap()
         ));
     }

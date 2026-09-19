@@ -11,7 +11,6 @@ login-token-placeholder = Introduce tu token maestro…
 login-submit = Iniciar sesión
 login-token-help = El token de administrador proviene de <code class="text-mono">admin_token</code> en <code class="text-mono">stackpit.toml</code>. Edita el archivo y reinicia <code class="text-mono">stackpit serve</code> para aplicar los cambios.
 login-docs = Documentación
-login-selfhosting = Guía de autoalojamiento
 
 # Banner de error (derivado de los códigos ?error= de OAuth) y banner informativo de cierre de sesión.
 login-error-state-mismatch = Tu sesión de inicio fue manipulada o expiró. Inténtalo de nuevo.

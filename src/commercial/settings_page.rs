@@ -225,7 +225,7 @@ mod tests {
         );
         insta::assert_snapshot!(
             "license_active_en",
-            crate::html::redact_asset_version(tpl.render().unwrap())
+            crate::html::redact_versions(tpl.render().unwrap())
         );
     }
 
@@ -238,7 +238,7 @@ mod tests {
         );
         insta::assert_snapshot!(
             "license_unlicensed_en",
-            crate::html::redact_asset_version(tpl.render().unwrap())
+            crate::html::redact_versions(tpl.render().unwrap())
         );
     }
 

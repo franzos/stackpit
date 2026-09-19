@@ -510,10 +510,13 @@ type AssetCompression = tower_http::compression::predicate::And<
     tower_http::compression::predicate::NotForContentType,
 >;
 
-/// Pins the asset version in rendered HTML so snapshots survive a CSS rebuild.
+/// Pins the asset hash and the footer version in rendered HTML so snapshots
+/// survive a CSS rebuild or a release bump.
 #[cfg(test)]
-pub(crate) fn redact_asset_version(html: String) -> String {
+pub(crate) fn redact_versions(html: String) -> String {
     html.replace(ASSET_VERSION, "ASSET_VERSION")
+        .replace(&format!(">v{VERSION}<"), ">vVERSION<")
+        .replace(&format!("&copy; {} ", current_year()), "&copy; YEAR ")
 }
 
 async fn redirect_to_issue_stream(
@@ -551,6 +554,15 @@ struct Asset {
 /// Hash of the asset bytes, from build.rs. Edited CSS or JS gets a fresh URL,
 /// which is what lets the old one sit in the browser cache for a year.
 pub const ASSET_VERSION: &str = env!("STACKPIT_ASSET_VERSION");
+
+/// Release version, shown in the page footer.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Year for the footer copyright notice. Read per render so it never goes stale.
+pub fn current_year() -> i32 {
+    use chrono::Datelike;
+    chrono::Utc::now().year()
+}
 
 const CACHE_IMMUTABLE: &str = "public, max-age=31536000, immutable";
 const JS_CONTENT_TYPE: &str = "application/javascript; charset=utf-8";

@@ -11,7 +11,6 @@ login-token-placeholder = Введите мастер-токен…
 login-submit = Войти
 login-token-help = Токен администратора берётся из <code class="text-mono">admin_token</code> в <code class="text-mono">stackpit.toml</code>. Отредактируйте файл и перезапустите <code class="text-mono">stackpit serve</code>, чтобы применить изменения.
 login-docs = Документация
-login-selfhosting = Руководство по самостоятельному хостингу
 
 # Баннер ошибки (сопоставленный с кодами ?error= редиректа OAuth) и информационный баннер выхода.
 login-error-state-mismatch = Ваша сессия входа была подделана или истекла. Пожалуйста, попробуйте снова.

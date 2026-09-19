@@ -18,8 +18,8 @@
     <link rel="stylesheet" href="/web/_assets/style.css?v={{ crate::html::ASSET_VERSION }}">
     <link rel="icon" type="image/png" href="/web/_assets/icon.png?v={{ crate::html::ASSET_VERSION }}">
   </head>
-  <body class="min-h-screen flex items-center justify-center px-4">
-    <div class="w-full max-w-md">
+  <body class="min-h-screen flex flex-col px-4 py-6">
+    <div class="w-full max-w-md m-auto">
       <div class="flex flex-col items-center mb-6">
         <div class="flex items-center gap-2 mb-4">
           <img src="/web/_assets/icon.png?v={{ crate::html::ASSET_VERSION }}" alt="" width="28" height="28">
@@ -48,5 +48,13 @@
         {% endif %}
       </div>
     </div>
+
+    <footer class="shrink-0 pt-6 text-start text-[12px] text-muted">
+      &copy; {{ crate::html::current_year() }}
+      <a class="hover:text-on-surface"
+         href="https://gofranz.com/"
+         target="_blank"
+         rel="noopener">Franz Geffke</a>
+    </footer>
   </body>
 </html>

@@ -19,6 +19,8 @@ jobs:
             os: macos-latest
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -28,7 +30,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Package
         run: |
@@ -53,10 +55,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
 
       - name: Install cargo-deb
-        run: cargo install cargo-deb
+        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3 # v2
+        with:
+          tool: cargo-deb@3.8.0
 
       - name: Build deb package
-        run: cargo deb
+        run: cargo deb -- --locked
 
       - name: Upload deb artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -72,10 +76,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
 
       - name: Install cargo-generate-rpm
-        run: cargo install cargo-generate-rpm
+        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3 # v2
+        with:
+          tool: cargo-generate-rpm@0.21.0
 
       - name: Build
-        run: cargo build --release
+        run: cargo build --release --locked
 
       - name: Build rpm package
         run: cargo generate-rpm
@@ -91,8 +97,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      hashes: ${{ steps.hashes.outputs.hashes }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0 # the previous tag, for the compare link
 
       - name: Download artifacts
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
@@ -111,7 +121,63 @@ jobs:
           gh release upload "$GITHUB_REF_NAME" \
             stackpit-*.tar.gz \
             stackpit-*.tar.gz.sha256 \
-            *.deb \
-            *.rpm
+            ./*.deb \
+            ./*.rpm
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # taiki-e writes the changelog section; this appends where to get the
+      # image, how to check the download, and what changed since the last tag.
+      - name: Append image and verification notes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          v="${TAG#v}"
+          prev=$(git tag --sort=-v:refname | awk -v t="$TAG" 'p { print; exit } $0 == t { p = 1 }')
+          gh release view "$TAG" --json body --jq .body > notes.md
+          {
+            echo
+            echo '---'
+            echo
+            echo "Container images: \`ghcr.io/$REPO:$v\` (SQLite), \`ghcr.io/$REPO:$v-postgres\` (PostgreSQL)"
+            echo
+            echo 'Verify a download:'
+            echo
+            echo '```bash'
+            echo 'sha256sum -c stackpit-x86_64-unknown-linux-gnu.tar.gz.sha256'
+            echo "slsa-verifier verify-artifact stackpit-x86_64-unknown-linux-gnu.tar.gz \\"
+            echo "  --provenance-path multiple.intoto.jsonl \\"
+            echo "  --source-uri github.com/$REPO --source-tag $TAG"
+            echo '```'
+            echo
+            echo "Install steps: [README](https://github.com/$REPO#install)"
+            if [ -n "$prev" ]; then
+              echo
+              echo "Changes since $prev: [compare](https://github.com/$REPO/compare/$prev...$TAG)"
+            fi
+          } >> notes.md
+          gh release edit "$TAG" --notes-file notes.md
+
+      # Subjects for the provenance job: the artifacts people actually download,
+      # not the .sha256 sidecars.
+      - name: Hash the release assets
+        id: hashes
+        run: |
+          echo "hashes=$(sha256sum stackpit-*.tar.gz ./*.deb ./*.rpm | base64 -w0)" >> "$GITHUB_OUTPUT"
+
+  # Keyless (Sigstore/OIDC) SLSA build provenance covering every artifact,
+  # attached to the release. Referenced by TAG, not a SHA: the generator verifies
+  # its own ref to establish the trusted-builder identity, so a pinned commit
+  # breaks it.
+  provenance:
+    needs: release
+    permissions:
+      id-token: write # keyless Sigstore signing via OIDC
+      contents: write # attach the .intoto.jsonl to the release
+      actions: read
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: ${{ needs.release.outputs.hashes }}
+      upload-assets: true

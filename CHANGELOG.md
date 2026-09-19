@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.4.6] - 2026-09-19
+
+### Added
+- Page footer showing the release version and copyright
+
 ## [0.4.5] - 2026-09-18
 
 ### Added

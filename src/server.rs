@@ -342,6 +342,7 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
         bg_cancel.child_token(),
     );
     crate::background::spawn_wal_checkpoint_task(bg_writer_pool.clone(), bg_cancel.child_token());
+    crate::background::spawn_analyze_task(bg_writer_pool.clone(), bg_cancel.child_token());
     crate::background::spawn_digest_task(
         bg_writer_pool.clone(),
         digest_notify_tx,

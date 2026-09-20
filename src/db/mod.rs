@@ -104,6 +104,24 @@ pub use pool::create_ingest_pool;
 pub use pool::create_read_pool as create_pool;
 pub use pool::create_write_pool as create_writer_pool;
 
+/// Refresh the query planner's statistics.
+///
+/// With no `sqlite_stat1` the planner scores an index by how many constraints
+/// it satisfies, so a lookup keyed on a correlated column loses to a wider
+/// index whose leading columns are bound to constants -- and a page that should
+/// seek once per row scans instead. `analysis_limit` samples rather than walks
+/// every index, which keeps this in the low milliseconds on a large database.
+/// Both statements go on one connection: the limit is per-connection state.
+#[cfg(feature = "sqlite")]
+pub async fn sqlite_analyze(pool: &DbPool) -> Result<()> {
+    let mut conn = pool.acquire().await?;
+    sqlx::query("PRAGMA analysis_limit=400")
+        .execute(&mut *conn)
+        .await?;
+    sqlx::query("ANALYZE").execute(&mut *conn).await?;
+    Ok(())
+}
+
 /// Run a PRAGMA on a SQLite pool. No-op for PostgreSQL.
 #[cfg(feature = "sqlite")]
 pub async fn sqlite_pragma(pool: &DbPool, pragma: &'static str) -> Result<()> {

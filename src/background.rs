@@ -101,6 +101,25 @@ pub fn spawn_oidc_cleanup_task(pool: DbPool, cancel: CancellationToken) {
     });
 }
 
+/// Keep SQLite's planner statistics current. Runs before the first sleep so a
+/// database that has never been analysed -- every install, since migrations
+/// don't produce statistics -- gets them at boot rather than an hour in.
+pub fn spawn_analyze_task(pool: DbPool, cancel: CancellationToken) {
+    supervise("analyze", async move {
+        let _pool = pool;
+        loop {
+            #[cfg(feature = "sqlite")]
+            if let Err(e) = crate::db::sqlite_analyze(&_pool).await {
+                tracing::warn!("ANALYZE error: {e}");
+            }
+            tokio::select! {
+                _ = cancel.cancelled() => return,
+                _ = tokio::time::sleep(Duration::from_secs(3600)) => {}
+            }
+        }
+    });
+}
+
 pub fn spawn_wal_checkpoint_task(pool: DbPool, cancel: CancellationToken) {
     supervise("wal_checkpoint", async move {
         let _pool = pool;

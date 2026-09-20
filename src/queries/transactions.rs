@@ -424,6 +424,10 @@ pub async fn transaction_percentile_trend(
 /// Membership is an EXISTS subquery rather than a join: several transaction
 /// events share one `trace_id` whenever a transaction is recorded more than
 /// once in the same trace, and a join would count each span once per match.
+///
+/// The period bounds the spans as well as the transactions. Without it the scan
+/// reads every span the project ever stored however short the window, and a
+/// trace straddling the window edge contributes spans from outside it.
 pub async fn transaction_span_breakdown(
     pool: &crate::db::DbPool,
     project_id: u64,
@@ -433,7 +437,8 @@ pub async fn transaction_span_breakdown(
     let rows = sqlx::query(sql!(
         "SELECT s.op AS op, s.description AS description, s.duration_ms AS duration_ms \
          FROM spans s \
-         WHERE s.project_id = ?1 AND s.duration_ms IS NOT NULL AND s.trace_id IS NOT NULL \
+         WHERE s.project_id = ?1 AND s.timestamp >= ?4 \
+           AND s.duration_ms IS NOT NULL AND s.trace_id IS NOT NULL \
            AND EXISTS (SELECT 1 FROM events e \
                        WHERE e.trace_id = s.trace_id AND e.project_id = ?2 \
                          AND e.item_type = 'transaction' AND e.transaction_name = ?3 \
@@ -610,10 +615,22 @@ mod tests {
         op: &str,
         duration_ms: i64,
     ) {
+        insert_span_at(pool, span_id, project_id, trace_id, op, duration_ms, 100).await;
+    }
+
+    async fn insert_span_at(
+        pool: &crate::db::DbPool,
+        span_id: &str,
+        project_id: i64,
+        trace_id: &str,
+        op: &str,
+        duration_ms: i64,
+        timestamp: i64,
+    ) {
         let compressed = zstd::encode_all(b"{}".as_slice(), 3).unwrap();
         sqlx::query(sql!(
             "INSERT INTO spans (span_id, payload, project_id, public_key, timestamp, trace_id, op, description, duration_ms)
-             VALUES (?1, ?2, ?3, 'testkey', 100, ?4, ?5, 'd', ?6)"
+             VALUES (?1, ?2, ?3, 'testkey', ?7, ?4, ?5, 'd', ?6)"
         ))
         .bind(span_id)
         .bind(&compressed)
@@ -621,6 +638,7 @@ mod tests {
         .bind(trace_id)
         .bind(op)
         .bind(duration_ms)
+        .bind(timestamp)
         .execute(pool)
         .await
         .unwrap();
@@ -695,6 +713,24 @@ mod tests {
             .unwrap()
             .groups
             .is_empty());
+    }
+
+    // The window bounds the spans too, not just the transactions that select
+    // the traces: a trace straddling the window edge contributes only the spans
+    // recorded inside it.
+    #[tokio::test]
+    async fn span_breakdown_drops_spans_older_than_the_period() {
+        let pool = open_test_db().await;
+        insert_txn_with_trace(&pool, "t1", 1, "/checkout", "trace-a", 1_000).await;
+        insert_span_at(&pool, "s-old", 1, "trace-a", "db.query", 10, 100).await;
+        insert_span_at(&pool, "s-new", 1, "trace-a", "db.query", 30, 1_000).await;
+
+        let agg = transaction_span_breakdown(&pool, 1, "/checkout", 500)
+            .await
+            .unwrap();
+        assert_eq!(agg.groups.len(), 1);
+        assert_eq!(agg.groups[0].count, 1, "the pre-window span must not count");
+        assert_eq!(agg.groups[0].avg_ms, 30);
     }
 
     #[tokio::test]

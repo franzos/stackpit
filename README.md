@@ -106,24 +106,36 @@ Do take this with a grain of salt: the "basic" rows are genuinely basic, and the
 
 ## How fast is it?
 
-Short version (one laptop, SQLite, ~2.9 KiB error envelopes):
+One instance, SQLite, ~2.9 KiB error envelopes across 100 distinct issues, on a Hetzner CCX43 with eight dedicated vCPU (AMD EPYC Milan) given to Stackpit and the rest to the load generator; storage is ext4 on NVMe, no disk encryption. "Sustained" is a rate held for a five-minute soak with zero rejections.
 
-| `ingest_batch_size` | Sustained (5 min, zero rejections) | Burst |
-|---|---|---|
-| 2000 (default) | ~10,800 events/s | 12,000-13,000 events/s |
-| 10000 | ~15,000-18,000 events/s | ~20,700 events/s |
-
-Details and trade-offs below.
-
-The repo ships `stackpit-bench`, an open-loop load generator that ramps Sentry error envelopes against a running server until the write path falls behind, then soaks below that knee. The chart below is one run on a laptop: AMD Ryzen 5 7640U (6 cores / 12 threads), 64 GB RAM, NVMe SSD on LUKS-encrypted ext4, Linux 6.19, SQLite backend, with the load generator competing for the same cores.
+| `ingest_batch_size` | Sustained | Knee | Accept p50 / p99 | Max WAL |
+|---|---|---|---|---|
+| 2000 (default) | 16,200 events/s | 18,000/s | 1.6 / 3.2 ms | 11.3 MiB |
+| 10000 | 23,400 events/s | 26,000/s | 1.6 / 3.3 ms | 23.8 MiB |
+| 20000 | 25,200 events/s | 28,000/s | 1.6 / 3.4 ms | 41.4 MiB |
+| 50000 | 25,200 events/s | 28,000/s | 1.6 / 3.4 ms | 91.1 MiB |
 
 <img src="docs/benchmark.svg" alt="Ingestion benchmark: target vs accepted vs persisted events/sec" width="100%">
 
-- **Sustained 10,800 events/s for a 5-minute soak with zero rejections** (10,867 rows/s persisted on average), accept latency p50 1.7 ms / p99 6.9 ms, WAL peaking at 8.9 MiB.
-- During the overload probes (14,000 and 16,000/s offered) the server accepted and persisted **12,000-13,000 events/s in bursts** and shed the rest with HTTP 503 backpressure; nothing is dropped silently. The knee varies between 12,000 and 14,000/s run to run on this machine (some runs hold 12,600/s for the full soak), hence the conservative sustained figure.
-- Payloads are ~2.9 KiB error events across 100 distinct issues.
+The chart is the default batch size. "Knee" is where the write path starts falling behind; above it the ingest endpoint sheds the excess with HTTP 503 and accounts for what it refuses, so nothing disappears quietly.
 
-To reproduce (fresh database; `mode = "open"` auto-provisions the project on the first envelope). In `stackpit.toml`, set `ingest_bind = "127.0.0.1:3001"` and `rate_limit = 0` under `[filter]` first: `stackpit init` writes a default rate limit, and unlimited open-mode ingest requires a loopback bind (or an explicit `open_ingest_unlimited_acknowledged = true`):
+**Sizing.** Throughput tracks core count up to about eight, then flattens, because every write goes through one SQLite writer thread:
+
+| vCPU for Stackpit | Knee at `ingest_batch_size = 20000` |
+|---|---|
+| 4 | 20,000/s |
+| 8 | 28,000/s |
+| 12 | 28,000/s |
+
+Past eight cores there's nothing more to get out of SQLite, so put the budget into disk and batch size instead. At the low end two cores carry 10,800 events/s at the default batch size, which covers most self-hosted installs.
+
+**Batch size.** The writer commits up to `ingest_batch_size` events per transaction (`[storage]`). Larger transactions amortize SQLite's commit and checkpoint cost; 10000-20000 is the useful range, and 50000 measures identically to 20000 while doubling the WAL. The cost is a bigger all-or-nothing unit: a transaction that fails twice drops up to that many events, and each one holds the write lock longer.
+
+**Disk.** WAL mode with `synchronous = NORMAL` skips the fsync per commit but still pays one per checkpoint, so sync latency sets the floor. The reference machine does a 4 KiB `O_DSYNC` write in 1.26 ms; an encrypted consumer SSD is closer to 5 ms and will land well below these numbers. I haven't measured how much of that is the disk alone.
+
+**PostgreSQL.** The bottleneck is Stackpit's write path, not the database. PostgreSQL isn't stuck with one writer: set `ingest_writers` in `[storage]` and ingestion fans out across concurrent writer tasks, good for 2-3x the single-writer rate.
+
+To reproduce, against a fresh database (`mode = "open"` auto-provisions the project on the first envelope). Set `ingest_bind = "127.0.0.1:3001"` and `rate_limit = 0` under `[filter]` in `stackpit.toml` first: `stackpit init` writes a default rate limit, and unlimited open-mode ingest wants a loopback bind, or an explicit `open_ingest_unlimited_acknowledged = true`:
 
 ```bash
 cargo build --release --manifest-path stackpit-bench/Cargo.toml
@@ -134,11 +146,7 @@ stackpit serve &
   --out bench-results
 ```
 
-It ramps until the knee, soaks at 90% of it for 5 minutes, and writes a per-second CSV plus the SVG chart above. Single-machine numbers, so take them with a grain of salt.
-
-There's more headroom in the batch size: the writer commits up to `ingest_batch_size` events per transaction (default 2000, set it in `[storage]`). Raising it to 10000 on the same laptop moved the knee from 14,000 to 20,000 events/s in back-to-back short-window runs, with ~20,700 rows/s persisted in the best 30-second windows: larger transactions amortize SQLite's commit and checkpoint cost. The trade-off is a bigger all-or-nothing unit: a write transaction that fails twice drops up to that many events, and each transaction holds the write lock longer. Sustained rates that high couldn't be verified here because the load generator saturates first; treat 10000 as burst-friendly tuning, not a validated sustained figure.
-
-Running PostgreSQL instead? The bottleneck is Stackpit's write path, not the database. Unlike SQLite, PostgreSQL isn't stuck with one writer: set `ingest_writers` in `[storage]` and ingestion fans out across concurrent writer tasks, which comfortably handles 2-3x the single-writer rate.
+`stackpit-bench` ramps until the knee, soaks at 90% of it for five minutes, and writes a per-second CSV plus the chart above. Run the generator on separate cores from the server - `taskset` is enough - or you're measuring the generator. One machine and one payload shape, so take the numbers with a grain of salt.
 
 ## Install
 

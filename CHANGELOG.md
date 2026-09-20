@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.7] - 2026-09-20
+
+### Added
+- Org-wide trace list spanning every project
+- aarch64 Linux builds, signed with SLSA provenance
+
+### Fixed
+- Transaction summary pages took minutes to load on busy projects
+
+### Changed
+- Span breakdown on a transaction honours the selected period
+
 ## [0.4.6] - 2026-09-19
 
 ### Added

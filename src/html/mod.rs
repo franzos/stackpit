@@ -42,6 +42,7 @@ pub mod release_health;
 pub mod release_list;
 pub mod replays;
 pub mod spans;
+pub mod trace_list;
 pub mod transactions;
 pub mod utils;
 
@@ -110,10 +111,6 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/web/projects/{project_id}/spans/",
             get(spans::list_handler),
-        )
-        .route(
-            "/web/projects/{project_id}/traces/{trace_id}/",
-            get(spans::trace_detail_handler),
         )
         .route(
             "/web/projects/{project_id}/metrics/",
@@ -408,6 +405,9 @@ pub fn routes() -> Router<AppState> {
         )
         // -- global views --
         .route("/web/events/", get(event_list::handler))
+        // The web router carries no `NormalizePath` layer, so the list and the
+        // per-trace page coexist on the same prefix.
+        .route("/web/traces/", get(trace_list::handler))
         .route(
             "/web/traces/{trace_id}/",
             get(spans::org_trace_detail_handler),
@@ -817,6 +817,84 @@ mod tests {
         assert_eq!(
             chrome.err(anyhow::anyhow!("project not found: 42")),
             "Error: project not found: 42"
+        );
+    }
+
+    // The per-project trace route is gone: there is one trace page and one URL
+    // for it. Five of the old emitters were Askama string literals and two were
+    // `format!` literals in Rust, and neither kind fails to compile when it is
+    // missed — it 404s at runtime. So both trees get walked.
+    #[test]
+    fn nothing_emits_a_per_project_trace_url() {
+        fn sources(dir: &std::path::Path, ext: &str, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).expect("read dir") {
+                let path = entry.expect("dir entry").path();
+                if path.is_dir() {
+                    sources(&path, ext, out);
+                } else if path.extension().and_then(|e| e.to_str()) == Some(ext) {
+                    out.push(path);
+                }
+            }
+        }
+
+        /// Replace every Askama `{{ … }}` / `{% … %}` with a placeholder. A URL
+        /// is otherwise cut at the first space, and interpolation in this
+        /// codebase always carries inner spaces — so `/web/projects/{{ id
+        /// }}/traces/` would read as an offender-free `/web/projects/{{`.
+        fn flatten_interpolation(src: &str) -> String {
+            let mut out = String::with_capacity(src.len());
+            let mut rest = src;
+            while let Some(at) = rest.find("{{").or_else(|| rest.find("{%")) {
+                out.push_str(&rest[..at]);
+                let close = if rest[at..].starts_with("{{") {
+                    "}}"
+                } else {
+                    "%}"
+                };
+                match rest[at + 2..].find(close) {
+                    Some(end) => {
+                        let body = &rest[at..at + 2 + end + 2];
+                        // Keep the newlines so reported line numbers stay true.
+                        out.push('X');
+                        out.extend(std::iter::repeat_n('\n', body.matches('\n').count()));
+                        rest = &rest[at + 2 + end + 2..];
+                    }
+                    None => break,
+                }
+            }
+            out.push_str(rest);
+            out
+        }
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut files = Vec::new();
+        sources(&root.join("templates"), "html", &mut files);
+        sources(&root.join("src"), "rs", &mut files);
+
+        // Split so this file's own needle does not match itself, which lets the
+        // walk cover `src/html/mod.rs` — where the deleted route lived.
+        let needle = concat!("/web/", "projects/");
+        let mut offenders = Vec::new();
+        for path in files {
+            let src = flatten_interpolation(&std::fs::read_to_string(&path).expect("read source"));
+            for (idx, _) in src.match_indices(needle) {
+                // Anything up to the next quote, angle bracket or newline is one
+                // URL; a `/traces/` inside it is the dead route.
+                let rest = &src[idx..];
+                let end = rest.find(['"', '\'', '<', '>', '\n']).unwrap_or(rest.len());
+                if rest[..end].contains("/traces/") {
+                    let line = src[..idx].matches('\n').count() + 1;
+                    offenders.push(format!(
+                        "{}:{line}",
+                        path.strip_prefix(root).unwrap_or(&path).display()
+                    ));
+                }
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "per-project trace URLs still emitted: {offenders:?}"
         );
     }
 

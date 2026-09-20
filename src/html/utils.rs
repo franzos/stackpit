@@ -151,6 +151,13 @@ pub struct ListParams {
     pub org: Option<String>,
     #[serde(default, deserialize_with = "empty_string_as_none")]
     pub project_id: Option<u64>,
+    /// `?projects=1,2` — the multi-select the trace list and the trace page
+    /// share, so a link carries from one to the other. Deliberately separate
+    /// from the single `project_id` the events and releases pages take.
+    pub projects: Option<String>,
+    /// The trace list's "spans more than one project" toggle. A checkbox, so an
+    /// unchecked box submits nothing at all.
+    pub multi: Option<String>,
     pub item_type: Option<String>,
     #[serde(flatten)]
     pub page: Pagination,

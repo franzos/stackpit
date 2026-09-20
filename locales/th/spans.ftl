@@ -43,6 +43,25 @@ spans-count = { $count ->
    *[other] { $count } สแปน
 }
 
+# --- รายการเทรซทั้งองค์กร ---
+traces-col-root = ทรานแซกชันราก
+traces-col-projects = โปรเจกต์
+traces-col-transactions = ทรานแซกชัน
+traces-col-errors = ข้อผิดพลาด
+traces-list-empty = ไม่พบเทรซ
+traces-filter-projects-label = รหัสโปรเจกต์
+traces-filter-projects-placeholder = รหัสโปรเจกต์
+traces-filter-period-label = ช่วงเวลา
+traces-filter-multi-label = ครอบคลุมมากกว่าหนึ่งโปรเจกต์
+traces-filter-submit = กรอง
+traces-pagination-label = การแบ่งหน้าเทรซ
+traces-count = { $count ->
+   *[other] { $count } เทรซ
+}
+traces-more-projects = { $count ->
+   *[other] +{ $count } เพิ่มเติม
+}
+
 # --- รายละเอียดเทรซ (waterfall) ---
 # title-prefix/suffix ห่อรหัสเทรซแบบไดนามิก total/showing-first/of ถูกแยกที่
 # ขอบเขต { $var } ของบรรทัดข้อมูลย่อย
@@ -77,11 +96,4 @@ trace-detail-filter-clear = แสดงทั้งหมด
 trace-detail-col-project = โปรเจกต์
 trace-detail-parent-not-in-view = ไม่พบสแปนหลักในมุมมองนี้
 trace-detail-txn-badge = ทรานแซกชัน
-trace-detail-other-projects-link = ดูเทรซทั้งหมด
-trace-detail-other-projects-transactions = { $count ->
-   *[other] อีก { $count } ทรานแซกชัน
-}
-trace-detail-other-projects-count = { $count ->
-   *[other] ใน { $count } โปรเจกต์อื่น
-}
 trace-detail-view-events = เหตุการณ์ทั้งหมดในเทรซนี้

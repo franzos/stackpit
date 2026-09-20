@@ -50,6 +50,31 @@ spans-count = { $count ->
    *[other] { $count } спана
 }
 
+# --- Список трасс по всей организации ---
+traces-col-root = Корневая транзакция
+traces-col-projects = Проекты
+traces-col-transactions = Транзакции
+traces-col-errors = Ошибки
+traces-list-empty = Трассы не найдены.
+traces-filter-projects-label = ID проектов
+traces-filter-projects-placeholder = ID проектов
+traces-filter-period-label = Период
+traces-filter-multi-label = Охватывает несколько проектов
+traces-filter-submit = Фильтр
+traces-pagination-label = Навигация по трассам
+traces-count = { $count ->
+    [one] { $count } трасса
+    [few] { $count } трассы
+    [many] { $count } трасс
+   *[other] { $count } трассы
+}
+traces-more-projects = { $count ->
+    [one] ещё +{ $count }
+    [few] ещё +{ $count }
+    [many] ещё +{ $count }
+   *[other] ещё +{ $count }
+}
+
 # --- Деталь трейса (водопад) ---
 # title-prefix/suffix оборачивают динамический ID трейса; total/showing-first/of
 # разбиты по границам { $var } строки с мета-данными.
@@ -87,17 +112,4 @@ trace-detail-filter-clear = Показать все
 trace-detail-col-project = Проект
 trace-detail-parent-not-in-view = Родительский спан вне представления
 trace-detail-txn-badge = Транзакция
-trace-detail-other-projects-link = Посмотреть весь трейс
-trace-detail-other-projects-transactions = { $count ->
-    [one] ещё { $count } транзакция
-    [few] ещё { $count } транзакции
-    [many] ещё { $count } транзакций
-   *[other] ещё { $count } транзакции
-}
-trace-detail-other-projects-count = { $count ->
-    [one] в { $count } другом проекте
-    [few] в { $count } других проектах
-    [many] в { $count } других проектах
-   *[other] в { $count } других проектах
-}
 trace-detail-view-events = Все события этого трейса

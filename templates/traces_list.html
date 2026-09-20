@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+
+{% block title %}{{ chrome.t("spans-traces-heading") }} {{ chrome.t("spans-title-suffix") }}{% endblock %}
+
+{% block sidebar_nav %}
+  {% match project_nav %}
+  {% when Some with (pnav) %}
+    {% call m::project_sidebar(chrome, project_id_num, pnav, "traces") %}
+    {% endcall %}
+  {% when None %}
+    {% call m::top_sidebar(chrome, "traces") %}
+    {% endcall %}
+  {% endmatch %}
+{% endblock %}
+
+{% block breadcrumbs %}
+  {% match project_nav %}{% when Some with (pnav) %}
+  <span class="breadcrumb-sep">/</span>
+  <a class="breadcrumb-link" href="/web/projects/{{ project_id_num }}/"><bdi>{{ pnav.label }}</bdi></a>
+  {% when None %}{% endmatch %}
+  <span class="breadcrumb-sep">/</span>
+  <span class="breadcrumb-current">{{ chrome.t("spans-traces-heading") }}</span>
+{% endblock %}
+
+{% block content %}
+  <div class="page-header">
+    <h1>{{ chrome.t("spans-traces-heading") }}</h1>
+  </div>
+
+  <form class="filter-form" method="get" action="/web/traces/">
+    <input class="input w-auto"
+           type="text"
+           name="projects"
+           placeholder="{{ chrome.t("traces-filter-projects-placeholder") }}"
+           value="{{ projects }}"
+           aria-label="{{ chrome.t("traces-filter-projects-label") }}"
+           size="12">
+    <select class="select w-auto"
+            name="period"
+            aria-label="{{ chrome.t("traces-filter-period-label") }}">
+      {% call m::period_options(chrome, period, chrome.t("common-period-all")) %}
+      {% endcall %}
+    </select>
+    <label class="flex items-center gap-2 text-[13px]">
+      <input type="checkbox"
+             name="multi"
+             value="1"
+             {% if multi == "1" %}checked{% endif %}>
+      <span>{{ chrome.t("traces-filter-multi-label") }}</span>
+    </label>
+    <button class="btn btn-secondary" type="submit">{{ chrome.t("traces-filter-submit") }}</button>
+  </form>
+
+  {% if result.items.is_empty() %}
+    <div class="card">
+      <p class="empty">{{ chrome.t("traces-list-empty") }}</p>
+    </div>
+  {% else %}
+    <div class="card overflow-hidden">
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>{{ chrome.t("spans-col-trace-id") }}</th>
+              <th class="col-desc">{{ chrome.t("traces-col-root") }}</th>
+              <th>{{ chrome.t("traces-col-projects") }}</th>
+              <th class="text-end">{{ chrome.t("traces-col-transactions") }}</th>
+              <th class="text-end">{{ chrome.t("nav-spans") }}</th>
+              <th class="text-end">{{ chrome.t("traces-col-errors") }}</th>
+              <th>{{ chrome.t("spans-col-duration") }}</th>
+              <th>{{ chrome.t("spans-col-last-seen") }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for trace in result.items %}
+              <tr>
+                <td class="ltr-code">
+                  <a class="text-mono" href="/web/traces/{{ trace.trace_id }}/">{{ trace.trace_id|truncate_id }}</a>
+                </td>
+                <td class="col-desc truncate-cell text-mono ltr-code">
+                  {% match trace.root_name %}{% when Some with (n) %}{{ n }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
+              </td>
+              <td>
+                <span class="flex items-center gap-1 flex-wrap">
+                  {% for c in trace.chips %}
+                    <a href="/web/traces/?projects={{ c.project_id }}{{ chip_qs }}"
+                       class="badge"
+                       data-project="{{ c.project_id }}"
+                       style="background-color: {{ c.color }}1a;
+                              color: {{ c.color }};
+                              border: 1px solid {{ c.color }}59"><bdi>{{ c.label }}</bdi></a>
+                  {% endfor %}
+                  {% if trace.extra_projects > 0 %}
+                    <span class="text-muted text-[12px]">{{ chrome.tv_count("traces-more-projects", trace.extra_projects as i64) }}</span>
+                  {% endif %}
+                </span>
+              </td>
+              <td class="text-tabular text-end">{{ trace.transaction_count }}</td>
+              <td class="text-tabular text-end">{{ trace.span_count }}</td>
+              <td class="text-tabular text-end">
+                {% if trace.error_count > 0 %}
+                  {# error_count counts error rows only, so the link must narrow to them too. #}
+                  <a href="/web/events/?trace={{ trace.trace_id|urlencode }}&amp;item_type=event">{{ trace.error_count }}</a>
+                {% else %}
+                  <span class="text-muted">—</span>
+                {% endif %}
+              </td>
+              <td class="text-tabular">
+                {% match trace.extent_ms %}{% when Some with (ms) %}{{ ms|format_duration }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
+            </td>
+            <td class="text-muted">
+              <time datetime="{{ trace.last_timestamp|format_ts }}"
+                    title="{{ trace.last_timestamp|format_ts }}">{{ chrome.rel_time(trace.last_timestamp) }}</time>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<nav class="pagination"
+     aria-label="{{ chrome.t("traces-pagination-label") }}">
+  <span>{{ chrome.tv_count("traces-count", result.total as i64) }}</span>
+  <span class="flex gap-2">
+    {% if result.has_prev() %}
+      <a class="btn btn-ghost"
+         href="/web/traces/?offset={{ result.prev_offset() }}&amp;limit={{ result.limit }}{{ filter_qs }}">{{ chrome.t("spans-pagination-prev") }}</a>
+    {% endif %}
+    {% if result.has_next() %}
+      <a class="btn btn-ghost"
+         href="/web/traces/?offset={{ result.next_offset() }}&amp;limit={{ result.limit }}{{ filter_qs }}">{{ chrome.t("spans-pagination-next") }}</a>
+    {% endif %}
+  </span>
+</nav>
+{% endif %}
+{% endblock %}

@@ -34,6 +34,7 @@ events-list-filter-submit = ترشيح
 events-list-empty = لا توجد أحداث تطابق المرشّحات الحالية.
 events-untitled = (بلا عنوان)
 events-col-project = المشروع
+events-col-trace = التتبّع
 
 # --- الإجراءات المجمّعة ---
 events-bulk-delete = حذف

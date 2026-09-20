@@ -23,6 +23,7 @@ pub mod releases;
 pub mod replays;
 pub mod retention;
 pub mod spans;
+pub mod traces;
 pub mod transactions;
 pub mod types;
 pub mod users;

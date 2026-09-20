@@ -1,5 +1,5 @@
-{# Waterfall body shared by the per-project and org-level trace pages. Expects
-   `view` (TraceView) and `chrome` on the including template. #}
+{# Waterfall body for the trace page. Expects `view` (TraceView) and `chrome`
+   on the including template. #}
 {% if view.rows.is_empty() %}
   <div class="card">
     <p class="empty">{{ chrome.t("trace-detail-empty") }}</p>

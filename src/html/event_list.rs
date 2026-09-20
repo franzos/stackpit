@@ -81,14 +81,16 @@ pub async fn handler(
     // rows behind it. Missing the trace falls through to the ordinary search.
     if let Some(needle) = queries::trace_id_candidate(&query_str) {
         let org_ids = scope.org_ids();
-        if let Some((pid, trace_id)) =
+        // Unfiltered on purpose: `resolve_trace_id` returns `MIN(project_id)`,
+        // so pre-filtering on it would pin the page to an arbitrary hop and hide
+        // the rest of the trace — the opposite of what a pasted id asks for.
+        if let Some((_, trace_id)) =
             queries::events::resolve_trace_id(&pool, &needle, params.project_id, org_ids.as_deref())
                 .await?
         {
-            return Ok(axum::response::Redirect::to(&format!(
-                "/web/projects/{pid}/traces/{trace_id}/"
-            ))
-            .into_response());
+            return Ok(
+                axum::response::Redirect::to(&format!("/web/traces/{trace_id}/")).into_response(),
+            );
         }
     }
 
@@ -156,6 +158,42 @@ mod tests {
             base_qs: String::new(),
             chrome: PageChrome::new(String::new(), locale, "/web/projects/".into()),
         }
+    }
+
+    fn summary(event_id: &str, trace_id: Option<&str>) -> queries::EventSummary {
+        queries::EventSummary {
+            event_id: event_id.into(),
+            item_type: crate::ingest::models::ItemType::Event,
+            project_id: 7,
+            project_name: None,
+            fingerprint: None,
+            timestamp: 1_700_000_000,
+            level: Some("error".into()),
+            title: Some("boom".into()),
+            platform: None,
+            release: None,
+            environment: None,
+            trace_id: trace_id.map(String::from),
+        }
+    }
+
+    #[test]
+    fn a_traced_row_links_to_the_trace_page_and_an_untraced_one_does_not() {
+        let trace = "aabbccddeeff00112233445566778899";
+        let mut tmpl = empty_template(langid!("en"));
+        tmpl.result.items = vec![summary("e1", Some(trace)), summary("e2", None)];
+        tmpl.result.total = 2;
+        let out = tmpl.render().expect("render");
+
+        assert_eq!(
+            out.matches(&format!("href=\"/web/traces/{trace}/\""))
+                .count(),
+            1,
+            "the traced row links to the org trace page"
+        );
+        // Two rows, two trace cells, plus the sidebar's own `/web/traces/`
+        // entry: only one of the rows carries a link.
+        assert_eq!(out.matches("href=\"/web/traces/").count(), 2);
     }
 
     // Empty-collection render must not leak an unresolved Fluent key in either locale.

@@ -91,6 +91,8 @@ pub async fn list_checkins_for_monitor(
                 platform: row.get("platform"),
                 release: row.get("release"),
                 environment: row.get("environment"),
+                // A check-in is a monitor ping, never a traced request.
+                trace_id: None,
             }
         })
         .collect();

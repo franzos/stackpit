@@ -99,10 +99,11 @@ async fn issue_or_transaction_handler(
         if let Some((_, trace_id)) =
             queries::events::resolve_trace_id(pool, &needle, Some(project_id), None).await?
         {
-            return Ok(axum::response::Redirect::to(&format!(
-                "/web/projects/{project_id}/traces/{trace_id}/"
-            ))
-            .into_response());
+            // Unfiltered: the pasted id asks for the whole trace, not the hop
+            // `resolve_trace_id` happened to return.
+            return Ok(
+                axum::response::Redirect::to(&format!("/web/traces/{trace_id}/")).into_response(),
+            );
         }
     }
 

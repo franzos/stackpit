@@ -82,6 +82,10 @@ expression: "crate::html::redact_versions(tmpl.render().unwrap())"
   </div>
   <div class="px-3 pt-4 pb-1 label-caps">Across projects</div>
   <div class="px-2 space-y-0.5">
+    <a href="/web/traces/?projects=42"
+       class="sidebar-link">
+      <span>Traces</span>
+    </a>
     <a href="/web/releases/?project_id=42"
        class="sidebar-link">
       <span>Releases</span>

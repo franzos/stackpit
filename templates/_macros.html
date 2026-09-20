@@ -124,6 +124,10 @@
   </div>
   <div class="px-3 pt-4 pb-1 label-caps">{{ chrome.t("nav-across-projects") }}</div>
   <div class="px-2 space-y-0.5">
+    <a href="/web/traces/?projects={{ project_id }}"
+       class="sidebar-link">
+      <span>{{ chrome.t("nav-traces") }}</span>
+    </a>
     <a href="/web/releases/?project_id={{ project_id }}"
        class="sidebar-link">
       <span>{{ chrome.t("nav-releases") }}</span>
@@ -140,6 +144,18 @@
     <a href="/web/projects/"
        class="sidebar-link{% if active == "projects" %} sidebar-link-active{% endif %}">
       <span>{{ chrome.t("nav-projects") }}</span>
+    </a>
+    <a href="/web/traces/"
+       class="sidebar-link{% if active == "traces" %} sidebar-link-active{% endif %}">
+      <span>{{ chrome.t("nav-traces") }}</span>
+    </a>
+    <a href="/web/events/"
+       class="sidebar-link{% if active == "events" %} sidebar-link-active{% endif %}">
+      <span>{{ chrome.t("nav-events") }}</span>
+    </a>
+    <a href="/web/releases/"
+       class="sidebar-link{% if active == "releases" %} sidebar-link-active{% endif %}">
+      <span>{{ chrome.t("nav-releases") }}</span>
     </a>
   </div>
 {% endmacro %}

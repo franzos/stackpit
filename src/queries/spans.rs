@@ -12,7 +12,7 @@ use super::types::{
 /// `None` means all time. Bound as 0 rather than branching the SQL: event
 /// timestamps are Unix seconds, so `>= 0` matches every row and the
 /// (project_id, timestamp) index still drives the scan.
-fn since_bound(since_ts: Option<i64>) -> i64 {
+pub(crate) fn since_bound(since_ts: Option<i64>) -> i64 {
     since_ts.unwrap_or(0)
 }
 
@@ -171,7 +171,7 @@ pub enum TraceScope {
 impl TraceScope {
     /// True when the scope selects no rows at all, so the query is skipped
     /// rather than emitted with no predicate.
-    fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         match self {
             Self::Projects(ids) | Self::Orgs(ids) => ids.is_empty(),
             Self::All => false,
@@ -180,7 +180,7 @@ impl TraceScope {
 
     /// Push `AND <predicate>` for everything but `All`, which needs none.
     /// `project_column` is a caller-controlled literal, never user input.
-    fn push_predicate(
+    pub(crate) fn push_predicate(
         &self,
         qb: &mut sqlx::QueryBuilder<crate::db::Db>,
         project_column: &'static str,

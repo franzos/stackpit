@@ -1,5 +1,5 @@
 use askama::Template;
-use axum::extract::{Path, Query, RawQuery, State};
+use axum::extract::{Path, Query, RawQuery};
 
 use crate::extractors::{BrowserDefaults, ProjectPageCtx, ReadPool};
 use crate::html::chrome::PageChrome;
@@ -14,7 +14,6 @@ use crate::queries::types::{
     PagedResult, SpanAggregation, SpanSummary, TraceError, TraceSummary, Waterfall,
 };
 use crate::queries::ProjectNavCounts;
-use crate::server::AppState;
 
 use super::HtmlError;
 
@@ -30,16 +29,6 @@ struct SpanListTemplate {
     aggregates: SpanAggregation,
     agg_cap: usize,
     period: String,
-    nav: ProjectNavCounts,
-    chrome: PageChrome,
-}
-
-#[derive(Template)]
-#[template(path = "trace_detail.html")]
-struct TraceDetailTemplate {
-    project_id: u64,
-    trace_id: String,
-    view: TraceView,
     nav: ProjectNavCounts,
     chrome: PageChrome,
 }
@@ -99,7 +88,7 @@ pub async fn list_handler(
 /// One colour per contributing project, assigned by first appearance. Eight is
 /// well past the number of apps a single trace realistically crosses; beyond
 /// that the palette repeats rather than growing unreadable.
-const PROJECT_COLORS: [&str; 8] = [
+pub(crate) const PROJECT_COLORS: [&str; 8] = [
     "#2563eb", "#db2777", "#16a34a", "#d97706", "#7c3aed", "#0891b2", "#be123c", "#65a30d",
 ];
 
@@ -113,33 +102,41 @@ pub struct TraceViewParams {
 /// test so a long `?projects=` list can't turn one page load into a scan.
 const MAX_FILTER_PROJECTS: usize = 64;
 
+/// Read `?projects=1,2` into project ids, or `None` for the full view.
+/// Malformed entries are dropped; ids outside the caller's scope simply match
+/// no rows. Shared by the trace list and the trace page so a link carries from
+/// one to the other unchanged.
+pub(crate) fn parse_project_filter(raw: Option<&str>) -> Option<Vec<i64>> {
+    let raw = raw?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let mut ids: Vec<i64> = raw
+        .split(',')
+        .filter_map(|s| s.trim().parse::<i64>().ok())
+        .take(MAX_FILTER_PROJECTS)
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    (!ids.is_empty()).then_some(ids)
+}
+
 impl TraceViewParams {
-    /// Project ids to render, or `None` for the full view. Malformed entries are
-    /// dropped; ids outside the caller's scope simply match no rows.
     fn project_filter(&self) -> Option<Vec<i64>> {
-        let raw = self.projects.as_deref()?.trim();
-        if raw.is_empty() {
-            return None;
-        }
-        let mut ids: Vec<i64> = raw
-            .split(',')
-            .filter_map(|s| s.trim().parse::<i64>().ok())
-            .take(MAX_FILTER_PROJECTS)
-            .collect();
-        ids.sort_unstable();
-        ids.dedup();
-        (!ids.is_empty()).then_some(ids)
+        parse_project_filter(self.projects.as_deref())
     }
 }
 
-/// The one place a caller's entitlement becomes a trace read scope. Both trace
-/// handlers go through it so the superuser and membership cases cannot drift
-/// apart: a caller with a role never reaches `All`.
-fn trace_scope(
-    active: &ActiveOrg,
-    project_scope: Option<&crate::orgs::extractor::ProjectScope>,
-) -> queries::spans::TraceScope {
-    match cross_org_scope(active, project_scope) {
+/// The one place a caller's entitlement becomes a trace read scope. Both the
+/// trace page and the trace list go through it so the superuser and membership
+/// cases cannot drift apart: a caller with a role never reaches `All`.
+///
+/// There is no project narrowing: a trace crosses projects and, for a caller in
+/// several orgs, orgs. `?projects=` selects what is drawn, never what is read.
+pub(crate) fn trace_scope(active: &ActiveOrg) -> queries::spans::TraceScope {
+    // `cross_org_scope` is shared with two other pages, so the `Project` arm has
+    // to be handled even though no trace caller supplies a project scope.
+    match cross_org_scope(active, None) {
         CrossOrgScope::All => queries::spans::TraceScope::All,
         CrossOrgScope::Project(org_id) => queries::spans::TraceScope::Orgs(vec![org_id]),
         CrossOrgScope::Memberships(ids) => queries::spans::TraceScope::Orgs(ids),
@@ -157,12 +154,6 @@ pub struct LegendEntry {
     pub selected: bool,
     /// Query string this entry's link navigates to, `?projects=...` or empty.
     pub toggle_qs: String,
-}
-
-/// "n more transactions in m other projects", on the per-project page.
-pub struct OtherProjectsBanner {
-    pub transactions: usize,
-    pub projects: usize,
 }
 
 /// A waterfall row with everything the template needs pre-resolved.
@@ -192,12 +183,11 @@ pub struct TraceView {
     pub legend: Vec<LegendEntry>,
     pub span_total: usize,
     pub span_shown: usize,
-    pub other_projects: Option<OtherProjectsBanner>,
 }
 
 /// Read a trace at `scope` and render the rows in `visible` (all of them when
 /// `None`). The scope is the security boundary; `visible` is only what is drawn,
-/// which is why the banner can count transactions the page does not show.
+/// which is why the legend can list a project whose rows the page leaves out.
 ///
 /// Rows are filtered *before* the waterfall is built, so a row whose parent was
 /// filtered out surfaces as a root carrying the "parent not in view" marker
@@ -257,19 +247,6 @@ pub async fn build_trace_view(
         let idx = order.iter().position(|&p| p == project_id).unwrap_or(0);
         PROJECT_COLORS[idx % PROJECT_COLORS.len()]
     };
-
-    let banner = visible_set.as_ref().map(|_| {
-        let others: std::collections::HashSet<i64> = transactions
-            .iter()
-            .map(|t| t.project_id)
-            .filter(|p| !shown(*p))
-            .collect();
-        OtherProjectsBanner {
-            transactions: transactions.iter().filter(|t| !shown(t.project_id)).count(),
-            projects: others.len(),
-        }
-    });
-    let other_projects = banner.filter(|b| b.transactions > 0);
 
     let mut span_rows: Vec<queries::spans::SpanRow> = transactions
         .iter()
@@ -367,7 +344,6 @@ pub async fn build_trace_view(
         legend,
         span_total,
         span_shown,
-        other_projects,
     })
 }
 
@@ -396,36 +372,6 @@ fn not_found() -> HtmlError {
     HtmlError(axum::http::StatusCode::NOT_FOUND, "Not found".into())
 }
 
-pub async fn trace_detail_handler(
-    active: ActiveOrg,
-    State(state): State<AppState>,
-    ReadPool(pool): ReadPool,
-    Chrome(chrome): Chrome,
-    Path((project_id, trace_id)): Path<(u64, String)>,
-) -> Result<axum::response::Response, HtmlError> {
-    let trace_id = full_trace_id(&trace_id).ok_or_else(not_found)?;
-    let project_scope =
-        crate::orgs::extractor::require_project_scope(&active, &pool, project_id as i64)
-            .await
-            .map_err(|_| not_found())?;
-
-    // Read at the owning org's scope so the banner can count what other readable
-    // projects contributed, then render only this project's rows.
-    let scope = trace_scope(&active, Some(&project_scope));
-    let view = build_trace_view(&pool, &trace_id, &scope, Some(&[project_id as i64])).await?;
-
-    let nav = state.nav_counts(project_id).await;
-
-    let tmpl = TraceDetailTemplate {
-        project_id,
-        trace_id,
-        view,
-        nav,
-        chrome,
-    };
-    Ok(render_template(&tmpl))
-}
-
 /// The org-level trace page: every project the caller can read, on one
 /// waterfall. No project selector — the scope is who the caller is.
 pub async fn org_trace_detail_handler(
@@ -436,7 +382,7 @@ pub async fn org_trace_detail_handler(
     Query(params): Query<TraceViewParams>,
 ) -> Result<axum::response::Response, HtmlError> {
     let trace_id = full_trace_id(&trace_id).ok_or_else(not_found)?;
-    let scope = trace_scope(&active, None);
+    let scope = trace_scope(&active);
     let filter = params.project_filter();
     let view = build_trace_view(&pool, &trace_id, &scope, filter.as_deref()).await?;
     // Errors count as rows: below a sampling rate of 1 a trace routinely has
@@ -586,39 +532,16 @@ mod tests {
         .await
     }
 
-    async fn project_page(
-        pool: &crate::db::DbPool,
-        active: ActiveOrg,
-        project_id: u64,
-    ) -> Result<axum::response::Response, HtmlError> {
-        let (state, _chans) = crate::server::AppState::for_test(pool.clone());
-        trace_detail_handler(
-            active,
-            State(state),
-            ReadPool(pool.clone()),
-            chrome(),
-            Path((project_id, TRACE.to_string())),
-        )
-        .await
-    }
-
     // A caller with a role must never reach `All`, whichever page they land on.
     #[test]
     fn only_a_superuser_reaches_the_unscoped_trace_read() {
+        assert_eq!(trace_scope(&superuser()), queries::spans::TraceScope::All);
         assert_eq!(
-            trace_scope(&superuser(), None),
-            queries::spans::TraceScope::All
-        );
-        assert_eq!(
-            trace_scope(&member_of(&[20, 21]), None),
+            trace_scope(&member_of(&[20, 21])),
             queries::spans::TraceScope::Orgs(vec![20, 21])
         );
-        let scope = crate::orgs::extractor::ProjectScope {
-            org_id: 20,
-            role: Some(Role::Member),
-        };
         assert_eq!(
-            trace_scope(&member_of(&[20]), Some(&scope)),
+            trace_scope(&member_of(&[20])),
             queries::spans::TraceScope::Orgs(vec![20])
         );
     }
@@ -777,35 +700,37 @@ mod tests {
         assert!(!foreign.contains("POST /kyc/start"));
     }
 
+    // `require_project_scope` used to refuse a foreign project id on the
+    // per-project route. That route is gone; the org page has to refuse the same
+    // read, by the scope rather than by the URL.
     #[tokio::test]
-    async fn the_per_project_page_banners_only_when_others_contribute() {
+    async fn the_org_page_404s_when_nothing_on_the_trace_is_readable() {
         let pool = seeded().await;
-        let html = body(project_page(&pool, member_of(&[20]), 10).await.unwrap()).await;
-        assert!(html.contains("POST /kyc/start"));
-        assert!(
-            !html.contains("POST /users/registration"),
-            "rendered rows stay project-local"
-        );
-        assert!(
-            html.contains("1 more transaction") && html.contains("in 1 other project"),
-            "the banner counts what the scope could read but the page does not show"
-        );
+        let foreign_only = "1234567890abcdef1234567890abcdef";
+        sqlx::query(crate::db::sql!(
+            "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp,
+                                 transaction_name, trace_id, duration_ms, span_id, start_ms)
+             VALUES ('e-far', 'transaction', ?1, 12, 'k', 1700000000, 'GET /far-only', ?2, 5, 'd000', 1700000000000)"
+        ))
+        .bind(zstd::encode_all([0u8; 0].as_slice(), 3).unwrap())
+        .bind(foreign_only)
+        .execute(&pool)
+        .await
+        .unwrap();
 
-        // A member of org 21 alone sees project 12's trace with nothing else on it.
-        let alone = body(project_page(&pool, member_of(&[21]), 12).await.unwrap()).await;
-        assert!(alone.contains("GET /far"));
         assert!(
-            !alone.contains("more transaction"),
-            "no banner without others"
+            org_page(&pool, member_of(&[20]), foreign_only, None)
+                .await
+                .is_err(),
+            "a trace living entirely in a foreign org is not found, not empty"
         );
-    }
-
-    #[tokio::test]
-    async fn the_per_project_page_404s_outside_the_callers_orgs() {
-        let pool = seeded().await;
-        assert!(
-            project_page(&pool, member_of(&[20]), 12).await.is_err(),
-            "a project in a foreign org is not found, not empty"
-        );
+        // …and naming the foreign project outright does not reach it either.
+        assert!(org_page(&pool, member_of(&[20]), foreign_only, Some("12"))
+            .await
+            .is_err());
+        // The org that owns it still reads it.
+        assert!(org_page(&pool, member_of(&[21]), foreign_only, None)
+            .await
+            .is_ok());
     }
 }

@@ -114,7 +114,7 @@
           {% when None %}{% endmatch %}
           {% match trace_id %}{% when Some with (tid) %}
           <a class="btn btn-secondary"
-             href="/web/projects/{{ issue.project_id }}/traces/{{ tid }}/">{{ chrome.t("issue-detail-view-trace") }}</a>
+             href="/web/traces/{{ tid }}/?projects={{ issue.project_id }}">{{ chrome.t("issue-detail-view-trace") }}</a>
           {% when None %}{% endmatch %}
         </div>
       {% endif %}

@@ -44,7 +44,7 @@
               <tr>
                 <td class="ltr-code">
                   <a class="text-mono"
-                     href="/web/projects/{{ project_id }}/traces/{{ trace.trace_id }}/">{{ trace.trace_id|truncate_id }}</a>
+                     href="/web/traces/{{ trace.trace_id }}/?projects={{ project_id }}">{{ trace.trace_id|truncate_id }}</a>
                 </td>
                 <td class="text-mono ltr-code">
                   {% match trace.root_op %}{% when Some with (op) %}{{ op }}{% when None %}<span class="text-muted">—</span>{% endmatch %}
@@ -154,11 +154,11 @@
             <tr>
               <td class="ltr-code">
                 <a class="text-mono"
-                   href="/web/projects/{{ project_id }}/traces/{{ span.trace_id }}/">{{ span.span_id|truncate_id }}</a>
+                   href="/web/traces/{{ span.trace_id }}/?projects={{ project_id }}">{{ span.span_id|truncate_id }}</a>
               </td>
               <td class="ltr-code">
                 <a class="text-mono"
-                   href="/web/projects/{{ project_id }}/traces/{{ span.trace_id }}/">{{ span.trace_id|truncate_id }}</a>
+                   href="/web/traces/{{ span.trace_id }}/?projects={{ project_id }}">{{ span.trace_id|truncate_id }}</a>
               </td>
               <td class="text-mono ltr-code">
                 {% match span.op %}{% when Some with (op) %}{{ op }}{% when None %}<span class="text-muted">—</span>{% endmatch %}

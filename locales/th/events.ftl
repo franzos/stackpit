@@ -35,6 +35,7 @@ events-list-filter-submit = กรอง
 events-list-empty = ไม่มีเหตุการณ์ที่ตรงกับตัวกรองปัจจุบัน
 events-untitled = (ไม่มีชื่อ)
 events-col-project = โปรเจกต์
+events-col-trace = เทรซ
 
 # --- การกระทำแบบกลุ่ม ---
 events-bulk-delete = ลบ

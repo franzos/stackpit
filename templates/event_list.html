@@ -128,6 +128,7 @@
                   <a href="/web/events/?sort=project_id{{ base_qs }}"
                      {% if sort == "project_id" %}class="active-sort"{% endif %}>{{ chrome.t("events-col-project") }}</a>
                 </th>
+                <th class="hide-mobile">{{ chrome.t("events-col-trace") }}</th>
                 <th class="hide-mobile">
                   <a href="/web/events/?sort=platform{{ base_qs }}"
                      {% if sort == "platform" %}class="active-sort"{% endif %}>{{ chrome.t("events-label-platform") }}</a>
@@ -165,9 +166,12 @@
           <td>
             <a class="text-mono" href="/web/projects/{{ event.project_id }}/">{% match event.project_name %}{% when Some with (n) %}{{ n }}{% when None %}{{ event.project_id }}{% endmatch %}</a>
         </td>
-        <td class="hide-mobile">
-          {% match event.platform %}{% when Some with (p) %}<span class="badge badge-platform">{{ p }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
+        <td class="hide-mobile ltr-code">
+          {% match event.trace_id %}{% when Some with (tid) %}<a class="text-mono" href="/web/traces/{{ tid }}/">{{ tid|truncate_id }}</a>{% when None %}<span class="text-muted">—</span>{% endmatch %}
       </td>
+      <td class="hide-mobile">
+        {% match event.platform %}{% when Some with (p) %}<span class="badge badge-platform">{{ p }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
+    </td>
       <td class="hide-mobile">
         {% match event.environment %}{% when Some with (e) %}<span class="text-mono text-[12px]">{{ e }}</span>{% when None %}<span class="text-muted">—</span>{% endmatch %}
     </td>

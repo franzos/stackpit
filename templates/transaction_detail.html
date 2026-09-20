@@ -188,7 +188,7 @@
             {% match i.trace_id %}
             {% when Some with (tid) %}
             <a class="truncate"
-               href="/web/projects/{{ project_id }}/traces/{{ tid }}/">{{ tid }}</a>
+               href="/web/traces/{{ tid }}/?projects={{ project_id }}">{{ tid }}</a>
             {% when None %}
             <span class="text-muted">{{ i.event_id }}</span>
           {% endmatch %}

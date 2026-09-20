@@ -45,6 +45,18 @@ expression: "crate::html::redact_versions(tpl.render().unwrap())"
        class="sidebar-link">
       <span>Projects</span>
     </a>
+    <a href="/web/traces/"
+       class="sidebar-link">
+      <span>Traces</span>
+    </a>
+    <a href="/web/events/"
+       class="sidebar-link">
+      <span>Events</span>
+    </a>
+    <a href="/web/releases/"
+       class="sidebar-link">
+      <span>Releases</span>
+    </a>
   </div>
 
 

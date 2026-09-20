@@ -153,7 +153,7 @@ async fn list_all_events_inner(
     let mut select_qb: QueryBuilder<crate::db::Db> = QueryBuilder::new(
         "SELECT events.event_id, events.item_type, events.project_id, p.name AS project_name, \
          events.fingerprint, events.timestamp, events.level, events.title, events.platform, \
-         events.release, events.environment \
+         events.release, events.environment, events.trace_id \
          FROM events LEFT JOIN projects p ON p.project_id = events.project_id",
     );
     push_event_filter_conditions(&mut select_qb, filter, org_ids);
@@ -231,7 +231,7 @@ pub async fn list_events(
         .get::<i64, _>(0);
 
     let rows = sqlx::query(sql!(
-        "SELECT event_id, item_type, project_id, fingerprint, timestamp, level, title, platform, release, environment
+        "SELECT event_id, item_type, project_id, fingerprint, timestamp, level, title, platform, release, environment, trace_id
          FROM events WHERE project_id = ?1
          ORDER BY timestamp DESC
          LIMIT ?2 OFFSET ?3"
@@ -270,7 +270,7 @@ pub async fn list_events_for_issue(
     .unwrap_or(0);
 
     let rows = sqlx::query(sql!(
-        "SELECT event_id, item_type, project_id, fingerprint, timestamp, level, title, platform, release, environment
+        "SELECT event_id, item_type, project_id, fingerprint, timestamp, level, title, platform, release, environment, trace_id
          FROM events WHERE project_id = ?1 AND fingerprint = ?2
          ORDER BY timestamp DESC
          LIMIT ?3 OFFSET ?4"
@@ -656,6 +656,7 @@ fn map_event_summary(row: &crate::db::DbRow) -> Result<EventSummary> {
         platform: row.get("platform"),
         release: row.get("release"),
         environment: row.get("environment"),
+        trace_id: row.get_opt_string("trace_id"),
     })
 }
 
@@ -1312,6 +1313,59 @@ mod tests {
             .execute(pool)
             .await
             .unwrap();
+    }
+
+    // `map_event_summary` reads `trace_id` by name, so a SELECT that forgets it
+    // builds clean and panics at runtime. Every listing path gets executed here.
+    #[tokio::test]
+    async fn every_event_listing_carries_the_trace_id() {
+        let pool = open_test_db().await;
+        insert_traced_event(&pool, "t1", 1, TRACE_A, "traced").await;
+        sqlx::query(sql!(
+            "UPDATE events SET fingerprint = 'fp1' WHERE event_id = 't1'"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        insert_test_event(
+            &pool,
+            "t2",
+            1,
+            100,
+            Some("fp1"),
+            Some("error"),
+            Some("plain"),
+        )
+        .await;
+
+        let page = Page::new(None, None);
+        let trace_of = |items: &[EventSummary], id: &str| {
+            items
+                .iter()
+                .find(|e| e.event_id == id)
+                .unwrap()
+                .trace_id
+                .clone()
+        };
+
+        for items in [
+            list_all_events(&pool, &EventFilter::default(), &page, None)
+                .await
+                .unwrap()
+                .items,
+            list_events(&pool, 1, &page).await.unwrap().items,
+            list_events_for_issue(&pool, 1, "fp1", &page)
+                .await
+                .unwrap()
+                .items,
+        ] {
+            assert_eq!(trace_of(&items, "t1").as_deref(), Some(TRACE_A));
+            assert_eq!(
+                trace_of(&items, "t2"),
+                None,
+                "an untraced event stays empty"
+            );
+        }
     }
 
     // The event list narrows to one trace on the full id and on a prefix, and

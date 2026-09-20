@@ -213,6 +213,9 @@ pub struct EventSummary {
     pub platform: Option<String>,
     pub release: Option<String>,
     pub environment: Option<String>,
+    /// Present on any event the SDK traced, error events included. Read by name
+    /// in `map_event_summary`, so a SELECT that omits it panics at runtime.
+    pub trace_id: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -697,6 +700,38 @@ pub struct TraceSummary {
     pub root_op: Option<String>,
     pub root_description: Option<String>,
     pub total_duration_ms: Option<i64>,
+}
+
+/// One row of the org-wide traces list: a whole trace, across every project the
+/// caller can read.
+#[derive(Debug)]
+pub struct OrgTraceSummary {
+    pub trace_id: String,
+    pub transaction_count: u64,
+    /// Distinct projects seen by the *bounded scan*. Drives the multi-project
+    /// filter only; what the row displays comes from the rollup.
+    pub project_count: u64,
+    pub first_timestamp: i64,
+    pub last_timestamp: i64,
+    /// Wall-clock extent of the trace's transactions. `None` when every
+    /// contributing row predates migration 030 and carries no `start_ms`.
+    pub extent_ms: Option<i64>,
+    pub root_name: Option<String>,
+}
+
+/// One project's transaction count on a trace, for the row's project chips.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraceProjectCount {
+    pub project_id: i64,
+    pub transaction_count: u64,
+}
+
+/// Per-trace detail the group-by cannot supply, fetched for one visible page.
+#[derive(Debug, Default)]
+pub struct TraceRollup {
+    /// Contributing projects, most transactions first, id as tiebreak.
+    pub projects: Vec<TraceProjectCount>,
+    pub error_count: u64,
 }
 
 #[derive(Debug, Serialize)]

@@ -53,6 +53,35 @@ spans-count = { $count ->
    *[other] { $count } امتداد
 }
 
+# --- قائمة التتبّعات على مستوى المؤسسة ---
+traces-col-root = المعاملة الجذرية
+traces-col-projects = المشاريع
+traces-col-transactions = المعاملات
+traces-col-errors = الأخطاء
+traces-list-empty = لم يُعثر على تتبّعات.
+traces-filter-projects-label = معرّفات المشاريع
+traces-filter-projects-placeholder = معرّفات المشاريع
+traces-filter-period-label = الفترة الزمنية
+traces-filter-multi-label = يمتدّ عبر أكثر من مشروع
+traces-filter-submit = تصفية
+traces-pagination-label = ترقيم صفحات التتبّعات
+traces-count = { $count ->
+    [zero] لا تتبّعات
+    [one] تتبّع واحد
+    [two] تتبّعان
+    [few] { $count } تتبّعات
+    [many] { $count } تتبّعًا
+   *[other] { $count } تتبّع
+}
+traces-more-projects = { $count ->
+    [zero] +{ $count } إضافي
+    [one] +{ $count } إضافي
+    [two] +{ $count } إضافيان
+    [few] +{ $count } إضافية
+    [many] +{ $count } إضافيًا
+   *[other] +{ $count } إضافي
+}
+
 # --- تفاصيل التتبّع (الشلال) ---
 trace-detail-title-prefix = التتبّع
 trace-detail-title-suffix = — Stackpit
@@ -90,21 +119,4 @@ trace-detail-filter-clear = عرض الكل
 trace-detail-col-project = المشروع
 trace-detail-parent-not-in-view = الامتداد الأصل خارج العرض
 trace-detail-txn-badge = معاملة
-trace-detail-other-projects-link = عرض التتبّع كاملًا
-trace-detail-other-projects-transactions = { $count ->
-    [zero] لا معاملات إضافية
-    [one] معاملة إضافية واحدة
-    [two] معاملتان إضافيتان
-    [few] { $count } معاملات إضافية
-    [many] { $count } معاملةً إضافية
-   *[other] { $count } معاملة إضافية
-}
-trace-detail-other-projects-count = { $count ->
-    [zero] في لا مشاريع أخرى
-    [one] في مشروع آخر
-    [two] في مشروعين آخرين
-    [few] في { $count } مشاريع أخرى
-    [many] في { $count } مشروعًا آخر
-   *[other] في { $count } مشروع آخر
-}
 trace-detail-view-events = كل الأحداث في هذا التتبّع

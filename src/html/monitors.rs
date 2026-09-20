@@ -179,6 +179,7 @@ mod snapshot_tests {
                     platform: None,
                     release: None,
                     environment: None,
+                    trace_id: None,
                 }],
                 total: 3,
                 offset: 0,

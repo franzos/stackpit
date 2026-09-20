@@ -37,7 +37,21 @@ Sort by events, first seen, or last seen. If you arrived by clicking a tag value
 
 Paste a trace id into the search box and you land on that trace's waterfall instead of the list. A prefix works too, as long as it matches only one trace. The same holds for the cross-project Events search, which also takes a Trace ID filter to list every event on one trace.
 
-One user flow often crosses several applications, each with its own project. Since the SDKs propagate the trace id across the hop, `/web/traces/{trace_id}/` draws the whole thing on one waterfall: every project you can read, with each application's transaction nested under the outbound `http.client` span of the app that called it. A legend above the waterfall lists the contributing projects with their transaction counts, and each entry toggles that project in the `?projects=` filter — the URL is the saved view, so it's bookmarkable and shareable, and nothing is stored on the server. A row whose parent span isn't on screen — filtered out, in a project you can't read, or never reported — is drawn as a root and marked "parent span not in view". The per-project trace page is unchanged and still where the links land; when other projects you can read also appear on the trace, it shows a banner with the count and a link to the full view.
+One user flow often crosses several applications, each with its own project. Since the SDKs propagate the trace id across the hop, `/web/traces/{trace_id}/` draws the whole thing on one waterfall: every project you can read, with each application's transaction nested under the outbound `http.client` span of the app that called it. A legend above the waterfall lists the contributing projects with their transaction counts, and each entry toggles that project in the `?projects=` filter — the URL is the saved view, so it's bookmarkable and shareable, and nothing is stored on the server. A row whose parent span isn't on screen — filtered out, in a project you can't read, or never reported — is drawn as a root and marked "parent span not in view".
+
+That is the only trace page, and `/web/traces/{trace_id}/` is the only URL for it. Links from inside a project carry `?projects=` so you land filtered to where you came from; pasting a trace id into a search box takes you to the unfiltered view, since what you asked for is the whole trace. Per-project trace URLs of the form `/web/projects/{id}/traces/{trace_id}/` are not served — a link of that shape 404s.
+
+### Finding a trace
+
+Traces in the sidebar, or `/web/traces/`, lists them across every project you can read: the root transaction, a coloured chip per contributing project, transaction, span and error counts, how long the trace ran, and when it was last seen. Click the trace id for the waterfall, or a chip to filter the list to that project.
+
+The filters all live in the URL:
+
+- `?projects=1,2` — the same comma-separated list the trace page takes, so a link carries from one to the other. Name a single project and the page keeps that project's sidebar.
+- Time range, the same option set as everywhere else.
+- "Spans more than one project", off by default — tick it to see only the traces that crossed an application boundary.
+
+Sorting is by last seen, newest first. The list reads transaction events, so a trace that only ever produced standalone spans shows up on the project's own Spans page rather than here.
 
 ## Reading an issue
 

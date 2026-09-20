@@ -46,6 +46,27 @@ spans-count = { $count ->
    *[other] { $count } spans
 }
 
+# --- Liste des traces à l'échelle de l'organisation ---
+traces-col-root = Transaction racine
+traces-col-projects = Projets
+traces-col-transactions = Transactions
+traces-col-errors = Erreurs
+traces-list-empty = Aucune trace trouvée.
+traces-filter-projects-label = ID de projets
+traces-filter-projects-placeholder = ID de projets
+traces-filter-period-label = Période
+traces-filter-multi-label = Couvre plusieurs projets
+traces-filter-submit = Filtrer
+traces-pagination-label = Pagination des traces
+traces-count = { $count ->
+    [one] { $count } trace
+   *[other] { $count } traces
+}
+traces-more-projects = { $count ->
+    [one] +{ $count } autre
+   *[other] +{ $count } autres
+}
+
 # --- Détail d'une trace (cascade) ---
 # title-prefix/suffix encadrent l'id de trace dynamique ; total/showing-first/of
 # sont découpés aux limites { $var } de la ligne de méta.
@@ -81,13 +102,4 @@ trace-detail-filter-clear = Tout afficher
 trace-detail-col-project = Projet
 trace-detail-parent-not-in-view = Span parent hors de la vue
 trace-detail-txn-badge = Transaction
-trace-detail-other-projects-link = Voir la trace complète
-trace-detail-other-projects-transactions = { $count ->
-    [one] { $count } transaction de plus
-   *[other] { $count } transactions de plus
-}
-trace-detail-other-projects-count = { $count ->
-    [one] dans { $count } autre projet
-   *[other] dans { $count } autres projets
-}
 trace-detail-view-events = Tous les événements de cette trace

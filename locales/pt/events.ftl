@@ -35,6 +35,7 @@ events-list-filter-submit = Filtrar
 events-list-empty = Nenhum evento corresponde aos filtros atuais.
 events-untitled = (sem título)
 events-col-project = Projeto
+events-col-trace = Trace
 
 # --- Ações em massa ---
 events-bulk-delete = Eliminar

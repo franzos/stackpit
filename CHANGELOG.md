@@ -1,17 +1,22 @@
 # Changelog
 
-## [Unreleased]
+## [0.4.8] - 2026-10-05
 
 ### Security
 - An id_token could be presented as an access token and was accepted
 - Logging out left the refresh token alive at the identity provider
+- An opaque token with no audience was accepted on a client-id match
 
 ### Fixed
-- Back-channel logout rejected every logout token Hydra sent, so sessions ended by the identity provider were never cleared here. `exp` is optional on a logout token, not forbidden — only `nonce` is.
+- Back-channel logout rejected every logout token Hydra sent
+- SSO logout stopped at Stackpit's own form-action policy
+- ID and logout tokens failed to verify against non-Hydra identity providers
 
 ### Changed
-- An opaque token with no audience is no longer accepted on a client-id match alone.
-- Startup refuses a config where `auth.oauth.web_audience` equals `auth.oauth.client_id`: an id_token carries `aud = client_id`, so the two being the same makes an id_token indistinguishable from an access token for this server.
+- `offline_access` is requested only when listed in `scopes`
+- The browser session is the stored grant, not a per-request token check
+- Startup refuses `web_audience` equal to `client_id`
+- Startup refuses a `refresh_token_max_ttl_secs` of 0
 
 ## [0.4.7] - 2026-09-20
 

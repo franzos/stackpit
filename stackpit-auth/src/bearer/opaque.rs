@@ -92,13 +92,17 @@ impl BearerGate {
             return BearerAuthOutcome::InvalidToken;
         }
 
-        // Some Hydra opaque tokens omit `aud`; accept `client_id` match instead.
-        // Only when the response carried no audience at all: a token bound to a
-        // *different* resource must never pass just because the same client
-        // minted it (that turns every web-session token into a /mcp credential).
+        // Some IdPs omit `aud` on opaque tokens. Falling back to a `client_id`
+        // match for those is OPT-IN (`allow_audience_less_opaque`): an
+        // audience-less token from the same client is indistinguishable from
+        // one minted for a different resource, so the fallback silently turns
+        // every web-session token into a credential for this resource. Even
+        // when enabled it applies only to a response with no audience at all —
+        // a token bound to a *different* resource never passes.
         if !self.inner.audience.is_empty() {
             let aud_match = body.aud.contains(&self.inner.audience);
-            let client_id_match = body.aud.is_empty()
+            let client_id_match = self.inner.allow_audience_less_opaque
+                && body.aud.is_empty()
                 && !self.inner.client_id.is_empty()
                 && body
                     .client_id

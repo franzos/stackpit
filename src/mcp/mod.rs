@@ -258,6 +258,8 @@ pub(crate) mod test_support {
             realm: "stackpit".to_string(),
             expected_issuer: Some(TEST_ISSUER.to_string()),
             client_id: String::new(),
+            jwt_login_client_id: "stackpit-web".to_string(),
+            allow_audience_less_opaque: false,
             admin_token: None,
             introspection_client_id: None,
             introspection_client_secret: None,
@@ -268,8 +270,8 @@ pub(crate) mod test_support {
             jwt: Some(JwtVerifierConfig {
                 jwks: JwksCache::new(
                     reqwest::Client::new(),
-                    "http://127.0.0.1:0/jwks".to_string(),
-                    60,
+                    url::Url::parse("http://127.0.0.1:0/jwks").unwrap(),
+                    crate::oidc::client::jwks_cache_config(60),
                 ),
             }),
         })

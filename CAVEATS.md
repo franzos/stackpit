@@ -2,40 +2,10 @@
 
 Deliberate trade-offs and non-obvious constraints. These are intentional, not bugs.
 
-## Two JWT libraries, two JWKS parses
+## One JWKS parse, two JWT libraries underneath
 
-stackpit depends on **both** `openidconnect` and `jsonwebtoken`, and parses the
-provider's JWKS into two in-memory forms. This is on purpose.
+Every IdP-signed token goes through the `oidc-relying-party` crate: ID tokens (`src/oidc/client.rs`), MCP access tokens (`stackpit-auth/src/bearer/jwt.rs`) and back-channel logout tokens (`src/oidc/logout.rs`) share the issuer's `JwksCache` (an `auth.mcp.jwks_url` override gets its own), which parses each JWKS once and applies the same key rules to all three. The crate verifies ID tokens with `openidconnect` and the other two with `jsonwebtoken`, so both stay in the dependency tree, neither as a runtime dependency of Stackpit's own crates; only the one matched key is converted to `openidconnect`'s type, per ID-token verification.
 
-The two crates are independent crypto stacks: `openidconnect` ships its own JOSE
-implementation on RustCrypto (`rsa`/`p256`/`sha2`/…), while `jsonwebtoken` is
-built on `ring`/`aws-lc-rs`. They share no key type, so the same JWKS document
-has to be parsed once per library. There is no single key type that works for
-both, and `openidconnect` is its own crypto island regardless of what else is in
-the tree.
+## A second copy of the refresh token for back-channel logout
 
-We carry both because stackpit does three JWT jobs with conflicting rules:
-
-- **id_token** (login) — verified by `openidconnect`, which enforces the strict
-  id_token checks (nonce, `aud == client_id`). That strictness is exactly what
-  we want at login.
-- **MCP access token** (RS256, resource-server) — not an id_token; needs a
-  relaxed, claims-agnostic RS256 verify.
-- **back-channel `logout_token`** — the spec *forbids* nonce and aud-match,
-  which `openidconnect`'s id_token verifier requires.
-
-`openidconnect` does not publicly expose a generic JWS verify (the primitive
-exists internally but is private), so the latter two go through `jsonwebtoken`.
-Collapsing to one library isn't worth it: openidconnect-only would mean
-hand-rolling JWT envelope parsing against a private primitive, and
-jsonwebtoken-only would mean hand-rolling id_token verification — the most
-security-critical, easiest-to-botch part of OIDC.
-
-The runtime cost is small: `JwksCache` fetches the raw JWKS once (and refetches
-on `kid` miss); only the in-memory parse is duplicated. A login-only OIDC app
-(e.g. one built on `axum-oidc`) never hits this — it needs only `openidconnect`.
-The second library shows up here precisely because stackpit is *also* a resource
-server (MCP) and handles back-channel logout.
-
-Call sites: `src/oauth.rs` (id_token), `stackpit-auth/src/jwks.rs` (MCP RS256),
-`src/oidc/logout.rs` (logout_token).
+`oidc_grants` encrypts every token with the browser's raw cookie handle as AAD and stores only its hash, so the database plus the master key cannot read a grant's tokens. Back-Channel Logout 1.0 §2.7 wants the refresh tokens of session-bound grants (no `offline_access`) revoked when a logout token ends them, and that handler never sees a cookie. `refresh_token_bc` is the same refresh token encrypted under AAD = the hashed handle, written wherever the refresh token is written and only for grants without `offline_access`, read only by the back-channel handler. That copy is readable with the database and the master key; the access and ID tokens keep the stronger property. The `offline` flag comes from the token response's granted `scope`, updated on a refresh only when the response lists `scope` again (RFC 6749 §5.1 lets the OP omit it); an OP that never returns `scope` leaves every grant marked session-bound.

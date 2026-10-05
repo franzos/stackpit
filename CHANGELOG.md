@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+### Security
+- An id_token could be presented as an access token and was accepted
+- Logging out left the refresh token alive at the identity provider
+
+### Fixed
+- Back-channel logout rejected every logout token Hydra sent, so sessions ended by the identity provider were never cleared here. `exp` is optional on a logout token, not forbidden — only `nonce` is.
+
+### Changed
+- An opaque token with no audience is no longer accepted on a client-id match alone.
+- Startup refuses a config where `auth.oauth.web_audience` equals `auth.oauth.client_id`: an id_token carries `aud = client_id`, so the two being the same makes an id_token indistinguishable from an access token for this server.
+
 ## [0.4.7] - 2026-09-20
 
 ### Added

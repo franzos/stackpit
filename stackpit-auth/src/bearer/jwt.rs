@@ -2,9 +2,9 @@
 //! against the JWKS cache. Issuer mismatch fails closed -- never falls through
 //! to introspection.
 
-use base64::Engine;
-use jsonwebtoken::errors::ErrorKind;
-use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
+use oidc_relying_party::algorithms::SigningAlgorithm;
+use oidc_relying_party::jwks::TokenPolicy;
+use oidc_relying_party::unverified::{unverified_header, unverified_payload};
 
 use super::cache::hash_token;
 use super::{now_secs, BearerAuthOutcome, BearerGate, CachedResponse};
@@ -56,54 +56,47 @@ impl BearerGate {
             return self.check_scope(cached, iss, required_scope);
         }
 
-        let header = match decode_header(token) {
-            Ok(h) => h,
-            Err(err) => {
-                tracing::warn!(error = %err, "bearer rejected: JWT header undecodable");
-                return BearerAuthOutcome::InvalidToken;
-            }
-        };
-        let Some(kid) = header.kid else {
+        if unverified_header(token).is_none_or(|h| h.get("kid").is_none_or(|k| !k.is_string())) {
             tracing::warn!("bearer rejected: JWT header missing kid");
             return BearerAuthOutcome::InvalidToken;
-        };
-        // Header `alg` is informational; the validator pins RS256 below.
-
-        let Some(jwk) = jwks.find(&kid).await else {
-            tracing::warn!(kid = %kid, "bearer rejected: kid not in JWKS");
-            return BearerAuthOutcome::InvalidToken;
-        };
-        let key = match DecodingKey::from_jwk(&jwk) {
-            Ok(k) => k,
-            Err(err) => {
-                tracing::warn!(error = %err, "bearer rejected: JWK->DecodingKey failed");
-                return BearerAuthOutcome::InvalidToken;
-            }
-        };
-
-        let mut validation = Validation::new(Algorithm::RS256);
-        validation.set_issuer(&[expected_iss]);
-        if !self.inner.audience.is_empty() {
-            validation.set_audience(&[self.inner.audience.as_str()]);
-            // `set_audience` only compares when the claim is present, so an
-            // aud-less token would sail through (RFC 9068 §2.2 makes it REQUIRED).
-            validation.set_required_spec_claims(&["exp", "aud", "iss"]);
-        } else {
-            // jsonwebtoken validates aud by default; turn it off explicitly.
-            validation.validate_aud = false;
         }
-        validation.validate_nbf = true;
-        validation.leeway = JWT_LEEWAY_SECS;
 
-        let data = match decode::<serde_json::Value>(token, &key, &validation) {
-            Ok(d) => d,
+        // A configured audience also makes `aud` required (RFC 9068 §2.2).
+        let policy = TokenPolicy {
+            issuer: expected_iss.to_string(),
+            audience: if self.inner.audience.is_empty() {
+                Vec::new()
+            } else {
+                vec![self.inner.audience.clone()]
+            },
+            required_claims: vec!["exp".to_string()],
+            validate_exp: true,
+            leeway: JWT_LEEWAY_SECS,
+            refuse_id_token_shape: (!self.inner.jwt_login_client_id.is_empty())
+                .then(|| self.inner.jwt_login_client_id.clone()),
+            skip_audience_check: self.inner.audience.is_empty(),
+        };
+        let claims = match jwks
+            .verify::<serde_json::Value>(token, &policy, &[SigningAlgorithm::Rs256])
+            .await
+        {
+            Ok(claims) => claims,
             Err(err) => {
                 // An audience mismatch is otherwise indistinguishable from a
                 // JWKS problem in the logs, which is a long wrong turn.
-                if matches!(err.kind(), ErrorKind::InvalidAudience) {
+                let unverified = unverified_payload(token);
+                let aud = unverified.as_ref().and_then(|c| c.get("aud"));
+                let aud_matches = match aud {
+                    Some(serde_json::Value::String(s)) => *s == self.inner.audience,
+                    Some(serde_json::Value::Array(a)) => a
+                        .iter()
+                        .any(|v| v.as_str() == Some(self.inner.audience.as_str())),
+                    _ => false,
+                };
+                if !self.inner.audience.is_empty() && !aud_matches {
                     tracing::warn!(
                         expected_aud = %self.inner.audience,
-                        got_aud = %unverified_aud(token).unwrap_or_else(|| "<none>".to_string()),
+                        got_aud = %aud.map_or_else(|| "<none>".to_string(), ToString::to_string),
                         "bearer rejected: JWT audience does not contain this resource",
                     );
                 } else {
@@ -112,7 +105,6 @@ impl BearerGate {
                 return BearerAuthOutcome::InvalidToken;
             }
         };
-        let claims = data.claims;
 
         let Some(sub) = claims
             .get("sub")
@@ -197,30 +189,10 @@ fn scope_claim(claims: &serde_json::Value) -> Option<String> {
 
 /// Used only to pick the validator; signature verification re-checks `iss`.
 fn unverified_iss(token: &str) -> Option<String> {
-    unverified_claims(token)?
+    unverified_payload(token)?
         .get("iss")?
         .as_str()
         .map(str::to_string)
-}
-
-/// Diagnostics only: rendered into the rejection log after the validator has
-/// already refused the token.
-fn unverified_aud(token: &str) -> Option<String> {
-    Some(unverified_claims(token)?.get("aud")?.to_string())
-}
-
-fn unverified_claims(token: &str) -> Option<serde_json::Value> {
-    let mut parts = token.split('.');
-    let _header = parts.next()?;
-    let payload_b64 = parts.next()?;
-    let _sig = parts.next()?;
-    if parts.next().is_some() {
-        return None;
-    }
-    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(payload_b64)
-        .ok()?;
-    serde_json::from_slice(&payload).ok()
 }
 
 #[cfg(test)]

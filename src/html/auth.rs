@@ -11,10 +11,12 @@
 use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Redirect, Response};
+use oidc_relying_party::auth_response::{check_authorization_response_iss, AuthorizationErrorCode};
 use serde::Deserialize;
 
 use crate::oidc::cookies::{
-    append_set_cookie, build_grant_cookie, build_login_cookie, clear_login_cookie, LOGIN_COOKIE,
+    append_set_cookie, build_grant_cookie, build_login_cookie, clear_login_cookie,
+    login_cookie_name,
 };
 use crate::oidc::grants::{self, NewGrant};
 use crate::oidc::login_state::{self, LoginState};
@@ -36,7 +38,13 @@ pub async fn login(State(state): State<AppState>) -> Response {
         return login_error("encryption_unconfigured");
     };
 
-    let start = oidc.start_login().await;
+    let start = match oidc.start_login() {
+        Ok(start) => start,
+        Err(e) => {
+            tracing::error!("building the authorization request failed: {e:#}");
+            return login_error("session_unavailable");
+        }
+    };
     let packed = match login_state::pack(
         encryptor,
         &LoginState::new(start.state.clone(), start.nonce, start.pkce_verifier),
@@ -62,6 +70,8 @@ pub struct CallbackQuery {
     state: Option<String>,
     error: Option<String>,
     error_description: Option<String>,
+    /// RFC 9207 authorization-server issuer identifier.
+    iss: Option<String>,
 }
 
 /// `GET /web/auth/callback` -- finish the auth-code flow, issue a grant.
@@ -76,6 +86,12 @@ pub async fn callback(
     let Some(encryptor) = state.encryptor.as_ref() else {
         return finish_with_error(&state, "encryption_unconfigured");
     };
+
+    // RFC 9207 §2.4: checked on success and error responses alike (mix-up defence).
+    if check_authorization_response_iss(oidc.discovery(), q.iss.as_deref()).is_err() {
+        tracing::warn!(iss = ?q.iss, "OAuth callback iss does not match the configured issuer");
+        return finish_with_error(&state, "issuer_mismatch");
+    }
 
     if let Some(err) = q.error.as_deref() {
         tracing::warn!(
@@ -93,7 +109,8 @@ pub async fn callback(
     };
 
     // forged or expired cookies fail decryption: the GCM tag is the integrity check
-    let Some(packed) = read_cookie(&headers, LOGIN_COOKIE) else {
+    let login_cookie = login_cookie_name(state.config.server.cookies_should_be_secure());
+    let Some(packed) = read_cookie(&headers, login_cookie) else {
         return finish_with_error(&state, "session_expired");
     };
     let Some(login_state) = login_state::unpack(encryptor, packed) else {
@@ -181,6 +198,7 @@ pub async fn callback(
             refresh_token: success.refresh_token.as_deref(),
             refresh_exp: success.refresh_exp,
             id_token: &success.id_token,
+            offline: success.offline,
         },
     )
     .await
@@ -229,9 +247,10 @@ pub async fn callback(
 }
 
 /// `POST /web/auth/backchannel-logout` -- Hydra POSTs a signed logout token
-/// when the user logs out elsewhere. Validate strictly, dedupe by jti,
-/// write revocation marker, eager-delete matching grants. Returns 200 OK
-/// or 400 with an empty body per the spec.
+/// when the user logs out elsewhere. Validate strictly, write the
+/// revocation marker, eager-delete matching grants, record the jti, then
+/// revoke the session-bound refresh tokens (§2.7, best-effort). Returns
+/// 200 OK (also for a replay) or 400 with an empty body per the spec.
 pub async fn backchannel_logout(
     State(state): State<AppState>,
     body: axum::body::Bytes,
@@ -247,15 +266,7 @@ pub async fn backchannel_logout(
         return axum::http::StatusCode::BAD_REQUEST.into_response();
     };
 
-    let validation = logout::validate_logout_token(&oidc, &token).await;
-    let logout::LogoutValidation::Ok {
-        iss,
-        sub,
-        sid,
-        jti,
-        iat,
-    } = validation
-    else {
+    let Some(claims) = logout::validate_logout_token(&oidc, &token).await else {
         return axum::http::StatusCode::BAD_REQUEST.into_response();
     };
 
@@ -267,17 +278,24 @@ pub async fn backchannel_logout(
         state.config.auth.oauth.refresh_token_max_ttl_secs,
     );
 
-    match logout::apply_logout(
+    // Read before apply_logout deletes the rows.
+    let revocable = select_revocable(&state, &claims).await;
+
+    let applied = logout::apply_logout(
         &state.auth_pool,
-        &iss,
-        sub.as_deref(),
-        sid.as_deref(),
-        &jti,
-        iat,
+        &claims.iss,
+        claims.sub.as_deref(),
+        claims.sid.as_deref(),
+        &claims.jti,
+        claims.iat,
         ttl,
     )
-    .await
-    {
+    .await;
+    if matches!(applied, Ok(()) | Err(logout::LogoutApplyError::Replay)) {
+        revoke_refresh_tokens(&state, &oidc, revocable).await;
+    }
+
+    match applied {
         Ok(()) => {
             let mut resp = axum::http::StatusCode::OK.into_response();
             resp.headers_mut().insert(
@@ -287,8 +305,8 @@ pub async fn backchannel_logout(
             resp
         }
         Err(logout::LogoutApplyError::Replay) => {
-            tracing::warn!(jti = %jti, "back-channel logout replay rejected");
-            axum::http::StatusCode::BAD_REQUEST.into_response()
+            tracing::info!(jti = %claims.jti, "back-channel logout replay; already applied");
+            axum::http::StatusCode::OK.into_response()
         }
         Err(logout::LogoutApplyError::Db(e)) => {
             tracing::error!(error = %e, "back-channel logout DB write failed");
@@ -298,33 +316,61 @@ pub async fn backchannel_logout(
     }
 }
 
+/// Session-bound refresh tokens of the grants the logout token names, by
+/// `sid` when present, else by `sub` (same selection as `apply_logout`).
+async fn select_revocable(
+    state: &AppState,
+    claims: &oidc_relying_party::logout_token::LogoutTokenClaims,
+) -> Vec<grants::RevocableRefresh> {
+    if state.encryptor.is_none() {
+        return Vec::new();
+    }
+    let selected = if let Some(sid) = claims.sid.as_deref().filter(|s| !s.is_empty()) {
+        grants::select_revocable_by_sid(&state.auth_pool, &claims.iss, sid).await
+    } else if let Some(sub) = claims.sub.as_deref().filter(|s| !s.is_empty()) {
+        grants::select_revocable_by_sub(&state.auth_pool, &claims.iss, sub).await
+    } else {
+        return Vec::new();
+    };
+    selected.unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "back-channel logout: selecting refresh tokens to revoke failed");
+        Vec::new()
+    })
+}
+
+async fn revoke_refresh_tokens(
+    state: &AppState,
+    oidc: &crate::oidc::client::OidcClient,
+    revocable: Vec<grants::RevocableRefresh>,
+) {
+    let Some(encryptor) = state.encryptor.as_ref() else {
+        return;
+    };
+    for row in revocable {
+        let Some(mut pt) =
+            encryptor.decrypt_bytes_with_aad(&row.refresh_token_bc, &row.hashed_handle)
+        else {
+            tracing::warn!("back-channel logout: decrypting a refresh token copy failed");
+            continue;
+        };
+        match std::str::from_utf8(&pt) {
+            Ok(token) => oidc.revoke_refresh_token(token).await,
+            Err(_) => tracing::warn!("back-channel logout: refresh token copy is not UTF-8"),
+        }
+        zeroize::Zeroize::zeroize(&mut pt);
+    }
+}
+
 fn login_error(code: &str) -> Response {
     Redirect::to(&format!("/web/login?error={code}")).into_response()
 }
 
-/// Error codes an IdP may legitimately return (RFC 6749 4.1.2.1 + OIDC Core).
-const KNOWN_OAUTH_ERRORS: &[&str] = &[
-    "invalid_request",
-    "unauthorized_client",
-    "access_denied",
-    "unsupported_response_type",
-    "invalid_scope",
-    "server_error",
-    "temporarily_unavailable",
-    "interaction_required",
-    "login_required",
-    "account_selection_required",
-    "consent_required",
-];
-
-/// `q.error` is attacker-controlled; anything off the allow-list collapses to
-/// a fixed code so it never reaches the Location header (control characters
+/// `q.error` is attacker-controlled; anything unregistered collapses to a
+/// fixed code so it never reaches the Location header (control characters
 /// would panic HeaderValue conversion, and arbitrary values inject params).
 fn sanitize_oauth_error(code: &str) -> &'static str {
-    KNOWN_OAUTH_ERRORS
-        .iter()
-        .find(|k| **k == code)
-        .copied()
+    AuthorizationErrorCode::parse(code)
+        .as_str()
         .unwrap_or("oauth_error")
 }
 
@@ -398,6 +444,203 @@ mod tests {
                 "/web/login?error=oauth_error"
             );
         }
+    }
+
+    #[cfg(feature = "sqlite")]
+    async fn callback_location_without_iss(iss_parameter_supported: bool) -> String {
+        use axum::body::Body;
+        use axum::http::Request;
+        use oidc_relying_party::jwks::JwksCacheConfig;
+        use tower::ServiceExt;
+
+        let mut oidc = crate::oidc::client::OidcClient::for_test(
+            "https://idp.example.com".to_string(),
+            "stackpit-web".to_string(),
+            stackpit_auth::JwksCache::new(
+                reqwest::Client::new(),
+                url::Url::parse("http://127.0.0.1:0/jwks").unwrap(),
+                JwksCacheConfig::default(),
+            ),
+        );
+        oidc.discovery_mut()
+            .authorization_response_iss_parameter_supported = iss_parameter_supported;
+
+        let pool = crate::db::open_test_pool().await;
+        let (mut state, _chans) = crate::server::AppState::for_test(pool);
+        state.oidc = crate::oidc::discovery::OidcSlot::ready(crate::oidc::discovery::OidcReady {
+            client: std::sync::Arc::new(oidc),
+        });
+        state.encryptor = Some(std::sync::Arc::new(
+            crate::util::crypto::SecretEncryptor::from_config_or_env(Some(
+                &secrecy::SecretString::from("11".repeat(32)),
+            ))
+            .unwrap()
+            .unwrap(),
+        ));
+        let app = axum::Router::new()
+            .route("/cb", axum::routing::get(super::callback))
+            .with_state(state);
+        let res = app
+            .oneshot(
+                Request::get("/cb?code=c&state=s")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        res.headers()
+            .get(axum::http::header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string()
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn callback_without_iss_rejected_when_the_op_advertises_it() {
+        assert_eq!(
+            callback_location_without_iss(true).await,
+            "/web/login?error=issuer_mismatch"
+        );
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn callback_without_iss_accepted_when_the_op_does_not_advertise_it() {
+        // Passes the issuer check and stops at the missing login cookie.
+        assert_eq!(
+            callback_location_without_iss(false).await,
+            "/web/login?error=session_expired"
+        );
+    }
+
+    /// Back-channel logout for one `sid` against a fake IdP whose revocation
+    /// endpoint answers `revoke_status` and must be hit `expected_revokes` times.
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
+    async fn backchannel_logout_revokes(
+        offline: bool,
+        revoke_status: usize,
+        expected_revokes: usize,
+    ) {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use oidc_relying_party::algorithms::SigningAlgorithm;
+        use oidc_relying_party::jwks::JwksCacheConfig;
+        use oidc_relying_party::test_support::{
+            jwks, logout_token_claims, rsa_key, sign_logout_token, FakeIdp, REVOCATION_PATH,
+        };
+        use tower::ServiceExt;
+
+        const AUD: &str = "stackpit-web";
+        let key = rsa_key();
+        let mut idp = FakeIdp::start(
+            &[SigningAlgorithm::Rs256],
+            &jwks(std::slice::from_ref(&key)),
+            serde_json::json!({}),
+        )
+        .await;
+        let issuer = idp.issuer();
+        let revoke = idp
+            .server()
+            .mock("POST", REVOCATION_PATH)
+            .match_body("token=rt-1&token_type_hint=refresh_token")
+            .with_status(revoke_status)
+            .expect(expected_revokes)
+            .create_async()
+            .await;
+
+        let cache = stackpit_auth::JwksCache::new(
+            reqwest::Client::new(),
+            url::Url::parse(&idp.jwks_url()).unwrap(),
+            JwksCacheConfig::default(),
+        );
+        cache
+            .prime_raw(&jwks(std::slice::from_ref(&key)).to_string())
+            .unwrap();
+        let mut oidc =
+            crate::oidc::client::OidcClient::for_test(issuer.clone(), AUD.to_string(), cache);
+        oidc.discovery_mut().revocation_endpoint =
+            Some(url::Url::parse(&format!("{}{REVOCATION_PATH}", idp.url())).unwrap());
+
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        let enc = std::sync::Arc::new(
+            crate::util::crypto::SecretEncryptor::from_config_or_env(Some(
+                &secrecy::SecretString::from("11".repeat(32)),
+            ))
+            .unwrap()
+            .unwrap(),
+        );
+        let user = crate::queries::users::upsert_from_oidc(&pool, &issuer, "alice", None, None)
+            .await
+            .unwrap();
+        let handle = crate::oidc::grants::insert(
+            &pool,
+            &enc,
+            &crate::oidc::grants::NewGrant {
+                user_id: user.user_id,
+                iss: &issuer,
+                sub: "alice",
+                sid: Some("sid-1"),
+                access_token: "at",
+                access_exp: chrono::Utc::now().timestamp() + 3600,
+                refresh_token: Some("rt-1"),
+                refresh_exp: None,
+                id_token: "it",
+                offline,
+            },
+        )
+        .await
+        .unwrap();
+
+        let (mut state, _chans) = crate::server::AppState::for_test(pool.clone());
+        state.oidc = crate::oidc::discovery::OidcSlot::ready(crate::oidc::discovery::OidcReady {
+            client: std::sync::Arc::new(oidc),
+        });
+        state.encryptor = Some(enc.clone());
+        let app = axum::Router::new()
+            .route("/bc", axum::routing::post(super::backchannel_logout))
+            .with_state(state);
+        let token = sign_logout_token(
+            &key,
+            Some(key.kid()),
+            Some("logout+jwt"),
+            &logout_token_claims(&issuer, AUD, Some("alice"), Some("sid-1")),
+        );
+        let res = app
+            .oneshot(
+                Request::post("/bc")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(format!("logout_token={token}")))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(crate::oidc::grants::load(&pool, &enc, &handle)
+            .await
+            .unwrap()
+            .is_none());
+        revoke.assert_async().await;
+    }
+
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
+    #[tokio::test]
+    async fn backchannel_logout_revokes_a_session_bound_refresh_token_once() {
+        backchannel_logout_revokes(false, 200, 1).await;
+    }
+
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
+    #[tokio::test]
+    async fn backchannel_logout_leaves_an_offline_access_refresh_token_alone() {
+        backchannel_logout_revokes(true, 200, 0).await;
+    }
+
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
+    #[tokio::test]
+    async fn backchannel_logout_answers_200_when_revocation_fails() {
+        backchannel_logout_revokes(false, 500, 1).await;
     }
 
     #[test]

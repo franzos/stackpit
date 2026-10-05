@@ -44,7 +44,7 @@ use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
 use crate::context::{AuthContext, PrincipalId};
-use crate::jwks::JwksCache;
+use crate::JwksCache;
 
 use cache::{
     CacheEntry, RevocationCacheEntry, CACHE_CAPACITY, NEGATIVE_CACHE_CAPACITY,
@@ -106,6 +106,10 @@ struct Inner {
     expected_issuer: Option<String>,
     /// Empty disables the opaque arm's `client_id` fallback.
     client_id: String,
+    /// See [`BearerGateConfig::jwt_login_client_id`].
+    jwt_login_client_id: String,
+    /// See [`BearerGateConfig::allow_audience_less_opaque`].
+    allow_audience_less_opaque: bool,
     /// Break-glass; bypasses scope and audience.
     admin_token: Option<SecretString>,
     /// Pre-rendered HTTP Basic for the introspection POST.
@@ -214,6 +218,14 @@ pub struct BearerGateConfig {
     pub expected_issuer: Option<String>,
     /// Empty disables the opaque arm's `client_id` fallback.
     pub client_id: String,
+    /// The RP's browser-login client id; a JWT shaped like an ID token for it is refused by the JWT arm; empty disables that tell.
+    pub jwt_login_client_id: String,
+    /// Opt-in: accept an introspection response that carries NO `aud` at all,
+    /// on a `client_id` match alone. Off by default — an audience-less token
+    /// from the same client is then indistinguishable from one minted for a
+    /// different resource, which turns a web-session token into a credential
+    /// for this one. Only turn it on for an IdP that genuinely omits `aud`.
+    pub allow_audience_less_opaque: bool,
     pub admin_token: Option<SecretString>,
     pub introspection_client_id: Option<String>,
     pub introspection_client_secret: Option<SecretString>,
@@ -268,6 +280,8 @@ impl BearerGate {
                 audience: cfg.audience,
                 expected_issuer: cfg.expected_issuer,
                 client_id: cfg.client_id,
+                jwt_login_client_id: cfg.jwt_login_client_id,
+                allow_audience_less_opaque: cfg.allow_audience_less_opaque,
                 admin_token: cfg.admin_token,
                 basic_auth,
                 cache_ttl: Duration::from_secs(cfg.cache_ttl_secs),
@@ -473,25 +487,26 @@ fn now_secs() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use jsonwebtoken::jwk::JwkSet;
     use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+    use oidc_relying_party::jwks::JwksCacheConfig;
+    use oidc_relying_party::test_support::{jwks, rsa_key, sign_id_token};
     use serde_json::json;
     use std::time::Instant;
 
-    // Pre-generated 2048-bit RSA keypair (DER avoids needing `use_pem`).
-    const TEST_PRIVATE_DER: &[u8] = include_bytes!("../testdata/test_rsa_priv.der");
-    const TEST_JWKS_JSON: &str = include_str!("../testdata/test_jwks.json");
     const TEST_KID: &str = "test-key-1";
 
-    fn jwks() -> JwkSet {
-        serde_json::from_str(TEST_JWKS_JSON).expect("test JWKS parses")
+    fn primed_jwks(json: &str) -> JwksCache {
+        let cache = JwksCache::new(
+            reqwest::Client::new(),
+            reqwest::Url::parse("http://127.0.0.1:0/jwks").unwrap(),
+            JwksCacheConfig::default(),
+        );
+        cache.prime_raw(json).expect("test JWKS parses");
+        cache
     }
 
     fn issue_jwt(claims: serde_json::Value) -> String {
-        let mut header = Header::new(Algorithm::RS256);
-        header.kid = Some(TEST_KID.to_string());
-        let key = EncodingKey::from_rsa_der(TEST_PRIVATE_DER);
-        encode(&header, &claims, &key).expect("sign JWT")
+        sign_id_token(&rsa_key(), Some(TEST_KID), &claims)
     }
 
     fn base_gate(cfg_mutator: impl FnOnce(&mut BearerGateConfig)) -> BearerGate {
@@ -503,6 +518,8 @@ mod tests {
             realm: "test".to_string(),
             expected_issuer: Some("https://hydra.example.com".to_string()),
             client_id: "stackpit-mcp".to_string(),
+            jwt_login_client_id: "stackpit-web".to_string(),
+            allow_audience_less_opaque: false,
             admin_token: None,
             introspection_client_id: None,
             introspection_client_secret: None,
@@ -511,15 +528,7 @@ mod tests {
             provisioner: None,
             revocation: None,
             jwt: Some(JwtVerifierConfig {
-                jwks: {
-                    let cache = JwksCache::new(
-                        reqwest::Client::new(),
-                        "http://127.0.0.1:0/jwks".to_string(),
-                        60,
-                    );
-                    cache._prime(jwks());
-                    cache
-                },
+                jwks: primed_jwks(&jwks(&[rsa_key()]).to_string()),
             }),
         };
         cfg_mutator(&mut cfg);
@@ -676,9 +685,8 @@ mod tests {
         assert!(matches!(outcome, BearerAuthOutcome::InvalidToken));
     }
 
-    /// `jsonwebtoken` only compares `aud` when the claim is present, so an
-    /// aud-less token from the right issuer would otherwise be accepted at a
-    /// resource server that requires an audience (RFC 9068 §2.2, §4).
+    /// A resource server that requires an audience refuses an aud-less token
+    /// from the right issuer (RFC 9068 §2.2, §4).
     #[tokio::test]
     async fn jwt_absent_audience_rejected() {
         let gate = base_gate(|_| {});
@@ -702,6 +710,53 @@ mod tests {
         }));
         let outcome = gate.authorize(Some(&jwt), "").await;
         assert!(matches!(outcome, BearerAuthOutcome::InvalidToken));
+    }
+
+    fn id_token_shaped_jwts() -> Vec<(&'static str, String)> {
+        let claims = |extra: serde_json::Value| {
+            let mut c = json!({
+                "iss": "https://hydra.example.com",
+                "sub": "alice",
+                "aud": ["https://mcp.example.com"],
+                "exp": now() + 300,
+            });
+            c.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            issue_jwt(c)
+        };
+        vec![
+            ("nonce", claims(json!({ "nonce": "n" }))),
+            ("at_hash", claims(json!({ "at_hash": "h" }))),
+            (
+                "aud",
+                claims(json!({ "aud": ["https://mcp.example.com", "stackpit-web"] })),
+            ),
+        ]
+    }
+
+    #[tokio::test]
+    async fn jwt_shaped_like_a_login_id_token_rejected() {
+        let gate = base_gate(|_| {});
+        for (tell, jwt) in id_token_shaped_jwts() {
+            let outcome = gate.authorize(Some(&jwt), "").await;
+            assert!(
+                matches!(outcome, BearerAuthOutcome::InvalidToken),
+                "{tell} must be refused"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn jwt_id_token_tell_off_without_login_client_id() {
+        let gate = base_gate(|c| c.jwt_login_client_id = String::new());
+        for (tell, jwt) in id_token_shaped_jwts() {
+            let outcome = gate.authorize(Some(&jwt), "").await;
+            assert!(
+                matches!(outcome, BearerAuthOutcome::Ok(_)),
+                "{tell} must be accepted"
+            );
+        }
     }
 
     #[tokio::test]
@@ -761,6 +816,25 @@ mod tests {
             "iat": now(),
         });
         let jwt = encode(&header, &claims, &key).expect("sign with foreign key");
+        let outcome = gate.authorize(Some(&jwt), "").await;
+        assert!(matches!(outcome, BearerAuthOutcome::InvalidToken));
+    }
+
+    #[tokio::test]
+    async fn jwt_whose_key_is_for_encryption_rejected() {
+        let mut jwk = rsa_key().jwk().clone();
+        jwk["use"] = json!("enc");
+        let gate = base_gate(|c| {
+            c.jwt = Some(JwtVerifierConfig {
+                jwks: primed_jwks(&json!({ "keys": [jwk] }).to_string()),
+            });
+        });
+        let jwt = issue_jwt(json!({
+            "iss": "https://hydra.example.com",
+            "sub": "alice",
+            "aud": ["https://mcp.example.com"],
+            "exp": now() + 300,
+        }));
         let outcome = gate.authorize(Some(&jwt), "").await;
         assert!(matches!(outcome, BearerAuthOutcome::InvalidToken));
     }
@@ -1014,13 +1088,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn opaque_client_id_still_rescues_an_absent_audience() {
+    async fn opaque_without_audience_is_rejected_by_default() {
         let body = format!(
             r#"{{"active":true,"sub":"alice","client_id":"stackpit-mcp","iss":"https://hydra.example.com","scope":"openid","exp":{}}}"#,
             now() + 300
         );
         let (addr, _) = spawn_introspection_server(body);
         let gate = base_gate(|c| c.introspection_url = Some(format!("http://{addr}/introspect")));
+        let outcome = gate.authorize(Some("opaque-no-aud-token"), "").await;
+        assert!(matches!(outcome, BearerAuthOutcome::InvalidToken));
+    }
+
+    #[tokio::test]
+    async fn opaque_without_audience_passes_when_opted_in() {
+        let body = format!(
+            r#"{{"active":true,"sub":"alice","client_id":"stackpit-mcp","iss":"https://hydra.example.com","scope":"openid","exp":{}}}"#,
+            now() + 300
+        );
+        let (addr, _) = spawn_introspection_server(body);
+        let gate = base_gate(|c| {
+            c.introspection_url = Some(format!("http://{addr}/introspect"));
+            c.allow_audience_less_opaque = true;
+        });
         let outcome = gate.authorize(Some("opaque-no-aud-token"), "").await;
         assert!(matches!(outcome, BearerAuthOutcome::Ok(_)));
     }

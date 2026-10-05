@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="{{ self.locale }}" dir="{{ self.dir() }}">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="robots" content="noindex">
+    <meta http-equiv="refresh" content="0; url={{ target }}">
+    <title>{{ self.t("login-logout-continue-heading") }}</title>
+    <link rel="stylesheet" href="/web/_assets/style.css?v={{ crate::html::ASSET_VERSION }}">
+  </head>
+  <body>
+    <main>
+      <p>{{ self.t("login-logout-continue-heading") }}</p>
+      <p><a href="{{ target }}">{{ self.t("login-logout-continue") }}</a></p>
+    </main>
+  </body>
+</html>

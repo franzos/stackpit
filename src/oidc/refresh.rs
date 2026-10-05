@@ -69,17 +69,16 @@ pub async fn refresh(
         ));
     };
 
-    match oidc.refresh(refresh_token).await {
+    match oidc.refresh(refresh_token, &grant.sub).await {
         Ok(new_tokens) => {
             // Persist immediately; race losers get InvalidGrant on next call.
             grants::rotate_tokens(
                 pool,
                 encryptor,
                 &grant.handle,
-                &new_tokens.access_token,
-                new_tokens.access_exp,
-                new_tokens.refresh_token.as_deref(),
-                new_tokens.refresh_exp,
+                &new_tokens,
+                new_tokens.id_token.as_deref(),
+                new_tokens.offline,
             )
             .await?;
 
@@ -95,9 +94,10 @@ pub async fn refresh(
                     .refresh_token
                     .or_else(|| grant.refresh_token.clone()),
                 refresh_exp: new_tokens.refresh_exp.or(grant.refresh_exp),
-                id_token: grant.id_token.clone(),
+                id_token: new_tokens.id_token.or_else(|| grant.id_token.clone()),
                 csrf_token: grant.csrf_token.clone(),
                 created_at: grant.created_at,
+                offline: new_tokens.offline.unwrap_or(grant.offline),
             };
             Ok(RefreshOutcome::Refreshed(updated))
         }
@@ -131,5 +131,114 @@ pub async fn refresh(
             }
         }
         Err(RefreshError::Transient(msg)) => Ok(RefreshOutcome::Transient(msg)),
+    }
+}
+
+#[cfg(all(test, feature = "sqlite", not(feature = "postgres")))]
+mod tests {
+    use super::*;
+    use crate::oidc::grants::NewGrant;
+    use oidc_relying_party::algorithms::SigningAlgorithm;
+    use oidc_relying_party::test_support::{
+        jwks, rsa_key, sign_id_token, unix_now, FakeIdp, TOKEN_PATH,
+    };
+    use serde_json::json;
+
+    const CLIENT_ID: &str = "stackpit-web";
+
+    /// A grant for `alice` refreshed against a fake IdP whose token endpoint
+    /// answers with `status` and `body(issuer)`.
+    async fn refresh_against(status: usize, body: impl FnOnce(&str) -> String) -> RefreshOutcome {
+        let key = rsa_key();
+        let mut idp = FakeIdp::start(&[SigningAlgorithm::Rs256], &jwks(&[key]), json!({})).await;
+        let issuer = idp.issuer();
+        idp.server()
+            .mock("POST", TOKEN_PATH)
+            .with_status(status)
+            .with_header("content-type", "application/json")
+            .with_body(body(&issuer))
+            .create_async()
+            .await;
+        let oidc = OidcClient::for_test(
+            issuer.clone(),
+            CLIENT_ID.to_string(),
+            stackpit_auth::JwksCache::new(
+                reqwest::Client::new(),
+                url::Url::parse(&idp.jwks_url()).unwrap(),
+                crate::oidc::client::jwks_cache_config(60),
+            ),
+        );
+
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        let user = crate::queries::users::upsert_from_oidc(&pool, &issuer, "alice", None, None)
+            .await
+            .unwrap();
+        let enc = SecretEncryptor::from_config_or_env(Some(&secrecy::SecretString::from(
+            "11".repeat(32),
+        )))
+        .unwrap()
+        .unwrap();
+        let handle = grants::insert(
+            &pool,
+            &enc,
+            &NewGrant {
+                user_id: user.user_id,
+                iss: &issuer,
+                sub: "alice",
+                sid: None,
+                access_token: "at1",
+                access_exp: 0,
+                refresh_token: Some("rt1"),
+                refresh_exp: None,
+                id_token: "old-id-token",
+                offline: false,
+            },
+        )
+        .await
+        .unwrap();
+        let grant = grants::load(&pool, &enc, &handle).await.unwrap().unwrap();
+        refresh(&pool, &enc, &oidc, &grant).await.unwrap()
+    }
+
+    fn token_response(issuer: &str, sub: &str) -> String {
+        let now = unix_now();
+        let id_token = sign_id_token(
+            &rsa_key(),
+            Some(rsa_key().kid()),
+            &json!({
+                "iss": issuer,
+                "sub": sub,
+                "aud": CLIENT_ID,
+                "iat": now,
+                "exp": now + 300,
+            }),
+        );
+        json!({
+            "access_token": "at2",
+            "token_type": "Bearer",
+            "expires_in": 300,
+            "id_token": id_token,
+        })
+        .to_string()
+    }
+
+    #[tokio::test]
+    async fn refreshed_id_token_for_the_same_sub_is_kept() {
+        let outcome = refresh_against(200, |iss| token_response(iss, "alice")).await;
+        let RefreshOutcome::Refreshed(grant) = outcome else {
+            panic!("expected Refreshed");
+        };
+        assert_eq!(grant.access_token, "at2");
+        assert_ne!(grant.id_token.as_deref(), Some("old-id-token"));
+    }
+
+    #[tokio::test]
+    async fn refreshed_id_token_for_another_sub_ends_the_grant_like_invalid_grant() {
+        let invalid_grant =
+            refresh_against(400, |_| json!({ "error": "invalid_grant" }).to_string()).await;
+        assert!(matches!(invalid_grant, RefreshOutcome::InvalidGrant));
+
+        let other_sub = refresh_against(200, |iss| token_response(iss, "mallory")).await;
+        assert!(matches!(other_sub, RefreshOutcome::InvalidGrant));
     }
 }

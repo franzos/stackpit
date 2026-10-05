@@ -763,7 +763,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(scoped.get(A).is_none(), "org 21 reads nothing on trace A");
+        assert!(!scoped.contains_key(A), "org 21 reads nothing on trace A");
         assert_eq!(
             scoped.get(C).unwrap().projects,
             vec![TraceProjectCount {

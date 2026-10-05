@@ -61,7 +61,7 @@ pub struct AppState {
     pub ingest_stats: Arc<IngestStats>,
     /// Admin browser sessions (per-login random handles; dropped on restart).
     pub admin_sessions: Arc<stackpit_auth::AdminSessionStore>,
-    /// Browser OIDC surface (client + web gate); empty until discovery lands, which may be after startup.
+    /// Browser OIDC client; empty until discovery lands, which may be after startup.
     pub oidc: OidcSlot,
     /// `Some` iff both `[auth.oauth]` and `[auth.mcp]` are configured.
     pub mcp: Option<Arc<McpRuntime>>,
@@ -349,7 +349,11 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
         bg_cancel.child_token(),
     );
     // OIDC grants / revocation markers / JTI dedupe -- hourly purge.
-    crate::background::spawn_oidc_cleanup_task(bg_writer_pool.clone(), bg_cancel.child_token());
+    crate::background::spawn_oidc_cleanup_task(
+        bg_writer_pool.clone(),
+        config.auth.oauth.refresh_token_max_ttl_secs as i64,
+        bg_cancel.child_token(),
+    );
 
     let auth_cache: AuthCache = Arc::new(dashmap::DashMap::new());
     let negative_auth_cache: NegativeAuthCache = Arc::new(dashmap::DashMap::new());
@@ -431,12 +435,8 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
         revocation_store.clone(),
     )?;
 
-    // Web gate: introspects the access token from the cookie-indexed grant row.
     let oidc = match boot_client {
-        Some(client) => {
-            let web_gate = build_web_bearer_gate(&client, &config, revocation_store.clone());
-            OidcSlot::ready(OidcReady { client, web_gate })
-        }
+        Some(client) => OidcSlot::ready(OidcReady { client }),
         None => {
             let slot = OidcSlot::default();
             if oauth_configured {
@@ -444,7 +444,6 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
                     slot.clone(),
                     bg_cancel.child_token(),
                     config.clone(),
-                    revocation_store.clone(),
                 );
             }
             slot
@@ -798,12 +797,12 @@ fn build_mcp_runtime(
     // Reuse OidcClient's cache by default; explicit `auth.mcp.jwks_url`
     // override gets its own cache but shares the OIDC HTTP client pool.
     let jwks_cache = match mcp.jwks_url.as_deref() {
-        Some(url) if url != oidc.jwks_uri() => Some(JwksCache::new(
+        Some(url) if url != oidc.jwks_uri().as_str() => Some(JwksCache::new(
             oidc.http_client(),
-            url.to_string(),
-            mcp.jwks_cache_ttl_secs,
+            url::Url::parse(url)
+                .map_err(|e| anyhow::anyhow!("auth.mcp.jwks_url '{url}' is not a URL: {e}"))?,
+            crate::oidc::client::jwks_cache_config(mcp.jwks_cache_ttl_secs),
         )),
-        _ if oidc.jwks_uri().is_empty() => None,
         _ => Some(oidc.jwks_cache().clone()),
     };
 
@@ -850,6 +849,8 @@ fn build_mcp_runtime(
             // the *web* client here would make every web-session token a valid
             // /mcp credential the moment introspection is configured.
             client_id: String::new(),
+            jwt_login_client_id: oidc.client_id().to_string(),
+            allow_audience_less_opaque: false,
             // MCP accepts only tokens the authorization server issued for this
             // resource; a static config secret is not one.
             admin_token: None,
@@ -875,85 +876,6 @@ fn build_mcp_runtime(
         origins,
         principals: Arc::new(crate::mcp::PrincipalCache::new()),
     })))
-}
-
-/// Validates the access token from the grant vault per request. Prefers local
-/// JWKS validation (the IdP issues JWT access tokens by default), falling back
-/// to introspection for opaque-token deployments. `None` when neither is
-/// resolvable, or when no issuer is configured.
-pub(crate) fn build_web_bearer_gate(
-    oidc: &Arc<OidcClient>,
-    config: &Config,
-    revocation_store: Option<crate::oidc::revocations::DbRevocationStore>,
-) -> Option<BearerGate> {
-    let issuer = config.auth.oauth.issuer_url.as_deref()?.to_string();
-    let client_id = config
-        .auth
-        .oauth
-        .client_id
-        .as_deref()
-        .unwrap_or("")
-        .to_string();
-
-    // Reuse OidcClient's warmed cache so JWT access tokens validate locally.
-    let jwks_cache = if oidc.jwks_uri().is_empty() {
-        None
-    } else {
-        Some(oidc.jwks_cache().clone())
-    };
-
-    // Introspection is a fallback for opaque tokens, not a requirement.
-    let introspection_url = config
-        .auth
-        .oauth
-        .introspection_url
-        .as_deref()
-        .or(config.auth.mcp.introspection_url.as_deref())
-        .or_else(|| oidc.introspection_endpoint())
-        .map(str::to_string);
-
-    if jwks_cache.is_none() && introspection_url.is_none() {
-        tracing::error!(
-            "OAuth is enabled but the web bearer gate has no token validator: the IdP \
-             advertises neither a JWKS endpoint (for local JWT validation) nor an \
-             introspection endpoint, so browser SSO sessions cannot be validated and will \
-             bounce to /web/login. Configure Hydra to advertise jwks_uri, or set \
-             auth.oauth.introspection_url."
-        );
-        return None;
-    }
-
-    if jwks_cache.is_some() && introspection_url.is_none() {
-        tracing::warn!(
-            "the IdP advertises no introspection endpoint and none is configured: the web \
-             bearer gate will validate JWT access tokens only. Opaque access tokens cannot be \
-             introspected and will be rejected. Set auth.oauth.introspection_url (or have the \
-             IdP advertise one) if this deployment uses opaque tokens."
-        );
-    }
-
-    Some(BearerGate::with_client(
-        oidc.http_client(),
-        BearerGateConfig {
-            introspection_url,
-            audience: config.auth.oauth.web_audience.clone(),
-            resource_metadata_url: String::new(),
-            challenge_scope: String::new(),
-            realm: String::new(),
-            expected_issuer: Some(issuer),
-            client_id,
-            // web_auth_middleware enforces admin_token ahead of the gate.
-            admin_token: None,
-            introspection_client_id: config.auth.mcp.introspection_client_id.clone(),
-            introspection_client_secret: config.auth.mcp.introspection_client_secret.clone(),
-            cache_ttl_secs: config.auth.oauth.introspection_cache_ttl_secs,
-            cache_max_ttl_secs: config.auth.oauth.cache_max_ttl_secs,
-            // Callback upserts the user row before issuing the grant.
-            provisioner: None,
-            revocation: revocation_store.map(|r| r.into_arc()),
-            jwt: jwks_cache.map(|jwks| JwtVerifierConfig { jwks }),
-        },
-    ))
 }
 
 async fn shutdown_signal() {

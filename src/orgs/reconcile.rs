@@ -39,9 +39,13 @@ pub async fn reconcile(pool: &DbPool, input: ReconcileInput<'_>) -> Result<Recon
         let role = Role::parse(&oc.role);
         match org_by_ext(pool, input.iss, &oc.id).await? {
             Some(org_id) => {
+                let role_sync = role_sync_enabled(pool, org_id).await?;
+                // With role sync off the IdP's role is not authoritative, so a
+                // first login joins as a member, never as the claimed owner.
+                let insert_role = if role_sync { role } else { Role::Member };
                 // DO NOTHING insert: never overwrites an existing role before the last-owner guard.
-                add_member(pool, input.user_id, org_id, role).await?;
-                if role_sync_enabled(pool, org_id).await? {
+                add_member(pool, input.user_id, org_id, insert_role).await?;
+                if role_sync {
                     // guarded: promote is unconditional, demote refuses the sole owner (atomic)
                     set_member_role_guarded(pool, input.user_id, org_id, role).await?;
                 }
@@ -331,6 +335,39 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(role_for(&pool, u, org).await, "owner");
+    }
+
+    /// C19 (round-3 review): with role sync off, a first login still inserted
+    /// the claimed role, so an owner claim minted a new owner.
+    #[tokio::test]
+    async fn role_sync_off_first_login_joins_as_member() {
+        let pool = crate::db::open_test_pool().await;
+        let u = seed_user(&pool).await;
+        let u2 = seed_user2(&pool).await;
+        let org = provision_forseti_org(&pool, u2, "https://idp", "acme", "acme", "Acme")
+            .await
+            .unwrap();
+        #[cfg(feature = "sqlite")]
+        const ROLE_SYNC_OFF: &str = "UPDATE organizations SET role_sync = FALSE WHERE org_id = ?1";
+        #[cfg(not(feature = "sqlite"))]
+        const ROLE_SYNC_OFF: &str = "UPDATE organizations SET role_sync = FALSE WHERE org_id = $1";
+        sqlx::query(ROLE_SYNC_OFF)
+            .bind(org)
+            .execute(&pool)
+            .await
+            .unwrap();
+        reconcile(
+            &pool,
+            ReconcileInput {
+                user_id: u,
+                iss: "https://idp",
+                orgs: Some(&[acme_owner_claim()]),
+                orgs_truncated: false,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(role_for(&pool, u, org).await, "member");
     }
 
     // Gap 1c: member promoted to owner via claim.

@@ -252,29 +252,23 @@ pub struct OAuthConfig {
     /// hard-capped at 90d.
     #[serde(default = "default_refresh_token_max_ttl")]
     pub refresh_token_max_ttl_secs: u64,
-    /// Expected `aud` on the web bearer gate. Empty = skip audience binding;
-    /// only safe when no other resource server shares the IdP.
+    /// Scopes requested at sign-in. Empty = `openid email profile`. List
+    /// `offline_access` to get refresh tokens, `orgs` to receive Forseti's
+    /// organization claim.
+    #[serde(default)]
+    pub scopes: Vec<String>,
+    /// Extra `aud` values accepted on an ID token besides `client_id` (OIDC
+    /// Core 3.1.3.7 step 3). Empty = only `client_id`.
+    #[serde(default)]
+    pub trusted_audiences: Vec<String>,
+    /// Sent as the non-standard `audience` authorize param (Hydra/Forseti
+    /// bind it into the access token's `aud`). Empty = omit.
     #[serde(default)]
     pub web_audience: String,
     /// Forseti org to scope logins into: appended as the `organization_id`
     /// authorize param (id or slug). Empty = omit.
     #[serde(default)]
     pub organization_id: Option<String>,
-    /// Required scope on every web bearer-gate authorization. Empty = accept
-    /// any introspection-valid token. Set to e.g. `stackpit:web` for
-    /// defense-in-depth against tokens reused from other resource servers.
-    #[serde(default)]
-    pub web_required_scope: String,
-    /// Web introspection-cache TTL (seconds).
-    #[serde(default = "default_introspection_cache_ttl")]
-    pub introspection_cache_ttl_secs: u64,
-    /// Hard ceiling on any cached bearer entry's TTL (seconds). Bounds how
-    /// long stale IdP scope/audience changes stay served. `0` disables the
-    /// cache; startup rejects values above 300.
-    #[serde(default = "default_bearer_cache_max_ttl")]
-    pub cache_max_ttl_secs: u64,
-    /// Web bearer-gate introspection endpoint. Defaults to MCP's value.
-    pub introspection_url: Option<String>,
     /// `true` = fail startup on discovery failure. `false` = log + fall back
     /// to admin-token-only.
     #[serde(default)]
@@ -614,10 +608,8 @@ mod tests {
                     redirect_uri: Some(
                         "https://stackpit.example.com/web/auth/callback".to_string(),
                     ),
-                    web_audience: "stackpit-web".to_string(),
                     refresh_token_max_ttl_secs: default_refresh_token_max_ttl(),
                     access_token_max_ttl_secs: default_access_token_max_ttl(),
-                    introspection_cache_ttl_secs: 60,
                     ..OAuthConfig::default()
                 },
                 mcp: McpConfig::default(),
@@ -663,6 +655,14 @@ mod tests {
     }
 
     #[test]
+    fn refresh_ttl_zero_rejected() {
+        let mut cfg = loopback_oauth_enabled();
+        cfg.auth.oauth.refresh_token_max_ttl_secs = 0;
+        let err = cfg.validate().expect_err("0 must be rejected");
+        assert!(format!("{err:#}").contains("is 0"));
+    }
+
+    #[test]
     fn refresh_ttl_above_ninety_days_rejected() {
         let mut cfg = loopback_oauth_enabled();
         cfg.auth.oauth.refresh_token_max_ttl_secs = 91 * 24 * 3600;
@@ -671,6 +671,28 @@ mod tests {
         assert!(
             msg.contains("90-day"),
             "error should mention the cap; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn token_endpoint_auth_method_accepts_the_four_spellings_and_rejects_others() {
+        for ok in [
+            "client_secret_basic",
+            "basic",
+            " Client_Secret_Post ",
+            "post",
+        ] {
+            let mut cfg = loopback_oauth_enabled();
+            cfg.auth.oauth.token_endpoint_auth_method = Some(ok.to_string());
+            cfg.validate().unwrap_or_else(|e| panic!("{ok}: {e:#}"));
+        }
+        let mut cfg = loopback_oauth_enabled();
+        cfg.auth.oauth.token_endpoint_auth_method = Some("private_key_jwt".to_string());
+        let msg = format!("{:#}", cfg.validate().expect_err("must be rejected"));
+        assert_eq!(
+            msg,
+            "auth.oauth.token_endpoint_auth_method 'private_key_jwt' is not supported; \
+             use client_secret_basic or client_secret_post"
         );
     }
 
@@ -715,15 +737,10 @@ mod tests {
     }
 
     #[test]
-    fn empty_web_audience_rejected() {
-        let mut cfg = loopback_oauth_enabled();
-        cfg.auth.oauth.web_audience = String::new();
-        let err = cfg.validate().expect_err("empty audience must fail");
-        let msg = format!("{err:#}");
-        assert!(
-            msg.contains("web_audience"),
-            "error should mention web_audience; got: {msg}"
-        );
+    fn web_audience_is_optional() {
+        let cfg = loopback_oauth_enabled();
+        assert!(cfg.auth.oauth.web_audience.is_empty());
+        cfg.validate().expect("no audience is a valid web config");
     }
 
     fn loopback_mcp_enabled(audience: &str) -> Config {

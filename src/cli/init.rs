@@ -49,18 +49,16 @@ rate_limit = 300
 #                                       # (logout signs out of Stackpit only, not the IdP).
 #                                       # Otherwise: required=true refuses to start; required=false
 #                                       # warns on every boot.
-# # web_audience              = "stackpit-web"  # audience the web BFF expects on access tokens;
-#                                       # bind this to the IdP audience for the web client to
-#                                       # block confused-deputy attacks across resource servers.
+# # scopes                    = ["openid", "email", "profile"]  # the default. Add "offline_access"
+#                                       # for refresh tokens, "orgs" behind Forseti.
+# # trusted_audiences         = []                 # extra ID-token `aud` values to accept
+# # web_audience              = "stackpit-web"     # Hydra/Forseti only: sent as `audience=`
+# # organization_id           = "acme"             # Forseti only: org to sign in to
 # # access_token_max_ttl_secs = 86400   # ceiling for back-channel revocation TTL
 # # refresh_token_max_ttl_secs = 1209600  # 14d default; ceiling for marker TTL when
 #                                       # a refresh token might outlast the access token.
 #                                       # Should match Hydra's lifespans.refresh_token.
 #                                       # Hard-capped at 90 days (7776000s) at startup.
-# # introspection_cache_ttl_secs = 60   # positive cache for the web bearer gate
-# # cache_max_ttl_secs         = 30     # hard ceiling on the web cache entry TTL;
-#                                       # 0 disables the cache (range 0-300)
-# # introspection_url          = "..."  # defaults to mcp.introspection_url
 #
 # MCP endpoint at POST /mcp. Requires [auth.oauth] above.
 #

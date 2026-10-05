@@ -15,6 +15,7 @@ use axum::response::Response;
 pub const GRANT_COOKIE: &str = "sp_grant";
 pub const GRANT_COOKIE_HOST: &str = "__Host-sp_grant";
 pub const LOGIN_COOKIE: &str = "sp_login";
+pub const LOGIN_COOKIE_HOST: &str = "__Host-sp_login";
 
 /// `__Host-` prefix requires `Secure` + `Path=/` + no `Domain` (rules out
 /// subdomain shadowing); only valid when cookies are Secure.
@@ -23,6 +24,23 @@ pub fn grant_cookie_name(secure: bool) -> &'static str {
         GRANT_COOKIE_HOST
     } else {
         GRANT_COOKIE
+    }
+}
+
+/// Same `__Host-` rule as the grant cookie; the prefix forces `Path=/`.
+pub fn login_cookie_name(secure: bool) -> &'static str {
+    if secure {
+        LOGIN_COOKIE_HOST
+    } else {
+        LOGIN_COOKIE
+    }
+}
+
+fn login_cookie_path(secure: bool) -> &'static str {
+    if secure {
+        "/"
+    } else {
+        "/web/auth/"
     }
 }
 
@@ -60,9 +78,9 @@ pub fn clear_grant_cookie_all_variants() -> [HeaderValue; 2] {
 /// `Max-Age` is an advisory copy of the deadline sealed into the blob - one constant drives both.
 pub fn build_login_cookie(blob_b64: &str, secure: bool) -> HeaderValue {
     let max_age = crate::oidc::login_state::LOGIN_TTL_SECONDS;
-    let mut v = format!(
-        "{LOGIN_COOKIE}={blob_b64}; HttpOnly; SameSite=Lax; Path=/web/auth/; Max-Age={max_age}"
-    );
+    let (name, path) = (login_cookie_name(secure), login_cookie_path(secure));
+    let mut v =
+        format!("{name}={blob_b64}; HttpOnly; SameSite=Lax; Path={path}; Max-Age={max_age}");
     if secure {
         v.push_str("; Secure");
     }
@@ -70,7 +88,8 @@ pub fn build_login_cookie(blob_b64: &str, secure: bool) -> HeaderValue {
 }
 
 pub fn clear_login_cookie(secure: bool) -> HeaderValue {
-    let mut v = format!("{LOGIN_COOKIE}=; HttpOnly; SameSite=Lax; Path=/web/auth/; Max-Age=0");
+    let (name, path) = (login_cookie_name(secure), login_cookie_path(secure));
+    let mut v = format!("{name}=; HttpOnly; SameSite=Lax; Path={path}; Max-Age=0");
     if secure {
         v.push_str("; Secure");
     }
@@ -80,4 +99,27 @@ pub fn clear_login_cookie(secure: bool) -> HeaderValue {
 /// Append a `Set-Cookie` header without clobbering existing ones.
 pub fn append_set_cookie(resp: &mut Response, value: HeaderValue) {
     resp.headers_mut().append(SET_COOKIE, value);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// C11 (round-3 review): the login-state cookie had no `__Host-` form, so
+    /// a sibling subdomain could plant or shadow it.
+    #[test]
+    fn secure_login_cookie_is_host_prefixed_on_root_path() {
+        let set = build_login_cookie("blob", true);
+        let set = set.to_str().unwrap();
+        assert!(set.starts_with("__Host-sp_login=blob;"));
+        assert!(set.contains("Path=/;") && set.contains("Secure"));
+        assert!(!set.contains("Domain"));
+        let clear = clear_login_cookie(true);
+        assert!(clear.to_str().unwrap().starts_with("__Host-sp_login=;"));
+
+        let plain = build_login_cookie("blob", false);
+        let plain = plain.to_str().unwrap();
+        assert!(plain.starts_with("sp_login=blob;"));
+        assert!(plain.contains("Path=/web/auth/"));
+    }
 }

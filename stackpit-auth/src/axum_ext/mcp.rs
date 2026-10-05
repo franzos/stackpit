@@ -147,7 +147,17 @@ fn challenge_value(gate: &BearerGate, error: Option<&str>, scope: Option<&str>) 
 mod tests {
     use super::*;
     use crate::bearer::{BearerGateConfig, JwtVerifierConfig};
-    use crate::jwks::JwksCache;
+    use crate::JwksCache;
+    use oidc_relying_party::jwks::JwksCacheConfig;
+    use oidc_relying_party::test_support::{jwks, rsa_key, sign_id_token};
+
+    fn test_jwks() -> JwksCache {
+        JwksCache::new(
+            reqwest::Client::new(),
+            reqwest::Url::parse("http://127.0.0.1:0/jwks").unwrap(),
+            JwksCacheConfig::default(),
+        )
+    }
 
     const TEST_CHALLENGE_SCOPE: &str = "openid stackpit:events:read";
 
@@ -161,6 +171,8 @@ mod tests {
             realm: "stackpit".to_string(),
             expected_issuer: Some("https://hydra.example.com".to_string()),
             client_id: "stackpit-mcp".to_string(),
+            jwt_login_client_id: "stackpit-web".to_string(),
+            allow_audience_less_opaque: false,
             admin_token: None,
             introspection_client_id: None,
             introspection_client_secret: None,
@@ -168,13 +180,7 @@ mod tests {
             cache_max_ttl_secs: 30,
             provisioner: None,
             revocation: None,
-            jwt: Some(JwtVerifierConfig {
-                jwks: JwksCache::new(
-                    reqwest::Client::new(),
-                    "http://127.0.0.1:0/jwks".to_string(),
-                    60,
-                ),
-            }),
+            jwt: Some(JwtVerifierConfig { jwks: test_jwks() }),
         })
         .expect("test HTTP client builds")
     }
@@ -189,7 +195,6 @@ mod tests {
     /// Same primed-JWKS setup as the bearer tests; the layer needs a token it
     /// can actually validate.
     fn gate_with_primed_jwks() -> BearerGate {
-        const TEST_JWKS_JSON: &str = include_str!("../testdata/test_jwks.json");
         BearerGate::new(BearerGateConfig {
             introspection_url: None,
             audience: "https://mcp.example.com".to_string(),
@@ -199,6 +204,8 @@ mod tests {
             realm: "stackpit".to_string(),
             expected_issuer: Some("https://hydra.example.com".to_string()),
             client_id: String::new(),
+            jwt_login_client_id: "stackpit-web".to_string(),
+            allow_audience_less_opaque: false,
             admin_token: None,
             introspection_client_id: None,
             introspection_client_secret: None,
@@ -208,12 +215,10 @@ mod tests {
             revocation: None,
             jwt: Some(JwtVerifierConfig {
                 jwks: {
-                    let cache = JwksCache::new(
-                        reqwest::Client::new(),
-                        "http://127.0.0.1:0/jwks".to_string(),
-                        60,
-                    );
-                    cache._prime(serde_json::from_str(TEST_JWKS_JSON).expect("test JWKS parses"));
+                    let cache = test_jwks();
+                    cache
+                        .prime_raw(&jwks(&[rsa_key()]).to_string())
+                        .expect("test JWKS parses");
                     cache
                 },
             }),
@@ -222,15 +227,7 @@ mod tests {
     }
 
     fn issue_jwt(claims: serde_json::Value) -> String {
-        const TEST_PRIVATE_DER: &[u8] = include_bytes!("../testdata/test_rsa_priv.der");
-        let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256);
-        header.kid = Some("test-key-1".to_string());
-        jsonwebtoken::encode(
-            &header,
-            &claims,
-            &jsonwebtoken::EncodingKey::from_rsa_der(TEST_PRIVATE_DER),
-        )
-        .expect("sign JWT")
+        sign_id_token(&rsa_key(), Some("test-key-1"), &claims)
     }
 
     /// Empty `required_scope` authenticates only. A token holding just the write

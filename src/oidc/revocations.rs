@@ -87,8 +87,9 @@ async fn check_revoked(pool: &DbPool, iss: &str, sub: &str, sid: Option<&str>) -
 /// Insert a sid-scoped revocation marker. `expires_at` is unix seconds.
 pub async fn insert_sid(pool: &DbPool, iss: &str, sid: &str, expires_at: i64) -> Result<()> {
     sqlx::query(sql!(
-        "INSERT OR REPLACE INTO oidc_revocations (iss, kind, value, expires_at) \
-         VALUES (?1, 'sid', ?2, ?3)"
+        "INSERT INTO oidc_revocations (iss, kind, value, expires_at) \
+         VALUES (?1, 'sid', ?2, ?3) \
+         ON CONFLICT (iss, kind, value) DO UPDATE SET expires_at = excluded.expires_at"
     ))
     .bind(iss)
     .bind(sid)
@@ -102,8 +103,9 @@ pub async fn insert_sid(pool: &DbPool, iss: &str, sid: &str, expires_at: i64) ->
 /// Insert a sub-scoped revocation marker (whole-user logout).
 pub async fn insert_sub(pool: &DbPool, iss: &str, sub: &str, expires_at: i64) -> Result<()> {
     sqlx::query(sql!(
-        "INSERT OR REPLACE INTO oidc_revocations (iss, kind, value, expires_at) \
-         VALUES (?1, 'sub', ?2, ?3)"
+        "INSERT INTO oidc_revocations (iss, kind, value, expires_at) \
+         VALUES (?1, 'sub', ?2, ?3) \
+         ON CONFLICT (iss, kind, value) DO UPDATE SET expires_at = excluded.expires_at"
     ))
     .bind(iss)
     .bind(sub)
@@ -133,6 +135,16 @@ pub async fn purge_expired(pool: &DbPool, now_secs: i64) -> Result<u64> {
 
 /// Atomically remember a back-channel logout JTI. Returns `true` if seen
 /// before; caller MUST reject the request as a replay.
+/// Whether a logout token `jti` was already applied.
+pub async fn jti_seen(pool: &DbPool, jti: &str) -> Result<bool> {
+    let row = sqlx::query(sql!("SELECT 1 FROM oidc_logout_jti WHERE jti = ?1"))
+        .bind(jti)
+        .fetch_optional(pool)
+        .await
+        .context("reading JTI dedupe row")?;
+    Ok(row.is_some())
+}
+
 pub async fn jti_seen_or_remember(pool: &DbPool, jti: &str, expires_at: i64) -> Result<bool> {
     let res = sqlx::query(sql!(
         "INSERT INTO oidc_logout_jti (jti, expires_at) VALUES (?1, ?2)"

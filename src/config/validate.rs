@@ -1,4 +1,5 @@
 use anyhow::Result;
+use oidc_relying_party::discovery::ClientAuthMethod;
 use secrecy::ExposeSecret;
 use std::path::Path;
 
@@ -9,7 +10,7 @@ use super::Config;
 /// revocation markers accumulate for months.
 const REFRESH_TOKEN_MAX_TTL_CAP_SECS: u64 = 90 * 24 * 3600;
 
-/// Cap for `cache_max_ttl_secs` (oauth + mcp). Higher values let scope/audience
+/// Cap for `auth.mcp.cache_max_ttl_secs`. Higher values let scope/audience
 /// rotations linger past the next IdP rotation.
 const BEARER_CACHE_MAX_TTL_CAP_SECS: u64 = 300;
 
@@ -72,19 +73,6 @@ impl Config {
                     );
                 }
             }
-        }
-
-        // Without audience or scope binding, an IdP-issued token for another
-        // resource server would pass the admin UI gate.
-        if self.auth.oauth.required
-            && self.auth.oauth.web_audience.trim().is_empty()
-            && self.auth.oauth.web_required_scope.trim().is_empty()
-        {
-            anyhow::bail!(
-                "auth.oauth.required = true but both auth.oauth.web_audience and \
-                 auth.oauth.web_required_scope are empty. Set at least one so the \
-                 web bearer gate binds tokens to this resource server."
-            );
         }
 
         let db_path = Path::new(&self.storage.path);
@@ -247,13 +235,22 @@ impl Config {
         }
 
         if let Some(ref m) = oauth.token_endpoint_auth_method {
-            match m.trim().to_ascii_lowercase().as_str() {
-                "client_secret_basic" | "basic" | "client_secret_post" | "post" => {}
-                other => anyhow::bail!(
-                    "auth.oauth.token_endpoint_auth_method '{other}' is not supported; \
-                     use client_secret_basic or client_secret_post"
-                ),
+            if ClientAuthMethod::parse(m).is_err() {
+                anyhow::bail!(
+                    "auth.oauth.token_endpoint_auth_method '{}' is not supported; \
+                     use client_secret_basic or client_secret_post",
+                    m.trim().to_ascii_lowercase()
+                );
             }
+        }
+
+        if oauth.is_enabled() && oauth.refresh_token_max_ttl_secs == 0 {
+            anyhow::bail!(
+                "auth.oauth.refresh_token_max_ttl_secs is 0, which would purge every stored \
+                 refresh grant on the next hourly sweep. Pick a value between 1 second and \
+                 90 days ({} seconds).",
+                REFRESH_TOKEN_MAX_TTL_CAP_SECS
+            );
         }
 
         if oauth.refresh_token_max_ttl_secs > REFRESH_TOKEN_MAX_TTL_CAP_SECS {
@@ -266,14 +263,6 @@ impl Config {
             );
         }
 
-        if oauth.is_enabled() && oauth.web_audience.is_empty() {
-            anyhow::bail!(
-                "auth.oauth.web_audience is empty -- set it to the audience your IdP issues \
-                 for the web client (e.g. \"stackpit-web\") so web-side audience checks bind \
-                 tokens to this resource server (confused-deputy risk)."
-            );
-        }
-
         if self.auth.mcp.is_enabled() && !oauth.is_enabled() {
             tracing::warn!(
                 "auth.mcp is configured but auth.oauth is not -- the MCP gate pulls the issuer + \
@@ -282,16 +271,6 @@ impl Config {
             );
         }
 
-        if oauth.cache_max_ttl_secs > BEARER_CACHE_MAX_TTL_CAP_SECS {
-            anyhow::bail!(
-                "auth.oauth.cache_max_ttl_secs is {}, which exceeds the {}s cap. \
-                 Pick a value <= {}; longer ceilings let stale scope / audience changes \
-                 at the IdP linger past the next rotation.",
-                oauth.cache_max_ttl_secs,
-                BEARER_CACHE_MAX_TTL_CAP_SECS,
-                BEARER_CACHE_MAX_TTL_CAP_SECS
-            );
-        }
         // JWKS TTL floor: sub-minute values degrade to refetch-per-request
         // (self-DoS). Reject at startup rather than letting the cache clamp
         // it silently.

@@ -5,21 +5,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use arc_swap::ArcSwapOption;
-use stackpit_auth::BearerGate;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
 use crate::oidc::client::OidcClient;
-use crate::oidc::revocations::DbRevocationStore;
 
 const BACKOFF_FLOOR: Duration = Duration::from_secs(1);
 const BACKOFF_CEILING: Duration = Duration::from_secs(60);
 
-/// Published as one unit so a request never observes a client without its gate.
+/// The discovered OIDC client, published once discovery succeeds.
 pub struct OidcReady {
     pub client: Arc<OidcClient>,
-    /// `None` when the discovery doc offered nothing to validate tokens with.
-    pub web_gate: Option<BearerGate>,
 }
 
 /// Lock-free slot for the discovered surface - read on every authed request.
@@ -71,12 +67,7 @@ fn jittered(backoff: Duration) -> Duration {
 }
 
 /// Retries until discovery lands, then stops - nothing invalidates a discovered client.
-pub fn spawn_retry(
-    slot: OidcSlot,
-    cancel: CancellationToken,
-    config: Arc<Config>,
-    revocations: Option<DbRevocationStore>,
-) {
+pub fn spawn_retry(slot: OidcSlot, cancel: CancellationToken, config: Arc<Config>) {
     crate::background::supervise("oidc_discovery_retry", async move {
         let mut backoff = BACKOFF_FLOOR;
         loop {
@@ -88,10 +79,9 @@ pub fn spawn_retry(
                 .await
             {
                 Ok(client) => {
-                    let client = Arc::new(client);
-                    let web_gate =
-                        crate::server::build_web_bearer_gate(&client, &config, revocations.clone());
-                    slot.publish(OidcReady { client, web_gate });
+                    slot.publish(OidcReady {
+                        client: Arc::new(client),
+                    });
                     tracing::info!(
                         "OIDC discovery succeeded on retry; browser sign-in is live \
                          (/mcp, if configured, still needs a restart)"

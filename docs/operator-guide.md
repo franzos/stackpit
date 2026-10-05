@@ -148,14 +148,19 @@ hydra create oauth2-client \
   --scope "openid email profile offline_access orgs" \
   --token-endpoint-auth-method client_secret_basic \
   --audience stackpit-web \
-  --redirect-uri https://stackpit.example.com/web/auth/callback
+  --redirect-uri https://stackpit.example.com/web/auth/callback \
+  --post-logout-callback https://stackpit.example.com/web/login \
+  --backchannel-logout-callback https://stackpit.example.com/web/auth/backchannel-logout \
+  --backchannel-logout-session-required
 ```
+
+With Forseti as the IdP, the `orgs` claim is scoped to the client's organization, which Forseti reads from its own metadata row for the client. A client created with the Hydra CLI has no such row and only receives the Default organization, so stackpit drops the user's other Forseti-backed org memberships on their next login. Register the client through Forseti's admin UI instead, or run `forseti reconcile-client-metadata` on the Forseti host after creating it.
 
 stackpit authenticates at the token endpoint with `client_secret_basic` by default (it also auto-detects the method from discovery, preferring basic). Register the client with a matching `--token-endpoint-auth-method`, or, if you must use `client_secret_post`, set `token_endpoint_auth_method = "client_secret_post"` under `[auth.oauth]` — otherwise the token exchange fails with `invalid_client`.
 
-The `--audience` allow-list entry matters: stackpit sends `audience=stackpit-web` on the authorization request so Hydra binds it into the access token's `aud`, and the web gate then checks for it. Hydra only honours audiences that appear on the client's allow-list — leave it off and the token comes back without the `aud`, and every web session is rejected with `InvalidAudience`. (Hydra uses a non-standard `audience=` parameter for this; RFC 8707 `resource=` isn't wired in Hydra yet.)
+`--audience` and the `orgs` scope are Forseti/Hydra extras, both optional. With `web_audience` set, stackpit sends Hydra's non-standard `audience=` parameter so the access token carries that `aud`; Hydra only honours audiences on the client's allow-list. stackpit itself doesn't need it, since the access token never authenticates a browser request (see below).
 
-The `orgs` scope in the example is optional. It's what lets stackpit map organizations and roles from your IdP; leave it off and you get personal-orgs-only. See [Organizations & Roles](#organizations--roles) for the full picture. It only works if the IdP is actually registered to grant the scope, so keep it on the client's allow-list too.
+The `orgs` scope is what lets stackpit map organizations and roles from your IdP; leave it out and you get personal-orgs-only. See [Organizations & Roles](#organizations--roles) for the full picture. List it under `scopes` and keep it on the client's allow-list too.
 
 Then wire it into `stackpit.toml`:
 
@@ -168,23 +173,23 @@ issuer_url    = "https://hydra.example.com"
 client_id     = "<from hydra output>"
 client_secret = "<from hydra output>"
 redirect_uri  = "https://stackpit.example.com/web/auth/callback"
-web_audience  = "stackpit.example.com"                  # required — must match the IdP audience for the web client
+# scopes      = ["openid", "email", "profile", "offline_access", "orgs"]  # default: openid email profile
+# web_audience = "stackpit-web"                         # optional, Hydra/Forseti only
 ```
 
-`web_audience` binds the BFF to the audience your IdP issues to the web client; it blocks confused-deputy attacks across resource servers and is enforced at startup.
+`scopes` defaults to `openid email profile`. Add `offline_access` for refresh tokens where the IdP supports it (Hydra and Forseti do; Google and Entra don't). Against Keycloak, leave it out: when stackpit is the only client in a sign-in that asks for it, Keycloak keeps just an offline session, which ends its single sign-on and makes logout at Keycloak fail.
 
-**Access-token validation: JWT vs opaque.** On every request the web gate validates the grant's access token. It supports both token shapes:
+ID and logout tokens are accepted when signed with RS256, PS256, ES256 or EdDSA and the IdP's discovery document lists that algorithm. A token without `kid` works when the IdP's JWKS holds exactly one key for its algorithm. An ID token addressed to more than stackpit is refused unless each extra audience is listed in `trusted_audiences` and `azp` names stackpit's client.
 
-- **JWT access tokens (recommended, the default for Hydra).** Validated locally against the IdP's JWKS — signature, `iss`, `aud`, `exp`. No network call on the hot path, no admin-API reachability needed. As long as discovery advertises a `jwks_uri` (it normally does), this just works.
-- **Opaque access tokens.** Can't be validated locally — they require RFC 7662 introspection. For these to work, **the IdP's discovery document must advertise an `introspection_endpoint`, or you must set `introspection_url` under `[auth.oauth]` manually.** Note Hydra only exposes introspection on its *admin* API (not in public discovery) and that API is private, so opaque-token setups need stackpit to have a network path to it.
-
-If neither validator is available — no JWKS and no introspection URL — the web gate can't be built and SSO is disabled (stackpit logs an error at startup). If only JWKS is available (no introspection), stackpit logs a warning that opaque tokens will be rejected; this is fine for the JWT default but a misconfiguration if your IdP issues opaque tokens.
+**Sessions.** At sign-in stackpit validates the ID token and keeps the IdP's tokens server-side; the browser gets an opaque cookie pointing at that row, and the row is the session. Access tokens are never checked per request, so any IdP works, whatever it issues as an access token (opaque, JWT, a token for another audience). The session ends when the refresh token is rejected, the IdP sends back-channel logout, the user signs out, or `session_max_ttl_secs` passes. Without `offline_access` there's no refresh, and the session lasts until one of the others.
 
 User rows are provisioned just-in-time on first login, linked by the OIDC `(iss, sub)` pair. What a user can see and do is scoped by organization and role, covered in the next section; the `admin_token` is a separate break-glass code path (CLI, headless ops), doesn't flow through the users table at all, and acts as a superuser above every org. Email is stored only when the IdP reports `email_verified=true`; unverified emails are ignored to keep an attacker-controlled string out of identity decisions.
 
 A "Sign in with SSO" button appears on `/web/login` whenever `[auth.oauth]` is configured. The admin_token path keeps working alongside as a break-glass.
 
-The full set of OAuth knobs (`post_logout_redirect_uri`, `access_token_max_ttl_secs`, `introspection_cache_ttl_secs`, `session_max_ttl_secs`, etc.) is documented inline in the config that `stackpit init` writes — read that file for the authoritative reference.
+Signing out goes both ways. Logout in stackpit sends the browser to the IdP's `end_session_endpoint` (OIDC RP-Initiated Logout), which ends the IdP session too; the IdP only returns the browser to `post_logout_redirect_uri` if that exact URL is registered on the client, as above. A sign-out that starts at the IdP or in another app reaches stackpit through OIDC Back-Channel Logout, on `/web/auth/backchannel-logout`: register it on the client and make sure the IdP can reach it. A logout token naming a `sid` ends that browser's session only; one with just `sub` ends all of the user's sessions. `exp` is checked when present but not required, since Hydra leaves it out. Without back-channel logout, stackpit sessions outlive an IdP-side logout until they expire. An IdP without `end_session_endpoint` gets a local logout: the stackpit session ends, the IdP session stays.
+
+The full set of OAuth knobs (`post_logout_redirect_uri`, `access_token_max_ttl_secs`, `session_max_ttl_secs`, etc.) is documented inline in the config that `stackpit init` writes — read that file for the authoritative reference.
 
 ## MCP endpoint
 
@@ -258,7 +263,7 @@ The `admin_token` sits above all of this as a superuser. It sees every org (incl
 
 If your IdP reports organization membership on its claims, stackpit maps those orgs and roles in on login, so you don't manage membership in two places. This is built around [Forseti](https://git.gofranz.com/franz/forseti)'s `orgs` claim, and any IdP that emits the same shape works.
 
-To turn it on, grant stackpit's client the `orgs` scope (alongside `openid email profile offline_access`) and make sure the IdP is registered to grant it. Without the scope the claim never arrives, and stackpit logs a warning and falls back to personal-orgs-only.
+To turn it on, add `orgs` to `scopes` under `[auth.oauth]` (alongside `openid email profile`) and make sure the IdP is registered to grant it. Without the scope the claim never arrives, and stackpit logs a warning and falls back to personal-orgs-only.
 
 On each login stackpit reads the full `orgs` claim (the user's memberships, each with a role) and reconciles:
 

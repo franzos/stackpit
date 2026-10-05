@@ -2,9 +2,10 @@
 //!
 //! Priority:
 //! 1. **admin_token** (header or cookie) -- break-glass, never hits the IdP.
-//! 2. **`sp_grant` cookie** -- look up the server-side grant, refresh the
-//!    access token if it's close to expiring, introspect it via the
-//!    `BearerGate` (which also checks revocations), inject `AuthContext`.
+//! 2. **`sp_grant` cookie** -- look up the server-side grant (the browser
+//!    session), refresh the IdP tokens if they're close to expiring, inject
+//!    `AuthContext`. The grant row is the session: refresh `invalid_grant`,
+//!    back-channel logout, logout and the absolute TTL delete it.
 //! 3. Otherwise -- redirect to `/web/login` (or 401 JSON for API clients).
 //!
 //! Public paths (assets, OAuth callback) skip the gate entirely.
@@ -15,7 +16,7 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect, Response};
 use secrecy::ExposeSecret;
 use stackpit_auth::axum_ext::middleware as auth_mw;
-use stackpit_auth::{AuthContext, BearerAuthOutcome, PrincipalId};
+use stackpit_auth::{AuthContext, PrincipalId};
 
 use crate::middleware::{derive_admin_csrf_token, CsrfToken};
 use crate::oidc::cookies::{append_set_cookie, clear_grant_cookie};
@@ -122,10 +123,6 @@ pub async fn web_auth_middleware(
         let (Some(ready), Some(encryptor)) = (oidc_ready.as_ref(), state.encryptor.as_ref()) else {
             return unauthenticated_response(&req, secure_cookies);
         };
-        let Some(gate) = ready.web_gate.as_ref() else {
-            // Misconfiguration -- should have been caught at startup.
-            return unauthenticated_response(&req, secure_cookies);
-        };
         let oidc = &ready.client;
 
         // Pure SELECT (grants::load), so it belongs on the read pool rather than
@@ -139,7 +136,7 @@ pub async fn web_auth_middleware(
         let handle = grant.handle.clone();
 
         // Logout must succeed even with an expired or revoked access token, so it
-        // skips the bearer gate + eager refresh. Inject the per-grant CSRF token so
+        // skips the eager refresh. Inject the per-grant CSRF token so
         // the synchronizer check passes; the handler does the actual teardown.
         if path == "/web/logout" {
             req.extensions_mut()
@@ -147,7 +144,6 @@ pub async fn web_auth_middleware(
             return next.run(req).await;
         }
 
-        // Failures fall through to the existing token; the gate will reject if expired.
         let now = chrono::Utc::now().timestamp();
         let cap = state.config.auth.oauth.session_max_ttl_secs;
         if session_expired(grant.created_at, now, cap) {
@@ -164,9 +160,7 @@ pub async fn web_auth_middleware(
                     return unauthenticated_response(&req, secure_cookies);
                 }
                 Ok(RefreshOutcome::Transient(msg)) => {
-                    tracing::warn!(
-                        "transient refresh failure ({msg}); falling back to existing access token"
-                    );
+                    tracing::warn!("transient refresh failure ({msg}); keeping the session");
                     grant
                 }
                 Err(e) => {
@@ -178,83 +172,68 @@ pub async fn web_auth_middleware(
             grant
         };
 
-        match gate
-            .authorize(
-                Some(&grant.access_token),
-                state.config.auth.oauth.web_required_scope.as_str(),
-            )
-            .await
-        {
-            BearerAuthOutcome::Ok(_) => {
-                // Stable grant handle so audit logs correlate per browser session.
-                let handle_uuid = handle_to_uuid(&grant.handle);
-                // GrantRecord's `Drop` zeroizes tokens -- clone iss/sub instead of moving.
-                let ctx = AuthContext::User {
-                    iss: grant.iss.clone(),
-                    sub: grant.sub.clone(),
-                    principal_id: PrincipalId::Session(handle_uuid),
-                };
-                if let AuthContext::User { iss, sub, .. } = &ctx {
-                    tracing::debug!(
-                        target: "stackpit::auth",
-                        auth_source = %ctx.source(),
-                        iss = %iss,
-                        sub = %sub,
-                        principal_id = %handle_uuid,
-                        "request authenticated",
-                    );
-                }
-                let csrf = grant.csrf_token.clone();
-                let user_id = grant.user_id;
-                req.extensions_mut().insert(ctx);
-                req.extensions_mut().insert(CsrfToken(csrf));
-                // Locale ladder step 3 (persisted preference) is only reachable when
-                // neither a valid `?lang=` query nor a valid `sp_locale` cookie wins;
-                // skip the SELECT otherwise. Mirrors resolve_locale's query/cookie logic.
-                let query_or_cookie_wins = req
-                    .uri()
-                    .query()
-                    .and_then(|q| {
-                        q.split('&')
-                            .find_map(|kv| kv.strip_prefix("lang="))
-                            .and_then(crate::locale::accept)
-                    })
-                    .or_else(|| crate::locale::read_locale_cookie(req.headers()))
-                    .is_some();
-                let preferred = if query_or_cookie_wins {
-                    None
-                } else {
-                    crate::queries::users::get_preferred_language(&state.pool, user_id)
-                        .await
-                        .unwrap_or(None)
-                };
-                req.extensions_mut()
-                    .insert(crate::html::utils::PreferredLanguage(preferred));
-                // Fail closed: a DB error here must not fabricate a membership.
-                let active_org = match resolve_session_active_org(
-                    &state.pool,
-                    &state.auth_pool,
-                    user_id,
-                    req.headers(),
-                    state.encryptor.as_deref(),
-                )
-                .await
-                {
-                    Ok(org) => org,
-                    Err(e) => {
-                        tracing::error!("active-org resolution failed for user {user_id}: {e:#}");
-                        return internal_error_response(&req);
-                    }
-                };
-                req.extensions_mut().insert(active_org);
-                return next.run(req).await;
-            }
-            _ => {
-                // Revoked or expired beyond refresh; drop the grant.
-                grants::forget(&state.auth_pool, &handle).await;
-                return unauthenticated_response(&req, secure_cookies);
-            }
+        // Stable grant handle so audit logs correlate per browser session.
+        let handle_uuid = handle_to_uuid(&grant.handle);
+        // GrantRecord's `Drop` zeroizes tokens -- clone iss/sub instead of moving.
+        let ctx = AuthContext::User {
+            iss: grant.iss.clone(),
+            sub: grant.sub.clone(),
+            principal_id: PrincipalId::Session(handle_uuid),
+        };
+        if let AuthContext::User { iss, sub, .. } = &ctx {
+            tracing::debug!(
+                target: "stackpit::auth",
+                auth_source = %ctx.source(),
+                iss = %iss,
+                sub = %sub,
+                principal_id = %handle_uuid,
+                "request authenticated",
+            );
         }
+        let csrf = grant.csrf_token.clone();
+        let user_id = grant.user_id;
+        req.extensions_mut().insert(ctx);
+        req.extensions_mut().insert(CsrfToken(csrf));
+        // Locale ladder step 3 (persisted preference) is only reachable when
+        // neither a valid `?lang=` query nor a valid `sp_locale` cookie wins;
+        // skip the SELECT otherwise. Mirrors resolve_locale's query/cookie logic.
+        let query_or_cookie_wins = req
+            .uri()
+            .query()
+            .and_then(|q| {
+                q.split('&')
+                    .find_map(|kv| kv.strip_prefix("lang="))
+                    .and_then(crate::locale::accept)
+            })
+            .or_else(|| crate::locale::read_locale_cookie(req.headers()))
+            .is_some();
+        let preferred = if query_or_cookie_wins {
+            None
+        } else {
+            crate::queries::users::get_preferred_language(&state.pool, user_id)
+                .await
+                .unwrap_or(None)
+        };
+        req.extensions_mut()
+            .insert(crate::html::utils::PreferredLanguage(preferred));
+        // Fail closed: a DB error here must not fabricate a membership.
+        let active_org = match resolve_session_active_org(
+            &state.pool,
+            &state.auth_pool,
+            user_id,
+            req.headers(),
+            state.encryptor.as_deref(),
+        )
+        .await
+        {
+            Ok(org) => org,
+            Err(e) => {
+                tracing::error!("active-org resolution failed for user {user_id}: {e:#}");
+                return internal_error_response(&req);
+            }
+        };
+        req.extensions_mut().insert(active_org);
+        return next.run(req).await;
     }
 
     // 3. No identity.
@@ -507,6 +486,7 @@ mod tests {
                 refresh_token: None,
                 refresh_exp: None,
                 id_token: "it",
+                offline: false,
             },
         )
         .await
@@ -528,6 +508,107 @@ mod tests {
             .await
             .expect("grant lookup must not write");
         assert_eq!(record.user_id, u.user_id);
+    }
+
+    // The grant row is the session: an access token no resource-server gate
+    // would accept (opaque, wrong audience) still authenticates the browser.
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
+    #[tokio::test]
+    async fn web_request_authenticates_from_grant_without_bearer_gate() {
+        use super::AuthContext;
+        use crate::oidc::discovery::{OidcReady, OidcSlot};
+        use crate::oidc::grants::{self, NewGrant};
+        use crate::util::crypto::SecretEncryptor;
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use axum::routing::get;
+        use axum::{Extension, Router};
+        use tower::ServiceExt;
+
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        let u =
+            crate::queries::users::upsert_from_oidc(&pool, "https://idp", "sub-own", None, None)
+                .await
+                .unwrap();
+        let encryptor = std::sync::Arc::new(
+            SecretEncryptor::from_config_or_env(Some(&secrecy::SecretString::from(
+                "11".repeat(32),
+            )))
+            .unwrap()
+            .expect("a key was supplied"),
+        );
+        let handle = grants::insert(
+            &pool,
+            &encryptor,
+            &NewGrant {
+                user_id: u.user_id,
+                iss: "https://idp",
+                sub: "sub-own",
+                sid: None,
+                access_token: "opaque-token-for-another-audience",
+                access_exp: chrono::Utc::now().timestamp() + 3600,
+                refresh_token: None,
+                refresh_exp: None,
+                id_token: "it",
+                offline: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        let (mut state, _chans) = crate::server::AppState::for_test(pool);
+        let mut config = crate::config::Config::default();
+        config.auth.oauth.issuer_url = Some("https://idp".to_string());
+        config.auth.oauth.client_id = Some("stackpit".to_string());
+        config.auth.oauth.client_secret = Some(secrecy::SecretString::from("s"));
+        config.auth.oauth.redirect_uri = Some("https://sp/web/auth/callback".to_string());
+        state.config = std::sync::Arc::new(config);
+        state.encryptor = Some(encryptor);
+        state.oidc = OidcSlot::ready(OidcReady {
+            client: std::sync::Arc::new(crate::oidc::client::OidcClient::for_test(
+                "https://idp".to_string(),
+                "stackpit".to_string(),
+                stackpit_auth::JwksCache::new(
+                    reqwest::Client::new(),
+                    url::Url::parse("https://idp/.well-known/jwks.json").unwrap(),
+                    crate::oidc::client::jwks_cache_config(60),
+                ),
+            )),
+        });
+
+        let app = Router::new()
+            .route(
+                "/web/projects/",
+                get(|Extension(ctx): Extension<AuthContext>| async move {
+                    match ctx {
+                        AuthContext::User { sub, .. } => sub,
+                        _ => String::new(),
+                    }
+                }),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                state,
+                super::web_auth_middleware,
+            ));
+        let res = app
+            .oneshot(
+                Request::get("/web/projects/")
+                    .header(
+                        "cookie",
+                        format!(
+                            "{}={}",
+                            crate::oidc::cookies::grant_cookie_name(false),
+                            handle.to_hex()
+                        ),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), 1024).await.unwrap();
+        assert_eq!(&body[..], b"sub-own");
     }
 
     #[test]

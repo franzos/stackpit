@@ -18,6 +18,25 @@ use crate::server::AppState;
 use crate::util::crypto::SecretEncryptor;
 
 pub const PROVISION_COOKIE: &str = "sp_provision";
+pub const PROVISION_COOKIE_HOST: &str = "__Host-sp_provision";
+
+/// `__Host-` when Secure (no subdomain can plant or shadow it); the prefix
+/// forces `Path=/`.
+pub fn provision_cookie_name(secure: bool) -> &'static str {
+    if secure {
+        PROVISION_COOKIE_HOST
+    } else {
+        PROVISION_COOKIE
+    }
+}
+
+fn provision_cookie_path(secure: bool) -> &'static str {
+    if secure {
+        "/"
+    } else {
+        "/web/provision"
+    }
+}
 const AAD: &[u8] = b"stackpit:provision:v1";
 const PROVISION_TTL_SECS: i64 = 900;
 
@@ -71,8 +90,9 @@ pub fn intersect_provisionable(signed: &[String], submitted: &[String]) -> Vec<S
 /// interstitial can never render.
 pub fn build_provision_cookie(blob: &str, secure: bool) -> HeaderValue {
     let secure_flag = if secure { "; Secure" } else { "" };
+    let (name, path) = (provision_cookie_name(secure), provision_cookie_path(secure));
     let v = format!(
-        "{PROVISION_COOKIE}={blob}; Path=/web/provision; SameSite=Lax; HttpOnly; \
+        "{name}={blob}; Path={path}; SameSite=Lax; HttpOnly; \
          Max-Age={PROVISION_TTL_SECS}{secure_flag}"
     );
     HeaderValue::from_str(&v).expect("provision cookie is valid ASCII")
@@ -80,9 +100,8 @@ pub fn build_provision_cookie(blob: &str, secure: bool) -> HeaderValue {
 
 fn clear_provision_cookie(secure: bool) -> HeaderValue {
     let secure_flag = if secure { "; Secure" } else { "" };
-    let v = format!(
-        "{PROVISION_COOKIE}=; Path=/web/provision; SameSite=Lax; HttpOnly; Max-Age=0{secure_flag}"
-    );
+    let (name, path) = (provision_cookie_name(secure), provision_cookie_path(secure));
+    let v = format!("{name}=; Path={path}; SameSite=Lax; HttpOnly; Max-Age=0{secure_flag}");
     HeaderValue::from_str(&v).expect("clear provision cookie is valid ASCII")
 }
 
@@ -113,7 +132,10 @@ pub async fn provision_form(
     let Some(enc) = state.encryptor.as_deref() else {
         return Redirect::to("/web/").into_response();
     };
-    let Some(blob) = read_cookie(&headers, PROVISION_COOKIE) else {
+    let Some(blob) = read_cookie(
+        &headers,
+        provision_cookie_name(state.config.server.cookies_should_be_secure()),
+    ) else {
         return Redirect::to("/web/").into_response();
     };
     let Some(mut ps) = unpack(enc, blob) else {
@@ -179,7 +201,10 @@ pub async fn provision_submit(
     let Some(enc) = state.encryptor.as_deref() else {
         return Redirect::to("/web/").into_response();
     };
-    let Some(blob) = read_cookie(&headers, PROVISION_COOKIE) else {
+    let Some(blob) = read_cookie(
+        &headers,
+        provision_cookie_name(state.config.server.cookies_should_be_secure()),
+    ) else {
         return Redirect::to("/web/").into_response();
     };
     let Some(ps) = unpack(enc, blob) else {

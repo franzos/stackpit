@@ -1,6 +1,8 @@
 use axum::extract::{Form, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
+use oidc_relying_party::auth_response::AuthorizationErrorCode;
+use oidc_relying_party::end_session::{build_end_session_url, EndSessionRequest};
 use secrecy::ExposeSecret;
 use serde::Deserialize;
 
@@ -8,7 +10,7 @@ use crate::html::chrome::Localized;
 use crate::html::utils::Chrome;
 use crate::locale::LanguageIdentifier;
 use crate::oidc::cookies::{append_set_cookie, clear_grant_cookie_all_variants};
-use crate::oidc::{grants, logout};
+use crate::oidc::grants;
 use crate::server::AppState;
 
 pub const ADMIN_COOKIE: &str = "stackpit_token";
@@ -81,6 +83,40 @@ impl Localized for LoginTemplate {
     }
 }
 
+#[derive(askama::Template)]
+#[template(path = "logout_continue.html")]
+struct LogoutContinueTemplate {
+    target: String,
+    locale: LanguageIdentifier,
+}
+
+impl Localized for LogoutContinueTemplate {
+    fn locale(&self) -> &LanguageIdentifier {
+        &self.locale
+    }
+}
+
+/// Hand the browser to the IdP's `end_session_endpoint` from a document rather
+/// than a 303. Chrome and Safari check `form-action` on every hop of a form
+/// submission's redirect chain, so a 303 out of the logout POST is blocked by
+/// our `form-action 'self'` and the user sits on an unchanged page. A
+/// declarative refresh is navigation type "other", which `form-action` never
+/// covers, so the policy stays strict and any IdP's endpoint works.
+fn continue_to_idp(target: &str, locale: LanguageIdentifier) -> axum::response::Response {
+    if !url::Url::parse(target).is_ok_and(|u| matches!(u.scheme(), "http" | "https")) {
+        tracing::error!(target: "stackpit::auth", "refusing a non-HTTP(S) end-session URL");
+        return axum::response::Redirect::to("/web/login?logout=local").into_response();
+    }
+    let tmpl = LogoutContinueTemplate {
+        target: target.to_string(),
+        locale,
+    };
+    match askama::Template::render(&tmpl) {
+        Ok(html) => axum::response::Html(html).into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "render error").into_response(),
+    }
+}
+
 #[derive(Deserialize, Default)]
 pub struct LoginQuery {
     error: Option<String>,
@@ -130,21 +166,27 @@ fn error_message(locale: &LanguageIdentifier, code: &str) -> String {
         }
         "session_expired" => "login-error-session-expired",
         "missing_code" | "missing_state" => "login-error-missing-response",
-        "token_exchange_failed" => "login-error-token-exchange",
+        "token_exchange_failed" | "issuer_mismatch" => "login-error-token-exchange",
         "provisioning_failed" => "login-error-provisioning",
         "email_conflict" => "login-error-email-conflict",
         "session_unavailable" => "login-error-session-unavailable",
         "encryption_unconfigured" => "login-error-encryption",
-        other => {
-            // Log unknown codes (usually a new error path missing here) but
-            // render a generic message so we never echo arbitrary input into HTML.
-            tracing::warn!(
-                target: "stackpit::auth",
-                code = %other,
-                "login redirect carried unknown error code; rendering generic message",
-            );
-            "login-error-generic"
-        }
+        other => match AuthorizationErrorCode::parse(other) {
+            AuthorizationErrorCode::AccessDenied => "login-error-access-denied",
+            AuthorizationErrorCode::LoginRequired
+            | AuthorizationErrorCode::InteractionRequired
+            | AuthorizationErrorCode::ConsentRequired => "login-error-interaction-required",
+            _ => {
+                // Log unknown codes (usually a new error path missing here) but
+                // render a generic message so we never echo arbitrary input into HTML.
+                tracing::warn!(
+                    target: "stackpit::auth",
+                    code = %other,
+                    "login redirect carried unknown error code; rendering generic message",
+                );
+                "login-error-generic"
+            }
+        },
     };
     crate::i18n::lookup(locale, key)
 }
@@ -232,7 +274,11 @@ pub struct LoginForm {
 /// Universal logout for both admin-token and OIDC (SSO) sessions. Clears the
 /// admin cookie + CSRF salt, and -- when OAuth is enabled -- tears down the
 /// server-side grant and runs RP-initiated logout against the IdP.
-pub async fn handle_logout(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+pub async fn handle_logout(
+    State(state): State<AppState>,
+    Chrome(chrome): Chrome,
+    headers: HeaderMap,
+) -> impl IntoResponse {
     let secure = state.config.server.cookies_should_be_secure();
 
     // Revoke server-side so the handle dies even if the cookie clear is lost.
@@ -256,28 +302,43 @@ pub async fn handle_logout(State(state): State<AppState>, headers: HeaderMap) ->
             had_grant = true;
             // GrantRecord's Drop zeroizes tokens; clone before forgetting.
             id_token_hint = record.id_token.clone();
+            // Best-effort RFC 7009: forgetting the row only stops *us*
+            // honouring the refresh token. Until the IdP revokes it, anything
+            // that lifted a copy can still redeem it for a fresh access token.
+            if let (Some(refresh), Some(client)) =
+                (record.refresh_token.as_deref(), state.oidc.client())
+            {
+                client.revoke_refresh_token(refresh).await;
+            }
             grants::forget(&state.auth_pool, &record.handle).await;
         }
     }
 
     // RP-initiated logout if the IdP advertises end_session_endpoint and we have
     // an id_token hint; else local-only banner for OIDC sessions; else plain.
+    // `post_logout_redirect_uri` is operator config, validated at startup; no
+    // request data reaches it, and the IdP echoes it to the browser.
+    let post_logout = state.config.auth.oauth.post_logout_redirect_uri.as_deref();
     let oidc_client = state.oidc.client();
-    let target = match (
-        oidc_client
-            .as_deref()
-            .and_then(|o| o.end_session_endpoint()),
-        id_token_hint.as_deref(),
-    ) {
-        (Some(endpoint), Some(hint)) => {
-            let post = state.config.auth.oauth.post_logout_redirect_uri.as_deref();
-            logout::build_end_session_url(endpoint, hint, post)
-        }
-        _ if had_grant => "/web/login?logout=local".to_string(),
-        _ => "/web/login".to_string(),
+    let end_session = oidc_client
+        .as_deref()
+        .zip(id_token_hint.as_deref())
+        .and_then(|(client, hint)| {
+            build_end_session_url(
+                client.discovery(),
+                &EndSessionRequest {
+                    id_token_hint: Some(hint),
+                    client_id: Some(client.client_id()),
+                    post_logout_redirect_uri: post_logout,
+                    state: None,
+                },
+            )
+        });
+    let mut resp = match end_session {
+        Some(url) => continue_to_idp(url.as_str(), chrome.locale),
+        _ if had_grant => axum::response::Redirect::to("/web/login?logout=local").into_response(),
+        _ => axum::response::Redirect::to("/web/login").into_response(),
     };
-
-    let mut resp = axum::response::Redirect::to(&target).into_response();
     // Clear both name variants of every session cookie so a stale
     // opposite-posture cookie can't linger and recreate the admin+OIDC overlap.
     for cookie in clear_session_cookies() {
@@ -301,6 +362,27 @@ mod tests {
     use crate::locale::default_locale;
     use askama::Template;
     use unic_langid::langid;
+
+    #[tokio::test]
+    async fn idp_logout_is_a_document_not_a_redirect() {
+        let target = "https://id.example.com/oauth2/sessions/logout?id_token_hint=x&state=y";
+        let resp = continue_to_idp(target, default_locale());
+        // A 3xx would stay inside the form submission and trip `form-action 'self'`.
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains(r#"http-equiv="refresh""#));
+        let decoded = html.replace("&#38;", "&").replace("&amp;", "&");
+        assert!(decoded.contains(target), "{html}");
+    }
+
+    #[test]
+    fn idp_logout_refuses_non_http_targets() {
+        let resp = continue_to_idp("javascript:alert(1)", default_locale());
+        assert!(resp.status().is_redirection());
+    }
 
     /// Every known error code emitted by `src/html/auth.rs` must map to a
     /// non-default message (i.e. *not* the generic fallback). Catalogue is
@@ -357,6 +439,107 @@ mod tests {
         assert!(super::logout_message(&en, "").is_none());
         assert!(super::logout_message(&en, "remote").is_none());
         assert!(super::logout_message(&en, "<script>").is_none());
+    }
+
+    // An IdP without `end_session_endpoint`: logout ends the Stackpit
+    // session and says so, rather than failing.
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
+    #[tokio::test]
+    async fn end_session_absent_logs_out_locally() {
+        use crate::oidc::grants::{self, NewGrant};
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        let u = crate::queries::users::upsert_from_oidc(&pool, "https://idp", "sub-lo", None, None)
+            .await
+            .unwrap();
+        let enc = std::sync::Arc::new(
+            crate::util::crypto::SecretEncryptor::from_config_or_env(Some(
+                &secrecy::SecretString::from("11".repeat(32)),
+            ))
+            .unwrap()
+            .unwrap(),
+        );
+        let handle = grants::insert(
+            &pool,
+            &enc,
+            &NewGrant {
+                user_id: u.user_id,
+                iss: "https://idp",
+                sub: "sub-lo",
+                sid: None,
+                access_token: "at",
+                access_exp: 0,
+                refresh_token: None,
+                refresh_exp: None,
+                id_token: "it",
+                offline: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        let (mut state, _chans) = crate::server::AppState::for_test(pool.clone());
+        let mut config = crate::config::Config::default();
+        config.auth.oauth.issuer_url = Some("https://idp".to_string());
+        config.auth.oauth.client_id = Some("stackpit".to_string());
+        config.auth.oauth.client_secret = Some(secrecy::SecretString::from("s"));
+        config.auth.oauth.redirect_uri = Some("https://sp/web/auth/callback".to_string());
+        state.config = std::sync::Arc::new(config);
+        state.encryptor = Some(enc.clone());
+        state.oidc = crate::oidc::discovery::OidcSlot::ready(crate::oidc::discovery::OidcReady {
+            client: std::sync::Arc::new(crate::oidc::client::OidcClient::for_test(
+                "https://idp".to_string(),
+                "stackpit".to_string(),
+                stackpit_auth::JwksCache::new(
+                    reqwest::Client::new(),
+                    url::Url::parse("https://idp/jwks").unwrap(),
+                    crate::oidc::client::jwks_cache_config(60),
+                ),
+            )),
+        });
+        let app = axum::Router::new()
+            .route("/web/logout", axum::routing::post(super::handle_logout))
+            .with_state(state);
+        let res = app
+            .oneshot(
+                Request::post("/web/logout")
+                    .header(
+                        "cookie",
+                        format!(
+                            "{}={}",
+                            crate::oidc::cookies::grant_cookie_name(false),
+                            handle.to_hex()
+                        ),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            res.headers().get("location").and_then(|v| v.to_str().ok()),
+            Some("/web/login?logout=local")
+        );
+        assert!(grants::load(&pool, &enc, &handle).await.unwrap().is_none());
+    }
+
+    #[test]
+    fn callback_access_denied_shows_message() {
+        let en = default_locale();
+        let generic = error_message(&en, "not_a_real_code_xyz");
+        for code in [
+            "access_denied",
+            "login_required",
+            "consent_required",
+            "interaction_required",
+        ] {
+            let msg = error_message(&en, code);
+            assert_ne!(msg, generic, "{code} must get its own message");
+            assert!(!msg.contains(code), "{code} must not show the raw code");
+        }
     }
 
     #[test]

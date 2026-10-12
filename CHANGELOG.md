@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.4.9] - 2026-10-12
+
+### Security
+- Outbound requests could target multicast, site-local and NAT64 addresses
+- SQLite database files were readable by other local users
+- `/api/0` JSON bodies were buffered without a size cap before auth
+- Two concurrent first keys could both register an open-mode project
+- Container binary was writable by the runtime user
+
+### Fixed
+- HTML 500s from non-database errors were not logged
+
+### Changed
+- Logs once when forwarding headers arrive from an untrusted proxy
+- Faster event and span list totals
+- Large `/store` bodies are parsed off the async runtime
+
 ## [0.4.8] - 2026-10-05
 
 ### Security

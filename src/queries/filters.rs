@@ -193,11 +193,6 @@ pub async fn discard_fingerprint(
     fingerprint: &str,
     project_id: u64,
 ) -> Result<()> {
-    #[cfg(feature = "sqlite")]
-    let query = sql!(
-        "INSERT OR IGNORE INTO discarded_fingerprints (fingerprint, project_id) VALUES (?1, ?2)"
-    );
-    #[cfg(not(feature = "sqlite"))]
     let query = sql!("INSERT INTO discarded_fingerprints (fingerprint, project_id) VALUES (?1, ?2) ON CONFLICT (project_id, fingerprint) DO NOTHING");
 
     sqlx::query(query)
@@ -296,10 +291,6 @@ pub async fn add_environment_filter(
     project_id: u64,
     environment: &str,
 ) -> Result<()> {
-    #[cfg(feature = "sqlite")]
-    let query =
-        sql!("INSERT OR IGNORE INTO environment_filters (project_id, environment) VALUES (?1, ?2)");
-    #[cfg(not(feature = "sqlite"))]
     let query = sql!("INSERT INTO environment_filters (project_id, environment) VALUES (?1, ?2) ON CONFLICT (project_id, environment) DO NOTHING");
 
     sqlx::query(query)
@@ -326,9 +317,6 @@ pub async fn add_release_filter(
     project_id: u64,
     pattern: &str,
 ) -> Result<()> {
-    #[cfg(feature = "sqlite")]
-    let query = sql!("INSERT OR IGNORE INTO release_filters (project_id, pattern) VALUES (?1, ?2)");
-    #[cfg(not(feature = "sqlite"))]
     let query = sql!("INSERT INTO release_filters (project_id, pattern) VALUES (?1, ?2) ON CONFLICT (project_id, pattern) DO NOTHING");
 
     sqlx::query(query)
@@ -355,10 +343,6 @@ pub async fn add_user_agent_filter(
     project_id: u64,
     pattern: &str,
 ) -> Result<()> {
-    #[cfg(feature = "sqlite")]
-    let query =
-        sql!("INSERT OR IGNORE INTO user_agent_filters (project_id, pattern) VALUES (?1, ?2)");
-    #[cfg(not(feature = "sqlite"))]
     let query = sql!("INSERT INTO user_agent_filters (project_id, pattern) VALUES (?1, ?2) ON CONFLICT (project_id, pattern) DO NOTHING");
 
     sqlx::query(query)
@@ -424,9 +408,6 @@ pub async fn delete_filter_rule(pool: &crate::db::DbPool, id: i64, project_id: u
 // -- IP blocklist ----------------------------------------------------------
 
 pub async fn add_ip_block(pool: &crate::db::DbPool, project_id: u64, cidr: &str) -> Result<()> {
-    #[cfg(feature = "sqlite")]
-    let query = sql!("INSERT OR IGNORE INTO ip_blocklist (project_id, cidr) VALUES (?1, ?2)");
-    #[cfg(not(feature = "sqlite"))]
     let query = sql!("INSERT INTO ip_blocklist (project_id, cidr) VALUES (?1, ?2) ON CONFLICT (project_id, cidr) DO NOTHING");
 
     sqlx::query(query)

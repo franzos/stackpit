@@ -1,16 +1,18 @@
-use axum::extract::{Path, Query};
+use axum::extract::{Path, Query, State};
 use axum::response::IntoResponse;
 
 use crate::extractors::ReadPool;
 use crate::orgs::extractor::ActiveOrg;
 use crate::queries;
 use crate::queries::types::Pagination;
+use crate::server::AppState;
 
 use super::ApiError;
 
 /// GET /api/v1/projects/{project_id}/events/?limit=&offset=
 pub async fn list_for_project(
     active: ActiveOrg,
+    State(state): State<AppState>,
     ReadPool(pool): ReadPool,
     Path(project_id): Path<u64>,
     Query(params): Query<Pagination>,
@@ -19,7 +21,10 @@ pub async fn list_for_project(
         .await
         .map_err(|_| ApiError::not_found("not found"))?;
     let page = params.page();
-    let events = queries::events::list_events(&pool, project_id, &page)
+    let total = queries::projects::nav_counts_cached(&pool, &state.nav_cache, project_id)
+        .await
+        .event_count as i64;
+    let events = queries::events::list_events(&pool, project_id, &page, total)
         .await
         .map_err(ApiError::internal)?;
     Ok(axum::Json(events))

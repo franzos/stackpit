@@ -1,5 +1,8 @@
 use crate::filter::cidr::CidrBlock;
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static UNTRUSTED_PROXY_WARNED: AtomicBool = AtomicBool::new(false);
 
 /// Peers allowed to set forwarding headers. Loopback is always trusted;
 /// additional proxies (Docker bridge, LB) come from `server.trusted_proxies`.
@@ -42,6 +45,7 @@ pub fn extract_client_ip(
 ) -> Option<String> {
     let peer_ip = peer_addr.map(|a| a.ip());
     let peer_is_trusted = peer_ip.is_some_and(|ip| trusted.is_trusted(ip));
+    note_untrusted_forwarding(peer_is_trusted, peer_ip.is_some(), headers);
 
     if peer_is_trusted {
         if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
@@ -74,9 +78,70 @@ pub fn extract_client_ip(
     peer_ip.map(|ip| ip.to_string())
 }
 
+/// Logs once per process when a forwarding header arrives from a peer that is
+/// not in `server.trusted_proxies`. Returns whether this call emitted the log.
+pub(crate) fn note_untrusted_forwarding(
+    peer_is_trusted: bool,
+    peer_present: bool,
+    headers: &axum::http::HeaderMap,
+) -> bool {
+    note_untrusted_forwarding_once(
+        &UNTRUSTED_PROXY_WARNED,
+        peer_is_trusted,
+        peer_present,
+        headers,
+    )
+}
+
+fn note_untrusted_forwarding_once(
+    warned: &AtomicBool,
+    peer_is_trusted: bool,
+    peer_present: bool,
+    headers: &axum::http::HeaderMap,
+) -> bool {
+    if !peer_present || peer_is_trusted {
+        return false;
+    }
+    if !headers.contains_key("x-forwarded-for") && !headers.contains_key("x-real-ip") {
+        return false;
+    }
+    if warned.swap(true, Ordering::Relaxed) {
+        return false;
+    }
+    tracing::error!(
+        "X-Forwarded-For or X-Real-IP received from a peer not in server.trusted_proxies; \
+         the header is ignored and per-IP rate limits key on the proxy address, not the client"
+    );
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn note_untrusted_forwarding_fires_once_for_untrusted_peer_with_headers() {
+        let warned = AtomicBool::new(false);
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-forwarded-for", "70.41.3.18".parse().unwrap());
+        let bare = axum::http::HeaderMap::new();
+
+        assert!(!note_untrusted_forwarding_once(
+            &warned, true, true, &headers
+        ));
+        assert!(!note_untrusted_forwarding_once(
+            &warned, false, false, &headers
+        ));
+        assert!(!note_untrusted_forwarding_once(&warned, false, true, &bare));
+        assert!(!warned.load(Ordering::Relaxed));
+
+        assert!(note_untrusted_forwarding_once(
+            &warned, false, true, &headers
+        ));
+        assert!(!note_untrusted_forwarding_once(
+            &warned, false, true, &headers
+        ));
+    }
 
     fn no_proxies() -> TrustedProxies {
         TrustedProxies::default()

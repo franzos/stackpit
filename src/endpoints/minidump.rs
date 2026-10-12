@@ -40,7 +40,7 @@ pub async fn handle(
 
         match field.bytes().await {
             Ok(data) if data.len() > MAX_FIELD_SIZE => {
-                tracing::warn!("multipart field '{name}' exceeds {MAX_FIELD_SIZE} bytes, skipping");
+                tracing::warn!("multipart field {name:?} exceeds {MAX_FIELD_SIZE} bytes, skipping");
                 continue;
             }
             Ok(data) => {

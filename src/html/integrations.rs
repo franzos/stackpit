@@ -872,15 +872,10 @@ pub async fn test_integration(
             }
         };
 
-        let client = match reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
-            .redirect(reqwest::redirect::Policy::none())
-            .resolve(&resolved.hostname, resolved.addr)
-            .build()
-        {
+        let client = match crate::util::ssrf::build_pinned_client(&resolved) {
             Ok(c) => c,
             Err(e) => {
-                let e = anyhow::Error::from(e).context("failed to build pinned reqwest client");
+                let e = e.context("failed to build pinned reqwest client");
                 return axum::response::IntoResponse::into_response(HtmlError::from(e));
             }
         };

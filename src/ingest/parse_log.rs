@@ -13,8 +13,9 @@ pub struct LogFields {
 /// doesn't decompress and re-parse the batch payload.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedLogEntry {
-    /// Serialized (uncompressed) entry JSON; compressed per entry at flush.
+    /// Serialized entry JSON, zstd-compressed per entry once `compressed` is set.
     pub payload: Vec<u8>,
+    pub compressed: bool,
     /// The entry's own timestamp; falls back to the event's at flush.
     pub timestamp: Option<i64>,
     pub fields: LogFields,
@@ -23,6 +24,7 @@ pub struct ParsedLogEntry {
 pub(crate) fn parse_log_entry(v: &serde_json::Value) -> ParsedLogEntry {
     ParsedLogEntry {
         payload: serde_json::to_vec(v).unwrap_or_default(),
+        compressed: false,
         timestamp: extract_log_timestamp(v),
         fields: extract_log_fields(v),
     }

@@ -52,6 +52,16 @@ fn is_client_fault(status: axum::http::StatusCode) -> bool {
     status != axum::http::StatusCode::INTERNAL_SERVER_ERROR
 }
 
+/// Run a body's parse off the reactor once it exceeds `INLINE_CPU_MAX_BYTES`,
+/// the same threshold the writer uses for compression.
+pub fn parse_with_size_gate<T>(body: &[u8], parse: impl FnOnce() -> T) -> T {
+    if body.len() > crate::util::INLINE_CPU_MAX_BYTES {
+        crate::writer::block_in_place_if_multi_thread(parse)
+    } else {
+        parse()
+    }
+}
+
 /// Run the event through the filter engine. Returns `true` when dropped, and
 /// records the reason in discard_stats.
 pub fn check_event_filter(state: &AppState, event: &StorableEvent, project_id: u64) -> bool {
@@ -117,5 +127,26 @@ mod tests {
             }
         }
         assert!(limiter.is_over_budget("ip"));
+    }
+
+    #[test]
+    fn size_gate_runs_the_closure_below_the_threshold() {
+        let body = vec![b'x'; crate::util::INLINE_CPU_MAX_BYTES];
+        let out = parse_with_size_gate(&body, || body.len() + 1);
+        assert_eq!(out, body.len() + 1);
+    }
+
+    #[test]
+    fn size_gate_runs_the_closure_above_the_threshold() {
+        let body = vec![b'x'; crate::util::INLINE_CPU_MAX_BYTES + 1];
+        let out = parse_with_size_gate(&body, || body.len() + 1);
+        assert_eq!(out, body.len() + 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn size_gate_blocks_in_place_on_a_multi_thread_runtime() {
+        let body = vec![b'x'; crate::util::INLINE_CPU_MAX_BYTES + 1];
+        let out = parse_with_size_gate(&body, || body.len() + 1);
+        assert_eq!(out, body.len() + 1);
     }
 }

@@ -16,21 +16,26 @@ pub(crate) fn since_bound(since_ts: Option<i64>) -> i64 {
     since_ts.unwrap_or(0)
 }
 
+/// `all_time_total` (the nav-count cache) replaces the `COUNT(*)` only when `since_ts` is `None`.
 pub async fn list_spans(
     pool: &crate::db::DbPool,
     project_id: u64,
     page: &Page,
     since_ts: Option<i64>,
+    all_time_total: Option<i64>,
 ) -> Result<PagedResult<SpanSummary>> {
     let since = since_bound(since_ts);
-    let count_row = sqlx::query(sql!(
-        "SELECT COUNT(*) FROM spans WHERE project_id = ?1 AND timestamp >= ?2"
-    ))
-    .bind(project_id as i64)
-    .bind(since)
-    .fetch_one(pool)
-    .await?;
-    let total = count_row.get::<i64, _>(0);
+    let total = match (since_ts, all_time_total) {
+        (None, Some(total)) => total,
+        _ => sqlx::query(sql!(
+            "SELECT COUNT(*) FROM spans WHERE project_id = ?1 AND timestamp >= ?2"
+        ))
+        .bind(project_id as i64)
+        .bind(since)
+        .fetch_one(pool)
+        .await?
+        .get::<i64, _>(0),
+    };
 
     let rows = sqlx::query(sql!(
         "SELECT span_id, trace_id, timestamp, op, description, duration_ms
@@ -1576,6 +1581,26 @@ mod tests {
         assert_eq!(empty.avg_ms, 0);
     }
 
+    #[tokio::test]
+    async fn list_spans_uses_cached_total_only_when_all_time() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        insert_span(&pool, "old", "t-old", None, 1, 100, 0, 10, None, None).await;
+        insert_span(&pool, "new", "t-new", None, 1, 900, 0, 20, None, None).await;
+        let page = Page::new(Some(0), Some(25));
+
+        let cached = list_spans(&pool, 1, &page, None, Some(999)).await.unwrap();
+        assert_eq!(cached.total, 999);
+        assert_eq!(cached.items.len(), 2);
+
+        let windowed = list_spans(&pool, 1, &page, Some(500), Some(999))
+            .await
+            .unwrap();
+        assert_eq!(windowed.total, 1);
+
+        let counted = list_spans(&pool, 1, &page, None, None).await.unwrap();
+        assert_eq!(counted.total, 2);
+    }
+
     // The spans page had no window at all and read the whole table; all three of
     // its reads have to agree on the one the page is showing.
     #[tokio::test]
@@ -1610,9 +1635,9 @@ mod tests {
 
         let page = Page::new(Some(0), Some(25));
 
-        let all = list_spans(&pool, 1, &page, None).await.unwrap();
+        let all = list_spans(&pool, 1, &page, None, None).await.unwrap();
         assert_eq!(all.total, 2);
-        let windowed = list_spans(&pool, 1, &page, Some(500)).await.unwrap();
+        let windowed = list_spans(&pool, 1, &page, Some(500), None).await.unwrap();
         assert_eq!(windowed.total, 1);
         assert_eq!(windowed.items[0].span_id, "new");
 

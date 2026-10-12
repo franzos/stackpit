@@ -416,12 +416,7 @@ pub async fn test(
                 .await
             }
         };
-        let client = match reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
-            .redirect(reqwest::redirect::Policy::none())
-            .resolve(&resolved.hostname, resolved.addr)
-            .build()
-        {
+        let client = match crate::util::ssrf::build_pinned_client(&resolved) {
             Ok(c) => c,
             Err(e) => {
                 tracing::error!("failed to build pinned reqwest client: {e}");

@@ -63,7 +63,13 @@ pub async fn list_handler(
     let since = period_to_timestamp(&period);
 
     let (span_result, trace_result, agg_result) = tokio::join!(
-        queries::spans::list_spans(&ctx.pool, ctx.project_id, &page, since),
+        queries::spans::list_spans(
+            &ctx.pool,
+            ctx.project_id,
+            &page,
+            since,
+            since.is_none().then_some(ctx.nav.span_count as i64),
+        ),
         queries::spans::list_traces(&ctx.pool, ctx.project_id, &trace_page, since),
         queries::spans::aggregate_spans(&ctx.pool, ctx.project_id, since),
     );

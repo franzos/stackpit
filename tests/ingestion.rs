@@ -27,6 +27,7 @@ fn make_event(event_id: &str, project_id: u64, fingerprint: &str) -> StorableEve
         server_name: None,
         transaction_name: None,
         title: Some(format!("test error {event_id}")),
+        title_checked: false,
         sdk_name: None,
         sdk_version: None,
         fingerprint: Some(fingerprint.to_string()),
@@ -103,7 +104,10 @@ async fn ingest_event_then_query_back() {
     );
 
     let page = stackpit::queries::types::Page::new(None, None);
-    let events = stackpit::queries::events::list_events(&pool, 1, &page)
+    let total = stackpit::queries::projects::get_nav_counts(&pool, 1)
+        .await
+        .event_count as i64;
+    let events = stackpit::queries::events::list_events(&pool, 1, &page, total)
         .await
         .unwrap();
     assert!(

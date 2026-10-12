@@ -9,7 +9,7 @@ use anyhow::Result;
 use simple_hll::HyperLogLog;
 use sqlx::QueryBuilder;
 
-use crate::db::{sql, DbPool};
+use crate::db::{dyn_sql, sql, DbPool, MAX_FN, MIN_FN};
 use crate::ingest::models::{
     ItemType, StorableAttachment, StorableEvent, StorageBucket, HLL_REGISTER_COUNT,
     MAX_TAGS_PER_EVENT,
@@ -82,7 +82,7 @@ fn push_event_row(
     b.push_bind(event.start_ms);
 }
 
-/// Insert an event row (INSERT OR IGNORE). Returns `true` if it was actually new.
+/// Insert an event row, ignoring a duplicate `event_id`. Returns `true` if it was actually new.
 ///
 /// Accepts any sqlx executor -- `&DbPool`, `&mut PgConnection`, `&mut SqliteConnection`,
 /// or a dereferenced transaction (`&mut *tx`).
@@ -101,32 +101,22 @@ where
     Ok(result.rows_affected() == 1)
 }
 
-/// Backend-specific `INSERT ... (cols) VALUES`-prefix and trailing conflict clause.
+/// `INSERT ... (cols) VALUES` prefix and trailing conflict clause.
 ///
-/// SQLite expresses idempotent inserts with a leading `INSERT OR IGNORE`;
-/// Postgres uses a trailing `ON CONFLICT (...) DO NOTHING`. `conflict_col` of
-/// `None` means no conflict handling at all (e.g. metrics/logs).
+/// `conflict_col` names the unique column that makes the insert idempotent via
+/// `ON CONFLICT (col) DO NOTHING`; `None` means no conflict handling at all
+/// (e.g. metrics/logs).
 struct InsertIgnore {
     prefix: String,
     suffix: String,
 }
 
 fn insert_ignore(table: &str, cols: &str, conflict_col: Option<&str>) -> InsertIgnore {
-    match conflict_col {
-        #[cfg(feature = "sqlite")]
-        Some(_) => InsertIgnore {
-            prefix: format!("INSERT OR IGNORE INTO {table} ({cols}) "),
-            suffix: String::new(),
-        },
-        #[cfg(not(feature = "sqlite"))]
-        Some(col) => InsertIgnore {
-            prefix: format!("INSERT INTO {table} ({cols}) "),
-            suffix: format!(" ON CONFLICT ({col}) DO NOTHING"),
-        },
-        None => InsertIgnore {
-            prefix: format!("INSERT INTO {table} ({cols}) "),
-            suffix: String::new(),
-        },
+    InsertIgnore {
+        prefix: format!("INSERT INTO {table} ({cols}) "),
+        suffix: conflict_col.map_or_else(String::new, |col| {
+            format!(" ON CONFLICT ({col}) DO NOTHING")
+        }),
     }
 }
 
@@ -135,7 +125,7 @@ fn insert_ignore(table: &str, cols: &str, conflict_col: Option<&str>) -> InsertI
 /// Spans go to the spans table, metrics to the metrics table, logs to
 /// the logs table, and everything else to the events table.
 ///
-/// Returns the set of events-table `event_id`s that were genuinely inserted (duplicates dropped by `INSERT OR IGNORE`/`ON CONFLICT DO NOTHING` are excluded so callers don't over-count retried events); spans, metrics, and logs never contribute to this set.
+/// Returns the set of events-table `event_id`s that were genuinely inserted (duplicates dropped by `ON CONFLICT DO NOTHING` are excluded so callers don't over-count retried events); spans, metrics, and logs never contribute to this set.
 pub async fn insert_event_rows_bulk(
     tx: &mut sqlx::Transaction<'_, crate::db::Db>,
     events: &[&StorableEvent],
@@ -571,7 +561,11 @@ async fn bulk_insert_logs_table(
                 return entries
                     .iter()
                     .map(|entry| LogRow {
-                        payload: compress_log_bytes(&entry.payload),
+                        payload: if entry.compressed {
+                            entry.payload.clone()
+                        } else {
+                            compress_log_bytes(&entry.payload)
+                        },
                         project_id: event.project_id as i64,
                         public_key: event.public_key.clone(),
                         timestamp: entry.timestamp.unwrap_or(event.timestamp),
@@ -651,31 +645,18 @@ pub async fn upsert_issue_from_event(pool: &DbPool, event: &StorableEvent) -> Re
 
     let mut tx = pool.begin().await?;
 
-    #[cfg(feature = "sqlite")]
-    let upsert_sql = sql!(
+    let upsert_sql = format!(
         "INSERT INTO issues (fingerprint, project_id, title, level, first_seen, last_seen, event_count, status, item_type)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'unresolved', ?8)
          ON CONFLICT(project_id, fingerprint) DO UPDATE SET
-             first_seen = MIN(issues.first_seen, excluded.first_seen),
-             last_seen = MAX(issues.last_seen, excluded.last_seen),
+             first_seen = {MIN_FN}(issues.first_seen, excluded.first_seen),
+             last_seen = {MAX_FN}(issues.last_seen, excluded.last_seen),
              event_count = issues.event_count + excluded.event_count,
              title = COALESCE(excluded.title, issues.title),
              level = COALESCE(excluded.level, issues.level),
              status = CASE WHEN issues.status = 'resolved' THEN 'unresolved' ELSE issues.status END"
     );
-    #[cfg(not(feature = "sqlite"))]
-    let upsert_sql = sql!(
-        "INSERT INTO issues (fingerprint, project_id, title, level, first_seen, last_seen, event_count, status, item_type)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'unresolved', ?8)
-         ON CONFLICT(project_id, fingerprint) DO UPDATE SET
-             first_seen = LEAST(issues.first_seen, excluded.first_seen),
-             last_seen = GREATEST(issues.last_seen, excluded.last_seen),
-             event_count = issues.event_count + excluded.event_count,
-             title = COALESCE(excluded.title, issues.title),
-             level = COALESCE(excluded.level, issues.level),
-             status = CASE WHEN issues.status = 'resolved' THEN 'unresolved' ELSE issues.status END"
-    );
-    sqlx::query(upsert_sql)
+    sqlx::query(dyn_sql(&upsert_sql))
         .bind(fp)
         .bind(event.project_id as i64)
         .bind(&event.title)

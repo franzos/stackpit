@@ -5,7 +5,7 @@ use axum::response::IntoResponse;
 
 use crate::endpoints::{
     authenticate_and_prefilter, check_event_filter, error_response, overloaded_response,
-    sentry_response, sentry_response_with_discarded,
+    parse_with_size_gate, sentry_response, sentry_response_with_discarded,
 };
 use crate::ingest::envelope;
 use crate::ingest::models::{StorableAttachment, StorableEvent};
@@ -24,13 +24,7 @@ pub async fn handle(
         Err(resp) => return resp,
     };
 
-    // Large envelopes (up to max_body_size) parse JSON off the reactor, matching the writer's compression threshold.
-    let parse_result = if body.len() > crate::util::INLINE_CPU_MAX_BYTES {
-        crate::writer::block_in_place_if_multi_thread(|| envelope::parse(&body, project_id, &auth))
-    } else {
-        envelope::parse(&body, project_id, &auth)
-    };
-    let parsed = match parse_result {
+    let parsed = match parse_with_size_gate(&body, || envelope::parse(&body, project_id, &auth)) {
         Ok(p) => p,
         Err(e) => {
             tracing::warn!("envelope parse error: {e}");

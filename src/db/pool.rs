@@ -92,13 +92,39 @@ async fn create_sqlite_pool(
         opts.foreign_keys(true).pragma("query_only", "ON")
     };
 
+    let path = opts.get_filename().to_path_buf();
     let pool = SqlitePoolOptions::new()
         .max_connections(max_connections.unwrap_or(4))
         .connect_with(opts)
         .await?;
+    secure_sqlite_files(&path);
 
     Ok(pool)
 }
+
+/// Owner-only mode on the database file and its WAL siblings. In-memory
+/// databases carry a `file:sqlx-in-memory-N` name, hence the `is_file` guard.
+#[cfg(all(feature = "sqlite", unix))]
+fn secure_sqlite_files(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    if !path.is_file() {
+        return;
+    }
+    let mut files = vec![path.to_path_buf()];
+    for suffix in ["-wal", "-shm"] {
+        let mut sibling = path.as_os_str().to_owned();
+        sibling.push(suffix);
+        files.push(sibling.into());
+    }
+    for file in files.iter().filter(|f| f.is_file()) {
+        // Best effort: a file we cannot chmod still opens.
+        let _ = std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o600));
+    }
+}
+
+#[cfg(all(feature = "sqlite", not(unix)))]
+fn secure_sqlite_files(_path: &std::path::Path) {}
 
 #[cfg(feature = "postgres")]
 async fn create_pg_pool(url: &str, max_connections: Option<u32>) -> Result<sqlx::PgPool> {
@@ -190,6 +216,32 @@ mod tests {
             msg.contains("readonly") || msg.contains("read-only") || msg.contains("read only"),
             "expected a read-only error, got: {msg}"
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn sqlite_database_file_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = std::env::temp_dir().join(format!("stackpit-perm-{}.db", std::process::id()));
+        let pool = create_write_pool(&format!("sqlite://{}", path.display()))
+            .await
+            .unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        pool.close().await;
+        for suffix in ["", "-wal", "-shm"] {
+            let mut file = path.as_os_str().to_owned();
+            file.push(suffix);
+            let _ = std::fs::remove_file(file);
+        }
+        assert_eq!(mode, 0o600);
+    }
+
+    #[tokio::test]
+    async fn in_memory_database_creates_no_file() {
+        let pool = create_read_pool("sqlite::memory:").await.unwrap();
+        pool.close().await;
+        assert!(!std::path::Path::new("file:sqlx-in-memory-0").exists());
     }
 
     /// Pool stopped at 022, the pre-rebuild state the tests below assume.

@@ -1,6 +1,9 @@
 #[cfg(not(any(feature = "sqlite", feature = "postgres")))]
 compile_error!("At least one database backend feature must be enabled: `sqlite` or `postgres`");
 
+#[cfg(all(feature = "sqlite", feature = "postgres"))]
+compile_error!("`sqlite` and `postgres` are mutually exclusive; enable exactly one");
+
 pub mod pool;
 
 #[cfg(any(feature = "sqlite", test))]
@@ -97,6 +100,16 @@ pub fn dyn_sql(s: &str) -> sqlx::AssertSqlSafe<String> {
     sqlx::AssertSqlSafe(translate_sql(s).into_owned())
 }
 
+/// Two-argument scalar min/max for upsert conflict clauses.
+#[cfg(feature = "sqlite")]
+pub(crate) const MIN_FN: &str = "MIN";
+#[cfg(feature = "sqlite")]
+pub(crate) const MAX_FN: &str = "MAX";
+#[cfg(not(feature = "sqlite"))]
+pub(crate) const MIN_FN: &str = "LEAST";
+#[cfg(not(feature = "sqlite"))]
+pub(crate) const MAX_FN: &str = "GREATEST";
+
 #[cfg(feature = "postgres")]
 pub use pool::create_bg_pool;
 #[cfg(feature = "postgres")]
@@ -125,22 +138,8 @@ pub async fn sqlite_analyze(pool: &DbPool) -> Result<()> {
 /// Run a PRAGMA on a SQLite pool. No-op for PostgreSQL.
 #[cfg(feature = "sqlite")]
 pub async fn sqlite_pragma(pool: &DbPool, pragma: &'static str) -> Result<()> {
-    #[cfg(not(feature = "postgres"))]
-    {
-        sqlx::query(pragma).execute(pool).await?;
-        Ok(())
-    }
-
-    #[cfg(feature = "postgres")]
-    {
-        match pool {
-            pool::DbPool::Sqlite(p) => {
-                sqlx::query(pragma).execute(p).await?;
-            }
-            pool::DbPool::Postgres(_) => {}
-        }
-        Ok(())
-    }
+    sqlx::query(pragma).execute(pool).await?;
+    Ok(())
 }
 
 /// Fetch a single raw event row by ID. Test-only helper.

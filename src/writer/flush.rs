@@ -1,5 +1,6 @@
 use crate::db::DbPool;
 use crate::ingest::models::StorableEvent;
+use crate::ingest::parse_log::compress_log_bytes;
 use crate::queries::event_writes;
 use anyhow::Result;
 use std::time::{Duration, Instant};
@@ -9,16 +10,19 @@ use super::aggregation::flush_aggregation_inner;
 use super::alerting::check_threshold_alerts;
 use super::msg::WriteMsg;
 
-/// Compress event payloads with zstd. A fallback: the accept path already
-/// compresses on send, so this is a no-op for events that came through the
-/// `WriterHandle`. Moves any remaining CPU-bound compression off the async
-/// runtime's cooperative budget where the runtime allows it. Shares
-/// `should_compress_payload` with the accept path so the two can't diverge.
+/// Compress event payloads and pre-extracted log entries with zstd. For event
+/// payloads this is a fallback: the accept path already compresses on send, so
+/// it is a no-op for events that came through the `WriterHandle`. Log entries
+/// are always compressed here, one zstd frame per entry. Moves the CPU-bound
+/// work off the async runtime's cooperative budget where the runtime allows
+/// it. Shares `should_compress_payload` with the accept path so the two can't
+/// diverge.
 fn compress_batch(batch: &mut [WriteMsg]) {
     // The retry re-entry arrives fully compressed; skip the blocking section then.
     let pending = batch.iter().any(|msg| match msg {
         WriteMsg::Event(event) | WriteMsg::EventWithAttachments(event, _) => {
-            !event.compressed && event.should_compress_payload()
+            (!event.compressed && event.should_compress_payload())
+                || has_uncompressed_log_entry(event)
         }
         _ => false,
     });
@@ -31,9 +35,23 @@ fn compress_batch(batch: &mut [WriteMsg]) {
                 if event.should_compress_payload() {
                     event.compress_payload();
                 }
+                for entry in event.log_entries.iter_mut().flatten() {
+                    if !entry.compressed {
+                        entry.payload = compress_log_bytes(&entry.payload);
+                        entry.compressed = true;
+                    }
+                }
             }
         }
     });
+}
+
+fn has_uncompressed_log_entry(event: &StorableEvent) -> bool {
+    event
+        .log_entries
+        .iter()
+        .flatten()
+        .any(|entry| !entry.compressed)
 }
 
 /// Per-stage durations of one flush transaction, for bottleneck diagnosis.
@@ -57,7 +75,7 @@ fn log_flush_timings(items: usize, agg: bool, compress: Duration, t: &TxTimings)
 }
 
 /// Flush batch of events + aggregated data in one transaction (retry-safe on failure).
-#[cfg(any(feature = "sqlite", test))]
+#[cfg(all(feature = "sqlite", not(feature = "postgres")))]
 pub(super) async fn flush_batch(
     pool: &DbPool,
     batch: &mut [WriteMsg],
@@ -143,7 +161,7 @@ pub(super) async fn flush_batch(
 }
 
 /// Inserts events and (if ready) flushes aggregated issue/tag/session/txn data in one transaction, building a batch-local scratch from only the rows the insert actually created (SDK-retried duplicates are dropped by the conflict clause and must not inflate counts) and folding it into `accumulators` after commit on the non-agg path, or before the aggregation flush on the agg path so the flush includes this batch. Sets `*merged` once the scratch has been folded in pre-commit, so a failed agg attempt knows whether the caller must roll `accumulators` back.
-#[cfg(any(feature = "sqlite", test))]
+#[cfg(all(feature = "sqlite", not(feature = "postgres")))]
 async fn do_flush_tx(
     pool: &DbPool,
     batch: &[WriteMsg],
@@ -449,6 +467,39 @@ mod tests {
             assert!(!e.compressed, "{} must stay raw", e.item_type);
             assert_eq!(e.payload, raw);
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn compress_batch_compresses_pre_extracted_log_entries_and_is_idempotent() {
+        let entry_json = serde_json::json!({"body": "first", "level": "warn"});
+        let plain = serde_json::to_vec(&entry_json).unwrap();
+        let mut log = StorableEvent::new(
+            "l2".to_string(),
+            ItemType::Log,
+            b"[]".to_vec(),
+            1,
+            "k".to_string(),
+        );
+        log.log_entries = Some(vec![crate::ingest::parse_log::parse_log_entry(&entry_json)]);
+        let mut batch = vec![WriteMsg::Event(log)];
+
+        compress_batch(&mut batch);
+        let WriteMsg::Event(e) = &batch[0] else {
+            panic!("expected event");
+        };
+        assert!(!e.compressed, "the batch payload itself stays raw");
+        let entry = &e.log_entries.as_ref().unwrap()[0];
+        assert!(entry.compressed);
+        assert_ne!(entry.payload, plain);
+        assert_eq!(zstd::decode_all(entry.payload.as_slice()).unwrap(), plain);
+        let stored = entry.payload.clone();
+
+        // The retry re-entry must not wrap the entry in a second zstd frame.
+        compress_batch(&mut batch);
+        let WriteMsg::Event(e) = &batch[0] else {
+            panic!("expected event");
+        };
+        assert_eq!(e.log_entries.as_ref().unwrap()[0].payload, stored);
     }
 
     // Regression: block_in_place panics on a current-thread runtime; the shared

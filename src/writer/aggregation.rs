@@ -1,3 +1,4 @@
+use crate::db::{MAX_FN, MIN_FN};
 use crate::queries::event_writes;
 use anyhow::Result;
 use sqlx::QueryBuilder;
@@ -221,28 +222,16 @@ pub(super) async fn flush_aggregation_inner(
         });
 
         // A NULL sketch means "unchanged this flush": COALESCE keeps the stored one.
-        #[cfg(feature = "sqlite")]
-        builder.push(
+        builder.push(format!(
             " ON CONFLICT(project_id, fingerprint) DO UPDATE SET \
-                 first_seen = MIN(issues.first_seen, excluded.first_seen), \
-                 last_seen = MAX(issues.last_seen, excluded.last_seen), \
+                 first_seen = {MIN_FN}(issues.first_seen, excluded.first_seen), \
+                 last_seen = {MAX_FN}(issues.last_seen, excluded.last_seen), \
                  event_count = issues.event_count + excluded.event_count, \
                  title = COALESCE(excluded.title, issues.title), \
                  level = COALESCE(excluded.level, issues.level), \
                  status = CASE WHEN issues.status = 'resolved' THEN 'unresolved' ELSE issues.status END, \
-                 user_hll = COALESCE(excluded.user_hll, issues.user_hll)",
-        );
-        #[cfg(not(feature = "sqlite"))]
-        builder.push(
-            " ON CONFLICT(project_id, fingerprint) DO UPDATE SET \
-                 first_seen = LEAST(issues.first_seen, excluded.first_seen), \
-                 last_seen = GREATEST(issues.last_seen, excluded.last_seen), \
-                 event_count = issues.event_count + excluded.event_count, \
-                 title = COALESCE(excluded.title, issues.title), \
-                 level = COALESCE(excluded.level, issues.level), \
-                 status = CASE WHEN issues.status = 'resolved' THEN 'unresolved' ELSE issues.status END, \
-                 user_hll = COALESCE(excluded.user_hll, issues.user_hll)",
-        );
+                 user_hll = COALESCE(excluded.user_hll, issues.user_hll)"
+        ));
 
         builder.build().execute(&mut **tx).await?;
     }
@@ -473,32 +462,18 @@ async fn flush_session_aggregates(
         });
 
         // A NULL sketch means "unchanged this flush": COALESCE keeps the stored one.
-        #[cfg(feature = "sqlite")]
-        builder.push(
+        builder.push(format!(
             " ON CONFLICT(project_id, release, environment, day_bucket) DO UPDATE SET \
                  sessions_total = session_aggregates.sessions_total + excluded.sessions_total, \
                  sessions_crashed = session_aggregates.sessions_crashed + excluded.sessions_crashed, \
                  sessions_errored = session_aggregates.sessions_errored + excluded.sessions_errored, \
                  sessions_abnormal = session_aggregates.sessions_abnormal + excluded.sessions_abnormal, \
-                 has_aggregate = MAX(session_aggregates.has_aggregate, excluded.has_aggregate), \
-                 first_seen = MIN(session_aggregates.first_seen, excluded.first_seen), \
-                 last_seen = MAX(session_aggregates.last_seen, excluded.last_seen), \
+                 has_aggregate = {MAX_FN}(session_aggregates.has_aggregate, excluded.has_aggregate), \
+                 first_seen = {MIN_FN}(session_aggregates.first_seen, excluded.first_seen), \
+                 last_seen = {MAX_FN}(session_aggregates.last_seen, excluded.last_seen), \
                  users_hll = COALESCE(excluded.users_hll, session_aggregates.users_hll), \
-                 users_crashed_hll = COALESCE(excluded.users_crashed_hll, session_aggregates.users_crashed_hll)",
-        );
-        #[cfg(not(feature = "sqlite"))]
-        builder.push(
-            " ON CONFLICT(project_id, release, environment, day_bucket) DO UPDATE SET \
-                 sessions_total = session_aggregates.sessions_total + excluded.sessions_total, \
-                 sessions_crashed = session_aggregates.sessions_crashed + excluded.sessions_crashed, \
-                 sessions_errored = session_aggregates.sessions_errored + excluded.sessions_errored, \
-                 sessions_abnormal = session_aggregates.sessions_abnormal + excluded.sessions_abnormal, \
-                 has_aggregate = GREATEST(session_aggregates.has_aggregate, excluded.has_aggregate), \
-                 first_seen = LEAST(session_aggregates.first_seen, excluded.first_seen), \
-                 last_seen = GREATEST(session_aggregates.last_seen, excluded.last_seen), \
-                 users_hll = COALESCE(excluded.users_hll, session_aggregates.users_hll), \
-                 users_crashed_hll = COALESCE(excluded.users_crashed_hll, session_aggregates.users_crashed_hll)",
-        );
+                 users_crashed_hll = COALESCE(excluded.users_crashed_hll, session_aggregates.users_crashed_hll)"
+        ));
 
         builder.build().execute(&mut **tx).await?;
     }
@@ -627,11 +602,6 @@ async fn flush_transaction_metrics(
         .collect::<Vec<_>>()
         .join(", ");
 
-    #[cfg(feature = "sqlite")]
-    let (min_fn, max_fn) = ("MIN", "MAX");
-    #[cfg(not(feature = "sqlite"))]
-    let (min_fn, max_fn) = ("LEAST", "GREATEST");
-
     // A NULL sketch means "unchanged this flush": COALESCE keeps the stored one.
     let conflict_clause = format!(
         " ON CONFLICT(project_id, transaction_name, hour_bucket) DO UPDATE SET \
@@ -639,8 +609,8 @@ async fn flush_transaction_metrics(
              sum_duration_ms = transaction_metrics.sum_duration_ms + excluded.sum_duration_ms, \
              failed_count = transaction_metrics.failed_count + excluded.failed_count, \
              {bucket_updates}, \
-             first_seen = {min_fn}(transaction_metrics.first_seen, excluded.first_seen), \
-             last_seen = {max_fn}(transaction_metrics.last_seen, excluded.last_seen), \
+             first_seen = {MIN_FN}(transaction_metrics.first_seen, excluded.first_seen), \
+             last_seen = {MAX_FN}(transaction_metrics.last_seen, excluded.last_seen), \
              users_hll = COALESCE(excluded.users_hll, transaction_metrics.users_hll)"
     );
 

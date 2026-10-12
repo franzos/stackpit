@@ -483,7 +483,9 @@ mod tests {
     use crate::db;
     use crate::ingest::models::{StorableAttachment, StorableEvent};
     use accumulator::Accumulators;
-    use flush::{flush_aggregation, flush_batch, insert_event};
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
+    use flush::flush_batch;
+    use flush::{flush_aggregation, insert_event};
     use simple_hll::HyperLogLog;
 
     type LogRow = (Vec<u8>, Option<String>, Option<String>, Option<String>);
@@ -651,7 +653,8 @@ mod tests {
         assert_eq!(row.0, 1);
     }
 
-    /// A batch that re-sends an already-inserted event_id (SDK envelope retry) must raise the issue event_count only for genuinely new rows; the duplicate is dropped by INSERT OR IGNORE / ON CONFLICT DO NOTHING and must not be accumulated.
+    /// A batch that re-sends an already-inserted event_id (SDK envelope retry) must raise the issue event_count only for genuinely new rows; the duplicate is dropped by ON CONFLICT DO NOTHING and must not be accumulated.
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn retried_event_id_not_double_counted_in_batch() {
         let pool = test_pool().await;
@@ -801,6 +804,7 @@ mod tests {
     /// Regression test for the accumulate-then-clear race: when `should_agg=true`,
     /// events in the current batch must be accumulated *before* the aggregation
     /// flush runs, so every fingerprint gets a matching issue row.
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn flush_batch_with_agg_creates_issue_for_all_events() {
         let pool = test_pool().await;
@@ -917,6 +921,7 @@ mod tests {
     }
 
     /// A flush that fails on both the attempt and its retry must not fold the batch into the accumulators (merge-on-commit); injected via a closed pool.
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn failed_flush_does_not_accumulate() {
         let pool = test_pool().await;
@@ -938,6 +943,7 @@ mod tests {
     }
 
     /// Regression for the accumulator-lifecycle bug: a prior non-flushed delta (committed batch, still in memory) must survive a later batch whose aggregation flush fails twice, and the failed batch must not pollute the accumulators (old code cleared the maps in the double-failure branch).
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn failed_agg_flush_preserves_prior_deltas() {
         let pool = test_pool().await;
@@ -1596,6 +1602,7 @@ mod tests {
 
     /// Regression: a batch containing only sessions (no fingerprints) must
     /// still flush its aggregates -- the early-return guard previously skipped it.
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn session_only_batch_flushes() {
         let pool = test_pool().await;
@@ -1631,6 +1638,7 @@ mod tests {
 
     // --- transactions ---
 
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
     fn make_transaction_event(event_id: &str, payload: &serde_json::Value) -> StorableEvent {
         let raw = serde_json::to_vec(payload).unwrap();
         let mut e = StorableEvent::new(
@@ -1644,6 +1652,7 @@ mod tests {
         e
     }
 
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn transaction_yields_no_issue_but_rolls_up() {
         let pool = test_pool().await;
@@ -1720,6 +1729,7 @@ mod tests {
     /// A log batch parsed from an envelope must land as one row per entry,
     /// each individually zstd-compressed, via the pre-extracted entries
     /// (no payload re-parse at flush).
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn log_batch_flushes_per_entry_compressed_rows() {
         let pool = test_pool().await;
@@ -1753,6 +1763,7 @@ mod tests {
         assert_eq!(entry.get("body").and_then(|v| v.as_str()), Some("first"));
     }
 
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn cross_hour_rows_merge_in_list() {
         let pool = test_pool().await;
@@ -1843,6 +1854,7 @@ mod tests {
         }
     }
 
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn instances_sorted_by_duration_nulls_last() {
         let pool = test_pool().await;
@@ -1884,5 +1896,94 @@ mod tests {
         assert_eq!(result.items[1].event_id, "fast");
         assert_eq!(result.items[2].event_id, "none");
         assert!(result.items[2].duration_ms.is_none());
+    }
+
+    // --- postgres split pipeline ---
+
+    /// The insert-only flush commits event and per-entry log rows (each entry
+    /// its own zstd frame) and hands back the batch scratch; the issue row is
+    /// left for the aggregation task.
+    #[cfg(all(feature = "postgres", not(feature = "sqlite")))]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pg_flush_batch_insert_only_inserts_and_returns_scratch() {
+        use flush::flush_batch_insert_only;
+
+        let pool = test_pool().await;
+
+        let mut e = make_event("pg_ins1");
+        e.fingerprint = Some("pg_ins_fp".to_string());
+
+        let body = b"{}\n{\"type\":\"log\"}\n{\"items\":[{\"body\":\"first\",\"level\":\"warn\",\"trace_id\":\"t1\"},{\"body\":\"second\",\"level\":\"error\"}]}\n";
+        let auth = crate::ingest::auth::SentryAuth {
+            sentry_key: "k".to_string(),
+        };
+        let parsed = crate::ingest::envelope::parse(body, 1, &auth).unwrap();
+        assert_eq!(parsed.events.len(), 1);
+        assert!(parsed.events[0].log_entries.is_some());
+
+        let mut batch = vec![WriteMsg::Event(e)];
+        batch.extend(parsed.events.into_iter().map(WriteMsg::Event));
+
+        let scratch = flush_batch_insert_only(&pool, &mut batch)
+            .await
+            .expect("insert-only flush must succeed");
+        assert!(!scratch.is_empty());
+        assert_eq!(
+            scratch
+                .issues
+                .get(&(1, "pg_ins_fp".to_string()))
+                .map(|d| d.event_count),
+            Some(1)
+        );
+
+        let event = db::get_event(&pool, "pg_ins1").await.unwrap();
+        assert!(event.is_some(), "event row must be committed");
+
+        let rows: Vec<LogRow> =
+            sqlx::query_as("SELECT payload, level, body, trace_id FROM logs ORDER BY body")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(rows.len(), 2, "one row per log entry");
+        assert_eq!(rows[0].1.as_deref(), Some("warning"));
+        assert_eq!(rows[0].2.as_deref(), Some("first"));
+        assert_eq!(rows[0].3.as_deref(), Some("t1"));
+        assert_eq!(rows[1].1.as_deref(), Some("error"));
+        let entry: serde_json::Value =
+            serde_json::from_slice(&zstd::decode_all(rows[0].0.as_slice()).unwrap()).unwrap();
+        assert_eq!(entry.get("body").and_then(|v| v.as_str()), Some("first"));
+
+        let issues: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM issues WHERE fingerprint = 'pg_ins_fp'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(issues.0, 0, "no aggregation SQL runs on the insert path");
+    }
+
+    /// Closing the scratch channel makes the aggregation task flush what it
+    /// holds before exiting.
+    #[cfg(all(feature = "postgres", not(feature = "sqlite")))]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pg_aggregation_loop_flushes_on_channel_close() {
+        let pool = test_pool().await;
+
+        let mut e = make_event("pg_agg1");
+        e.fingerprint = Some("pg_agg_fp".to_string());
+        assert!(insert_event(&pool, &e).await.unwrap());
+        let mut scratch = Accumulators::new();
+        scratch.accumulate(&e);
+
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        tx.send(scratch).await.unwrap();
+        drop(tx);
+        aggregation_loop(&pool, rx, None).await;
+
+        let row: (i64,) =
+            sqlx::query_as("SELECT event_count FROM issues WHERE fingerprint = 'pg_agg_fp'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(row.0, 1);
     }
 }

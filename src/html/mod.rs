@@ -673,11 +673,18 @@ impl IntoResponse for HtmlError {
 
 impl From<anyhow::Error> for HtmlError {
     fn from(e: anyhow::Error) -> Self {
+        if !is_db_error(&e) {
+            tracing::error!("{e:#}");
+        }
         HtmlError(
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             safe_error_message(&e),
         )
     }
+}
+
+fn is_db_error(e: &anyhow::Error) -> bool {
+    e.chain().any(|cause| cause.is::<sqlx::Error>())
 }
 
 /// Shown instead of a database error. Not localized yet: the flash/error page
@@ -688,7 +695,7 @@ const INTERNAL_ERROR_DETAIL: &str = "internal server error";
 /// SQL and schema names, so it is logged in full and replaced; deliberate
 /// application messages ("project not found", validation) pass through.
 pub(crate) fn safe_error_message(e: &anyhow::Error) -> String {
-    if e.chain().any(|cause| cause.is::<sqlx::Error>()) {
+    if is_db_error(e) {
         tracing::error!("database error: {e:#}");
         INTERNAL_ERROR_DETAIL.to_string()
     } else {
@@ -768,6 +775,12 @@ mod tests {
     fn db_error() -> anyhow::Error {
         anyhow::Error::from(sqlx::Error::RowNotFound)
             .context("loading project 7 from the projects table")
+    }
+
+    #[test]
+    fn is_db_error_requires_sqlx_in_the_chain() {
+        assert!(is_db_error(&db_error()));
+        assert!(!is_db_error(&anyhow::anyhow!("x")));
     }
 
     #[test]

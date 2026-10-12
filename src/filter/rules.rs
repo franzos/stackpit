@@ -228,6 +228,7 @@ mod tests {
             server_name: Some("web-01".to_string()),
             transaction_name: Some("/api/health".to_string()),
             title: Some("TypeError: null".to_string()),
+            title_checked: false,
             sdk_name: Some("sentry.python".to_string()),
             sdk_version: Some("1.0.0".to_string()),
             fingerprint: None,

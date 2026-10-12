@@ -108,7 +108,7 @@ fn parse_artifact_bundle_sync(zip_data: &[u8]) -> Result<Vec<SourcemapEntry>> {
             let data = match read_zip_entry(&mut archive, zip_path) {
                 Ok(d) => d,
                 Err(e) => {
-                    tracing::warn!("skipping {zip_path}: {e}");
+                    tracing::warn!("skipping {zip_path:?}: {e}");
                     continue;
                 }
             };

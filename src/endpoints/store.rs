@@ -3,7 +3,9 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::IntoResponse;
 
-use crate::endpoints::pipeline::{authenticate_and_prefilter, check_event_filter};
+use crate::endpoints::pipeline::{
+    authenticate_and_prefilter, check_event_filter, parse_with_size_gate,
+};
 use crate::endpoints::responses::{
     error_response, overloaded_response, sentry_response, sentry_response_with_discarded,
 };
@@ -23,7 +25,9 @@ pub async fn handle(
         Err(resp) => return resp,
     };
 
-    let mut event = match envelope::parse_store_body(&body, project_id, &auth) {
+    let mut event = match parse_with_size_gate(&body, || {
+        envelope::parse_store_body(&body, project_id, &auth)
+    }) {
         Ok(e) => e,
         Err(e) => {
             tracing::warn!("invalid event payload: {e}");

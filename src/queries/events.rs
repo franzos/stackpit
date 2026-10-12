@@ -218,18 +218,13 @@ pub async fn resolve_trace_id(
     Ok(Some((row.get_u64("project_id"), resolved)))
 }
 
-/// List events for a single project, paginated.
+/// List events for a single project, paginated; `all_time_total` comes from the nav-count cache.
 pub async fn list_events(
     pool: &crate::db::DbPool,
     project_id: u64,
     page: &Page,
+    all_time_total: i64,
 ) -> Result<PagedResult<EventSummary>> {
-    let total: i64 = sqlx::query(sql!("SELECT COUNT(*) FROM events WHERE project_id = ?1"))
-        .bind(project_id as i64)
-        .fetch_one(pool)
-        .await?
-        .get::<i64, _>(0);
-
     let rows = sqlx::query(sql!(
         "SELECT event_id, item_type, project_id, fingerprint, timestamp, level, title, platform, release, environment, trace_id
          FROM events WHERE project_id = ?1
@@ -247,7 +242,7 @@ pub async fn list_events(
         .map(map_event_summary)
         .collect::<Result<Vec<_>>>()?;
 
-    Ok(PagedResult::from_page(items, total, page))
+    Ok(PagedResult::from_page(items, all_time_total, page))
 }
 
 /// All events for a given issue, paginated. The total is the issue row's
@@ -779,9 +774,21 @@ mod tests {
     async fn list_events_empty() {
         let pool = open_test_db().await;
         let page = Page::new(None, None);
-        let result = list_events(&pool, 1, &page).await.unwrap();
+        let result = list_events(&pool, 1, &page, 0).await.unwrap();
         assert!(result.items.is_empty());
         assert_eq!(result.total, 0);
+    }
+
+    #[tokio::test]
+    async fn list_events_total_is_the_callers_value() {
+        let pool = open_test_db().await;
+        insert_test_event(&pool, "e1", 1, 100, Some("fp1"), Some("error"), None).await;
+        insert_test_event(&pool, "e2", 1, 200, Some("fp1"), Some("error"), None).await;
+
+        let page = Page::new(None, None);
+        let result = list_events(&pool, 1, &page, 777).await.unwrap();
+        assert_eq!(result.items.len(), 2);
+        assert_eq!(result.total, 777);
     }
 
     #[tokio::test]
@@ -819,7 +826,7 @@ mod tests {
         .await;
 
         let page = Page::new(None, None);
-        let result = list_events(&pool, 1, &page).await.unwrap();
+        let result = list_events(&pool, 1, &page, 2).await.unwrap();
         assert_eq!(result.total, 2);
         assert_eq!(result.items.len(), 2);
         // Newest first
@@ -845,21 +852,21 @@ mod tests {
 
         // First page
         let page = Page::new(Some(0), Some(3));
-        let result = list_events(&pool, 1, &page).await.unwrap();
+        let result = list_events(&pool, 1, &page, 10).await.unwrap();
         assert_eq!(result.total, 10);
         assert_eq!(result.items.len(), 3);
         assert!(result.has_next());
 
         // Middle page
         let page = Page::new(Some(3), Some(3));
-        let result = list_events(&pool, 1, &page).await.unwrap();
+        let result = list_events(&pool, 1, &page, 10).await.unwrap();
         assert_eq!(result.items.len(), 3);
         assert!(result.has_next());
         assert!(result.has_prev());
 
         // Last partial page
         let page = Page::new(Some(9), Some(3));
-        let result = list_events(&pool, 1, &page).await.unwrap();
+        let result = list_events(&pool, 1, &page, 10).await.unwrap();
         assert_eq!(result.items.len(), 1);
         assert!(!result.has_next());
     }
@@ -1353,7 +1360,7 @@ mod tests {
                 .await
                 .unwrap()
                 .items,
-            list_events(&pool, 1, &page).await.unwrap().items,
+            list_events(&pool, 1, &page, 0).await.unwrap().items,
             list_events_for_issue(&pool, 1, "fp1", &page)
                 .await
                 .unwrap()

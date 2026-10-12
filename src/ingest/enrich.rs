@@ -10,8 +10,9 @@ use serde_json::Value;
 pub fn enrich_event(event: &mut StorableEvent) {
     let need_fingerprint = event.fingerprint.is_none() && event.item_type.can_fingerprint();
     // Log batches carry no title fields; their entries were already extracted.
-    let need_title =
-        event.title.is_none() && !(event.item_type == ItemType::Log && event.log_entries.is_some());
+    let need_title = event.title.is_none()
+        && !event.title_checked
+        && !(event.item_type == ItemType::Log && event.log_entries.is_some());
     if !need_fingerprint && !need_title {
         return;
     }
@@ -142,6 +143,7 @@ mod tests {
             server_name: None,
             transaction_name: None,
             title: None,
+            title_checked: false,
             sdk_name: None,
             sdk_version: None,
             fingerprint: None,
@@ -161,6 +163,20 @@ mod tests {
             span_fields: None,
             log_entries: None,
         }
+    }
+
+    #[test]
+    fn enrich_skips_title_when_extraction_already_ran() {
+        let json = serde_json::json!({"message": "hello"});
+
+        let mut marked = make_event(&json, ItemType::Transaction);
+        marked.title_checked = true;
+        enrich_event(&mut marked);
+        assert_eq!(marked.title, None);
+
+        let mut unmarked = make_event(&json, ItemType::Transaction);
+        enrich_event(&mut unmarked);
+        assert_eq!(unmarked.title.as_deref(), Some("hello"));
     }
 
     #[test]
@@ -351,6 +367,7 @@ mod tests {
             server_name: None,
             transaction_name: None,
             title: None,
+            title_checked: false,
             sdk_name: None,
             sdk_version: None,
             fingerprint: None,

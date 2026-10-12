@@ -88,6 +88,11 @@ fn is_private_ip(ip: &IpAddr) -> bool {
                 return is_private_v4(&embedded);
             }
 
+            // NAT64 local-use prefix (64:ff9b:1::/48), RFC 8215.
+            if segments[0] == 0x0064 && segments[1] == 0xff9b && segments[2] == 1 {
+                return true;
+            }
+
             // NAT64 well-known prefix (64:ff9b::/96). Embedded v4 sits in
             // the last 32 bits (segments[6..=7]).
             if segments[0] == 0x0064
@@ -144,8 +149,10 @@ fn is_private_ip(ip: &IpAddr) -> bool {
             }
 
             v6.is_loopback() || v6.is_unspecified() || {
-                // fc00::/7 unique local, fe80::/10 link-local
-                (segments[0] & 0xfe00) == 0xfc00 || (segments[0] & 0xffc0) == 0xfe80
+                // fc00::/7 unique local, fe80::/10 link-local, fec0::/10 site-local
+                (segments[0] & 0xfe00) == 0xfc00
+                    || (segments[0] & 0xffc0) == 0xfe80
+                    || (segments[0] & 0xffc0) == 0xfec0
             }
         }
     }
@@ -158,6 +165,7 @@ fn is_private_v4(v4: &Ipv4Addr) -> bool {
         || v4.is_private()
         || v4.is_link_local()
         || v4.is_unspecified()
+        || v4.is_multicast()
         || is_cgnat(v4)
         // 0.0.0.0/8 -- "this network", whole range is non-routable
         || octets[0] == 0
@@ -207,6 +215,8 @@ mod tests {
         assert!(is_private_ip(&v4("127.0.0.1")));
         assert!(is_private_ip(&v4("169.254.169.254")));
         assert!(is_private_ip(&v4("100.64.0.1")));
+        // Multicast 224.0.0.0/4
+        assert!(is_private_ip(&v4("224.0.0.1")));
     }
 
     #[test]
@@ -215,6 +225,8 @@ mod tests {
         assert!(is_private_ip(&v6("2002:a9fe:a9fe::")));
         // NAT64 wrapping link-local 169.254.169.254
         assert!(is_private_ip(&v6("64:ff9b::a9fe:a9fe")));
+        // NAT64 local-use prefix is private regardless of the embedded v4
+        assert!(is_private_ip(&v6("64:ff9b:1::1")));
         // v4-mapped (::ffff:x.x.x.x) wrapping link-local 169.254.169.254
         assert!(is_private_ip(&v6("::ffff:169.254.169.254")));
         // IPv4-compatible (deprecated, ::x.x.x.x) wrapping link-local
@@ -222,6 +234,7 @@ mod tests {
         assert!(is_private_ip(&v6("::a9fe:a9fe")));
         // Link-local, unique-local, loopback
         assert!(is_private_ip(&v6("fe80::1")));
+        assert!(is_private_ip(&v6("fec0::1")));
         assert!(is_private_ip(&v6("fc00::1")));
         assert!(is_private_ip(&v6("::1")));
     }
@@ -250,6 +263,8 @@ mod tests {
         // Public v6 (Cloudflare, Google DNS)
         assert!(!is_private_ip(&v6("2606:4700:4700::1111")));
         assert!(!is_private_ip(&v6("2001:4860:4860::8888")));
+        // NAT64 well-known prefix wrapping public 1.1.1.1
+        assert!(!is_private_ip(&v6("64:ff9b::1.1.1.1")));
     }
 
     #[test]

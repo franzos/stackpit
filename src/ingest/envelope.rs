@@ -354,6 +354,7 @@ fn extract_fields_head(
     event: &mut StorableEvent,
     drift: i64,
 ) -> Option<String> {
+    event.title_checked = true;
     // serde would fill the struct positionally from a top-level array, so a
     // non-object document takes the full path, which extracts nothing from it.
     let starts_object = payload
@@ -447,6 +448,7 @@ fn extract_fields_full(
     event: &mut StorableEvent,
     drift: i64,
 ) -> Option<String> {
+    event.title_checked = true;
     let json: Value = match serde_json::from_slice(payload) {
         Ok(v) => v,
         Err(_) => return None,
@@ -1026,6 +1028,25 @@ mod tests {
             assert_eq!(head.tags, full.tags);
             assert_eq!(head.title, full.title);
         }
+    }
+
+    #[test]
+    fn parsed_profile_arrives_title_checked_with_no_title() {
+        let payload = serde_json::json!({
+            "event_id": "abcdef0123456789abcdef0123456789",
+            "platform": "python",
+            "transaction": {"name": "/api/orders", "id": "0123456789abcdef"},
+            "profile": {"samples": [{"elapsed_since_start_ns": 1}]},
+        })
+        .to_string();
+        let body = format!("{{}}\n{{\"type\":\"profile\"}}\n{payload}\n");
+
+        let result = parse(body.as_bytes(), 1, &test_auth()).unwrap();
+        assert_eq!(result.events.len(), 1);
+        let ev = &result.events[0];
+        assert_eq!(ev.item_type, ItemType::Profile);
+        assert!(ev.title_checked);
+        assert_eq!(ev.title, None);
     }
 
     // Recording blobs are not JSON: the full parse always failed and the item

@@ -84,6 +84,8 @@ token = ""                        # lettermint / postmark API token (required wh
 
 All fields have sane defaults, but two combinations refuse startup: no auth at all (set `server.admin_token`, configure `[auth.oauth]`, or accept the no-auth posture on a loopback bind with `no_auth_loopback_acknowledged = true`), and open mode on a non-loopback `ingest_bind` with `rate_limit = 0` (set a rate limit, switch to `mode = "closed"`, or set `open_ingest_unlimited_acknowledged = true`). For any non-loopback deployment you'll also want `external_url` set and `force_secure_cookies = true` so session cookies get the `Secure` flag.
 
+The ingest auth-failure limiter and the admin per-IP limiter key on the client address. Behind a reverse proxy that address is the proxy's unless `trusted_proxies` lists it, so every client shares one bucket and a single noisy SDK can lock out all of them; Stackpit logs one error the first time it sees `X-Forwarded-For` or `X-Real-IP` from a peer it doesn't trust.
+
 **Filter modes — what `open` vs `closed` controls is ingest admission, not event filtering:**
 
 - `open` — the first event for an unknown `project_id` auto-creates the project and registers the key it was sent with. After that, only registered keys are accepted; further keys must be added explicitly via the admin UI. Convenient for solo deployments and CI bring-up.

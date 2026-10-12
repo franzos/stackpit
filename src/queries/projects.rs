@@ -462,7 +462,8 @@ pub async fn get_nav_counts(pool: &crate::db::DbPool, project_id: u64) -> Projec
             (SELECT COUNT(*) FROM spans WHERE project_id = ?1),
             (SELECT COUNT(*) FROM metrics WHERE project_id = ?1),
             COALESCE(SUM(CASE WHEN item_type IN ('profile', 'profile_chunk') THEN 1 ELSE 0 END), 0),
-            COALESCE(SUM(CASE WHEN item_type = 'replay_event' THEN 1 ELSE 0 END), 0)
+            COALESCE(SUM(CASE WHEN item_type = 'replay_event' THEN 1 ELSE 0 END), 0),
+            COUNT(*)
          FROM events
          WHERE project_id = ?1"
     ))
@@ -482,6 +483,7 @@ pub async fn get_nav_counts(pool: &crate::db::DbPool, project_id: u64) -> Projec
             metric_count: row.get::<i64, _>(6) as u64,
             profile_count: row.get::<i64, _>(7) as u64,
             replay_count: row.get::<i64, _>(8) as u64,
+            event_count: row.get::<i64, _>(9) as u64,
             label,
         },
         _ => ProjectNavCounts {
@@ -722,44 +724,47 @@ pub async fn unarchive_project(pool: &crate::db::DbPool, project_id: u64) -> Res
     Ok(result.rows_affected())
 }
 
-/// Make sure a project and its key exist -- auto-provisions on first event.
+/// Outcome of an open-mode project claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectClaim {
+    /// This call created the project and registered the key.
+    Claimed,
+    /// The claim was lost: the project already existed or the key is already registered; nothing was written.
+    AlreadyExisted,
+}
+
+/// Claims a new project for a key; the project insert arbitrates concurrent first-contact keys.
 pub async fn ensure_project_key(
     pool: &crate::db::DbPool,
     project_id: u64,
     public_key: &str,
-) -> Result<()> {
-    #[cfg(feature = "sqlite")]
-    sqlx::query(sql!(
-        "INSERT OR IGNORE INTO projects (project_id, status, source) VALUES (?1, 'active', 'auto')"
-    ))
-    .bind(project_id as i64)
-    .execute(pool)
-    .await?;
-    #[cfg(not(feature = "sqlite"))]
-    sqlx::query(sql!(
+) -> Result<ProjectClaim> {
+    let mut tx = pool.begin().await?;
+    let project_inserted = sqlx::query(sql!(
         "INSERT INTO projects (project_id, status, source) VALUES (?1, 'active', 'auto') ON CONFLICT (project_id) DO NOTHING"
     ))
     .bind(project_id as i64)
-    .execute(pool)
-    .await?;
-
-    #[cfg(feature = "sqlite")]
-    sqlx::query(sql!(
-        "INSERT OR IGNORE INTO project_keys (public_key, project_id, status) VALUES (?1, ?2, 'active')"
-    ))
-    .bind(public_key)
-    .bind(project_id as i64)
-    .execute(pool)
-    .await?;
-    #[cfg(not(feature = "sqlite"))]
-    sqlx::query(sql!(
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if project_inserted == 0 {
+        tx.rollback().await?;
+        return Ok(ProjectClaim::AlreadyExisted);
+    }
+    let key_inserted = sqlx::query(sql!(
         "INSERT INTO project_keys (public_key, project_id, status) VALUES (?1, ?2, 'active') ON CONFLICT (public_key) DO NOTHING"
     ))
     .bind(public_key)
     .bind(project_id as i64)
-    .execute(pool)
-    .await?;
-    Ok(())
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if key_inserted == 0 {
+        tx.rollback().await?;
+        return Ok(ProjectClaim::AlreadyExisted);
+    }
+    tx.commit().await?;
+    Ok(ProjectClaim::Claimed)
 }
 
 /// Generate a new key for a project. Returns the public_key hex string.
@@ -1007,18 +1012,6 @@ pub async fn upsert_synced_key(
 ) -> Result<()> {
     let status = if active { "active" } else { "inactive" };
 
-    #[cfg(feature = "sqlite")]
-    sqlx::query(sql!(
-        "INSERT OR IGNORE INTO project_keys (public_key, project_id, status, label) VALUES (?1, ?2, ?3, ?4)"
-    ))
-    .bind(public_key)
-    .bind(project_id as i64)
-    .bind(status)
-    .bind(label)
-    .execute(pool)
-    .await?;
-
-    #[cfg(not(feature = "sqlite"))]
     sqlx::query(sql!(
         "INSERT INTO project_keys (public_key, project_id, status, label) VALUES (?1, ?2, ?3, ?4)
          ON CONFLICT (public_key) DO NOTHING"
@@ -1185,6 +1178,19 @@ mod tests {
     const ORG_A: i64 = 1;
     const ORG_B: i64 = 2;
 
+    #[tokio::test]
+    async fn get_nav_counts_includes_event_count() {
+        let pool = open_test_db().await;
+        insert_test_event(&pool, "e1", 1, 100, Some("fp1"), Some("error"), None).await;
+        insert_test_event(&pool, "e2", 1, 200, Some("fp1"), Some("error"), None).await;
+        insert_test_event(&pool, "e3", 1, 300, Some("fp2"), Some("warning"), None).await;
+        insert_test_event(&pool, "e4", 2, 150, Some("fp3"), Some("error"), None).await;
+
+        assert_eq!(get_nav_counts(&pool, 1).await.event_count, 3);
+        assert_eq!(get_nav_counts(&pool, 2).await.event_count, 1);
+        assert_eq!(get_nav_counts(&pool, 3).await.event_count, 0);
+    }
+
     // The membership-set key makes the live key space per-entitlement rather than
     // per-org, so expiry alone no longer bounds it; the cap has to actually cap.
     #[test]
@@ -1207,6 +1213,56 @@ mod tests {
                 "newest entries must survive"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn ensure_project_key_second_key_for_new_project_is_told_it_already_existed() {
+        let pool = open_test_db().await;
+        assert_eq!(
+            ensure_project_key(&pool, 7, "first").await.unwrap(),
+            ProjectClaim::Claimed
+        );
+        assert_eq!(
+            ensure_project_key(&pool, 7, "second").await.unwrap(),
+            ProjectClaim::AlreadyExisted
+        );
+        let keys = list_project_keys(&pool, 7).await.unwrap();
+        assert_eq!(keys.len(), 1, "the losing key must not be registered");
+        assert_eq!(keys[0].public_key, "first");
+    }
+
+    #[tokio::test]
+    async fn ensure_project_key_known_key_for_new_project_leaves_no_ghost_project() {
+        let pool = open_test_db().await;
+        assert_eq!(
+            ensure_project_key(&pool, 7, "k").await.unwrap(),
+            ProjectClaim::Claimed
+        );
+        assert_eq!(
+            ensure_project_key(&pool, 8, "k").await.unwrap(),
+            ProjectClaim::AlreadyExisted
+        );
+        assert!(
+            get_project_status(&pool, 8).await.unwrap().is_none(),
+            "the losing project row must be rolled back"
+        );
+        let key = get_project_key(&pool, "k").await.unwrap().expect("key row");
+        assert_eq!(key.project_id, 7);
+    }
+
+    #[tokio::test]
+    async fn ensure_project_key_same_key_twice_keeps_the_row() {
+        let pool = open_test_db().await;
+        ensure_project_key(&pool, 7, "only").await.unwrap();
+        assert_eq!(
+            ensure_project_key(&pool, 7, "only").await.unwrap(),
+            ProjectClaim::AlreadyExisted
+        );
+        let key = get_project_key(&pool, "only")
+            .await
+            .unwrap()
+            .expect("key row must survive the second call");
+        assert_eq!(key.project_id, 7);
     }
 
     #[tokio::test]

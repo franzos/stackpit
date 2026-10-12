@@ -7,6 +7,7 @@
 use crate::config::RegistrationMode;
 use crate::domain::ProjectStatus;
 use crate::queries;
+use crate::queries::projects::ProjectClaim;
 use crate::server::AppState;
 use axum::http::HeaderMap;
 use std::sync::Arc;
@@ -151,7 +152,15 @@ pub fn invalidate_key(cache: &AuthCache, negative: &NegativeAuthCache, key: &str
 }
 
 fn negative_cache_insert(state: &AppState, sentry_key: &str, project_id: u64, denial: Denial) {
-    let cache = &state.negative_auth_cache;
+    negative_cache_insert_into(&state.negative_auth_cache, sentry_key, project_id, denial);
+}
+
+fn negative_cache_insert_into(
+    cache: &NegativeAuthCache,
+    sentry_key: &str,
+    project_id: u64,
+    denial: Denial,
+) {
     if cache.len() > NEGATIVE_AUTH_CACHE_MAX_ENTRIES {
         cache.retain(|_, e| cache_fresh(e.inserted_at.elapsed(), NEGATIVE_AUTH_CACHE_TTL));
         evict_to_cap(cache, NEGATIVE_AUTH_CACHE_MAX_ENTRIES);
@@ -337,13 +346,28 @@ pub async fn validate_project_key(
                         negative_cache_insert(state, sentry_key, project_id, Denial::MaxProjects);
                         return Err(AuthError::MaxProjects);
                     }
-                    auto_register_key(
-                        &state.writer_pool,
-                        &state.auth_cache,
-                        sentry_key,
-                        project_id,
-                    )
-                    .await?;
+                    match auto_register_key(&state.writer_pool, sentry_key, project_id).await? {
+                        ProjectClaim::Claimed => {
+                            state.auth_cache.insert(
+                                sentry_key.to_owned(),
+                                CacheEntry {
+                                    project_id,
+                                    status: ProjectStatus::Active,
+                                    inserted_at: std::time::Instant::now(),
+                                },
+                            );
+                        }
+                        ProjectClaim::AlreadyExisted => {
+                            resolve_lost_claim(
+                                &state.writer_pool,
+                                &state.auth_cache,
+                                &state.negative_auth_cache,
+                                sentry_key,
+                                project_id,
+                            )
+                            .await?;
+                        }
+                    }
                 }
                 Err(e) => {
                     tracing::warn!("open-mode auth: DB lookup failed: {e}");
@@ -375,12 +399,33 @@ async fn project_status_checked(
 /// key that was never committed.
 async fn auto_register_key(
     writer_pool: &crate::db::DbPool,
+    sentry_key: &str,
+    project_id: u64,
+) -> Result<ProjectClaim, AuthError> {
+    queries::projects::ensure_project_key(writer_pool, project_id, sentry_key)
+        .await
+        .map_err(|e| {
+            tracing::warn!("auto-register key failed: {e}");
+            AuthError::InternalError
+        })
+}
+
+/// A lost claim passes only if the winner registered this same key for this project; the lookup uses the writer pool, where the winner committed.
+async fn resolve_lost_claim(
+    writer_pool: &crate::db::DbPool,
     auth_cache: &AuthCache,
+    negative_cache: &NegativeAuthCache,
     sentry_key: &str,
     project_id: u64,
 ) -> Result<(), AuthError> {
-    match queries::projects::ensure_project_key(writer_pool, project_id, sentry_key).await {
-        Ok(()) => {
+    let key = queries::projects::get_project_key(writer_pool, sentry_key)
+        .await
+        .map_err(|e| {
+            tracing::warn!("open-mode auth: lost-claim key lookup failed: {e}");
+            AuthError::InternalError
+        })?;
+    match key {
+        Some(key) if key.status == ProjectStatus::Active && key.project_id == project_id => {
             auth_cache.insert(
                 sentry_key.to_owned(),
                 CacheEntry {
@@ -391,9 +436,14 @@ async fn auto_register_key(
             );
             Ok(())
         }
-        Err(e) => {
-            tracing::warn!("auto-register key failed: {e}");
-            Err(AuthError::InternalError)
+        _ => {
+            negative_cache_insert_into(
+                negative_cache,
+                sentry_key,
+                project_id,
+                Denial::Denied("unknown key for existing project"),
+            );
+            Err(AuthError::Denied("unknown key for existing project"))
         }
     }
 }
@@ -660,13 +710,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn auto_register_key_success_caches_key() {
+    async fn auto_register_key_new_project_is_claimed() {
         let pool = crate::queries::test_helpers::open_test_db().await;
-        let cache: AuthCache = Arc::new(dashmap::DashMap::new());
-        let result = auto_register_key(&pool, &cache, "newkey", 7).await;
-        assert!(result.is_ok(), "insert into a live DB must succeed");
-        let entry = cache.get("newkey").expect("key must be cached");
-        assert_eq!(entry.project_id, 7);
+        let result = auto_register_key(&pool, "newkey", 7).await;
+        assert!(matches!(result, Ok(ProjectClaim::Claimed)));
+    }
+
+    #[tokio::test]
+    async fn auto_register_key_existing_project_is_already_existed() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        assert!(auto_register_key(&pool, "firstkey", 7).await.is_ok());
+        let result = auto_register_key(&pool, "secondkey", 7).await;
+        assert!(matches!(result, Ok(ProjectClaim::AlreadyExisted)));
     }
 
     // Regression: a failed auto-register insert must surface as InternalError
@@ -675,13 +730,65 @@ mod tests {
     async fn auto_register_key_failure_returns_internal_error() {
         let pool = crate::queries::test_helpers::open_test_db().await;
         pool.close().await;
-        let cache: AuthCache = Arc::new(dashmap::DashMap::new());
-        let result = auto_register_key(&pool, &cache, "newkey", 7).await;
+        let result = auto_register_key(&pool, "newkey", 7).await;
         assert!(matches!(result, Err(AuthError::InternalError)));
+    }
+
+    // One DSN's first session, event and client report race for the claim; the
+    // losers carry the winner's key and must still be accepted.
+    #[tokio::test]
+    async fn lost_claim_with_same_key_is_accepted_and_cached() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        assert!(auto_register_key(&pool, "samekey", 7).await.is_ok());
+        let cache: AuthCache = Arc::new(dashmap::DashMap::new());
+        let negative = new_negative_cache();
+        let result = resolve_lost_claim(&pool, &cache, &negative, "samekey", 7).await;
+        assert!(result.is_ok());
+        let entry = cache.get("samekey").expect("key must be positively cached");
+        assert_eq!(entry.project_id, 7);
+        assert!(negative.get(&("samekey".to_owned(), 7)).is_none());
+    }
+
+    #[tokio::test]
+    async fn lost_claim_with_key_owned_by_another_project_is_denied() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        assert!(auto_register_key(&pool, "k", 7).await.is_ok());
+        let cache: AuthCache = Arc::new(dashmap::DashMap::new());
+        let negative = new_negative_cache();
+        let result = resolve_lost_claim(&pool, &cache, &negative, "k", 8).await;
+        assert!(matches!(
+            result,
+            Err(AuthError::Denied("unknown key for existing project"))
+        ));
         assert!(
-            cache.get("newkey").is_none(),
-            "failed insert must not cache"
+            cache.get("k").is_none(),
+            "the key must not be cached for the wrong project"
         );
+        assert!(negative.get(&("k".to_owned(), 8)).is_some());
+    }
+
+    #[tokio::test]
+    async fn lost_claim_with_different_key_is_denied_and_negatively_cached() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        assert!(auto_register_key(&pool, "winner", 7).await.is_ok());
+        let cache: AuthCache = Arc::new(dashmap::DashMap::new());
+        let negative = new_negative_cache();
+        let result = resolve_lost_claim(&pool, &cache, &negative, "loser", 7).await;
+        assert!(matches!(
+            result,
+            Err(AuthError::Denied("unknown key for existing project"))
+        ));
+        assert!(
+            cache.get("loser").is_none(),
+            "a denied key must not be positively cached"
+        );
+        let entry = negative
+            .get(&("loser".to_owned(), 7))
+            .expect("denial must be negatively cached");
+        assert!(matches!(
+            entry.denial,
+            Denial::Denied("unknown key for existing project")
+        ));
     }
 
     // Regression: a failed status lookup must propagate as InternalError, not

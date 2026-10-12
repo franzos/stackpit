@@ -108,6 +108,7 @@ pub fn to_storable_event(sentry_event: &SentryEvent, project_id: u64) -> Result<
         server_name,
         transaction_name,
         title,
+        title_checked: true,
         sdk_name,
         sdk_version,
         fingerprint: fp,

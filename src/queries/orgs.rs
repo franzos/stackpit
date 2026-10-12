@@ -91,12 +91,7 @@ pub async fn ensure_personal_org(pool: &DbPool, user_id: i64) -> Result<i64> {
 
     let base = format!("personal-{}", crate::util::crypto::random_hex::<3>());
 
-    #[cfg(feature = "sqlite")]
-    let ins = sql!(
-        "INSERT OR IGNORE INTO organizations (slug, name, created_by, is_personal) \
-               VALUES (?1, 'Personal', ?2, 1) RETURNING org_id"
-    );
-    #[cfg(not(feature = "sqlite"))]
+    // Bare target: a race on idx_org_personal_owner must fall through to personal_org_id, not error.
     let ins = sql!(
         "INSERT INTO organizations (slug, name, created_by, is_personal) \
                VALUES (?1, 'Personal', ?2, TRUE) ON CONFLICT DO NOTHING RETURNING org_id"
@@ -241,17 +236,11 @@ pub async fn provision_forseti_org(
         return Ok(org_id);
     }
 
-    #[cfg(feature = "sqlite")]
-    let ins = sql!(
-        "INSERT OR IGNORE INTO organizations \
-               (slug, name, ext_iss, ext_org_id, created_by, role_sync) \
-               VALUES (?1, ?2, ?3, ?4, ?5, 1) RETURNING org_id"
-    );
-    #[cfg(not(feature = "sqlite"))]
+    // Bare target: a race on idx_org_ext must fall through to org_by_ext, not error.
     let ins = sql!(
         "INSERT INTO organizations \
                (slug, name, ext_iss, ext_org_id, created_by, role_sync) \
-               VALUES (?1, ?2, ?3, ?4, ?5, TRUE) ON CONFLICT (slug) DO NOTHING RETURNING org_id"
+               VALUES (?1, ?2, ?3, ?4, ?5, TRUE) ON CONFLICT DO NOTHING RETURNING org_id"
     );
 
     let org_id = loop_insert_unique_slug(
@@ -884,13 +873,6 @@ pub async fn create_native_org(
     slug: &str,
     name: &str,
 ) -> Result<i64> {
-    #[cfg(feature = "sqlite")]
-    let ins = sql!(
-        "INSERT OR IGNORE INTO organizations \
-               (slug, name, created_by, is_personal, role_sync) \
-               VALUES (?1, ?2, ?3, 0, 0) RETURNING org_id"
-    );
-    #[cfg(not(feature = "sqlite"))]
     let ins = sql!(
         "INSERT INTO organizations \
                (slug, name, created_by, is_personal, role_sync) \

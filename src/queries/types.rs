@@ -492,6 +492,8 @@ pub struct ProjectNavCounts {
     pub metric_count: u64,
     pub profile_count: u64,
     pub replay_count: u64,
+    /// All rows in `events` for the project, every item_type.
+    pub event_count: u64,
     /// Human label for the project: stored `name` if set, else `Project {id}`.
     /// Lives on `ProjectNavCounts` because every per-project template already
     /// renders this struct for tab badges.

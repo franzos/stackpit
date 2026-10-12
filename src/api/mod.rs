@@ -1,3 +1,4 @@
+use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
@@ -15,9 +16,13 @@ pub mod projects;
 pub mod releases;
 pub mod sourcemaps;
 
+/// `Json<_>` buffers the body before the handler checks the API key.
+const JSON_BODY_LIMIT: usize = 1024 * 1024;
+
 /// Sentry-compatible API routes (releases, sourcemaps) with per-project API key auth.
 /// Registered without trailing slashes; `NormalizePathLayer` (see `server.rs`) trims
 /// the trailing slash Sentry SDKs send so both forms match.
+/// `chunk-upload` sits after the `route_layer` so it keeps the 64 MiB limit from `server.rs`.
 pub fn sentry_api_routes() -> Router<AppState> {
     Router::new()
         .route(
@@ -41,12 +46,13 @@ pub fn sentry_api_routes() -> Router<AppState> {
             put(releases::update_project_scoped),
         )
         .route(
-            "/api/0/organizations/{org}/chunk-upload",
-            get(sourcemaps::chunk_upload_config).post(sourcemaps::chunk_upload),
-        )
-        .route(
             "/api/0/organizations/{org}/artifactbundle/assemble",
             post(sourcemaps::assemble),
+        )
+        .route_layer(DefaultBodyLimit::max(JSON_BODY_LIMIT))
+        .route(
+            "/api/0/organizations/{org}/chunk-upload",
+            get(sourcemaps::chunk_upload_config).post(sourcemaps::chunk_upload),
         )
 }
 

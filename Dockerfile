@@ -28,7 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 WORKDIR /app
 COPY --from=builder /app/target/release/stackpit /app/stackpit
 # The envelope, zip and minidump parsers handle untrusted bytes; keep them off root.
-RUN chown -R stackpit:stackpit /app
+RUN chown stackpit:stackpit /app
 USER stackpit
 EXPOSE 3000 3001
 

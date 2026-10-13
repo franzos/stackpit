@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.10] - 2026-10-13
+
+### Added
+- Per-category retention via `[storage.retention]`
+- Per-project retention overrides on the project settings page
+- Trace page notice when trace data expired or was never stored
+
+### Changed
+- Upgrading starts pruning session aggregates and unreferenced auto-created releases
+- Source maps follow the `errors` retention
+- Retention task also runs with `retention_days = 0`
+
 ## [0.4.9] - 2026-10-12
 
 ### Security

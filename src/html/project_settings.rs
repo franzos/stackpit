@@ -1,9 +1,12 @@
+use std::collections::HashMap;
+
 use askama::Template;
 use axum::extract::{Extension, Form, Path, State};
 use axum::response::IntoResponse;
 use serde::Deserialize;
 use stackpit_auth::AuthContext;
 
+use crate::config::{Category, OverrideError, Resolved};
 use crate::extractors::ProjectPath;
 use crate::forge;
 use crate::html::chrome::PageChrome;
@@ -44,9 +47,51 @@ struct ProjectSettingsTemplate {
     /// and every row's edit form so the two lists cannot drift.
     forge_options: &'static [(&'static str, &'static str)],
     move_targets: Vec<MoveTarget>,
+    /// `None` for members, who may not change retention.
+    retention: Option<RetentionView>,
     message: Option<Flash>,
     nav: ProjectNavCounts,
     chrome: PageChrome,
+}
+
+struct RetentionView {
+    rows: Vec<RetentionRow>,
+}
+
+struct RetentionRow {
+    /// Form field name and input id suffix.
+    field: &'static str,
+    label: String,
+    /// `None` means forever.
+    server_days: Option<u32>,
+    override_days: Option<u32>,
+    /// The server value has dropped to or below the stored override.
+    stale: bool,
+    /// Nothing is shorter than a one-day server value.
+    disabled: bool,
+}
+
+fn retention_view(
+    resolved: &Resolved,
+    overrides: &HashMap<Category, u32>,
+    chrome: &PageChrome,
+) -> RetentionView {
+    let rows = Category::OVERRIDABLE
+        .into_iter()
+        .map(|cat| {
+            let server_days = resolved.days(cat);
+            let override_days = overrides.get(&cat).copied();
+            RetentionRow {
+                field: cat.as_str(),
+                label: chrome.t(&format!("projects-retention-cat-{}", cat.as_str())),
+                server_days,
+                override_days,
+                stale: matches!((override_days, server_days), (Some(o), Some(s)) if o >= s),
+                disabled: server_days == Some(1),
+            }
+        })
+        .collect();
+    RetentionView { rows }
 }
 
 const FORGE_OPTIONS: &[(&str, &str)] = &[
@@ -587,6 +632,120 @@ pub async fn move_project(
     }
 }
 
+/// Absent field: unchanged (disabled inputs are not submitted). Blank: clear.
+#[derive(Deserialize)]
+pub struct RetentionForm {
+    pub errors: Option<String>,
+    pub traces: Option<String>,
+    pub logs: Option<String>,
+    pub metrics: Option<String>,
+}
+
+impl RetentionForm {
+    fn field(&self, cat: Category) -> Option<&str> {
+        match cat {
+            Category::Errors => self.errors.as_deref(),
+            Category::Traces => self.traces.as_deref(),
+            Category::Logs => self.logs.as_deref(),
+            Category::Metrics => self.metrics.as_deref(),
+            Category::Releases => None,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum RetentionFormError {
+    Invalid,
+    NotShorter,
+}
+
+/// The changes the form asks for, validated against the server values. Fields
+/// equal to the stored override are skipped, so a stale override survives an
+/// unrelated save.
+fn retention_changes(
+    form: &RetentionForm,
+    resolved: &Resolved,
+    stored: &HashMap<Category, u32>,
+) -> Result<Vec<(Category, Option<u32>)>, RetentionFormError> {
+    let mut changes = Vec::new();
+    for cat in Category::OVERRIDABLE {
+        let Some(raw) = form.field(cat) else {
+            continue;
+        };
+        let raw = raw.trim();
+        let new = if raw.is_empty() {
+            None
+        } else {
+            Some(
+                raw.parse::<u32>()
+                    .map_err(|_| RetentionFormError::Invalid)?,
+            )
+        };
+        if new == stored.get(&cat).copied() {
+            continue;
+        }
+        if let Some(days) = new {
+            resolved.check_override(cat, days).map_err(|e| match e {
+                OverrideError::NotShorter => RetentionFormError::NotShorter,
+                OverrideError::Zero | OverrideError::TooLarge | OverrideError::NotOverridable => {
+                    RetentionFormError::Invalid
+                }
+            })?;
+        }
+        changes.push((cat, new));
+    }
+    Ok(changes)
+}
+
+pub async fn set_retention(
+    State(state): State<AppState>,
+    active: ActiveOrg,
+    opt_auth: Option<Extension<AuthContext>>,
+    Chrome(chrome): Chrome,
+    ProjectPath(project_id): ProjectPath,
+    Form(form): Form<RetentionForm>,
+) -> axum::response::Response {
+    let scope = match require_project_owner(&active, &state.pool, project_id as i64).await {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+
+    let resolved = state.config.storage.resolved_retention();
+    let msg = match queries::retention::get_overrides(&state.writer_pool, project_id as i64).await {
+        Err(e) => chrome.flash_err(e),
+        Ok(stored) => match retention_changes(&form, &resolved, &stored) {
+            Err(RetentionFormError::Invalid) => Flash::err(chrome.tv1(
+                "flash-retention-invalid",
+                "max",
+                &crate::config::MAX_OVERRIDE_DAYS.to_string(),
+            )),
+            Err(RetentionFormError::NotShorter) => {
+                Flash::err(chrome.t("flash-retention-not-shorter"))
+            }
+            Ok(changes) if changes.is_empty() => Flash::ok(chrome.t("flash-retention-saved")),
+            Ok(changes) => match queries::retention::apply_overrides(
+                &state.writer_pool,
+                project_id as i64,
+                &changes,
+            )
+            .await
+            {
+                Ok(()) => Flash::ok(chrome.t("flash-retention-saved")),
+                Err(e) => chrome.flash_err(e),
+            },
+        },
+    };
+    render_general(
+        &state,
+        &scope,
+        opt_auth.as_ref(),
+        project_id,
+        Some(msg),
+        &chrome,
+    )
+    .await
+}
+
 async fn render_general(
     state: &AppState,
     scope: &ProjectScope,
@@ -617,6 +776,19 @@ async fn render_general(
         .and_then(|i| i.source.clone())
         .unwrap_or_else(|| "auto".to_string());
 
+    let retention = if scope.role == Some(Role::Member) {
+        None
+    } else {
+        let overrides = queries::retention::get_overrides(&state.pool, project_id as i64)
+            .await
+            .unwrap_or_default();
+        Some(retention_view(
+            &state.config.storage.resolved_retention(),
+            &overrides,
+            chrome,
+        ))
+    };
+
     let nav = state.nav_counts(project_id).await;
 
     let tmpl = ProjectSettingsTemplate {
@@ -627,6 +799,7 @@ async fn render_general(
         repos,
         forge_options: FORGE_OPTIONS,
         move_targets,
+        retention,
         message,
         nav,
         chrome: chrome.clone(),
@@ -957,6 +1130,11 @@ mod tests {
                     repos,
                     forge_options: FORGE_OPTIONS,
                     move_targets: Vec::new(),
+                    retention: Some(retention_view(
+                        &Resolved::uniform(90),
+                        &HashMap::from([(Category::Traces, 120)]),
+                        &chrome,
+                    )),
                     message: None,
                     nav: ProjectNavCounts::default(),
                     chrome: chrome.clone(),
@@ -970,6 +1148,7 @@ mod tests {
                 );
                 assert!(html.contains("stack_path_prefix"));
                 assert!(html.contains("forge_type_override"));
+                assert!(html.contains(r#"name="traces""#));
             }
         }
     }
@@ -988,6 +1167,7 @@ mod tests {
             repos: vec![repo("unknown", Some("gitea"), None)],
             forge_options: FORGE_OPTIONS,
             move_targets: Vec::new(),
+            retention: None,
             message: None,
             nav: ProjectNavCounts::default(),
             chrome,
@@ -1015,6 +1195,7 @@ mod tests {
             repos: vec![repo("unknown", None, None)],
             forge_options: FORGE_OPTIONS,
             move_targets: Vec::new(),
+            retention: None,
             message: None,
             nav: ProjectNavCounts::default(),
             chrome,
@@ -1039,5 +1220,286 @@ mod tests {
         );
         // The inert row says so, and points at the control that fixes it.
         assert!(html.contains("forge unknown"));
+    }
+
+    use crate::orgs::extractor::ActiveOrg;
+    use axum::http::StatusCode;
+
+    const ORG: i64 = 5;
+    const PROJECT: u64 = 7;
+
+    async fn seeded_pool() -> crate::db::DbPool {
+        let pool = crate::db::open_test_pool().await;
+        sqlx::query(crate::db::sql!(
+            "INSERT INTO organizations (org_id, slug, name) VALUES (5, 'acme', 'Acme')"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(crate::db::sql!(
+            "INSERT INTO projects (project_id, status, source, org_id) \
+             VALUES (7, 'active', 'manual', 5)"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool
+    }
+
+    /// Server values: errors 30, traces 90, logs 90, metrics forever.
+    fn state_for(pool: &crate::db::DbPool) -> AppState {
+        let (mut state, _chans) = AppState::for_test(pool.clone());
+        let mut config = crate::config::Config::default();
+        config.storage.retention_days = 90;
+        config.storage.retention.errors = Some(30);
+        config.storage.retention.metrics = Some(0);
+        state.config = std::sync::Arc::new(config);
+        state
+    }
+
+    fn as_role(role: Option<Role>) -> ActiveOrg {
+        match role {
+            Some(r) => ActiveOrg {
+                session_org_id: ORG,
+                role: Some(r),
+                org_name: None,
+                memberships: vec![(ORG, r)],
+            },
+            None => ActiveOrg::bare(ORG, None),
+        }
+    }
+
+    fn page_chrome() -> Chrome {
+        use unic_langid::langid;
+        Chrome(PageChrome::new(
+            "csrf".into(),
+            langid!("en"),
+            "/web/projects/".into(),
+        ))
+    }
+
+    fn form(fields: &[(Category, &str)]) -> RetentionForm {
+        let get = |cat| {
+            fields
+                .iter()
+                .find(|(c, _)| *c == cat)
+                .map(|(_, v)| (*v).to_string())
+        };
+        RetentionForm {
+            errors: get(Category::Errors),
+            traces: get(Category::Traces),
+            logs: get(Category::Logs),
+            metrics: get(Category::Metrics),
+        }
+    }
+
+    async fn post(
+        state: &AppState,
+        role: Option<Role>,
+        fields: &[(Category, &str)],
+    ) -> (StatusCode, String) {
+        let resp = set_retention(
+            State(state.clone()),
+            as_role(role),
+            None,
+            page_chrome(),
+            ProjectPath(PROJECT),
+            Form(form(fields)),
+        )
+        .await;
+        let status = resp.status();
+        let body = axum::body::to_bytes(resp.into_body(), 4 * 1024 * 1024)
+            .await
+            .unwrap();
+        (status, String::from_utf8_lossy(&body).into_owned())
+    }
+
+    async fn stored(pool: &crate::db::DbPool) -> HashMap<Category, u32> {
+        queries::retention::get_overrides(pool, PROJECT as i64)
+            .await
+            .unwrap()
+    }
+
+    const SAVED: &str = "Retention settings saved";
+    const NOT_SHORTER: &str = "A project override must be shorter than the server retention";
+    const INVALID: &str = "Retention must be a whole number of days";
+
+    #[tokio::test]
+    async fn retention_owner_saves_and_the_page_shows_it() {
+        let pool = seeded_pool().await;
+        let state = state_for(&pool);
+
+        let (status, body) = post(
+            &state,
+            Some(Role::Owner),
+            &[
+                (Category::Errors, ""),
+                (Category::Traces, " 14 "),
+                (Category::Logs, ""),
+                (Category::Metrics, "400"),
+            ],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains(SAVED), "{body}");
+        assert_eq!(
+            stored(&pool).await,
+            HashMap::from([(Category::Traces, 14), (Category::Metrics, 400)])
+        );
+        assert!(body.contains(r#"id="retention_traces""#));
+        assert!(body.contains(r#"value="14""#));
+    }
+
+    #[tokio::test]
+    async fn retention_value_not_below_server_writes_nothing() {
+        let pool = seeded_pool().await;
+        let state = state_for(&pool);
+
+        for days in ["90", "91"] {
+            let (status, body) = post(&state, Some(Role::Owner), &[(Category::Traces, days)]).await;
+            assert_eq!(status, StatusCode::OK);
+            assert!(body.contains(NOT_SHORTER), "{days}: {body}");
+        }
+        for bad in ["0", "-3", "1.5", "abc", "36501", "99999999999"] {
+            let (_, body) = post(&state, Some(Role::Owner), &[(Category::Metrics, bad)]).await;
+            assert!(body.contains(INVALID), "{bad}: {body}");
+        }
+        assert!(stored(&pool).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn retention_blank_clears() {
+        let pool = seeded_pool().await;
+        queries::retention::apply_overrides(
+            &pool,
+            PROJECT as i64,
+            &[(Category::Traces, Some(7)), (Category::Logs, Some(7))],
+        )
+        .await
+        .unwrap();
+        let state = state_for(&pool);
+
+        let (_, body) = post(
+            &state,
+            Some(Role::Owner),
+            &[(Category::Traces, "  "), (Category::Logs, "7")],
+        )
+        .await;
+        assert!(body.contains(SAVED), "{body}");
+        assert_eq!(stored(&pool).await, HashMap::from([(Category::Logs, 7)]));
+    }
+
+    #[tokio::test]
+    async fn retention_mixed_valid_and_invalid_writes_nothing() {
+        let pool = seeded_pool().await;
+        queries::retention::apply_overrides(&pool, PROJECT as i64, &[(Category::Logs, Some(7))])
+            .await
+            .unwrap();
+        let state = state_for(&pool);
+
+        let (_, body) = post(
+            &state,
+            Some(Role::Owner),
+            &[
+                (Category::Errors, "10"),
+                (Category::Traces, "120"),
+                (Category::Logs, ""),
+            ],
+        )
+        .await;
+        assert!(body.contains(NOT_SHORTER), "{body}");
+        assert_eq!(stored(&pool).await, HashMap::from([(Category::Logs, 7)]));
+    }
+
+    #[tokio::test]
+    async fn retention_stale_override_survives_an_unrelated_change() {
+        let pool = seeded_pool().await;
+        queries::retention::apply_overrides(&pool, PROJECT as i64, &[(Category::Errors, Some(60))])
+            .await
+            .unwrap();
+        let state = state_for(&pool);
+
+        let (_, body) = post(
+            &state,
+            Some(Role::Owner),
+            &[(Category::Errors, "60"), (Category::Logs, "10")],
+        )
+        .await;
+        assert!(body.contains(SAVED), "{body}");
+        assert_eq!(
+            stored(&pool).await,
+            HashMap::from([(Category::Errors, 60), (Category::Logs, 10)])
+        );
+        assert!(body.contains("No longer effective"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn retention_member_is_refused_and_sees_no_section() {
+        let pool = seeded_pool().await;
+        let state = state_for(&pool);
+
+        let (status, _) = post(&state, Some(Role::Member), &[(Category::Traces, "7")]).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(stored(&pool).await.is_empty());
+
+        for (role, shown) in [
+            (Some(Role::Member), false),
+            (Some(Role::Owner), true),
+            (None, true),
+        ] {
+            let resp = handler(
+                State(state.clone()),
+                as_role(role),
+                None,
+                page_chrome(),
+                ProjectPath(PROJECT),
+            )
+            .await;
+            assert_eq!(resp.status(), StatusCode::OK);
+            let body = axum::body::to_bytes(resp.into_body(), 4 * 1024 * 1024)
+                .await
+                .unwrap();
+            let body = String::from_utf8_lossy(&body);
+            assert_eq!(body.contains("/settings/retention"), shown, "role {role:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn retention_superuser_saves() {
+        let pool = seeded_pool().await;
+        let state = state_for(&pool);
+
+        let (status, body) = post(&state, None, &[(Category::Traces, "7")]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains(SAVED), "{body}");
+        assert_eq!(stored(&pool).await, HashMap::from([(Category::Traces, 7)]));
+    }
+
+    #[test]
+    fn retention_view_flags_stale_and_one_day_server_values() {
+        use unic_langid::langid;
+        let chrome = PageChrome::new("csrf".into(), langid!("en"), "/web/projects/".into());
+        let resolved = Resolved {
+            base: Some(90),
+            errors: Some(30),
+            traces: Some(1),
+            logs: Some(90),
+            metrics: None,
+            releases: Some(90),
+        };
+        let overrides = HashMap::from([
+            (Category::Errors, 30),
+            (Category::Logs, 10),
+            (Category::Metrics, 500),
+        ]);
+        let view = retention_view(&resolved, &overrides, &chrome);
+        let fields: Vec<_> = view.rows.iter().map(|r| r.field).collect();
+        assert_eq!(fields, ["errors", "traces", "logs", "metrics"]);
+        let flags: Vec<_> = view.rows.iter().map(|r| (r.stale, r.disabled)).collect();
+        assert_eq!(
+            flags,
+            [(true, false), (false, true), (false, false), (false, false)]
+        );
+        assert_eq!(view.rows[0].label, "Errors");
     }
 }

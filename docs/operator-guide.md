@@ -7,6 +7,7 @@ Everything beyond getting the binary and starting it: the full configuration ref
 - [Configuration](#configuration)
 - [PostgreSQL](#postgresql)
 - [Ingestion tuning](#ingestion-tuning)
+- [Retention](#retention)
 - [Authentication](#authentication)
 - [MCP endpoint](#mcp-endpoint)
 - [Organizations & Roles](#organizations--roles)
@@ -43,9 +44,16 @@ max_body_size = 10485760          # max decompressed body in bytes (default 10MB
 [storage]
 path = "stackpit.db"              # SQLite database path
 database_url = ""                 # full URL, e.g. "postgres://user:pass@host/stackpit" (overrides path)
-retention_days = 90               # auto-delete events older than this (0 = keep forever)
+retention_days = 90               # delete data older than this many days (0 = keep forever); fallback for [storage.retention]
 ingest_writers = 1                # concurrent ingest writer tasks (PostgreSQL only; SQLite always uses 1)
 ingest_batch_size = 2000          # max events per ingest write transaction (see Ingestion tuning)
+
+[storage.retention]               # per-category days, 0 = forever; unset keys use retention_days (see Retention)
+# errors   = 365
+# traces   = 30
+# logs     = 30
+# metrics  = 365
+# releases = 365
 
 [filter]
 mode = "open"                     # "open" = auto-provision new projects on first ingest; "closed" = pre-register everything
@@ -116,6 +124,50 @@ Do take the numbers with a grain of salt: they're from a single machine and one 
 ### SQLite: admin writes share the ingest writer
 
 On SQLite, admin and web UI writes intentionally go through the same single write connection as the ingest writer, since SQLite only allows one writer at a time. A long-running admin bulk operation (a large delete, org reconciliation) therefore holds that connection and delays ingest flushes behind it. The writer tolerates a stall only so far: each flush attempt waits up to 5 seconds for the connection, and a failed batch gets four attempts in total, so a bulk write that blocks ingest for roughly 20 seconds causes events to be dropped (with accounting, logged as "dropping N events after repeated flush failures"). If your ingest rate matters, schedule bulk cleanup and large deletes off-peak. PostgreSQL deployments are unaffected: admin writes use a separate connection there.
+
+## Retention
+
+A background task deletes old data once an hour. `retention_days` sets one window for everything; `[storage.retention]` splits it per category, so you can keep errors for a year and traces for a month. Traces (spans plus transactions) are usually the bulk of the database, so they're the category worth shortening first.
+
+```toml
+[storage]
+retention_days = 90
+
+[storage.retention]
+errors   = 365
+traces   = 30
+logs     = 30
+metrics  = 365
+releases = 365
+```
+
+Each key is a number of days, and `0` keeps that category forever. An unset key falls back to `retention_days`, so a config without `[storage.retention]` deletes the same rows as `retention_days` alone. `stackpit status` prints the effective value per category and the number of projects with overrides.
+
+| Category | Rows |
+|---|---|
+| `errors` | `events` with item type `event` or `user_report`, with their attachments. Source maps follow this value. |
+| `traces` | `events` with item type `transaction`, `profile` or `profile_chunk`; all `spans` |
+| `logs` | `logs` |
+| `metrics` | `metrics`; `transaction_metrics` (hourly rollups, by last seen) |
+| `releases` | auto-created `releases` rows past the cutoff (by last event, else creation) that no remaining event or session aggregate references |
+
+`retention_days` still covers everything outside these categories: the remaining event item types (sessions, replays with their metadata, check-ins, client reports, standalone attachments), `discard_stats`, and `session_aggregates` (whole days only). The server-wide deletes go by `received_at`, the time Stackpit received the row, not the timestamp the SDK reported.
+
+Releases with deploy metadata (a commit SHA or a release date, as set by sync or the API) are never pruned. An auto-created release that gets pruned comes back if a new event references it.
+
+The task also runs with `retention_days = 0`, since project overrides can apply even when the server keeps everything forever. With nothing to delete, a run costs one query.
+
+### Per-project overrides
+
+Project owners can shorten retention for their own project on the project settings page, with one value each for errors, traces, logs and metrics. Releases aren't overridable, and source maps ignore overrides. An override has to be shorter than the server value, which acts as the ceiling (any value works when the server keeps that category forever). If you later lower a server value below an existing override, the sweep uses the shorter of the two. Deleted data doesn't come back when an owner raises the value again.
+
+An override deletes a row only when both its `timestamp` and its `received_at` are past the cutoff. `timestamp` comes from the SDK and can lie in the past (offline queues, clock skew), so the `received_at` check stops freshly ingested old data from being deleted the hour it arrives. A row with a future timestamp outlives the override; the server value still bounds it.
+
+### Things to know
+
+- Upgrading starts pruning `session_aggregates` and unreferenced auto-created `releases` past `retention_days`. Nothing else gets deleted earlier than before.
+- When the categories differ, each typed `events` delete walks the `received_at` index from the oldest row and steps over rows of other categories that are still inside their own window. That's cheap with `errors` at or above `traces`, since old error rows are few. With traces outliving errors, the errors delete steps over every old transaction, and startup logs a warning.
+- The trace page shows a notice instead of an empty waterfall when a trace has error events but no spans or transactions. It reads "trace data expired" when traces retention is finite and the oldest error listed on the page is older than the traces cutoff, otherwise "no trace data stored" (which also covers traces the SDK never sampled). The page lists the newest 50 errors, so the oldest of those decides. The check uses the server value, so a project with a shorter traces override can see "no trace data stored" for a trace that did expire.
 
 ## Authentication
 
@@ -374,7 +426,7 @@ export SENTRY_PROJECT=1                         # project ID
 sentry-cli sourcemaps upload ./dist
 ```
 
-Bundler plugins (`@sentry/vite-plugin`, `@sentry/webpack-plugin`, etc.) accept the same environment variables, or you can pass them as options. Source maps are matched by debug ID and applied automatically when rendering stack traces. Stale upload chunks (and source maps themselves, per `retention_days`) are cleaned up by a background task.
+Bundler plugins (`@sentry/vite-plugin`, `@sentry/webpack-plugin`, etc.) accept the same environment variables, or you can pass them as options. Source maps are matched by debug ID and applied automatically when rendering stack traces. A background task deletes upload chunks after a day and source maps after the `errors` retention (see [Retention](#retention)), so stack traces of retained errors stay symbolicated.
 
 ## Monitors
 

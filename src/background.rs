@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
+use crate::config::Resolved;
 use crate::db::DbPool;
 use crate::util::stats::DiscardStats;
 
@@ -27,18 +28,20 @@ where
     });
 }
 
-pub fn spawn_retention_task(pool: DbPool, retention_days: u32, cancel: CancellationToken) {
-    if retention_days == 0 {
-        return;
-    }
+/// Sourcemaps follow the errors retention; `None` keeps them forever.
+fn sourcemap_max_age_secs(policy: &Resolved) -> Option<i64> {
+    policy.errors.map(|d| i64::from(d) * 86400)
+}
+
+pub fn spawn_retention_task(pool: DbPool, policy: Resolved, cancel: CancellationToken) {
     supervise("retention", async move {
         loop {
             tokio::select! {
                 _ = cancel.cancelled() => return,
                 _ = tokio::time::sleep(Duration::from_secs(3600)) => {}
             }
-            match crate::queries::retention::delete_old_events(&pool, retention_days).await {
-                Ok(n) if n > 0 => tracing::info!("retention cleanup: deleted {n} old events"),
+            match crate::queries::retention::run_sweep(&pool, &policy).await {
+                Ok(n) if n > 0 => tracing::info!("retention cleanup: deleted {n} old rows"),
                 Ok(_) => {}
                 Err(e) => tracing::warn!("retention cleanup error: {e}"),
             }
@@ -47,12 +50,14 @@ pub fn spawn_retention_task(pool: DbPool, retention_days: u32, cancel: Cancellat
                 Ok(_) => {}
                 Err(e) => tracing::warn!("chunk cleanup error: {e}"),
             }
-            // Same retention window as events.
-            let sm_max_age = retention_days as i64 * 86400;
-            match crate::ingest::sourcemap::cleanup_old_sourcemaps(&pool, sm_max_age).await {
-                Ok(n) if n > 0 => tracing::info!("sourcemap cleanup: deleted {n} old sourcemaps"),
-                Ok(_) => {}
-                Err(e) => tracing::warn!("sourcemap cleanup error: {e}"),
+            if let Some(sm_max_age) = sourcemap_max_age_secs(&policy) {
+                match crate::ingest::sourcemap::cleanup_old_sourcemaps(&pool, sm_max_age).await {
+                    Ok(n) if n > 0 => {
+                        tracing::info!("sourcemap cleanup: deleted {n} old sourcemaps")
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("sourcemap cleanup error: {e}"),
+                }
             }
         }
     });
@@ -265,8 +270,18 @@ async fn run_digest_cycle(
 
 #[cfg(test)]
 mod tests {
-    use super::run_digest_cycle;
+    use super::{run_digest_cycle, sourcemap_max_age_secs};
+    use crate::config::Resolved;
     use crate::queries::test_helpers::{insert_test_event, insert_test_issue, open_test_db};
+
+    #[test]
+    fn sourcemap_max_age_follows_errors_retention() {
+        let mut policy = Resolved::uniform(0);
+        policy.base = Some(30);
+        assert_eq!(sourcemap_max_age_secs(&policy), None);
+        policy.errors = Some(7);
+        assert_eq!(sourcemap_max_age_secs(&policy), Some(7 * 86400));
+    }
 
     #[tokio::test]
     async fn global_digest_events_are_scoped_per_project() {

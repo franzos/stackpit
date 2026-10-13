@@ -38,6 +38,9 @@ flash-repo-added = Repository aggiunto
 flash-repo-removed = Repository rimosso
 flash-project-archived = Progetto archiviato
 flash-project-unarchived = Progetto ripristinato dall'archivio
+flash-retention-saved = Impostazioni di conservazione salvate
+flash-retention-invalid = La conservazione deve essere un numero intero di giorni tra 1 e { $max }
+flash-retention-not-shorter = Il valore del progetto deve essere inferiore alla conservazione del server
 flash-key-created = Chiave creata
 flash-key-deleted = Chiave eliminata
 

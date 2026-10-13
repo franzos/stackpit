@@ -41,6 +41,9 @@ flash-repo-added = เพิ่มที่เก็บโค้ดแล้ว
 flash-repo-removed = นำที่เก็บโค้ดออกแล้ว
 flash-project-archived = จัดเก็บโปรเจกต์แล้ว
 flash-project-unarchived = ยกเลิกการจัดเก็บโปรเจกต์แล้ว
+flash-retention-saved = บันทึกการตั้งค่าการเก็บรักษาแล้ว
+flash-retention-invalid = ระยะเวลาเก็บรักษาต้องเป็นจำนวนวันเต็มตั้งแต่ 1 ถึง { $max }
+flash-retention-not-shorter = ค่าของโปรเจกต์ต้องสั้นกว่าระยะเวลาเก็บรักษาของเซิร์ฟเวอร์
 flash-key-created = สร้างคีย์แล้ว
 flash-key-deleted = ลบคีย์แล้ว
 

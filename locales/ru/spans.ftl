@@ -112,4 +112,11 @@ trace-detail-filter-clear = Показать все
 trace-detail-col-project = Проект
 trace-detail-parent-not-in-view = Родительский спан вне представления
 trace-detail-txn-badge = Транзакция
+trace-detail-data-expired = { $count ->
+    [one] Данные этого трейса устарели. Трейсы хранятся { $count } день.
+    [few] Данные этого трейса устарели. Трейсы хранятся { $count } дня.
+    [many] Данные этого трейса устарели. Трейсы хранятся { $count } дней.
+   *[other] Данные этого трейса устарели. Трейсы хранятся { $count } дня.
+}
+trace-detail-data-missing = Для этого трейса не сохранено данных трейса. Доступны только его ошибки.
 trace-detail-view-events = Все события этого трейса

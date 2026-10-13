@@ -4,7 +4,7 @@ use secrecy::ExposeSecret;
 use std::path::Path;
 
 use super::url::{url_origin, validate_absolute_http_url, validate_issuer_url_scheme};
-use super::Config;
+use super::{Category, Config, StorageConfig};
 
 /// Hard cap on `refresh_token_max_ttl_secs`. Larger values would let
 /// revocation markers accumulate for months.
@@ -187,9 +187,8 @@ impl Config {
             }
         }
 
-        // Zero retention means data piles up forever -- probably not intended
-        if self.storage.retention_days == 0 {
-            tracing::warn!("storage.retention_days is 0 -- data will never be cleaned up");
+        for warning in retention_warnings(&self.storage) {
+            tracing::warn!("{warning}");
         }
 
         // Rejected, not clamped: unlike the rate limits above, 0 empties the queue.
@@ -304,5 +303,152 @@ impl Config {
         validate_absolute_http_url("auth.mcp.audience", self.auth.mcp.audience.as_deref())?;
 
         Ok(())
+    }
+}
+
+/// Startup warnings for `[storage]` retention settings.
+pub(super) fn retention_warnings(storage: &StorageConfig) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let resolved = storage.resolved_retention();
+
+    if storage.retention_days == 0 && !storage.retention.all_set() {
+        let mut unbounded: Vec<&str> = Category::ALL
+            .into_iter()
+            .filter(|&c| resolved.days(c).is_none())
+            .map(Category::as_str)
+            .collect();
+        unbounded.extend([
+            "sessions",
+            "replays",
+            "check-ins",
+            "discard stats",
+            "session aggregates",
+        ]);
+        warnings.push(format!(
+            "storage.retention_days is 0: {} are never cleaned up",
+            unbounded.join(", ")
+        ));
+    }
+
+    let traces_outlive_errors = match (resolved.errors, resolved.traces) {
+        (Some(errors), Some(traces)) => traces > errors,
+        (Some(_), None) => true,
+        (None, _) => false,
+    };
+    if traces_outlive_errors {
+        let fmt = |d: Option<u32>| d.map_or_else(|| "forever".to_string(), |d| format!("{d} days"));
+        warnings.push(format!(
+            "storage.retention keeps traces ({}) longer than errors ({}); spans are the largest \
+             table, so this grows storage and the cost of every trace and retention scan",
+            fmt(resolved.traces),
+            fmt(resolved.errors)
+        ));
+    }
+
+    warnings
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::RetentionConfig;
+
+    fn storage(retention_days: u32, retention: RetentionConfig) -> StorageConfig {
+        StorageConfig {
+            retention_days,
+            retention,
+            ..StorageConfig::default()
+        }
+    }
+
+    #[test]
+    fn retention_defaults_emit_no_warning() {
+        assert!(retention_warnings(&StorageConfig::default()).is_empty());
+    }
+
+    #[test]
+    fn retention_days_zero_warns_and_names_unbounded_data() {
+        let w = retention_warnings(&storage(0, RetentionConfig::default()));
+        assert_eq!(w.len(), 1, "{w:?}");
+        for name in [
+            "errors",
+            "traces",
+            "sessions",
+            "replays",
+            "check-ins",
+            "discard stats",
+            "session aggregates",
+        ] {
+            assert!(w[0].contains(name), "missing {name}: {}", w[0]);
+        }
+    }
+
+    #[test]
+    fn retention_days_zero_partial_categories_still_warns() {
+        let w = retention_warnings(&storage(
+            0,
+            RetentionConfig {
+                errors: Some(30),
+                traces: Some(30),
+                ..RetentionConfig::default()
+            },
+        ));
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].contains("logs"));
+        assert!(!w[0].contains("errors"));
+    }
+
+    #[test]
+    fn retention_days_zero_all_categories_set_no_warning() {
+        let all = RetentionConfig {
+            errors: Some(365),
+            traces: Some(30),
+            logs: Some(30),
+            metrics: Some(365),
+            releases: Some(365),
+        };
+        assert!(retention_warnings(&storage(0, all)).is_empty());
+    }
+
+    #[test]
+    fn traces_longer_than_errors_warns() {
+        let w = retention_warnings(&storage(
+            90,
+            RetentionConfig {
+                traces: Some(180),
+                ..RetentionConfig::default()
+            },
+        ));
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].contains("traces (180 days)") && w[0].contains("errors (90 days)"));
+    }
+
+    #[test]
+    fn traces_forever_with_finite_errors_warns() {
+        let w = retention_warnings(&storage(
+            90,
+            RetentionConfig {
+                traces: Some(0),
+                ..RetentionConfig::default()
+            },
+        ));
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].contains("traces (forever)"));
+    }
+
+    #[test]
+    fn traces_not_longer_than_errors_no_warning() {
+        let shorter = RetentionConfig {
+            errors: Some(365),
+            traces: Some(30),
+            ..RetentionConfig::default()
+        };
+        assert!(retention_warnings(&storage(90, shorter)).is_empty());
+        let errors_forever = RetentionConfig {
+            errors: Some(0),
+            traces: Some(30),
+            ..RetentionConfig::default()
+        };
+        assert!(retention_warnings(&storage(90, errors_forever)).is_empty());
     }
 }

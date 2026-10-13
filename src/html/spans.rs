@@ -1,5 +1,5 @@
 use askama::Template;
-use axum::extract::{Path, Query, RawQuery};
+use axum::extract::{Path, Query, RawQuery, State};
 
 use crate::extractors::{BrowserDefaults, ProjectPageCtx, ReadPool};
 use crate::html::chrome::PageChrome;
@@ -14,6 +14,7 @@ use crate::queries::types::{
     PagedResult, SpanAggregation, SpanSummary, TraceError, TraceSummary, Waterfall,
 };
 use crate::queries::ProjectNavCounts;
+use crate::server::AppState;
 
 use super::HtmlError;
 
@@ -40,6 +41,8 @@ struct OrgTraceDetailTemplate {
     /// Whether `?projects=` is narrowing the view, for the "show all" affordance.
     filtered: bool,
     view: TraceView,
+    /// Why a trace with errors has no spans, already translated.
+    notice: Option<String>,
     chrome: PageChrome,
 }
 
@@ -378,10 +381,33 @@ fn not_found() -> HtmlError {
     HtmlError(axum::http::StatusCode::NOT_FOUND, "Not found".into())
 }
 
+/// Why a trace that has errors shows no spans.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Notice {
+    /// Its errors are older than the trace retention, in days.
+    Expired(u32),
+    Missing,
+}
+
+/// Only fires when no project on the trace reported spans or transactions, so
+/// a `?projects=` filter alone never triggers it. `traces_days` of `None` is
+/// keep-forever, which leaves `Missing` as the only explanation.
+pub(crate) fn trace_notice(view: &TraceView, traces_days: Option<u32>, now: i64) -> Option<Notice> {
+    if view.span_total != 0 || !view.legend.is_empty() {
+        return None;
+    }
+    let oldest = view.errors.iter().map(|e| e.err.timestamp).min()?;
+    match traces_days {
+        Some(d) if oldest < now - i64::from(d) * 86_400 => Some(Notice::Expired(d)),
+        _ => Some(Notice::Missing),
+    }
+}
+
 /// The org-level trace page: every project the caller can read, on one
 /// waterfall. No project selector — the scope is who the caller is.
 pub async fn org_trace_detail_handler(
     active: ActiveOrg,
+    State(state): State<AppState>,
     ReadPool(pool): ReadPool,
     Chrome(chrome): Chrome,
     Path(trace_id): Path<String>,
@@ -397,11 +423,21 @@ pub async fn org_trace_detail_handler(
     if view.span_total == 0 && view.legend.is_empty() && view.errors.is_empty() {
         return Err(not_found());
     }
+    let notice = trace_notice(
+        &view,
+        state.config.storage.resolved_retention().traces,
+        chrono::Utc::now().timestamp(),
+    )
+    .map(|n| match n {
+        Notice::Expired(d) => chrome.tv_count("trace-detail-data-expired", i64::from(d)),
+        Notice::Missing => chrome.t("trace-detail-data-missing"),
+    });
 
     let tmpl = OrgTraceDetailTemplate {
         trace_id,
         filtered: filter.is_some(),
         view,
+        notice,
         chrome,
     };
     Ok(render_template(&tmpl))
@@ -526,9 +562,21 @@ mod tests {
         trace_id: &str,
         projects: Option<&str>,
     ) -> Result<axum::response::Response, HtmlError> {
+        let (state, _chans) = AppState::for_test(pool.clone());
+        org_page_with(state, active, trace_id, projects).await
+    }
+
+    async fn org_page_with(
+        state: AppState,
+        active: ActiveOrg,
+        trace_id: &str,
+        projects: Option<&str>,
+    ) -> Result<axum::response::Response, HtmlError> {
+        let pool = state.pool.clone();
         org_trace_detail_handler(
             active,
-            ReadPool(pool.clone()),
+            State(state),
+            ReadPool(pool),
             chrome(),
             Path(trace_id.to_string()),
             Query(TraceViewParams {
@@ -738,5 +786,116 @@ mod tests {
         assert!(org_page(&pool, member_of(&[21]), foreign_only, None)
             .await
             .is_ok());
+    }
+
+    const DAY: i64 = 86_400;
+    const NOW: i64 = 1_800_000_000;
+
+    fn view_with(span_total: usize, error_ts: &[i64]) -> TraceView {
+        TraceView {
+            waterfall: Waterfall::default(),
+            rows: Vec::new(),
+            errors: error_ts
+                .iter()
+                .map(|&timestamp| TraceErrorRow {
+                    err: TraceError {
+                        event_id: "e".into(),
+                        project_id: 10,
+                        title: None,
+                        level: None,
+                        timestamp,
+                        span_id: None,
+                    },
+                    project_label: "kyc".into(),
+                    color: PROJECT_COLORS[0],
+                })
+                .collect(),
+            legend: Vec::new(),
+            span_total,
+            span_shown: span_total,
+        }
+    }
+
+    #[test]
+    fn trace_notice_expired_when_the_oldest_error_predates_retention() {
+        let view = view_with(0, &[NOW - DAY, NOW - 20 * DAY]);
+        assert_eq!(
+            trace_notice(&view, Some(14), NOW),
+            Some(Notice::Expired(14))
+        );
+    }
+
+    #[test]
+    fn trace_notice_missing_when_errors_are_within_retention() {
+        let view = view_with(0, &[NOW - DAY, NOW - 3 * DAY]);
+        assert_eq!(trace_notice(&view, Some(14), NOW), Some(Notice::Missing));
+    }
+
+    #[test]
+    fn trace_notice_missing_when_traces_are_kept_forever() {
+        let view = view_with(0, &[NOW - 1000 * DAY]);
+        assert_eq!(trace_notice(&view, None, NOW), Some(Notice::Missing));
+    }
+
+    #[test]
+    fn trace_notice_none_when_spans_or_a_legend_are_present() {
+        assert_eq!(
+            trace_notice(&view_with(3, &[NOW - 20 * DAY]), Some(14), NOW),
+            None
+        );
+
+        let mut view = view_with(0, &[NOW - 20 * DAY]);
+        view.legend.push(LegendEntry {
+            project_id: 10,
+            label: "kyc".into(),
+            org_name: None,
+            color: PROJECT_COLORS[0],
+            transaction_count: 1,
+            selected: false,
+            toggle_qs: String::new(),
+        });
+        assert_eq!(
+            trace_notice(&view, Some(14), NOW),
+            None,
+            "filtered out, not missing"
+        );
+
+        assert_eq!(trace_notice(&view_with(0, &[]), Some(14), NOW), None);
+    }
+
+    #[tokio::test]
+    async fn an_errors_only_trace_past_retention_shows_the_expired_notice() {
+        let pool = seeded().await;
+        let errors_only = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+        sqlx::query(crate::db::sql!(
+            "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp,
+                                 title, level, trace_id)
+             VALUES ('old', 'event', ?1, 10, 'k', 1700000000, 'StaleError', 'error', ?2)"
+        ))
+        .bind(zstd::encode_all([0u8; 0].as_slice(), 3).unwrap())
+        .bind(errors_only)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let (mut state, _chans) = AppState::for_test(pool.clone());
+        let mut config = crate::config::Config::default();
+        config.storage.retention.traces = Some(14);
+        state.config = std::sync::Arc::new(config);
+
+        let html = body(
+            org_page_with(state, member_of(&[20]), errors_only, None)
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert!(
+            html.contains("Trace data for this trace has expired. Traces are kept for 14 days.")
+        );
+        assert!(!html.contains("No spans found for this trace."));
+        assert!(
+            html.contains("StaleError"),
+            "the errors panel still renders"
+        );
     }
 }

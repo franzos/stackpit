@@ -1062,6 +1062,7 @@ const PROJECT_SCOPED_TABLES: &[&str] = &[
     "replay_metadata",
     "integration_exclusions",
     "notification_delivery_queue",
+    "project_retention",
 ];
 
 /// Delete a project and all it owns, reusing the caller's transaction.
@@ -2071,6 +2072,12 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO project_retention (project_id, category, days) VALUES (77, 'logs', 7)"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
 
         delete_project(&pool, 77).await.unwrap();
 
@@ -2082,6 +2089,7 @@ mod tests {
             "metrics",
             "issues",
             "project_keys",
+            "project_retention",
             "projects",
         ] {
             let n: i64 =

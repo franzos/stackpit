@@ -55,5 +55,14 @@
     </div>
   {% endif %}
 
+  {% match notice %}
+  {% when Some with (n) %}
+  <div class="card card-pad mb-4 border-warning/40"
+       style="border-color: var(--color-tertiary)">
+    <p class="text-[13px]">{{ n }}</p>
+  </div>
+  {% when None %}
+  {% endmatch %}
+
   {% include "_trace_waterfall_body.html" %}
 {% endblock %}

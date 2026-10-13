@@ -44,6 +44,9 @@ flash-repo-added = Repository added
 flash-repo-removed = Repository removed
 flash-project-archived = Project archived
 flash-project-unarchived = Project unarchived
+flash-retention-saved = Retention settings saved
+flash-retention-invalid = Retention must be a whole number of days from 1 to { $max }
+flash-retention-not-shorter = A project override must be shorter than the server retention
 flash-key-created = Key created
 flash-key-deleted = Key deleted
 

@@ -177,6 +177,10 @@ pub fn routes() -> Router<AppState> {
             post(project_settings::delete_repo),
         )
         .route(
+            "/web/projects/{project_id}/settings/retention",
+            post(project_settings::set_retention),
+        )
+        .route(
             "/web/projects/{project_id}/settings/keys/",
             get(project_settings::keys_handler),
         )

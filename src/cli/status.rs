@@ -1,4 +1,4 @@
-use crate::config::Config;
+use crate::config::{Category, Config};
 use crate::db;
 use anyhow::Result;
 use secrecy::ExposeSecret;
@@ -106,10 +106,26 @@ pub async fn run(config: &Config) -> Result<()> {
         }
     }
 
+    let pool = db::create_pool(&database_url).await;
+
+    let retention = config.storage.resolved_retention();
     if config.storage.retention_days > 0 {
         println!("    Retention       {} days", config.storage.retention_days);
     } else {
         println!("    Retention       \x1b[33mforever\x1b[0m \x1b[2m(retention_days = 0)\x1b[0m");
+    }
+    for cat in Category::ALL {
+        println!(
+            "      {:<14}{}",
+            cat.as_str(),
+            format_retention(retention.days(cat))
+        );
+    }
+    // Missing on a database that predates the project_retention migration.
+    if let Ok(p) = &pool {
+        if let Ok(n) = crate::queries::retention::count_projects_with_overrides(p).await {
+            println!("    Overrides       {n} project(s)");
+        }
     }
 
     println!();
@@ -147,7 +163,7 @@ pub async fn run(config: &Config) -> Result<()> {
         );
     }
 
-    let pool = match db::create_pool(&database_url).await {
+    let pool = match pool {
         Ok(p) => p,
         Err(e) => {
             println!();
@@ -254,6 +270,13 @@ pub async fn run(config: &Config) -> Result<()> {
     println!();
 
     Ok(())
+}
+
+fn format_retention(days: Option<u32>) -> String {
+    match days {
+        Some(d) => format!("{d} days"),
+        None => "\x1b[33mforever\x1b[0m".to_string(),
+    }
 }
 
 fn format_bytes(bytes: usize) -> String {

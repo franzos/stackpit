@@ -96,4 +96,8 @@ trace-detail-filter-clear = แสดงทั้งหมด
 trace-detail-col-project = โปรเจกต์
 trace-detail-parent-not-in-view = ไม่พบสแปนหลักในมุมมองนี้
 trace-detail-txn-badge = ทรานแซกชัน
+trace-detail-data-expired = { $count ->
+   *[other] ข้อมูลของเทรซนี้หมดอายุแล้ว ระบบเก็บเทรซไว้ { $count } วัน
+}
+trace-detail-data-missing = ไม่มีข้อมูลเทรซที่จัดเก็บไว้สำหรับเทรซนี้ มีเพียงข้อผิดพลาดของเทรซนี้เท่านั้น
 trace-detail-view-events = เหตุการณ์ทั้งหมดในเทรซนี้

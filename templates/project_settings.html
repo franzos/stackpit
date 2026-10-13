@@ -233,6 +233,62 @@
   </form>
 </div>
 
+{% if let Some(retention) = retention %}
+  <div class="card max-w-3xl">
+    <div class="card-header">
+      <span>{{ chrome.t("projects-retention-heading") }}</span>
+    </div>
+    <form method="post"
+          action="/web/projects/{{ project_id }}/settings/retention">
+      <input type="hidden" name="csrf_token" value="{{ chrome.csrf_token }}">
+      <div class="p-4 space-y-3">
+        <p class="text-muted text-[13px]">{{ chrome.t("projects-retention-help") }}</p>
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>{{ chrome.t("projects-retention-col-category") }}</th>
+                <th>{{ chrome.t("projects-retention-col-server") }}</th>
+                <th>{{ chrome.t("projects-retention-col-override") }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in retention.rows %}
+                <tr>
+                  <th>
+                    <label for="retention_{{ row.field }}">{{ row.label }}</label>
+                  </th>
+                  <td>
+                    {% match row.server_days %}{% when Some with (d) %}{{ d }}{% when None %}{{ chrome.t("projects-retention-forever") }}{% endmatch %}
+                  </td>
+                  <td>
+                    <input class="input w-auto inline-block"
+                           type="number"
+                           id="retention_{{ row.field }}"
+                           name="{{ row.field }}"
+                           min="1"
+                           step="1"
+                           value="{% match row.override_days %}{% when Some with (d) %}{{ d }}{% when None %}{% endmatch %}"
+                           placeholder="{% match row.server_days %}{% when Some with (d) %}{{ d }}{% when None %}{{ chrome.t("projects-retention-forever") }}{% endmatch %}"
+                           {% if row.disabled %}disabled{% endif %}>
+                    {% if row.stale %}<p class="text-muted text-[12px] mt-1">{{ chrome.t("projects-retention-stale") }}</p>{% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <p class="text-[13px]">{{ chrome.t("projects-retention-warning") }}</p>
+        <div>
+          <button type="submit"
+                  class="btn btn-primary"
+                  data-confirm="{{ chrome.t("projects-retention-confirm") }}">{{ chrome.t("projects-retention-submit") }}</button>
+        </div>
+      </div>
+    </form>
+  </div>
+{% endif %}
+
 <div class="card border-error/40 max-w-3xl">
   <div class="card-header" style="color: var(--color-error);">
     <span>{{ chrome.t("projects-danger-heading") }}</span>

@@ -40,6 +40,9 @@ flash-repo-added = تمت إضافة المستودع
 flash-repo-removed = تمت إزالة المستودع
 flash-project-archived = تمت أرشفة المشروع
 flash-project-unarchived = تم إلغاء أرشفة المشروع
+flash-retention-saved = تم حفظ إعدادات الاحتفاظ
+flash-retention-invalid = يجب أن تكون مدة الاحتفاظ عددًا صحيحًا من الأيام بين 1 و{ $max }
+flash-retention-not-shorter = يجب أن تكون قيمة المشروع أقصر من مدة الاحتفاظ على الخادم
 flash-key-created = تم إنشاء المفتاح
 flash-key-deleted = تم حذف المفتاح
 

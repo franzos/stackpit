@@ -1,9 +1,11 @@
-{# Waterfall body for the trace page. Expects `view` (TraceView) and `chrome`
-   on the including template. #}
+{# Waterfall body for the trace page. Expects `view` (TraceView), `notice`
+   and `chrome` on the including template. #}
 {% if view.rows.is_empty() %}
-  <div class="card">
-    <p class="empty">{{ chrome.t("trace-detail-empty") }}</p>
-  </div>
+  {% if notice.is_none() %}
+    <div class="card">
+      <p class="empty">{{ chrome.t("trace-detail-empty") }}</p>
+    </div>
+  {% endif %}
 {% else %}
   <div class="card card-pad">
     {# column header + time axis, aligned with the span rows below #}

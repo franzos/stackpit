@@ -38,6 +38,9 @@ flash-repo-added = Репозиторий добавлен
 flash-repo-removed = Репозиторий удалён
 flash-project-archived = Проект архивирован
 flash-project-unarchived = Проект разархивирован
+flash-retention-saved = Настройки хранения сохранены
+flash-retention-invalid = Срок хранения должен быть целым числом дней от 1 до { $max }
+flash-retention-not-shorter = Значение проекта должно быть короче срока хранения на сервере
 flash-key-created = Ключ создан
 flash-key-deleted = Ключ удалён
 

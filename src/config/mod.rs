@@ -4,8 +4,11 @@ use secrecy::SecretString;
 use serde::Deserialize;
 use std::path::Path;
 
+mod retention;
 pub(crate) mod url;
 mod validate;
+
+pub use retention::{Category, OverrideError, Resolved, RetentionConfig, MAX_OVERRIDE_DAYS};
 
 pub const DEFAULT_CONFIG_PATH: &str = "stackpit.toml";
 
@@ -103,6 +106,8 @@ pub struct StorageConfig {
     /// price of a bigger all-or-nothing failure unit.
     #[serde(default = "default_ingest_batch_size")]
     pub ingest_batch_size: u32,
+    #[serde(default)]
+    pub retention: RetentionConfig,
 }
 
 #[derive(Debug, Default, Clone, Copy, Deserialize, PartialEq, Eq)]
@@ -456,11 +461,26 @@ impl Default for StorageConfig {
             retention_days: DEFAULT_RETENTION_DAYS,
             ingest_writers: default_ingest_writers(),
             ingest_batch_size: default_ingest_batch_size(),
+            retention: RetentionConfig::default(),
         }
     }
 }
 
 impl StorageConfig {
+    /// Unset categories fall back to `retention_days`; 0 becomes `None` (forever).
+    pub fn resolved_retention(&self) -> Resolved {
+        let days = |v: Option<u32>| Some(v.unwrap_or(self.retention_days)).filter(|&d| d != 0);
+        let r = &self.retention;
+        Resolved {
+            base: days(None),
+            errors: days(r.errors),
+            traces: days(r.traces),
+            logs: days(r.logs),
+            metrics: days(r.metrics),
+            releases: days(r.releases),
+        }
+    }
+
     /// Resolve the database URL: `database_url` takes precedence, otherwise
     /// the `path` field is converted to a `sqlite:` URL.
     pub fn database_url(&self) -> String {
@@ -863,6 +883,80 @@ mod tests {
         assert_eq!(from_empty.filter.max_native_orgs_per_user, 10);
         assert_eq!(FilterConfig::default().max_projects, DEFAULT_MAX_PROJECTS);
         assert_eq!(Config::default().filter.max_projects, DEFAULT_MAX_PROJECTS);
+    }
+
+    #[test]
+    fn retention_defaults_hold_when_table_absent() {
+        let from_empty: Config = toml::from_str("").unwrap();
+        let only_storage: Config = toml::from_str("[storage]\npath = \"x.db\"\n").unwrap();
+        let missing_file = Config::load(Path::new("/nonexistent/stackpit.toml"), false).unwrap();
+        for cfg in [
+            &from_empty,
+            &only_storage,
+            &missing_file,
+            &Config::default(),
+        ] {
+            assert_eq!(cfg.storage.retention, RetentionConfig::default());
+            assert_eq!(cfg.storage.retention_days, DEFAULT_RETENTION_DAYS);
+            assert_eq!(DEFAULT_RETENTION_DAYS, 90);
+            assert_eq!(cfg.storage.resolved_retention(), Resolved::uniform(90));
+        }
+    }
+
+    #[test]
+    fn retention_partial_table_falls_back_to_retention_days() {
+        let cfg: Config = toml::from_str(
+            r"
+            [storage]
+            retention_days = 60
+
+            [storage.retention]
+            traces = 14
+            metrics = 0
+            ",
+        )
+        .unwrap();
+        let r = cfg.storage.resolved_retention();
+        assert_eq!(r.base, Some(60));
+        assert_eq!(r.errors, Some(60));
+        assert_eq!(r.traces, Some(14));
+        assert_eq!(r.logs, Some(60));
+        assert_eq!(r.metrics, None);
+        assert_eq!(r.releases, Some(60));
+        assert!(!r.events_uniform());
+    }
+
+    #[test]
+    fn retention_only_retention_days_is_events_uniform() {
+        let cfg: Config = toml::from_str("[storage]\nretention_days = 30\n").unwrap();
+        let r = cfg.storage.resolved_retention();
+        assert_eq!(r, Resolved::uniform(30));
+        assert!(r.events_uniform());
+    }
+
+    #[test]
+    fn retention_days_zero_resolves_unset_to_forever() {
+        let cfg: Config = toml::from_str(
+            r"
+            [storage]
+            retention_days = 0
+
+            [storage.retention]
+            errors = 365
+            ",
+        )
+        .unwrap();
+        let r = cfg.storage.resolved_retention();
+        assert_eq!(r.base, None);
+        assert_eq!(r.errors, Some(365));
+        assert_eq!(r.traces, None);
+        assert_eq!(r.releases, None);
+    }
+
+    #[test]
+    fn retention_rejects_negative_days() {
+        let res: Result<Config, _> = toml::from_str("[storage.retention]\nerrors = -1\n");
+        assert!(res.is_err());
     }
 
     use polymail::provider::smtp::SmtpTls;

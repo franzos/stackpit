@@ -193,6 +193,169 @@ pub(crate) mod test_helpers {
         .await
         .unwrap();
     }
+
+    /// Inserts an `events` row of `item_type` with independent clocks.
+    pub async fn insert_typed_event(
+        pool: &DbPool,
+        event_id: &str,
+        project_id: i64,
+        item_type: crate::ingest::models::ItemType,
+        timestamp: i64,
+        received_at: i64,
+        fingerprint: Option<&str>,
+    ) {
+        sqlx::query(sql!(
+            "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, received_at, fingerprint)
+             VALUES (?1, ?2, ?3, ?4, 'testkey', ?5, ?6, ?7)",
+        ))
+        .bind(event_id)
+        .bind(item_type.as_str())
+        .bind(&[0u8] as &[u8])
+        .bind(project_id)
+        .bind(timestamp)
+        .bind(received_at)
+        .bind(fingerprint)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    pub async fn insert_test_span(
+        pool: &DbPool,
+        span_id: &str,
+        project_id: i64,
+        timestamp: i64,
+        received_at: i64,
+    ) {
+        sqlx::query(sql!(
+            "INSERT INTO spans (span_id, payload, project_id, public_key, timestamp, received_at)
+             VALUES (?1, ?2, ?3, 'testkey', ?4, ?5)",
+        ))
+        .bind(span_id)
+        .bind(&[0u8] as &[u8])
+        .bind(project_id)
+        .bind(timestamp)
+        .bind(received_at)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    pub async fn insert_test_log(pool: &DbPool, project_id: i64, timestamp: i64, received_at: i64) {
+        sqlx::query(sql!(
+            "INSERT INTO logs (payload, project_id, public_key, timestamp, received_at)
+             VALUES (?1, ?2, 'testkey', ?3, ?4)",
+        ))
+        .bind(&[0u8] as &[u8])
+        .bind(project_id)
+        .bind(timestamp)
+        .bind(received_at)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    pub async fn insert_test_metric(
+        pool: &DbPool,
+        project_id: i64,
+        timestamp: i64,
+        received_at: i64,
+    ) {
+        sqlx::query(sql!(
+            "INSERT INTO metrics (project_id, timestamp, received_at, mri, metric_type)
+             VALUES (?1, ?2, ?3, 'c:test@none', 'c')",
+        ))
+        .bind(project_id)
+        .bind(timestamp)
+        .bind(received_at)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// Inserts an hourly rollup row; `first_seen` equals `last_seen`.
+    pub async fn insert_test_transaction_metric(
+        pool: &DbPool,
+        project_id: i64,
+        transaction_name: &str,
+        hour_bucket: i64,
+        last_seen: i64,
+    ) {
+        sqlx::query(sql!(
+            "INSERT INTO transaction_metrics (project_id, transaction_name, hour_bucket, count, first_seen, last_seen)
+             VALUES (?1, ?2, ?3, 1, ?4, ?4)",
+        ))
+        .bind(project_id)
+        .bind(transaction_name)
+        .bind(hour_bucket)
+        .bind(last_seen)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    pub async fn insert_test_session_aggregate(
+        pool: &DbPool,
+        project_id: i64,
+        release: &str,
+        day_bucket: i64,
+    ) {
+        sqlx::query(sql!(
+            "INSERT INTO session_aggregates (project_id, release, environment, day_bucket, sessions_total, first_seen, last_seen)
+             VALUES (?1, ?2, 'production', ?3, 1, ?3, ?3)",
+        ))
+        .bind(project_id)
+        .bind(release)
+        .bind(day_bucket)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    pub async fn insert_test_release(
+        pool: &DbPool,
+        project_id: i64,
+        version: &str,
+        commit_sha: Option<&str>,
+        date_released: Option<i64>,
+        last_event: Option<i64>,
+        created_at: i64,
+    ) {
+        sqlx::query(sql!(
+            "INSERT INTO releases (project_id, version, commit_sha, date_released, last_event, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        ))
+        .bind(project_id)
+        .bind(version)
+        .bind(commit_sha)
+        .bind(date_released)
+        .bind(last_event)
+        .bind(created_at)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// `date` is `%Y-%m-%d`.
+    pub async fn insert_test_discard_stat(pool: &DbPool, project_id: u64, date: &str) {
+        crate::queries::filters::upsert_discard_stats(
+            pool,
+            project_id,
+            "rate_limit",
+            None,
+            date,
+            1,
+        )
+        .await
+        .unwrap();
+    }
+
+    pub async fn count_rows(pool: &DbPool, table: &'static str) -> i64 {
+        sqlx::query_scalar(db::dyn_sql(&format!("SELECT COUNT(*) FROM {table}")))
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
 }
 
 #[cfg(test)]

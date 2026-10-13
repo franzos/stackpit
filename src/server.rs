@@ -333,7 +333,7 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
     let bg_cancel = CancellationToken::new();
     crate::background::spawn_retention_task(
         bg_writer_pool.clone(),
-        config.storage.retention_days,
+        config.storage.resolved_retention(),
         bg_cancel.child_token(),
     );
     crate::background::spawn_discard_stats_task(

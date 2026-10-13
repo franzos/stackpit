@@ -21,7 +21,16 @@ admin_token = "__ADMIN_TOKEN__"
 
 [storage]
 path = "stackpit.db"
-retention_days = 90
+retention_days = 90   # fallback for every unset category below; 0 = forever
+
+# Per-category retention in days (0 = forever); unset keys use retention_days.
+# Traces are usually the bulk of the database. Recommended:
+# [storage.retention]
+# errors   = 365   # error events, user reports, attachments; sourcemaps follow this
+# traces   = 30    # transactions, profiles, spans
+# logs     = 30
+# metrics  = 365   # metrics and hourly transaction rollups
+# releases = 365   # auto-created releases nothing references any more
 
 [filter]
 mode = "open"
@@ -156,5 +165,37 @@ mod tests {
         );
 
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn template_parses_with_retention_block_commented_out() {
+        let cfg: crate::config::Config = toml::from_str(CONFIG_TEMPLATE).expect("template parses");
+        assert_eq!(cfg.storage.retention_days, 90);
+        assert_eq!(
+            cfg.storage.retention,
+            crate::config::RetentionConfig::default()
+        );
+    }
+
+    #[test]
+    fn template_retention_block_parses_when_uncommented() {
+        let uncommented = CONFIG_TEMPLATE
+            .replace("\n# [storage.retention]", "\n[storage.retention]")
+            .replace("\n# errors ", "\nerrors ")
+            .replace("\n# traces ", "\ntraces ")
+            .replace("\n# logs ", "\nlogs ")
+            .replace("\n# metrics ", "\nmetrics ")
+            .replace("\n# releases ", "\nreleases ");
+        let cfg: crate::config::Config = toml::from_str(&uncommented).expect("template parses");
+        assert_eq!(
+            cfg.storage.retention,
+            crate::config::RetentionConfig {
+                errors: Some(365),
+                traces: Some(30),
+                logs: Some(30),
+                metrics: Some(365),
+                releases: Some(365),
+            }
+        );
     }
 }

@@ -102,4 +102,9 @@ trace-detail-filter-clear = Mostrar todo
 trace-detail-col-project = Proyecto
 trace-detail-parent-not-in-view = Span padre fuera de la vista
 trace-detail-txn-badge = Transacción
+trace-detail-data-expired = { $count ->
+    [one] Los datos de esta traza han caducado. Las trazas se conservan { $count } día.
+   *[other] Los datos de esta traza han caducado. Las trazas se conservan { $count } días.
+}
+trace-detail-data-missing = No hay datos de traza almacenados para esta traza. Solo están disponibles sus errores.
 trace-detail-view-events = Todos los eventos de esta traza

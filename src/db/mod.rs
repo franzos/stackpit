@@ -280,7 +280,8 @@ mod rewrite_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::queries::retention::delete_old_events;
+    use crate::config::Resolved;
+    use crate::queries::retention::run_sweep;
 
     async fn setup() -> DbPool {
         open_test_pool().await
@@ -345,6 +346,7 @@ mod tests {
         "session_aggregates",
         "organization_members",
         "invites",
+        "project_retention",
     ];
 
     #[cfg(feature = "sqlite")]
@@ -385,7 +387,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_old_events_removes_expired() {
+    async fn run_sweep_removes_expired() {
         let pool = setup().await;
         let now = chrono::Utc::now().timestamp();
         let old = now - 100 * 86400;
@@ -399,7 +401,7 @@ mod tests {
         .unwrap();
         insert_test_event(&pool, "new", 1, now).await;
 
-        let deleted = delete_old_events(&pool, 90).await.unwrap();
+        let deleted = run_sweep(&pool, &Resolved::uniform(90)).await.unwrap();
         assert_eq!(deleted, 1);
 
         assert!(get_event(&pool, "old").await.unwrap().is_none());
@@ -460,7 +462,7 @@ mod tests {
         insert_event_with_fingerprint(&pool, "e3", 1, "fp-a", now).await;
         insert_issue(&pool, "fp-a", 1, 3, old, now).await;
 
-        let deleted = delete_old_events(&pool, 90).await.unwrap();
+        let deleted = run_sweep(&pool, &Resolved::uniform(90)).await.unwrap();
         assert_eq!(deleted, 2);
 
         let row: (i64,) =
@@ -480,7 +482,7 @@ mod tests {
         insert_event_with_fingerprint(&pool, "e1", 1, "fp-orphan", old).await;
         insert_issue(&pool, "fp-orphan", 1, 1, old, old).await;
 
-        let deleted = delete_old_events(&pool, 90).await.unwrap();
+        let deleted = run_sweep(&pool, &Resolved::uniform(90)).await.unwrap();
         assert_eq!(deleted, 1);
 
         assert!(get_event(&pool, "e1").await.unwrap().is_none());
@@ -506,7 +508,7 @@ mod tests {
         insert_event_with_fingerprint(&pool, "b2", 1, "fp-fresh", now).await;
         insert_issue(&pool, "fp-fresh", 1, 2, now, now).await;
 
-        let deleted = delete_old_events(&pool, 90).await.unwrap();
+        let deleted = run_sweep(&pool, &Resolved::uniform(90)).await.unwrap();
         assert_eq!(deleted, 2);
 
         let row: (i64,) =

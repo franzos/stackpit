@@ -32,6 +32,7 @@ fn is_public_path(path: &str) -> bool {
     path == "/web/login"
         || path == "/health"
         || path == "/metrics"
+        || path == "/favicon.ico"
         || path.starts_with("/web/_assets/")
         || path.starts_with("/web/lang/")
         || path == "/web/auth/login"

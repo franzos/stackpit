@@ -177,6 +177,7 @@ async fn ingest_landing() -> axum::response::Html<&'static str> {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Stackpit — Ingest</title>
+<link rel="icon" type="image/png" href="/favicon.ico">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -559,6 +560,7 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
 
     let ingest_router = Router::new()
         .route("/", get(ingest_landing))
+        .route("/favicon.ico", get(html::favicon))
         .route("/health", get(ingest_health_handler))
         .with_state(state.clone())
         .merge(cors_scoped)
@@ -935,6 +937,26 @@ mod tests {
         assert!(
             html.contains("/web/_assets/style.css"),
             "expected styled shell, got: {html}"
+        );
+    }
+
+    #[tokio::test]
+    async fn favicon_is_served_at_the_root() {
+        let app =
+            Router::<()>::new().route("/favicon.ico", axum::routing::get(crate::html::favicon));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/favicon.ico")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers().get(header::CONTENT_TYPE).unwrap(),
+            "image/png"
         );
     }
 

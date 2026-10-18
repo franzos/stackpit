@@ -488,11 +488,17 @@ pub fn routes() -> Router<AppState> {
 
     // Assets get their own router so compression reaches them and nothing else:
     // pages echo the search query alongside the CSRF token (BREACH).
-    let mut assets = Router::new();
+    let mut assets = Router::new().route("/favicon.ico", get(favicon));
     for asset in ASSET_TABLE {
         assets = assets.route(asset.path, get(move || async move { serve_asset(asset) }));
     }
     router.merge(assets.layer(asset_compression()))
+}
+
+/// Site icon at the conventional root path, so clients that only look at the
+/// host (MCP connectors, bookmarks) find it on either listener.
+pub async fn favicon() -> impl IntoResponse {
+    serve_asset(&ICON)
 }
 
 /// woff2 and png are already compressed; re-encoding them only burns CPU.
@@ -571,17 +577,19 @@ pub fn current_year() -> i32 {
 const CACHE_IMMUTABLE: &str = "public, max-age=31536000, immutable";
 const JS_CONTENT_TYPE: &str = "application/javascript; charset=utf-8";
 
+const ICON: Asset = Asset {
+    path: "/web/_assets/icon.png",
+    content_type: "image/png",
+    body: include_bytes!("../../assets/icon.png"),
+};
+
 static ASSET_TABLE: &[Asset] = &[
     Asset {
         path: "/web/_assets/style.css",
         content_type: "text/css",
         body: include_bytes!("../../templates/style.css"),
     },
-    Asset {
-        path: "/web/_assets/icon.png",
-        content_type: "image/png",
-        body: include_bytes!("../../assets/icon.png"),
-    },
+    ICON,
     Asset {
         path: "/web/_assets/bulk.js",
         content_type: JS_CONTENT_TYPE,

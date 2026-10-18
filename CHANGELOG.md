@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.4.12] - 2026-10-18
+
+### Security
+- `zip` 9 for RUSTSEC-2026-0367, 0368, 0369
+- `rustls` 0.23.46 for RUSTSEC-2026-0346 to 0349
+
 ## [0.4.11] - 2026-10-18
 
 ### Fixed

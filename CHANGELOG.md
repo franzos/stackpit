@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.4.11] - 2026-10-18
+
+### Fixed
+- Site icon served at `/favicon.ico` so MCP connectors pick it up
+
 ## [0.4.10] - 2026-10-13
 
 ### Added

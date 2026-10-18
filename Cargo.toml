@@ -96,7 +96,7 @@ subtle = "2"
 secrecy = { version = "0.10", features = ["serde"] }
 zeroize = "1"
 sourcemap = "9"
-zip = { version = "8", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 # OAuth/OIDC relying party: discovery, JWKS, auth-code + PKCE, ID-token and
 # logout-token validation, end-session and revocation. The post-callback
 # session is the BFF token vault in the `oidc_grants` table (see src/oidc/).

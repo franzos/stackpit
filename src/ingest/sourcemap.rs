@@ -202,7 +202,10 @@ fn scan_for_sourcemaps(
     let mut total_bytes: usize = 0;
     let mut entries = Vec::new();
     let names: Vec<String> = (0..archive.len())
-        .filter_map(|i| archive.by_index(i).ok().map(|f| f.name().to_string()))
+        .filter_map(|i| {
+            let file = archive.by_index(i).ok()?;
+            file.name().ok().map(|n| n.into_owned())
+        })
         .collect();
 
     for name in &names {

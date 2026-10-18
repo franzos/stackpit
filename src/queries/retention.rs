@@ -1681,13 +1681,24 @@ mod tests {
         #[cfg(not(feature = "sqlite"))]
         let (explain, detail_col) = ("EXPLAIN", 0);
 
+        let mut tx = pool.begin().await.unwrap();
+        // On near-empty tables Postgres picks a seq scan regardless of indexes; disabling it
+        // makes the plan show whether a usable index exists at all.
+        #[cfg(not(feature = "sqlite"))]
+        for set in [
+            "SET LOCAL enable_seqscan = off",
+            "SET LOCAL enable_sort = off",
+        ] {
+            sqlx::query(set).execute(&mut *tx).await.unwrap();
+        }
+
         let mut plans = Vec::new();
         for select in override_selects() {
             let rows = sqlx::query(dyn_sql(&format!("{explain} {select}")))
                 .bind(cutoff)
                 .bind(CHUNK_LIMIT)
                 .bind(1i64)
-                .fetch_all(pool)
+                .fetch_all(&mut *tx)
                 .await
                 .unwrap();
             let plan = rows
@@ -1725,7 +1736,7 @@ mod tests {
                     && !plan.iter().any(|d| d.contains("TEMP B-TREE")),
                 "{select}: {plan:?}"
             );
-            // Postgres planner choice varies with stats; only rule out the full scan and the sort.
+            // Postgres may pick any project index; only rule out the full scan and the sort.
             #[cfg(not(feature = "sqlite"))]
             {
                 let _ = index;

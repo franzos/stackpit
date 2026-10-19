@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.4.13] - 2026-10-19
+
+### Added
+- OpenSSF Scorecard badge and security policy
+- Weekly fuzzing of the ingest parsers, `make fuzz` for local runs
+
 ## [0.4.12] - 2026-10-18
 
 ### Security

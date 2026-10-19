@@ -7,6 +7,7 @@
 
   [![CI](https://github.com/franzos/stackpit/actions/workflows/ci.yml/badge.svg)](https://github.com/franzos/stackpit/actions/workflows/ci.yml)
   [![Release](https://github.com/franzos/stackpit/actions/workflows/release.yml/badge.svg)](https://github.com/franzos/stackpit/actions/workflows/release.yml)
+  [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/franzos/stackpit/badge)](https://scorecard.dev/viewer/?uri=github.com/franzos/stackpit)
   [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
   [![Container](https://img.shields.io/badge/ghcr.io-stackpit-097aba?logo=docker&logoColor=white)](https://github.com/franzos/stackpit/pkgs/container/stackpit)
 

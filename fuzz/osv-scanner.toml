@@ -1,0 +1,5 @@
+# Accepted advisories with no fixed release; mirrors the ignore list in deny.toml.
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2023-0071"
+reason = "rsa via openidconnect: Marvin attack targets RSA decryption; Stackpit only verifies RS256 signatures with public keys"

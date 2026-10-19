@@ -7,12 +7,14 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   build:
     name: build + push (${{ matrix.backend }})
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     strategy:
       matrix:
         include:

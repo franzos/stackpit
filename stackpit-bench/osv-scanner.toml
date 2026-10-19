@@ -1,0 +1,5 @@
+# Accepted advisories with no fixed release.
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0192"
+reason = "ttf-parser via charts-rs is flagged unmaintained, not vulnerable; it only reads the fonts charts-rs bundles"

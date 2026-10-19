@@ -30,7 +30,7 @@ static SUPPORTED_LANGS: LazyLock<Vec<LanguageIdentifier>> = LazyLock::new(|| {
         .collect()
 });
 
-pub(crate) fn default_locale() -> LanguageIdentifier {
+pub fn default_locale() -> LanguageIdentifier {
     langid!("en")
 }
 
@@ -52,7 +52,7 @@ pub(crate) fn negotiate(requested: &[LanguageIdentifier]) -> LanguageIdentifier 
 
 /// The single validating parser: accept a tag only if it negotiates to a
 /// SUPPORTED locale. Reused by query, cookie, and the OIDC locale claim.
-pub(crate) fn accept(value: &str) -> Option<LanguageIdentifier> {
+pub fn accept(value: &str) -> Option<LanguageIdentifier> {
     let parsed: LanguageIdentifier = value.parse().ok()?;
     if LOCALES
         .iter()
@@ -64,7 +64,7 @@ pub(crate) fn accept(value: &str) -> Option<LanguageIdentifier> {
     }
 }
 
-pub(crate) fn from_accept_language(header: Option<&str>) -> LanguageIdentifier {
+pub fn from_accept_language(header: Option<&str>) -> LanguageIdentifier {
     let Some(raw) = header else {
         return default_locale();
     };

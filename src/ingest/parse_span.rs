@@ -31,7 +31,7 @@ pub(crate) const MAX_EMBEDDED_SPANS: usize = 1000;
 
 /// Pull child spans out of an already-parsed transaction payload (capped).
 /// Spans without a `span_id` are skipped: they can't be deduplicated.
-pub(crate) fn extract_embedded_spans_from_value(json: &Value) -> Vec<EmbeddedSpan> {
+pub fn extract_embedded_spans_from_value(json: &Value) -> Vec<EmbeddedSpan> {
     let Some(spans) = json.get("spans").and_then(|s| s.as_array()) else {
         return Vec::new();
     };
@@ -72,7 +72,7 @@ fn span_status_from_code(code: u64) -> String {
 }
 
 /// Decode a (possibly zstd-compressed) span payload and extract its fields.
-pub(crate) fn extract_span_fields(payload: &[u8]) -> SpanFields {
+pub fn extract_span_fields(payload: &[u8]) -> SpanFields {
     let json: Option<Value> = zstd::decode_all(payload)
         .ok()
         .or_else(|| Some(payload.to_vec()))

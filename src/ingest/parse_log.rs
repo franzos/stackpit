@@ -21,7 +21,7 @@ pub struct ParsedLogEntry {
     pub fields: LogFields,
 }
 
-pub(crate) fn parse_log_entry(v: &serde_json::Value) -> ParsedLogEntry {
+pub fn parse_log_entry(v: &serde_json::Value) -> ParsedLogEntry {
     ParsedLogEntry {
         payload: serde_json::to_vec(v).unwrap_or_default(),
         compressed: false,
@@ -82,7 +82,7 @@ pub(crate) fn extract_log_fields(v: &serde_json::Value) -> LogFields {
     }
 }
 
-pub(crate) fn parse_log_entries(payload: &[u8]) -> Vec<serde_json::Value> {
+pub fn parse_log_entries(payload: &[u8]) -> Vec<serde_json::Value> {
     let json: Option<serde_json::Value> = zstd::decode_all(std::io::Cursor::new(payload))
         .ok()
         .or_else(|| Some(payload.to_vec()))
@@ -95,7 +95,7 @@ pub(crate) fn parse_log_entries(payload: &[u8]) -> Vec<serde_json::Value> {
 
 /// Split an already-parsed log payload into its entries: a bare array or a
 /// Sentry SDK `{"items": [...]}` batch; anything else is one entry.
-pub(crate) fn log_entries_from_value(json: serde_json::Value) -> Vec<serde_json::Value> {
+pub fn log_entries_from_value(json: serde_json::Value) -> Vec<serde_json::Value> {
     use serde_json::Value;
     match json {
         Value::Array(mut arr) => {

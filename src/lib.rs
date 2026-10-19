@@ -9,6 +9,7 @@ pub(crate) mod endpoints;
 pub(crate) mod extractors;
 pub(crate) mod filter;
 pub(crate) mod forge;
+pub mod fuzz_api;
 pub(crate) mod html;
 pub(crate) mod i18n;
 pub mod ingest;

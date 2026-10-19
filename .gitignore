@@ -24,3 +24,9 @@ __pycache__/
 
 # mdBook build output
 docs/book/
+
+# cargo-fuzz build tree, corpora, and crash artifacts
+fuzz/target/
+fuzz/corpus/
+fuzz/artifacts/
+fuzz/coverage/

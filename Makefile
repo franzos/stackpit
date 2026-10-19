@@ -13,7 +13,7 @@ SEED_WORKERS ?= 8
 DB          := stackpit.db
 LOG         := /tmp/stackpit.log
 
-.PHONY: check clippy test check-pg clippy-pg test-pg fmt build css css-watch \
+.PHONY: check clippy test fuzz check-pg clippy-pg test-pg fmt build css css-watch \
         serve-bg kill seed test-integration e2e e2e-trace help
 
 # Tailwind v4 standalone CLI. The binary is dynamically linked against glibc +
@@ -134,3 +134,12 @@ e2e-trace: ## Open the Playwright HTML report from the last run
 	  -w /work \
 	  $(PLAYWRIGHT_IMAGE) \
 	  bash -c "npx playwright show-report --host 0.0.0.0"
+
+# cargo-fuzz needs nightly, which Guix doesn't ship; run it in a container.
+# FUZZ_SECS bounds the run; TARGET is any name under fuzz/fuzz_targets.
+FUZZ_IMAGE ?= docker.io/rustlang/rust:nightly
+FUZZ_SECS  ?= 60
+TARGET     ?= envelope
+fuzz: ## Run one libFuzzer target in a nightly container (TARGET=... FUZZ_SECS=...)
+	podman run --rm -v $(CURDIR):/src:Z -w /src -e CARGO_HOME=/src/fuzz/target/cargo-home $(FUZZ_IMAGE) \
+		sh -c "cargo install cargo-fuzz --locked --version 0.13.2 && cargo fuzz run $(TARGET) -- -max_total_time=$(FUZZ_SECS) -timeout=30"

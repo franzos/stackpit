@@ -24,6 +24,7 @@ integration-tests = []
 
 [workspace]
 members = ["stackpit-auth"]
+exclude = ["fuzz"]
 
 [lib]
 name = "stackpit"

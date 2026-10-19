@@ -1,0 +1,63 @@
+[package]
+name = "stackpit-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+axum = { version = "0.8", default-features = false }
+serde_json = "1"
+stackpit = { path = "..", default-features = false, features = ["sqlite"] }
+
+[[bin]]
+name = "envelope"
+path = "fuzz_targets/envelope.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "event_data"
+path = "fuzz_targets/event_data.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "telemetry"
+path = "fuzz_targets/telemetry.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "artifact_bundle"
+path = "fuzz_targets/artifact_bundle.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sentry_auth"
+path = "fuzz_targets/sentry_auth.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "client_ip"
+path = "fuzz_targets/client_ip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "locale"
+path = "fuzz_targets/locale.rs"
+test = false
+doc = false
+bench = false

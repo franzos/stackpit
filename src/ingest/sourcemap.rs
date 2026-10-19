@@ -69,7 +69,7 @@ pub async fn parse_artifact_bundle(zip_data: Vec<u8>) -> Result<Vec<SourcemapEnt
         .context("sourcemap bundle parse task join failed")?
 }
 
-fn parse_artifact_bundle_sync(zip_data: &[u8]) -> Result<Vec<SourcemapEntry>> {
+pub fn parse_artifact_bundle_sync(zip_data: &[u8]) -> Result<Vec<SourcemapEntry>> {
     let cursor = std::io::Cursor::new(zip_data);
     let mut archive = zip::ZipArchive::new(cursor).context("invalid ZIP archive")?;
 
@@ -513,7 +513,7 @@ pub async fn load_sourcemaps(
     .context("sourcemap decode task join failed")
 }
 
-fn decode_sourcemap(compressed: &[u8]) -> Result<sourcemap::SourceMap> {
+pub fn decode_sourcemap(compressed: &[u8]) -> Result<sourcemap::SourceMap> {
     let raw = zstd::decode_all(compressed).context("zstd decompress sourcemap")?;
     sourcemap::SourceMap::from_slice(&raw).context("parse sourcemap")
 }

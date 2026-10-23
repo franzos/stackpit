@@ -147,8 +147,6 @@ pub async fn create_org_invite(
     Path(path_org_id): Path<i64>,
     Form(form): Form<CreateInviteForm>,
 ) -> impl IntoResponse {
-    let is_superuser = active_org.role.is_none();
-
     let (iss, sub) = match opt_auth.as_ref().map(|e| &e.0) {
         Some(AuthContext::User { iss, sub, .. }) => (iss.as_str(), sub.as_str()),
         _ => return StatusCode::FORBIDDEN.into_response(),
@@ -163,16 +161,13 @@ pub async fn create_org_invite(
         }
     };
 
-    // Verify caller owns the PATH org (not the active org; IDOR prevention).
-    if !is_superuser {
-        match is_current_owner(&state.pool, user.user_id, path_org_id).await {
-            Ok(true) => {}
-            Ok(false) => return StatusCode::FORBIDDEN.into_response(),
-            Err(e) => {
-                tracing::error!("is_current_owner check failed: {e:#}");
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-            }
-        }
+    // Owner of the PATH org (not the active org; IDOR prevention) and native
+    // only: personal and Forseti-backed orgs render no invite list, so an
+    // invite created there could never be seen or revoked.
+    if let Err(resp) =
+        check_native_org_owner(&state.pool, &active_org, &opt_auth, path_org_id).await
+    {
+        return resp;
     }
 
     let role = Role::parse(&form.role);

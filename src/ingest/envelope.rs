@@ -23,6 +23,16 @@ const MAX_ENVELOPE_ITEMS: usize = 500;
 /// decompression amplification even if an operator raises `max_body_size`
 /// above the per-item large limit. A few large items' worth of headroom.
 const MAX_ENVELOPE_TOTAL_BYTES: usize = 4 * crate::ingest::models::MAX_LARGE_ITEM_PAYLOAD_BYTES; // 200MB
+/// Per-item ceiling on a session aggregate counter; the rollup columns are
+/// BIGINT and sum these with `col + excluded.col`, which Postgres rejects on
+/// overflow and SQLite silently turns into REAL.
+const MAX_SESSION_COUNT: u64 = 1_000_000_000;
+/// Ceiling on a transaction duration (about 31 years), same reason.
+const MAX_DURATION_MS: i64 = 1_000_000_000_000;
+
+fn clamp_duration_ms(ms: f64) -> i64 {
+    (ms.round() as i64).clamp(-MAX_DURATION_MS, MAX_DURATION_MS)
+}
 
 /// Parse a Sentry envelope. Wire format: `header\n(item_header\npayload\n)*`.
 pub fn parse(body: &[u8], project_id: u64, auth: &SentryAuth) -> Result<ParsedEnvelope> {
@@ -655,9 +665,9 @@ fn extract_transaction_perf(json: &Value, event: &mut StorableEvent, drift: i64)
         .filter(|f| f.is_finite());
 
     event.duration_ms = match measured {
-        Some(ms) => Some(ms.round() as i64),
+        Some(ms) => Some(clamp_duration_ms(ms)),
         None => match (end, start) {
-            (Some(e), Some(s)) => Some(((e - s) * 1000.0).round() as i64),
+            (Some(e), Some(s)) => Some(clamp_duration_ms((e - s) * 1000.0)),
             _ => None,
         },
     };
@@ -733,10 +743,16 @@ fn extract_session_aggregates(json: &Value, event: &mut StorableEvent, drift: i6
     };
 
     for agg in aggregates {
-        let exited = agg.get("exited").and_then(|v| v.as_u64()).unwrap_or(0);
-        let errored = agg.get("errored").and_then(|v| v.as_u64()).unwrap_or(0);
-        let crashed = agg.get("crashed").and_then(|v| v.as_u64()).unwrap_or(0);
-        let abnormal = agg.get("abnormal").and_then(|v| v.as_u64()).unwrap_or(0);
+        let count = |key: &str| {
+            agg.get(key)
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0)
+                .min(MAX_SESSION_COUNT)
+        };
+        let exited = count("exited");
+        let errored = count("errored");
+        let crashed = count("crashed");
+        let abnormal = count("abnormal");
         let total = exited + errored + crashed + abnormal;
 
         let started_ts = agg
@@ -1478,6 +1494,41 @@ mod tests {
         let second = &event.session_buckets[1];
         assert_eq!(second.total, 50);
         assert_eq!(second.crashed, 0);
+    }
+
+    // The rollup upsert adds these into BIGINT columns, so a crafted counter
+    // must not be able to poison the accumulator with an unflushable delta.
+    #[test]
+    fn aggregate_session_counts_are_clamped() {
+        let payload = r#"{
+            "aggregates":[
+                {"started":"2025-03-07T12:00:00.000Z",
+                 "exited":18446744073709551615,"errored":18446744073709551615,
+                 "crashed":1,"abnormal":1}
+            ],
+            "attrs":{}
+        }"#;
+        let mut event = StorableEvent::new(
+            String::new(),
+            ItemType::Sessions,
+            payload.as_bytes().to_vec(),
+            1,
+            "k".to_string(),
+        );
+        extract_fields(payload.as_bytes(), &ItemType::Sessions, &mut event, 0);
+        let b = &event.session_buckets[0];
+        assert_eq!(b.errored, MAX_SESSION_COUNT);
+        assert_eq!(b.total, 2 * MAX_SESSION_COUNT + 2);
+    }
+
+    #[test]
+    fn transaction_duration_is_clamped() {
+        let payload = r#"{"type":"transaction","transaction":"/api/health",
+            "measurements":{"duration":{"value":9e18,"unit":"millisecond"}}}"#;
+        assert_eq!(extract_txn(payload).duration_ms, Some(MAX_DURATION_MS));
+        let payload = r#"{"type":"transaction","transaction":"/api/health",
+            "start_timestamp":-1e300,"timestamp":1e300}"#;
+        assert_eq!(extract_txn(payload).duration_ms, Some(MAX_DURATION_MS));
     }
 
     // --- timestamp unit normalization ---

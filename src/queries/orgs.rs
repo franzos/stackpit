@@ -290,7 +290,7 @@ pub async fn create_invite(
     }
 
     let row = sqlx::query(sql!(
-        "SELECT ext_org_id FROM organizations WHERE org_id = ?1"
+        "SELECT ext_org_id, is_personal FROM organizations WHERE org_id = ?1"
     ))
     .bind(org_id)
     .fetch_optional(pool)
@@ -300,6 +300,9 @@ pub async fn create_invite(
     let ext_org_id: Option<String> = row.get("ext_org_id");
     if ext_org_id.is_some() {
         anyhow::bail!("cannot create invite for a Forseti-backed org");
+    }
+    if row.get::<bool, _>("is_personal") {
+        anyhow::bail!("cannot create invite for a personal org");
     }
 
     let now = chrono::Utc::now().timestamp();
@@ -1564,6 +1567,22 @@ mod tests {
         assert!(
             err.to_string().contains("Forseti"),
             "expected Forseti-org rejection, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_invite_on_personal_org_rejected() {
+        let pool = crate::db::open_test_pool().await;
+        let u = crate::queries::users::upsert_from_oidc(&pool, "iss", "sub-inv-pers", None, None)
+            .await
+            .unwrap();
+        let personal_id = ensure_personal_org(&pool, u.user_id).await.unwrap();
+        let err = create_invite(&pool, personal_id, Role::Member, None, u.user_id, 3600)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("personal"),
+            "expected personal-org rejection, got: {err}"
         );
     }
 

@@ -282,7 +282,7 @@ Only the two read scopes are advertised in the protected-resource metadata, deli
 
 ### What an authorized client can see
 
-Everything you can. Access follows your organization membership, refreshed from the IdP on each request, so a demotion upstream takes effect within a minute. There's no per-project access control yet: authorizing an MCP client grants it every project in every org you belong to. Each tool's description says so, and it's worth knowing before you click Allow on a shared instance.
+Everything you can. Access follows your organization membership as stackpit last saw it. A disabled or revoked IdP account is refused within a minute, because every request re-checks the token with the IdP. Org membership is only refreshed on a browser login: MCP tokens don't carry the `orgs` claim (the advertised scopes leave it out, and Forseti only releases the full claim to an admin-registered client), so removing someone from an org upstream takes effect the next time they sign in to the web UI, not before. There's no per-project access control yet: authorizing an MCP client grants it every project in every org you belong to. Each tool's description says so, and it's worth knowing before you click Allow on a shared instance.
 
 The admin token does **not** work here, by design.
 

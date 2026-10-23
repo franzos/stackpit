@@ -184,6 +184,9 @@ pub async fn callback(
         Default::default()
     });
 
+    let secure = state.config.server.cookies_should_be_secure();
+    retire_prior_grant(&state, &headers, secure, encryptor, &oidc).await;
+
     // cookie carries only the handle; tokens persist encrypted server-side
     let handle = match grants::insert(
         &state.auth_pool,
@@ -209,8 +212,6 @@ pub async fn callback(
             return finish_with_error(&state, "session_unavailable");
         }
     };
-
-    let secure = state.config.server.cookies_should_be_secure();
 
     // Build provision cookie first so we know if it succeeds before deciding redirect.
     let provision_cookie = if !recon.provisionable.is_empty() {
@@ -244,6 +245,27 @@ pub async fn callback(
         append_set_cookie(&mut resp, cookie);
     }
     resp
+}
+
+/// A sign-in from a browser that still holds a grant replaces it. Without this
+/// the old row keeps a live refresh token until the idle purge, reachable by
+/// anything that lifted the old cookie.
+async fn retire_prior_grant(
+    state: &AppState,
+    headers: &HeaderMap,
+    secure: bool,
+    encryptor: &crate::util::crypto::SecretEncryptor,
+    oidc: &crate::oidc::client::OidcClient,
+) {
+    let Some(prior) =
+        grants::resolve_from_headers(headers, secure, encryptor, &state.auth_pool).await
+    else {
+        return;
+    };
+    if let Some(refresh) = prior.refresh_token.as_deref() {
+        oidc.revoke_refresh_token(refresh).await;
+    }
+    grants::forget(&state.auth_pool, &prior.handle).await;
 }
 
 /// `POST /web/auth/backchannel-logout` -- Hydra POSTs a signed logout token
@@ -494,6 +516,77 @@ mod tests {
             .to_str()
             .unwrap()
             .to_string()
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn retire_prior_grant_drops_the_row_the_browser_presents() {
+        use crate::oidc::grants;
+        use axum::http::HeaderMap;
+        use oidc_relying_party::jwks::JwksCacheConfig;
+
+        let pool = crate::db::open_test_pool().await;
+        let (mut state, _chans) = crate::server::AppState::for_test(pool.clone());
+        state.auth_pool = pool.clone();
+        let encryptor = crate::util::crypto::SecretEncryptor::from_config_or_env(Some(
+            &secrecy::SecretString::from("11".repeat(32)),
+        ))
+        .unwrap()
+        .unwrap();
+        let oidc = crate::oidc::client::OidcClient::for_test(
+            "https://idp.example.com".to_string(),
+            "stackpit-web".to_string(),
+            stackpit_auth::JwksCache::new(
+                reqwest::Client::new(),
+                url::Url::parse("http://127.0.0.1:0/jwks").unwrap(),
+                JwksCacheConfig::default(),
+            ),
+        );
+        let user =
+            crate::queries::users::upsert_from_oidc(&pool, "https://idp", "sub-re", None, None)
+                .await
+                .unwrap();
+        let grant = |access_token: &'static str| grants::NewGrant {
+            user_id: user.user_id,
+            iss: "https://idp",
+            sub: "sub-re",
+            sid: None,
+            access_token,
+            access_exp: 0,
+            refresh_token: Some("rt"),
+            refresh_exp: None,
+            id_token: "idt",
+            offline: false,
+        };
+        let old = grants::insert(&pool, &encryptor, &grant("old"))
+            .await
+            .unwrap();
+        let other = grants::insert(&pool, &encryptor, &grant("other"))
+            .await
+            .unwrap();
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::COOKIE,
+            format!("sp_grant={}", old.to_hex()).parse().unwrap(),
+        );
+        super::retire_prior_grant(&state, &headers, false, &encryptor, &oidc).await;
+
+        assert!(grants::load(&pool, &encryptor, &old)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(grants::load(&pool, &encryptor, &other)
+            .await
+            .unwrap()
+            .is_some());
+
+        // No grant cookie: nothing to retire, nothing touched.
+        super::retire_prior_grant(&state, &HeaderMap::new(), false, &encryptor, &oidc).await;
+        assert!(grants::load(&pool, &encryptor, &other)
+            .await
+            .unwrap()
+            .is_some());
     }
 
     #[cfg(feature = "sqlite")]

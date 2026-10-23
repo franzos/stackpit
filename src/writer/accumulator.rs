@@ -295,11 +295,14 @@ impl Accumulators {
             // individual `crashed`/`errored`/`abnormal` update with init=false
             // carries total=0, so floor the total at the terminal count to keep
             // crashed+errored+abnormal <= total. Aggregates already satisfy this.
-            let terminal = bucket.crashed + bucket.errored + bucket.abnormal;
-            delta.total += bucket.total.max(terminal);
-            delta.crashed += bucket.crashed;
-            delta.errored += bucket.errored;
-            delta.abnormal += bucket.abnormal;
+            let terminal = bucket
+                .crashed
+                .saturating_add(bucket.errored)
+                .saturating_add(bucket.abnormal);
+            delta.total = delta.total.saturating_add(bucket.total.max(terminal));
+            delta.crashed = delta.crashed.saturating_add(bucket.crashed);
+            delta.errored = delta.errored.saturating_add(bucket.errored);
+            delta.abnormal = delta.abnormal.saturating_add(bucket.abnormal);
 
             if seen > 0 {
                 delta.first_seen = delta.first_seen.min(seen);
@@ -339,11 +342,11 @@ impl Accumulators {
             .entry(key)
             .or_insert_with(TxnDelta::new);
 
-        delta.count += 1;
-        delta.sum_duration_ms += duration.max(0) as u64;
+        delta.count = delta.count.saturating_add(1);
+        delta.sum_duration_ms = delta.sum_duration_ms.saturating_add(duration.max(0) as u64);
         delta.buckets[duration_bucket(duration)] += 1;
         if is_failed(event.trace_status.as_deref()) {
-            delta.failed_count += 1;
+            delta.failed_count = delta.failed_count.saturating_add(1);
         }
         delta.first_seen = delta.first_seen.min(ts);
         delta.last_seen = delta.last_seen.max(ts);
@@ -390,10 +393,10 @@ impl Accumulators {
         for (key, src) in &other.session_aggregates {
             match self.session_aggregates.get_mut(key) {
                 Some(dst) => {
-                    dst.total += src.total;
-                    dst.crashed += src.crashed;
-                    dst.errored += src.errored;
-                    dst.abnormal += src.abnormal;
+                    dst.total = dst.total.saturating_add(src.total);
+                    dst.crashed = dst.crashed.saturating_add(src.crashed);
+                    dst.errored = dst.errored.saturating_add(src.errored);
+                    dst.abnormal = dst.abnormal.saturating_add(src.abnormal);
                     dst.first_seen = dst.first_seen.min(src.first_seen);
                     dst.last_seen = dst.last_seen.max(src.last_seen);
                     dst.users_hll.merge(&src.users_hll);
@@ -424,11 +427,11 @@ impl Accumulators {
         for (key, src) in &other.transaction_metrics {
             match self.transaction_metrics.get_mut(key) {
                 Some(dst) => {
-                    dst.count += src.count;
-                    dst.sum_duration_ms += src.sum_duration_ms;
-                    dst.failed_count += src.failed_count;
+                    dst.count = dst.count.saturating_add(src.count);
+                    dst.sum_duration_ms = dst.sum_duration_ms.saturating_add(src.sum_duration_ms);
+                    dst.failed_count = dst.failed_count.saturating_add(src.failed_count);
                     for (d, s) in dst.buckets.iter_mut().zip(src.buckets.iter()) {
-                        *d += *s;
+                        *d = d.saturating_add(*s);
                     }
                     dst.users_hll.merge(&src.users_hll);
                     dst.has_user_data |= src.has_user_data;
@@ -610,6 +613,45 @@ mod tests {
         assert_eq!(delta.buckets[duration_bucket(200)], 1);
         assert_eq!(delta.first_seen, 1000);
         assert_eq!(delta.last_seen, 1500);
+    }
+
+    #[test]
+    fn counters_saturate_instead_of_overflowing() {
+        let mut acc = Accumulators::new();
+        for ts in 1000..1003 {
+            acc.accumulate(&txn_event("/api/x", ts, i64::MAX, Some("ok")));
+        }
+        let key = (7u64, "/api/x".to_string(), 0i64);
+        assert_eq!(
+            acc.transaction_metrics.get(&key).unwrap().sum_duration_ms,
+            u64::MAX
+        );
+
+        let mut other = Accumulators::new();
+        other.accumulate(&txn_event("/api/x", 1002, 1, Some("ok")));
+        acc.merge(&other);
+        assert_eq!(
+            acc.transaction_metrics.get(&key).unwrap().sum_duration_ms,
+            u64::MAX
+        );
+
+        let huge = SessionBucket {
+            release: "r".into(),
+            environment: "e".into(),
+            started_ts: 1000,
+            total: u64::MAX,
+            crashed: u64::MAX,
+            errored: 1,
+            abnormal: 1,
+            did: None,
+            is_aggregate: true,
+        };
+        let mut acc = Accumulators::new();
+        acc.accumulate(&session_event("s1", 1000, huge.clone()));
+        acc.accumulate(&session_event("s2", 1000, huge));
+        let delta = acc.session_aggregates.values().next().unwrap();
+        assert_eq!(delta.total, u64::MAX);
+        assert_eq!(delta.crashed, u64::MAX);
     }
 
     #[test]

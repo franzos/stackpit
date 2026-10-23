@@ -153,10 +153,14 @@ impl McpState {
     /// Resolve the caller: user row, then the IdP's current `orgs` claim through
     /// [`reconcile`](crate::orgs::reconcile::reconcile), then memberships.
     ///
-    /// The userinfo round-trip is what makes an IdP-side demotion reach MCP at
-    /// all: a bearer caller never runs the browser callback that reconciles
-    /// orgs. It is cached on the token hash for [`PRINCIPAL_TTL`], and a
-    /// userinfo failure denies rather than falling back to stored memberships.
+    /// The userinfo round-trip makes a disabled or revoked IdP account fail
+    /// closed here within [`PRINCIPAL_TTL`]; a userinfo failure denies rather
+    /// than falling back to stored memberships. Org membership is a different
+    /// matter: the advertised MCP scopes omit `orgs`, and Forseti scopes the
+    /// claim to the client's own org for anything but an admin-registered
+    /// client, so `claim.orgs` is normally `None` and reconcile removes or
+    /// demotes nothing. IdP-side org removals reach MCP on the user's next
+    /// browser login, which carries the full claim.
     pub async fn principal(
         &self,
         token: &str,

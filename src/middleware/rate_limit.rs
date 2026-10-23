@@ -9,6 +9,10 @@ use std::sync::Arc;
 // fans out into several asset requests) while still catching scripted abuse.
 const ADMIN_RATE_LIMIT: u32 = 600;
 const LOGIN_RATE_LIMIT: u32 = 10;
+const AUTH_LOGIN_RATE_LIMIT: u32 = 10;
+const AUTH_CALLBACK_RATE_LIMIT: u32 = 20;
+const AUTH_BCL_RATE_LIMIT: u32 = 60;
+const LOGOUT_RATE_LIMIT: u32 = 20;
 const ADMIN_RATE_WINDOW_SECS: u64 = 60;
 // The limiter caps requests per IP but not the number of distinct IPs, so an
 // address-rotating flood would otherwise grow `buckets` without bound.
@@ -58,6 +62,18 @@ fn evict_to_cap(buckets: &mut HashMap<String, IpBucket>, now: u64, cap: usize) {
     }
 }
 
+/// Auth routes get their own, tighter per-IP bucket; `None` means the general one.
+fn route_bucket(path: &str, method: &axum::http::Method) -> Option<(&'static str, u32)> {
+    match path {
+        "/web/login" if method == axum::http::Method::POST => Some(("login", LOGIN_RATE_LIMIT)),
+        "/web/auth/login" => Some(("auth-login", AUTH_LOGIN_RATE_LIMIT)),
+        "/web/auth/callback" => Some(("auth-callback", AUTH_CALLBACK_RATE_LIMIT)),
+        "/web/auth/backchannel-logout" => Some(("auth-bcl", AUTH_BCL_RATE_LIMIT)),
+        "/web/logout" => Some(("logout", LOGOUT_RATE_LIMIT)),
+        _ => None,
+    }
+}
+
 fn check_rate_limit(
     limiter: &SharedRateLimiter,
     req: &axum::http::Request<axum::body::Body>,
@@ -100,12 +116,9 @@ fn check_rate_limit_capped(
         inner.last_cleanup = now;
     }
 
-    let is_login_post =
-        req.uri().path() == "/web/login" && req.method() == axum::http::Method::POST;
-    let (key, limit) = if is_login_post {
-        (format!("{ip}:login"), LOGIN_RATE_LIMIT)
-    } else {
-        (ip, ADMIN_RATE_LIMIT)
+    let (key, limit) = match route_bucket(req.uri().path(), req.method()) {
+        Some((name, limit)) => (format!("{ip}:{name}"), limit),
+        None => (ip, ADMIN_RATE_LIMIT),
     };
 
     if inner.buckets.len() >= cap && !inner.buckets.contains_key(&key) {
@@ -150,15 +163,16 @@ pub async fn rate_limit_middleware(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::Method;
 
     fn limiter() -> SharedRateLimiter {
         new_rate_limiter_state(Arc::new(crate::util::network::TrustedProxies::default()))
     }
 
-    fn login_request(peer: &str) -> axum::http::Request<axum::body::Body> {
+    fn request(method: Method, path: &str, peer: &str) -> axum::http::Request<axum::body::Body> {
         let mut req = axum::http::Request::builder()
-            .method(axum::http::Method::POST)
-            .uri("/web/login")
+            .method(method)
+            .uri(path)
             .body(axum::body::Body::empty())
             .unwrap();
         let addr: std::net::SocketAddr = peer.parse().unwrap();
@@ -167,24 +181,92 @@ mod tests {
         req
     }
 
+    fn login_request(peer: &str) -> axum::http::Request<axum::body::Body> {
+        request(Method::POST, "/web/login", peer)
+    }
+
     #[test]
-    fn login_limit_is_per_ip_not_global() {
+    fn route_bucket_names_the_auth_routes_only() {
+        assert_eq!(
+            route_bucket("/web/login", &Method::POST),
+            Some(("login", LOGIN_RATE_LIMIT))
+        );
+        assert_eq!(route_bucket("/web/login", &Method::GET), None);
+        assert_eq!(
+            route_bucket("/web/auth/login", &Method::GET),
+            Some(("auth-login", AUTH_LOGIN_RATE_LIMIT))
+        );
+        assert_eq!(
+            route_bucket("/web/auth/callback", &Method::GET),
+            Some(("auth-callback", AUTH_CALLBACK_RATE_LIMIT))
+        );
+        assert_eq!(
+            route_bucket("/web/auth/backchannel-logout", &Method::POST),
+            Some(("auth-bcl", AUTH_BCL_RATE_LIMIT))
+        );
+        assert_eq!(
+            route_bucket("/web/logout", &Method::POST),
+            Some(("logout", LOGOUT_RATE_LIMIT))
+        );
+        assert_eq!(route_bucket("/web/projects/", &Method::POST), None);
+        assert_eq!(route_bucket("/web/auth/", &Method::GET), None);
+    }
+
+    #[test]
+    fn each_auth_route_has_its_own_per_ip_bucket() {
+        for (method, path, limit) in [
+            (Method::POST, "/web/login", LOGIN_RATE_LIMIT),
+            (Method::GET, "/web/auth/login", AUTH_LOGIN_RATE_LIMIT),
+            (Method::GET, "/web/auth/callback", AUTH_CALLBACK_RATE_LIMIT),
+            (
+                Method::POST,
+                "/web/auth/backchannel-logout",
+                AUTH_BCL_RATE_LIMIT,
+            ),
+            (Method::POST, "/web/logout", LOGOUT_RATE_LIMIT),
+        ] {
+            let limiter = limiter();
+            for _ in 0..limit {
+                assert!(
+                    check_rate_limit(&limiter, &request(method.clone(), path, "203.0.113.1:1000")),
+                    "{path} must allow {limit} requests"
+                );
+            }
+            assert!(
+                !check_rate_limit(&limiter, &request(method.clone(), path, "203.0.113.1:1000")),
+                "{path} must refuse request {}",
+                limit + 1
+            );
+            assert!(
+                check_rate_limit(&limiter, &request(method.clone(), path, "203.0.113.2:1000")),
+                "{path}: another IP must keep its own bucket"
+            );
+            assert!(
+                check_rate_limit(
+                    &limiter,
+                    &request(Method::GET, "/web/projects/", "203.0.113.1:1000")
+                ),
+                "{path}: the general bucket must be untouched"
+            );
+        }
+    }
+
+    #[test]
+    fn general_routes_keep_the_admin_limit() {
         let limiter = limiter();
-        for _ in 0..LOGIN_RATE_LIMIT {
+        for _ in 0..ADMIN_RATE_LIMIT {
             assert!(check_rate_limit(
                 &limiter,
-                &login_request("203.0.113.1:1000")
+                &request(Method::GET, "/web/projects/", "203.0.113.1:1000")
             ));
         }
-        // First IP exhausted its bucket.
         assert!(!check_rate_limit(
             &limiter,
-            &login_request("203.0.113.1:1000")
+            &request(Method::GET, "/web/projects/", "203.0.113.1:1000")
         ));
-        // A different IP must still be allowed (no global lockout).
         assert!(check_rate_limit(
             &limiter,
-            &login_request("203.0.113.2:1000")
+            &request(Method::GET, "/web/projects/", "203.0.113.2:1000")
         ));
     }
 
@@ -192,7 +274,7 @@ mod tests {
     fn missing_connect_info_shares_the_unknown_bucket() {
         let limiter = limiter();
         let req = axum::http::Request::builder()
-            .method(axum::http::Method::POST)
+            .method(Method::POST)
             .uri("/web/login")
             .body(axum::body::Body::empty())
             .unwrap();

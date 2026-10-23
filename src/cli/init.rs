@@ -68,13 +68,17 @@ rate_limit = 300
 #                                       # a refresh token might outlast the access token.
 #                                       # Should match Hydra's lifespans.refresh_token.
 #                                       # Hard-capped at 90 days (7776000s) at startup.
+# # session_max_ttl_secs      = 2592000  # 30d default; absolute session lifetime from login.
+#                                       # A token refresh does not extend it. 0 disables.
+# # session_idle_ttl_secs     = 604800   # 7d default; ends a session idle this long. 0 disables.
 #
 # MCP endpoint at POST /mcp. Requires [auth.oauth] above.
 #
 # Token validation order (the admin token is NOT accepted here: MCP requires a
 # token the authorization server issued for this resource):
-#   1. JWT access tokens — RS256 against the IdP's JWKS (recommended;
-#      Hydra's default since the JWT-by-default flip)
+#   1. JWT access tokens — verified against the IdP's JWKS with the signing
+#      algorithms its discovery document advertises (recommended; Hydra's
+#      default since the JWT-by-default flip)
 #   2. Opaque tokens — RFC 7662 introspection (admin URL preferred;
 #      discovery's `introspection_endpoint` as fallback)
 #

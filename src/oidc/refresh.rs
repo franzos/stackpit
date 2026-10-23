@@ -97,6 +97,7 @@ pub async fn refresh(
                 id_token: new_tokens.id_token.or_else(|| grant.id_token.clone()),
                 csrf_token: grant.csrf_token.clone(),
                 created_at: grant.created_at,
+                last_used_at: chrono::Utc::now().timestamp(),
                 offline: new_tokens.offline.unwrap_or(grant.offline),
             };
             Ok(RefreshOutcome::Refreshed(updated))
@@ -160,12 +161,14 @@ mod tests {
             .create_async()
             .await;
         let oidc = OidcClient::for_test(
-            issuer.clone(),
-            CLIENT_ID.to_string(),
-            stackpit_auth::JwksCache::new(
-                reqwest::Client::new(),
-                url::Url::parse(&idp.jwks_url()).unwrap(),
-                crate::oidc::client::jwks_cache_config(60),
+            CLIENT_ID,
+            oidc_relying_party::discovery::DiscoveryHandle::fixed(
+                crate::oidc::client::test_discovery(&issuer),
+                stackpit_auth::JwksCache::new(
+                    reqwest::Client::new(),
+                    url::Url::parse(&idp.jwks_url()).unwrap(),
+                    crate::oidc::client::jwks_cache_config(60),
+                ),
             ),
         );
 

@@ -66,7 +66,7 @@ fn jittered(backoff: Duration) -> Duration {
     Duration::from_millis(u64::from_le_bytes(buf) % (ms + 1))
 }
 
-/// Retries until discovery lands, then stops - nothing invalidates a discovered client.
+/// Retries until discovery lands, publishes the client and hands it over to its own refresh loop.
 pub fn spawn_retry(slot: OidcSlot, cancel: CancellationToken, config: Arc<Config>) {
     crate::background::supervise("oidc_discovery_retry", async move {
         let mut backoff = BACKOFF_FLOOR;
@@ -79,9 +79,11 @@ pub fn spawn_retry(slot: OidcSlot, cancel: CancellationToken, config: Arc<Config
                 .await
             {
                 Ok(client) => {
+                    let client = Arc::new(client);
                     slot.publish(OidcReady {
-                        client: Arc::new(client),
+                        client: client.clone(),
                     });
+                    client.spawn_refresh(cancel.child_token());
                     tracing::info!(
                         "OIDC discovery succeeded on retry; browser sign-in is live \
                          (/mcp, if configured, still needs a restart)"

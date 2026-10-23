@@ -81,6 +81,8 @@ pub struct GrantRecord {
     pub csrf_token: String,
     /// Unix timestamp when the grant row was first inserted.
     pub created_at: i64,
+    /// Unix timestamp of the last request on this grant, throttled by [`touch`].
+    pub last_used_at: i64,
     pub offline: bool,
 }
 
@@ -112,6 +114,11 @@ impl GrantRecord {
     /// True when the row should be refreshed before the next handler runs.
     pub fn should_refresh(&self, now_secs: i64, refresh_margin_secs: i64) -> bool {
         self.refresh_token.is_some() && self.access_exp - now_secs <= refresh_margin_secs
+    }
+
+    /// True once the grant has sat idle longer than `idle_secs`. `0` disables the check.
+    pub fn idle_expired(&self, now_secs: i64, idle_secs: u64) -> bool {
+        idle_secs > 0 && now_secs - self.last_used_at > idle_secs as i64
     }
 }
 
@@ -193,7 +200,7 @@ pub async fn load(
 ) -> Result<Option<GrantRecord>> {
     let db_key = handle.db_key();
     let row = sqlx::query(sql!(
-        "SELECT user_id, iss, sub, sid, access_token, access_exp, refresh_token, refresh_exp, id_token, csrf_token, created_at, offline \
+        "SELECT user_id, iss, sub, sid, access_token, access_exp, refresh_token, refresh_exp, id_token, csrf_token, created_at, last_used_at, offline \
          FROM oidc_grants WHERE handle = ?1"
     ))
     .bind(db_key.as_slice())
@@ -250,6 +257,7 @@ pub async fn load(
         id_token,
         csrf_token,
         created_at: row.get("created_at"),
+        last_used_at: row.get("last_used_at"),
         offline: row.get("offline"),
     }))
 }
@@ -366,6 +374,27 @@ pub async fn rotate_tokens(
     .await
     .context("updating oidc_grants row")?;
     Ok(())
+}
+
+/// Record a request on the grant. Skips the write when the row was touched
+/// within the last `min_interval_secs`. Returns the number of rows updated.
+pub async fn touch(
+    pool: &DbPool,
+    handle: &GrantHandle,
+    now_secs: i64,
+    min_interval_secs: i64,
+) -> Result<u64> {
+    let db_key = handle.db_key();
+    let res = sqlx::query(sql!(
+        "UPDATE oidc_grants SET last_used_at = ?1 WHERE handle = ?2 AND last_used_at <= ?3"
+    ))
+    .bind(now_secs)
+    .bind(db_key.as_slice())
+    .bind(now_secs.saturating_sub(min_interval_secs))
+    .execute(pool)
+    .await
+    .context("touching oidc_grants row")?;
+    Ok(res.rows_affected())
 }
 
 /// Delete a single grant by handle. Returns the number of rows affected.
@@ -506,6 +535,65 @@ mod purge_tests {
             .await
             .unwrap();
         assert_eq!(left, 1);
+    }
+
+    #[tokio::test]
+    async fn touch_bumps_last_used_at_only_past_the_minimum_interval() {
+        let pool = crate::db::open_test_pool().await;
+        let user_id =
+            crate::queries::users::upsert_from_oidc(&pool, "https://idp", "sub", None, None)
+                .await
+                .unwrap()
+                .user_id;
+        let now = 1_900_000_000;
+        let stale = GrantHandle::random();
+        let recent = GrantHandle::random();
+        seed_grant(&pool, user_id, &stale.db_key(), now - 61).await;
+        seed_grant(&pool, user_id, &recent.db_key(), now - 59).await;
+
+        assert_eq!(touch(&pool, &stale, now, 60).await.unwrap(), 1);
+        assert_eq!(touch(&pool, &recent, now, 60).await.unwrap(), 0);
+
+        let last_used = |handle: &GrantHandle| {
+            let key = handle.db_key();
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, i64>(sql!(
+                    "SELECT last_used_at FROM oidc_grants WHERE handle = ?1"
+                ))
+                .bind(key.as_slice())
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        assert_eq!(last_used(&stale).await, now);
+        assert_eq!(last_used(&recent).await, now - 59);
+    }
+
+    #[test]
+    fn idle_expired_boundaries() {
+        let grant = |last_used_at| GrantRecord {
+            handle: GrantHandle([0; 32]),
+            user_id: 1,
+            iss: String::new(),
+            sub: String::new(),
+            sid: None,
+            access_token: String::new(),
+            access_exp: 0,
+            refresh_token: None,
+            refresh_exp: None,
+            id_token: None,
+            csrf_token: String::new(),
+            created_at: 0,
+            last_used_at,
+            offline: false,
+        };
+        let idle = 7 * 24 * 3600;
+        assert!(!grant(1000).idle_expired(1000 + idle as i64, idle));
+        assert!(!grant(1000).idle_expired(1000 + idle as i64 - 1, idle));
+        assert!(grant(1000).idle_expired(1000 + idle as i64 + 1, idle));
+        assert!(!grant(0).idle_expired(i64::MAX, 0));
     }
 
     #[cfg(all(feature = "sqlite", not(feature = "postgres")))]

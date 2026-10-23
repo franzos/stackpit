@@ -78,7 +78,7 @@ pub async fn csrf_token(c: &reqwest::Client, form_path: &str) -> String {
     extract_csrf(&body).unwrap_or_else(|| panic!("no csrf_token hidden input on {form_path}"))
 }
 
-fn extract_csrf(html: &str) -> Option<String> {
+pub fn extract_csrf(html: &str) -> Option<String> {
     let needle = "name=\"csrf_token\" value=\"";
     let i = html.find(needle)? + needle.len();
     let rest = &html[i..];

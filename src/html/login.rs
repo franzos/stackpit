@@ -325,7 +325,7 @@ pub async fn handle_logout(
         .zip(id_token_hint.as_deref())
         .and_then(|(client, hint)| {
             build_end_session_url(
-                client.discovery(),
+                &client.discovery(),
                 &EndSessionRequest {
                     id_token_hint: Some(hint),
                     client_id: Some(client.client_id()),
@@ -491,12 +491,14 @@ mod tests {
         state.encryptor = Some(enc.clone());
         state.oidc = crate::oidc::discovery::OidcSlot::ready(crate::oidc::discovery::OidcReady {
             client: std::sync::Arc::new(crate::oidc::client::OidcClient::for_test(
-                "https://idp".to_string(),
-                "stackpit".to_string(),
-                stackpit_auth::JwksCache::new(
-                    reqwest::Client::new(),
-                    url::Url::parse("https://idp/jwks").unwrap(),
-                    crate::oidc::client::jwks_cache_config(60),
+                "stackpit",
+                oidc_relying_party::discovery::DiscoveryHandle::fixed(
+                    crate::oidc::client::test_discovery("https://idp"),
+                    stackpit_auth::JwksCache::new(
+                        reqwest::Client::new(),
+                        url::Url::parse("https://idp/jwks").unwrap(),
+                        crate::oidc::client::jwks_cache_config(60),
+                    ),
                 ),
             )),
         });

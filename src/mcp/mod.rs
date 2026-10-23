@@ -242,6 +242,7 @@ impl UserProvisioner for DbProvisioner {
 #[cfg(test)]
 pub(crate) mod test_support {
     use super::*;
+    use oidc_relying_party::discovery::DiscoveryHandle;
     use stackpit_auth::{BearerGateConfig, JwksCache, JwtVerifierConfig};
 
     pub const TEST_AUDIENCE: &str = "https://stackpit.example.com/mcp";
@@ -268,11 +269,15 @@ pub(crate) mod test_support {
             provisioner: None,
             revocation: None,
             jwt: Some(JwtVerifierConfig {
-                jwks: JwksCache::new(
-                    reqwest::Client::new(),
-                    url::Url::parse("http://127.0.0.1:0/jwks").unwrap(),
-                    crate::oidc::client::jwks_cache_config(60),
+                discovery: DiscoveryHandle::fixed(
+                    crate::oidc::client::test_discovery(TEST_ISSUER),
+                    JwksCache::new(
+                        reqwest::Client::new(),
+                        url::Url::parse("http://127.0.0.1:0/jwks").unwrap(),
+                        crate::oidc::client::jwks_cache_config(60),
+                    ),
                 ),
+                jwks_override: None,
             }),
         })
         .expect("test HTTP client builds")

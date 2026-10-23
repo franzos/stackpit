@@ -289,11 +289,15 @@ pub struct OAuthConfig {
     /// discovery (prefers client_secret_basic). Accepts `client_secret_basic`
     /// (alias `basic`) or `client_secret_post` (alias `post`).
     pub token_endpoint_auth_method: Option<String>,
-    /// Hard ceiling on browser-session age (seconds). Forces full re-login past this age,
-    /// ensuring Forseti demotions propagate via the OIDC callback's org reconciliation.
-    /// `0` disables the cap. Default 8h.
+    /// Absolute browser-session lifetime (seconds), counted from login. A
+    /// token refresh does not extend it; past this age the user logs in
+    /// again, which also re-reads the IdP's org claims. `0` disables. Default 30d.
     #[serde(default = "default_session_max_ttl")]
     pub session_max_ttl_secs: u64,
+    /// Idle browser-session lifetime (seconds), counted from the last
+    /// request. `0` disables. Default 7d.
+    #[serde(default = "default_session_idle_ttl")]
+    pub session_idle_ttl_secs: u64,
 }
 
 fn default_access_token_max_ttl() -> u64 {
@@ -301,7 +305,11 @@ fn default_access_token_max_ttl() -> u64 {
 }
 
 fn default_session_max_ttl() -> u64 {
-    8 * 3600
+    30 * 24 * 3600
+}
+
+fn default_session_idle_ttl() -> u64 {
+    7 * 24 * 3600
 }
 
 fn default_refresh_token_max_ttl() -> u64 {
@@ -311,8 +319,8 @@ fn default_refresh_token_max_ttl() -> u64 {
 /// MCP bearer-auth config. `audience = None` disables MCP. Requires
 /// `[auth.oauth]`; the dispatcher pulls the issuer from there.
 ///
-/// Accepts RS256 JWTs against the IdP's JWKS; opaque tokens fall through
-/// to introspection. At least one validation path must be reachable.
+/// Accepts JWTs signed with an algorithm the IdP's discovery advertises,
+/// verified against its JWKS; opaque tokens fall through to introspection.
 #[derive(Debug, Default, Deserialize)]
 pub struct McpConfig {
     pub audience: Option<String>,
@@ -630,6 +638,8 @@ mod tests {
                     ),
                     refresh_token_max_ttl_secs: default_refresh_token_max_ttl(),
                     access_token_max_ttl_secs: default_access_token_max_ttl(),
+                    session_max_ttl_secs: default_session_max_ttl(),
+                    session_idle_ttl_secs: default_session_idle_ttl(),
                     ..OAuthConfig::default()
                 },
                 mcp: McpConfig::default(),
@@ -665,6 +675,16 @@ mod tests {
     fn refresh_ttl_default_is_fourteen_days() {
         let cfg: OAuthConfig = toml::from_str("").unwrap();
         assert_eq!(cfg.refresh_token_max_ttl_secs, 14 * 24 * 3600);
+    }
+
+    #[test]
+    fn session_ttl_defaults_are_thirty_days_absolute_and_seven_days_idle() {
+        let cfg: OAuthConfig = toml::from_str("").unwrap();
+        assert_eq!(cfg.session_max_ttl_secs, 30 * 24 * 3600);
+        assert_eq!(cfg.session_idle_ttl_secs, 7 * 24 * 3600);
+        let with_section: Config = toml::from_str("[auth.oauth]\n").unwrap();
+        assert_eq!(with_section.auth.oauth.session_max_ttl_secs, 30 * 24 * 3600);
+        assert_eq!(with_section.auth.oauth.session_idle_ttl_secs, 7 * 24 * 3600);
     }
 
     #[test]

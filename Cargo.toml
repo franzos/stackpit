@@ -101,7 +101,7 @@ zip = { version = "9", default-features = false, features = ["deflate"] }
 # OAuth/OIDC relying party: discovery, JWKS, auth-code + PKCE, ID-token and
 # logout-token validation, end-session and revocation. The post-callback
 # session is the BFF token vault in the `oidc_grants` table (see src/oidc/).
-oidc-relying-party = "0.1"
+oidc-relying-party = "0.2"
 url = "2"
 # already in the tree via url/askama/axum, so making it direct adds no audit surface.
 percent-encoding = "2"
@@ -122,7 +122,7 @@ reqwest = { version = "0.12", default-features = false, features = ["cookies"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
 # reuse the real cookie-hash instead of reimplementing it in the auth test.
 stackpit-auth = { path = "stackpit-auth" }
-oidc-relying-party = { version = "0.1", features = ["test-support"] }
+oidc-relying-party = { version = "0.2", features = ["test-support"] }
 # same crate axum's Form uses, for round-tripping form structs in unit tests.
 serde_urlencoded = "0.7"
 # HTML render snapshots (pre-i18n-retrofit baseline).
@@ -143,6 +143,7 @@ section = "web"
 assets = [
     ["target/release/stackpit", "usr/bin/", "755"],
 ]
+
 
 [profile.release]
 opt-level = 3

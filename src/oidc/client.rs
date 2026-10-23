@@ -1,18 +1,22 @@
 //! OIDC client: auth-code + PKCE flow (browser UI only; MCP uses introspection).
-//! Protocol work runs through `oidc_relying_party`; JWKS rotation goes through
-//! the shared [`JwksCache`], which refetches on a `kid` miss.
+//! Protocol work runs through `oidc_relying_party`. Provider metadata lives in a
+//! [`DiscoveryHandle`] that re-fetches on a TTL; its [`JwksCache`] follows
+//! `jwks_uri` and refetches on a `kid` miss.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use oidc_relying_party::authorize::{build_authorization_request, login_scopes};
-use oidc_relying_party::discovery::{discover, ClientAuthMethod, Discovery, DiscoveryConfig};
+use oidc_relying_party::discovery::{
+    ClientAuthMethod, Discovery, DiscoveryConfig, DiscoveryHandle, DiscoveryHandleConfig,
+};
 use oidc_relying_party::id_token::{verify_id_token, IdTokenPolicy};
 use oidc_relying_party::jwks::{JwksCache, JwksCacheConfig};
 use oidc_relying_party::revocation;
 use oidc_relying_party::token::{exchange_code, exchange_refresh_token, RefreshOutcome};
 use secrecy::{ExposeSecret, SecretString};
+use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use crate::config::OAuthConfig;
@@ -24,9 +28,8 @@ pub struct OidcClient {
 }
 
 struct Inner {
-    discovery: Discovery,
-    /// One cache per issuer, shared with MCP bearer + back-channel logout.
-    jwks_cache: JwksCache,
+    /// Metadata and the key cache, shared with MCP bearer + back-channel logout.
+    discovery: DiscoveryHandle,
     client_secret: SecretString,
     http: reqwest::Client,
     redirect_uri: Url,
@@ -83,8 +86,9 @@ pub struct LoginSuccess {
 
 impl OidcClient {
     /// OIDC Discovery 1.0 §4 + JWKS prime. Network call -- run at startup
-    /// so the first login doesn't pay the round-trip. The [`JwksCache`] is
-    /// shared with the MCP gate and back-channel logout handler.
+    /// so the first login doesn't pay the round-trip. The [`DiscoveryHandle`]
+    /// is shared with the MCP gate and back-channel logout handler; call
+    /// [`Self::spawn_refresh`] to keep it current.
     pub async fn discover(cfg: &OAuthConfig, jwks_cache_ttl_secs: u64) -> Result<Self> {
         let issuer = cfg
             .issuer_url
@@ -121,9 +125,18 @@ impl OidcClient {
                 .transpose()
                 .context("auth.oauth.token_endpoint_auth_method")?,
         };
-        let discovery = discover(&http, issuer, &discovery_config)
-            .await
-            .with_context(|| format!("OIDC discovery failed for '{issuer}'"))?;
+        let handle = DiscoveryHandle::connect(
+            http.clone(),
+            issuer,
+            DiscoveryHandleConfig {
+                discovery: discovery_config,
+                jwks: jwks_cache_config(jwks_cache_ttl_secs),
+                ..DiscoveryHandleConfig::default()
+            },
+        )
+        .await
+        .with_context(|| format!("OIDC discovery failed for '{issuer}'"))?;
+        let discovery = handle.current();
 
         // OIDC RP-Initiated Logout 1.0 §3 precondition. Pure decision in
         // `check_end_session_precondition` so it's unit-testable.
@@ -151,15 +164,9 @@ impl OidcClient {
             }
         }
 
-        let jwks_cache = JwksCache::new(
-            http.clone(),
-            discovery.jwks_uri.clone(),
-            jwks_cache_config(jwks_cache_ttl_secs),
-        );
-
         // Prime the cache so first-request JWT validation skips the RTT and
         // a flaky IdP can't 401 everything during recovery.
-        match jwks_cache.prime().await {
+        match handle.jwks().prime().await {
             Ok(()) => tracing::info!(url = %discovery.jwks_uri, "JWKS cache warmed at startup"),
             Err(e) if cfg.required => {
                 return Err(anyhow::anyhow!(e)
@@ -184,8 +191,7 @@ impl OidcClient {
 
         Ok(Self {
             inner: Arc::new(Inner {
-                discovery,
-                jwks_cache,
+                discovery: handle,
                 client_secret: SecretString::from(client_secret.to_string()),
                 http,
                 redirect_uri,
@@ -203,30 +209,45 @@ impl OidcClient {
     }
 
     pub fn issuer(&self) -> &str {
-        &self.inner.discovery.issuer
+        self.inner.discovery.issuer()
     }
 
     pub fn client_id(&self) -> &str {
         &self.inner.id_token_policy.client_id
     }
 
-    /// The validated provider metadata.
-    pub fn discovery(&self) -> &Discovery {
-        &self.inner.discovery
+    /// The current validated provider metadata. Take one snapshot per operation.
+    pub fn discovery(&self) -> Arc<Discovery> {
+        self.inner.discovery.current()
     }
 
-    pub fn jwks_uri(&self) -> &Url {
-        &self.inner.discovery.jwks_uri
+    /// The handle the metadata and key cache are read through.
+    pub fn discovery_handle(&self) -> DiscoveryHandle {
+        self.inner.discovery.clone()
+    }
+
+    pub fn jwks_uri(&self) -> Url {
+        self.discovery().jwks_uri.clone()
     }
 
     /// Discovery's `introspection_endpoint` (RFC 7662 extension). MCP gate
     /// falls back to this when `auth.mcp.introspection_url` is unset.
-    pub fn introspection_endpoint(&self) -> Option<&str> {
-        self.inner
-            .discovery
+    pub fn introspection_endpoint(&self) -> Option<String> {
+        self.discovery()
             .introspection_endpoint
             .as_ref()
-            .map(Url::as_str)
+            .map(|url| url.as_str().to_string())
+    }
+
+    /// Re-fetches discovery on the handle's TTL until `cancel` fires.
+    pub fn spawn_refresh(&self, cancel: CancellationToken) {
+        let handle = self.inner.discovery.clone();
+        crate::background::supervise("oidc_discovery_refresh", async move {
+            tokio::select! {
+                _ = cancel.cancelled() => {}
+                () = handle.run_refresh() => {}
+            }
+        });
     }
 
     /// Best-effort RFC 7009 revocation of a refresh token.
@@ -236,14 +257,14 @@ impl OidcClient {
     /// it (a backup, a log, a compromised DB) can still redeem it. Failure is
     /// logged and swallowed: logout must complete regardless.
     pub async fn revoke_refresh_token(&self, refresh_token: &str) {
-        let discovery = &self.inner.discovery;
+        let discovery = self.discovery();
         if discovery.revocation_endpoint.is_none() {
             tracing::debug!("logout: IdP advertises no revocation_endpoint; skipping revoke");
             return;
         }
         match revocation::revoke_refresh_token(
             &self.inner.http,
-            discovery,
+            &discovery,
             self.client_id(),
             Some(self.inner.client_secret.expose_secret()),
             discovery.token_endpoint_auth_method,
@@ -265,8 +286,7 @@ impl OidcClient {
         access_token: &str,
     ) -> Result<OrgsClaim, UserinfoError> {
         let url = self
-            .inner
-            .discovery
+            .discovery()
             .userinfo_endpoint
             .clone()
             .ok_or(UserinfoError::NotConfigured)?;
@@ -302,8 +322,9 @@ impl OidcClient {
         ))
     }
 
-    pub fn jwks_cache(&self) -> &JwksCache {
-        &self.inner.jwks_cache
+    /// The key cache, pointed at the current `jwks_uri`.
+    pub fn jwks_cache(&self) -> JwksCache {
+        self.inner.discovery.jwks()
     }
 
     /// The shared HTTP client (redirects disabled, 10s timeout). Threaded
@@ -315,8 +336,9 @@ impl OidcClient {
 
     /// Build authorize URL + PKCE/state/nonce for session.
     pub fn start_login(&self) -> Result<LoginStart> {
+        let discovery = self.discovery();
         let req = build_authorization_request(
-            &self.inner.discovery,
+            &discovery,
             self.client_id(),
             &self.inner.redirect_uri,
             &self.inner.scopes,
@@ -340,9 +362,11 @@ impl OidcClient {
         expected_nonce: &str,
     ) -> Result<LoginSuccess> {
         let inner = &self.inner;
+        let discovery = self.discovery();
+        let jwks = self.jwks_cache();
         let tokens = exchange_code(
             &inner.http,
-            &inner.discovery,
+            &discovery,
             self.client_id(),
             Some(inner.client_secret.expose_secret()),
             &inner.redirect_uri,
@@ -355,11 +379,17 @@ impl OidcClient {
             .id_token
             .clone()
             .expect("exchange_code returns an id_token");
-        let offline = tokens.scopes.iter().any(|s| s == "offline_access");
+        // RFC 6749 §5.1: an omitted `scope` means the requested scopes were granted.
+        let granted = if tokens.scopes.is_empty() {
+            &inner.scopes
+        } else {
+            &tokens.scopes
+        };
+        let offline = granted.iter().any(|s| s == "offline_access");
 
         let claims = verify_id_token(
-            &inner.jwks_cache,
-            &inner.discovery,
+            &jwks,
+            &discovery,
             &id_token,
             Some(expected_nonce),
             Some(&tokens.access_token),
@@ -411,13 +441,15 @@ impl OidcClient {
         expected_sub: &str,
     ) -> Result<RefreshSuccess, RefreshError> {
         let inner = &self.inner;
+        let discovery = self.discovery();
+        let jwks = self.jwks_cache();
         let tokens = match exchange_refresh_token(
             &inner.http,
-            &inner.discovery,
+            &discovery,
             self.client_id(),
             Some(inner.client_secret.expose_secret()),
             refresh_token,
-            &inner.jwks_cache,
+            &jwks,
             &inner.id_token_policy,
             expected_sub,
         )
@@ -595,36 +627,40 @@ fn parse_orgs_claim(
     }
 }
 
+/// In-memory metadata for `issuer`: every accepted algorithm, no optional endpoints.
+#[cfg(test)]
+pub(crate) fn test_discovery(issuer: &str) -> Discovery {
+    let url = |path: &str| Url::parse(&format!("{issuer}{path}")).expect("stub URL valid");
+    Discovery {
+        issuer: issuer.to_string(),
+        authorization_endpoint: url("/oauth2/auth"),
+        token_endpoint: url("/oauth2/token"),
+        jwks_uri: url("/.well-known/jwks.json"),
+        userinfo_endpoint: None,
+        end_session_endpoint: None,
+        revocation_endpoint: None,
+        introspection_endpoint: None,
+        id_token_signing_alg_values_supported: Vec::new(),
+        signing_algorithms: oidc_relying_party::algorithms::ASYMMETRIC_ALGORITHMS.to_vec(),
+        token_endpoint_auth_method: ClientAuthMethod::Basic,
+        authorization_response_iss_parameter_supported: false,
+    }
+}
+
 impl OidcClient {
-    /// Test-only constructor: in-memory discovery for `issuer` (no network),
-    /// every accepted algorithm, no optional endpoints.
+    /// Test-only constructor over a fixed handle (no network).
     #[cfg(test)]
-    pub(crate) fn for_test(issuer: String, client_id: String, jwks_cache: JwksCache) -> Self {
-        let url = |path: &str| Url::parse(&format!("{issuer}{path}")).expect("stub URL valid");
+    pub(crate) fn for_test(client_id: &str, discovery: DiscoveryHandle) -> Self {
+        let issuer = discovery.issuer().to_string();
         Self {
             inner: Arc::new(Inner {
-                discovery: Discovery {
-                    issuer: issuer.clone(),
-                    authorization_endpoint: url("/oauth2/auth"),
-                    token_endpoint: url("/oauth2/token"),
-                    jwks_uri: url("/.well-known/jwks.json"),
-                    userinfo_endpoint: None,
-                    end_session_endpoint: None,
-                    revocation_endpoint: None,
-                    introspection_endpoint: None,
-                    id_token_signing_alg_values_supported: Vec::new(),
-                    signing_algorithms: oidc_relying_party::algorithms::ASYMMETRIC_ALGORITHMS
-                        .to_vec(),
-                    token_endpoint_auth_method: ClientAuthMethod::Basic,
-                    authorization_response_iss_parameter_supported: false,
-                },
-                jwks_cache,
+                discovery,
                 client_secret: SecretString::from("test-secret".to_string()),
                 http: reqwest::Client::new(),
-                redirect_uri: url("/callback"),
+                redirect_uri: Url::parse(&format!("{issuer}/callback")).expect("stub URL valid"),
                 scopes: login_scopes(&[]),
                 id_token_policy: IdTokenPolicy {
-                    client_id,
+                    client_id: client_id.to_string(),
                     client_secret: Some("test-secret".to_string()),
                     trusted_audiences: Vec::new(),
                     max_iat_age: None,
@@ -634,19 +670,18 @@ impl OidcClient {
             }),
         }
     }
-
-    #[cfg(all(test, feature = "sqlite"))]
-    pub(crate) fn discovery_mut(&mut self) -> &mut Discovery {
-        &mut Arc::get_mut(&mut self.inner)
-            .expect("test client is not shared yet")
-            .discovery
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use oidc_relying_party::algorithms::SigningAlgorithm;
+    use oidc_relying_party::test_support::{
+        jwks, rsa_key, sign_id_token, unix_now, FakeIdp, TOKEN_PATH,
+    };
     use serde_json::json;
+
+    const ISSUER: &str = "https://idp.example.com";
 
     fn test_cache() -> JwksCache {
         JwksCache::new(
@@ -656,13 +691,120 @@ mod tests {
         )
     }
 
+    fn test_client() -> OidcClient {
+        OidcClient::for_test(
+            "stackpit",
+            DiscoveryHandle::fixed(test_discovery(ISSUER), test_cache()),
+        )
+    }
+
+    fn oauth_config(issuer: &str) -> OAuthConfig {
+        OAuthConfig {
+            issuer_url: Some(issuer.to_string()),
+            client_id: Some("stackpit".to_string()),
+            client_secret: Some(SecretString::from("s")),
+            redirect_uri: Some("https://sp/web/auth/callback".to_string()),
+            allow_local_only_logout: true,
+            ..OAuthConfig::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn refreshed_discovery_is_visible_through_the_client() {
+        let mut idp =
+            FakeIdp::start(&[SigningAlgorithm::Rs256], &jwks(&[rsa_key()]), json!({})).await;
+        let client = OidcClient::discover(&oauth_config(&idp.issuer()), 60)
+            .await
+            .unwrap();
+        assert_eq!(
+            client.discovery().signing_algorithms,
+            vec![SigningAlgorithm::Rs256]
+        );
+        assert_eq!(client.jwks_uri().as_str(), idp.jwks_url());
+        assert!(client.introspection_endpoint().is_none());
+
+        let moved = format!("{}/keys", idp.url());
+        let introspect = format!("{}/oauth2/introspect", idp.url());
+        idp.set_discovery(json!({
+            "jwks_uri": moved,
+            "introspection_endpoint": introspect,
+            "id_token_signing_alg_values_supported": ["RS256", "ES256"],
+        }))
+        .await;
+        client.discovery_handle().refresh().await.unwrap();
+
+        let after = client.discovery();
+        assert_eq!(
+            after.signing_algorithms,
+            vec![SigningAlgorithm::Rs256, SigningAlgorithm::Es256]
+        );
+        assert_eq!(after.jwks_uri.as_str(), moved);
+        assert_eq!(client.jwks_uri().as_str(), moved);
+        assert_eq!(
+            client.introspection_endpoint().as_deref(),
+            Some(introspect.as_str())
+        );
+    }
+
+    /// Runs the code exchange against a token response without `scope`.
+    async fn finish_login_without_scope_in_response(requested: &[&str]) -> LoginSuccess {
+        let key = rsa_key();
+        let mut idp = FakeIdp::start(
+            &[SigningAlgorithm::Rs256],
+            &jwks(std::slice::from_ref(&key)),
+            json!({}),
+        )
+        .await;
+        let issuer = idp.issuer();
+        let now = unix_now();
+        let id_token = sign_id_token(
+            &key,
+            Some(key.kid()),
+            &json!({
+                "iss": issuer,
+                "sub": "alice",
+                "aud": "stackpit",
+                "iat": now,
+                "exp": now + 300,
+                "nonce": "n-1",
+            }),
+        );
+        idp.server()
+            .mock("POST", TOKEN_PATH)
+            .with_header("content-type", "application/json")
+            .with_body(
+                json!({
+                    "access_token": "at",
+                    "token_type": "Bearer",
+                    "expires_in": 300,
+                    "id_token": id_token,
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let mut cfg = oauth_config(&issuer);
+        cfg.scopes = requested.iter().map(ToString::to_string).collect();
+        let client = OidcClient::discover(&cfg, 60).await.unwrap();
+        client
+            .finish_login("code".to_string(), "verifier".to_string(), "n-1")
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn finish_login_offline_falls_back_to_the_requested_scopes() {
+        let granted = finish_login_without_scope_in_response(&["openid", "offline_access"]).await;
+        assert!(granted.offline);
+
+        let plain = finish_login_without_scope_in_response(&[]).await;
+        assert!(!plain.offline);
+    }
+
     #[test]
     fn extra_params_only_when_configured() {
-        let mut client = OidcClient::for_test(
-            "https://idp.example.com".to_string(),
-            "stackpit".to_string(),
-            test_cache(),
-        );
+        let mut client = test_client();
         let params = |client: &OidcClient| -> std::collections::HashMap<String, String> {
             let url = Url::parse(&client.start_login().unwrap().auth_url).unwrap();
             url.query_pairs().into_owned().collect()

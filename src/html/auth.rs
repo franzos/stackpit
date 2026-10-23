@@ -88,7 +88,7 @@ pub async fn callback(
     };
 
     // RFC 9207 §2.4: checked on success and error responses alike (mix-up defence).
-    if check_authorization_response_iss(oidc.discovery(), q.iss.as_deref()).is_err() {
+    if check_authorization_response_iss(&oidc.discovery(), q.iss.as_deref()).is_err() {
         tracing::warn!(iss = ?q.iss, "OAuth callback iss does not match the configured issuer");
         return finish_with_error(&state, "issuer_mismatch");
     }
@@ -475,17 +475,19 @@ mod tests {
         use oidc_relying_party::jwks::JwksCacheConfig;
         use tower::ServiceExt;
 
-        let mut oidc = crate::oidc::client::OidcClient::for_test(
-            "https://idp.example.com".to_string(),
-            "stackpit-web".to_string(),
-            stackpit_auth::JwksCache::new(
-                reqwest::Client::new(),
-                url::Url::parse("http://127.0.0.1:0/jwks").unwrap(),
-                JwksCacheConfig::default(),
+        let mut discovery = crate::oidc::client::test_discovery("https://idp.example.com");
+        discovery.authorization_response_iss_parameter_supported = iss_parameter_supported;
+        let oidc = crate::oidc::client::OidcClient::for_test(
+            "stackpit-web",
+            oidc_relying_party::discovery::DiscoveryHandle::fixed(
+                discovery,
+                stackpit_auth::JwksCache::new(
+                    reqwest::Client::new(),
+                    url::Url::parse("http://127.0.0.1:0/jwks").unwrap(),
+                    JwksCacheConfig::default(),
+                ),
             ),
         );
-        oidc.discovery_mut()
-            .authorization_response_iss_parameter_supported = iss_parameter_supported;
 
         let pool = crate::db::open_test_pool().await;
         let (mut state, _chans) = crate::server::AppState::for_test(pool);
@@ -534,12 +536,14 @@ mod tests {
         .unwrap()
         .unwrap();
         let oidc = crate::oidc::client::OidcClient::for_test(
-            "https://idp.example.com".to_string(),
-            "stackpit-web".to_string(),
-            stackpit_auth::JwksCache::new(
-                reqwest::Client::new(),
-                url::Url::parse("http://127.0.0.1:0/jwks").unwrap(),
-                JwksCacheConfig::default(),
+            "stackpit-web",
+            oidc_relying_party::discovery::DiscoveryHandle::fixed(
+                crate::oidc::client::test_discovery("https://idp.example.com"),
+                stackpit_auth::JwksCache::new(
+                    reqwest::Client::new(),
+                    url::Url::parse("http://127.0.0.1:0/jwks").unwrap(),
+                    JwksCacheConfig::default(),
+                ),
             ),
         );
         let user =
@@ -651,10 +655,13 @@ mod tests {
         cache
             .prime_raw(&jwks(std::slice::from_ref(&key)).to_string())
             .unwrap();
-        let mut oidc =
-            crate::oidc::client::OidcClient::for_test(issuer.clone(), AUD.to_string(), cache);
-        oidc.discovery_mut().revocation_endpoint =
+        let mut discovery = crate::oidc::client::test_discovery(&issuer);
+        discovery.revocation_endpoint =
             Some(url::Url::parse(&format!("{}{REVOCATION_PATH}", idp.url())).unwrap());
+        let oidc = crate::oidc::client::OidcClient::for_test(
+            AUD,
+            oidc_relying_party::discovery::DiscoveryHandle::fixed(discovery, cache),
+        );
 
         let pool = crate::queries::test_helpers::open_test_db().await;
         let enc = std::sync::Arc::new(

@@ -3,7 +3,8 @@
 
 use crate::common;
 
-async fn login_session_cookie() -> String {
+/// Every Set-Cookie the login response carries (session handle and CSRF salt).
+async fn login_set_cookies() -> Vec<String> {
     let c = common::client();
     let resp = c
         .post(format!("{}/web/login", common::admin_url()))
@@ -22,6 +23,13 @@ async fn login_session_cookie() -> String {
         .get_all("set-cookie")
         .iter()
         .map(|v| v.to_str().unwrap().to_string())
+        .collect()
+}
+
+async fn login_session_cookie() -> String {
+    login_set_cookies()
+        .await
+        .into_iter()
         .find(|c| c.starts_with("stackpit_token=") || c.starts_with("__Host-stackpit_token="))
         .expect("admin session Set-Cookie")
 }
@@ -77,29 +85,48 @@ async fn wrong_token_is_rejected() {
 }
 
 #[tokio::test]
-async fn logout_succeeds_without_csrf_token() {
-    // Logout is exempt from the synchronizer check (non-destructive +
-    // SameSite=Strict), so an empty/wrong csrf_token must still log out.
+async fn logout_rejects_wrong_csrf_token() {
     let c = common::login().await;
-    let resp = c
-        .post(format!("{}/web/logout", common::admin_url()))
+    let logout_url = format!("{}/web/logout", common::admin_url());
+
+    let wrong = c
+        .post(&logout_url)
         .form(&[("csrf_token", "0".repeat(32).as_str())])
         .send()
         .await
         .expect("POST /web/logout");
-    assert_eq!(resp.status().as_u16(), 303, "logout should 303");
+    assert_eq!(wrong.status().as_u16(), 403, "wrong csrf -> 403");
+
+    let csrf = common::csrf_token(&c, "/web/projects/").await;
+    let ok = c
+        .post(&logout_url)
+        .form(&[("csrf_token", csrf.as_str())])
+        .send()
+        .await
+        .expect("POST /web/logout");
+    assert_eq!(ok.status().as_u16(), 303, "logout should 303");
     assert_eq!(
-        resp.headers().get("location").unwrap().to_str().unwrap(),
+        ok.headers().get("location").unwrap().to_str().unwrap(),
         "/web/login"
     );
 }
 
 #[tokio::test]
 async fn logout_revokes_admin_session_handle() {
-    let set_cookie = login_session_cookie().await;
-    let cookie_pair = set_cookie.split(';').next().unwrap().to_string();
+    // Session handle plus CSRF salt: the admin CSRF token is derived from both.
+    let cookie_header = login_set_cookies()
+        .await
+        .iter()
+        .map(|sc| sc.split(';').next().unwrap().to_string())
+        .collect::<Vec<_>>()
+        .join("; ");
+    let session_pair = cookie_header
+        .split("; ")
+        .find(|p| p.starts_with("stackpit_token=") || p.starts_with("__Host-stackpit_token="))
+        .unwrap()
+        .to_string();
 
-    // Jarless client so the replayed cookie is exactly what we set.
+    // Jarless client so the replayed cookies are exactly what we set.
     let c = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
@@ -107,7 +134,7 @@ async fn logout_revokes_admin_session_handle() {
 
     let authed = c
         .get(format!("{}/web/projects/", common::admin_url()))
-        .header("cookie", &cookie_pair)
+        .header("cookie", &cookie_header)
         .header("accept", "text/html")
         .send()
         .await
@@ -117,11 +144,13 @@ async fn logout_revokes_admin_session_handle() {
         200,
         "fresh handle must authenticate"
     );
+    let csrf = common::extract_csrf(&authed.text().await.expect("projects body"))
+        .expect("csrf_token hidden input on /web/projects/");
 
     let logout = c
         .post(format!("{}/web/logout", common::admin_url()))
-        .header("cookie", &cookie_pair)
-        .form(&[("csrf_token", "x")])
+        .header("cookie", &cookie_header)
+        .form(&[("csrf_token", csrf.as_str())])
         .send()
         .await
         .expect("POST /web/logout");
@@ -129,7 +158,7 @@ async fn logout_revokes_admin_session_handle() {
 
     let replay = c
         .get(format!("{}/web/projects/", common::admin_url()))
-        .header("cookie", &cookie_pair)
+        .header("cookie", &session_pair)
         .header("accept", "text/html")
         .send()
         .await

@@ -25,9 +25,10 @@ use crate::oidc::revocations;
 /// token-validation concern).
 pub async fn validate_logout_token(oidc: &OidcClient, token: &str) -> Option<LogoutTokenClaims> {
     let policy = LogoutTokenPolicy::new(oidc.issuer(), oidc.client_id());
+    let discovery = oidc.discovery();
     match logout_token::validate_logout_token(
-        oidc.jwks_cache(),
-        &oidc.discovery().signing_algorithms,
+        &oidc.jwks_cache(),
+        &discovery.signing_algorithms,
         &policy,
         token,
     )
@@ -147,7 +148,13 @@ mod tests {
         cache
             .prime_raw(&jwks(&[rsa_key()]).to_string())
             .expect("prime");
-        OidcClient::for_test(ISS.to_string(), AUD.to_string(), cache)
+        OidcClient::for_test(
+            AUD,
+            oidc_relying_party::discovery::DiscoveryHandle::fixed(
+                crate::oidc::client::test_discovery(ISS),
+                cache,
+            ),
+        )
     }
 
     fn signed_logout_token(sub: Option<&str>, sid: Option<&str>) -> String {

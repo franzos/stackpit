@@ -147,16 +147,19 @@ fn challenge_value(gate: &BearerGate, error: Option<&str>, scope: Option<&str>) 
 mod tests {
     use super::*;
     use crate::bearer::{BearerGateConfig, JwtVerifierConfig};
-    use crate::JwksCache;
-    use oidc_relying_party::jwks::JwksCacheConfig;
+    use crate::test_util::{fixed_discovery, primed_jwks};
+    use oidc_relying_party::algorithms::SigningAlgorithm;
     use oidc_relying_party::test_support::{jwks, rsa_key, sign_id_token};
 
-    fn test_jwks() -> JwksCache {
-        JwksCache::new(
-            reqwest::Client::new(),
-            reqwest::Url::parse("http://127.0.0.1:0/jwks").unwrap(),
-            JwksCacheConfig::default(),
-        )
+    fn rs256_verifier(jwks_json: &str) -> JwtVerifierConfig {
+        JwtVerifierConfig {
+            discovery: fixed_discovery(
+                "https://hydra.example.com",
+                &[SigningAlgorithm::Rs256],
+                primed_jwks(jwks_json),
+            ),
+            jwks_override: None,
+        }
     }
 
     const TEST_CHALLENGE_SCOPE: &str = "openid stackpit:events:read";
@@ -180,7 +183,7 @@ mod tests {
             cache_max_ttl_secs: 30,
             provisioner: None,
             revocation: None,
-            jwt: Some(JwtVerifierConfig { jwks: test_jwks() }),
+            jwt: Some(rs256_verifier(&jwks(&[]).to_string())),
         })
         .expect("test HTTP client builds")
     }
@@ -213,15 +216,7 @@ mod tests {
             cache_max_ttl_secs: 30,
             provisioner: None,
             revocation: None,
-            jwt: Some(JwtVerifierConfig {
-                jwks: {
-                    let cache = test_jwks();
-                    cache
-                        .prime_raw(&jwks(&[rsa_key()]).to_string())
-                        .expect("test JWKS parses");
-                    cache
-                },
-            }),
+            jwt: Some(rs256_verifier(&jwks(&[rsa_key()]).to_string())),
         })
         .expect("test HTTP client builds")
     }

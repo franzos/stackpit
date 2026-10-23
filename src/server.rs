@@ -410,6 +410,7 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
         match OidcClient::discover(&config.auth.oauth, config.auth.mcp.jwks_cache_ttl_secs).await {
             Ok(c) => {
                 tracing::info!("OIDC client ready (issuer discovery succeeded)");
+                c.spawn_refresh(bg_cancel.child_token());
                 Some(Arc::new(c))
             }
             Err(e) if config.auth.oauth.required => {
@@ -792,29 +793,20 @@ fn build_mcp_runtime(
     // Precedence: explicit `auth.mcp.introspection_url` → discovery → none.
     let introspection_url = mcp
         .introspection_url
-        .as_deref()
-        .or_else(|| oidc.introspection_endpoint())
-        .map(str::to_string);
+        .clone()
+        .or_else(|| oidc.introspection_endpoint());
 
-    // Reuse OidcClient's cache by default; explicit `auth.mcp.jwks_url`
-    // override gets its own cache but shares the OIDC HTTP client pool.
-    let jwks_cache = match mcp.jwks_url.as_deref() {
+    // The handle's cache by default; an explicit `auth.mcp.jwks_url` gets its
+    // own cache but shares the OIDC HTTP client pool.
+    let jwks_override = match mcp.jwks_url.as_deref() {
         Some(url) if url != oidc.jwks_uri().as_str() => Some(JwksCache::new(
             oidc.http_client(),
             url::Url::parse(url)
                 .map_err(|e| anyhow::anyhow!("auth.mcp.jwks_url '{url}' is not a URL: {e}"))?,
             crate::oidc::client::jwks_cache_config(mcp.jwks_cache_ttl_secs),
         )),
-        _ => Some(oidc.jwks_cache().clone()),
+        _ => None,
     };
-
-    if jwks_cache.is_none() && introspection_url.is_none() {
-        anyhow::bail!(
-            "auth.mcp is enabled but neither a JWKS endpoint nor an introspection endpoint \
-             is configured. Set auth.mcp.introspection_url, configure Hydra to advertise \
-             jwks_uri / introspection_endpoint in its discovery doc, or disable [auth.mcp]."
-        );
-    }
 
     // Well-known absolute URL: prefer external_url (proxy-aware).
     let resource_base = config
@@ -862,7 +854,10 @@ fn build_mcp_runtime(
             cache_max_ttl_secs: mcp.cache_max_ttl_secs,
             provisioner: Some(provisioner),
             revocation: revocation_store.map(|r| r.into_arc()),
-            jwt: jwks_cache.map(|jwks| JwtVerifierConfig { jwks }),
+            jwt: Some(JwtVerifierConfig {
+                discovery: oidc.discovery_handle(),
+                jwks_override,
+            }),
         },
     );
     let metadata = Arc::new(ResourceMetadata::new(&audience, &issuer));

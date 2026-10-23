@@ -4,14 +4,15 @@
 //! 1. Size guard ([`MAX_BEARER_BYTES`]).
 //! 2. admin_token (constant-time; → [`AuthContext::Admin`], bypasses scope/aud).
 //! 3. JWT arm ([`jwt`]): peek unverified `iss`, require exact match against
-//!    `expected_issuer`, then RS256 validate against JWKS. Issuer mismatch
-//!    fails closed -- never falls through to introspection.
+//!    `expected_issuer`, then validate against the JWKS with the algorithms
+//!    discovery advertises. Issuer mismatch fails closed -- never falls
+//!    through to introspection.
 //! 4. Opaque arm ([`opaque`]): RFC 7662 introspection. Accepts `aud`
 //!    containing the resource OR `client_id` matching the configured client
 //!    (some Hydra opaque responses omit `aud`).
 //!
 //! Hardening:
-//! - JWT alg pinned to RS256 in the validator; header `alg` never trusted.
+//! - JWT alg limited to the discovery-derived set; header `alg` never trusted.
 //! - Unverified `iss` peek only selects the validator; signed `iss` is
 //!   re-checked by `Validation::set_issuer`.
 //! - Positive cache (SHA-256 keyed) covers both arms; revocation re-checked
@@ -44,7 +45,7 @@ use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
 use crate::context::{AuthContext, PrincipalId};
-use crate::JwksCache;
+use crate::{DiscoveryHandle, JwksCache};
 
 use cache::{
     CacheEntry, RevocationCacheEntry, CACHE_CAPACITY, NEGATIVE_CACHE_CAPACITY,
@@ -132,7 +133,7 @@ struct Inner {
     provisioner: Option<Arc<dyn UserProvisioner>>,
     revocation: Option<Arc<dyn RevocationStore>>,
     /// `None` disables the JWT arm; opaque becomes the only path.
-    jwks: Option<JwksCache>,
+    jwt: Option<JwtVerifierConfig>,
     /// Per-process throttle on admin_token audit warnings.
     admin_token_last_warn_secs: AtomicU64,
 }
@@ -197,10 +198,13 @@ pub enum BearerAuthOutcome {
     InsufficientScope { required: String },
 }
 
-/// Caller owns the [`JwksCache`] so one cache feeds the bearer gate, the
-/// id_token verifier, and the back-channel logout handler.
+/// Caller owns the [`DiscoveryHandle`] so one document and one key cache feed
+/// the bearer gate, the id_token verifier, and the back-channel logout handler.
 pub struct JwtVerifierConfig {
-    pub jwks: JwksCache,
+    /// Supplies the accepted signing algorithms and, by default, the key cache.
+    pub discovery: DiscoveryHandle,
+    /// A key cache used instead of the handle's own.
+    pub jwks_override: Option<JwksCache>,
 }
 
 /// `resource_metadata_url` and `realm` are echoed in WWW-Authenticate
@@ -271,8 +275,6 @@ impl BearerGate {
             _ => None,
         };
 
-        let jwks = cfg.jwt.map(|j| j.jwks);
-
         Self {
             inner: Arc::new(Inner {
                 http,
@@ -302,7 +304,7 @@ impl BearerGate {
                 realm: cfg.realm,
                 provisioner: cfg.provisioner,
                 revocation: cfg.revocation,
-                jwks,
+                jwt: cfg.jwt,
                 admin_token_last_warn_secs: AtomicU64::new(0),
             }),
         }
@@ -487,22 +489,21 @@ fn now_secs() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::{fixed_discovery, primed_jwks};
     use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
-    use oidc_relying_party::jwks::JwksCacheConfig;
-    use oidc_relying_party::test_support::{jwks, rsa_key, sign_id_token};
+    use oidc_relying_party::algorithms::SigningAlgorithm;
+    use oidc_relying_party::test_support::{ec_key, jwks, rsa_key, sign_id_token};
     use serde_json::json;
     use std::time::Instant;
 
     const TEST_KID: &str = "test-key-1";
+    const ISSUER: &str = "https://hydra.example.com";
 
-    fn primed_jwks(json: &str) -> JwksCache {
-        let cache = JwksCache::new(
-            reqwest::Client::new(),
-            reqwest::Url::parse("http://127.0.0.1:0/jwks").unwrap(),
-            JwksCacheConfig::default(),
-        );
-        cache.prime_raw(json).expect("test JWKS parses");
-        cache
+    fn rs256_verifier(jwks_json: &str) -> JwtVerifierConfig {
+        JwtVerifierConfig {
+            discovery: fixed_discovery(ISSUER, &[SigningAlgorithm::Rs256], primed_jwks(jwks_json)),
+            jwks_override: None,
+        }
     }
 
     fn issue_jwt(claims: serde_json::Value) -> String {
@@ -527,9 +528,7 @@ mod tests {
             cache_max_ttl_secs: 30,
             provisioner: None,
             revocation: None,
-            jwt: Some(JwtVerifierConfig {
-                jwks: primed_jwks(&jwks(&[rsa_key()]).to_string()),
-            }),
+            jwt: Some(rs256_verifier(&jwks(&[rsa_key()]).to_string())),
         };
         cfg_mutator(&mut cfg);
         BearerGate::new(cfg).expect("test HTTP client builds")
@@ -825,9 +824,7 @@ mod tests {
         let mut jwk = rsa_key().jwk().clone();
         jwk["use"] = json!("enc");
         let gate = base_gate(|c| {
-            c.jwt = Some(JwtVerifierConfig {
-                jwks: primed_jwks(&json!({ "keys": [jwk] }).to_string()),
-            });
+            c.jwt = Some(rs256_verifier(&json!({ "keys": [jwk] }).to_string()));
         });
         let jwt = issue_jwt(json!({
             "iss": "https://hydra.example.com",
@@ -837,6 +834,81 @@ mod tests {
         }));
         let outcome = gate.authorize(Some(&jwt), "").await;
         assert!(matches!(outcome, BearerAuthOutcome::InvalidToken));
+    }
+
+    fn es256_jwt() -> String {
+        let key = ec_key();
+        sign_id_token(
+            &key,
+            Some(key.kid()),
+            &json!({
+                "iss": ISSUER,
+                "sub": "alice",
+                "aud": ["https://mcp.example.com"],
+                "scope": "stackpit:events:read",
+                "exp": now() + 300,
+                "iat": now(),
+            }),
+        )
+    }
+
+    fn gate_allowing(algs: &[SigningAlgorithm]) -> BearerGate {
+        base_gate(|c| {
+            c.jwt = Some(JwtVerifierConfig {
+                discovery: fixed_discovery(
+                    ISSUER,
+                    algs,
+                    primed_jwks(&jwks(&[rsa_key(), ec_key()]).to_string()),
+                ),
+                jwks_override: None,
+            });
+        })
+    }
+
+    #[tokio::test]
+    async fn jwt_es256_accepted_when_gate_allows_es256() {
+        let gate = gate_allowing(&[SigningAlgorithm::Rs256, SigningAlgorithm::Es256]);
+        let outcome = gate
+            .authorize(Some(&es256_jwt()), "stackpit:events:read")
+            .await;
+        assert!(matches!(outcome, BearerAuthOutcome::Ok(_)));
+    }
+
+    #[tokio::test]
+    async fn jwt_es256_rejected_when_gate_pins_rs256() {
+        let gate = gate_allowing(&[SigningAlgorithm::Rs256]);
+        let outcome = gate
+            .authorize(Some(&es256_jwt()), "stackpit:events:read")
+            .await;
+        assert!(matches!(outcome, BearerAuthOutcome::InvalidToken));
+    }
+
+    #[tokio::test]
+    async fn jwt_override_cache_still_follows_the_handles_algorithms() {
+        let gate = base_gate(|c| {
+            c.jwt = Some(JwtVerifierConfig {
+                discovery: fixed_discovery(
+                    ISSUER,
+                    &[SigningAlgorithm::Rs256],
+                    primed_jwks(&jwks(&[]).to_string()),
+                ),
+                jwks_override: Some(primed_jwks(&jwks(&[rsa_key(), ec_key()]).to_string())),
+            });
+        });
+        let rsa = issue_jwt(json!({
+            "iss": ISSUER,
+            "sub": "alice",
+            "aud": ["https://mcp.example.com"],
+            "exp": now() + 300,
+        }));
+        assert!(matches!(
+            gate.authorize(Some(&rsa), "").await,
+            BearerAuthOutcome::Ok(_)
+        ));
+        assert!(matches!(
+            gate.authorize(Some(&es256_jwt()), "").await,
+            BearerAuthOutcome::InvalidToken
+        ));
     }
 
     #[tokio::test]

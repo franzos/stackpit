@@ -19,7 +19,7 @@ hex = "0.4"
 http = "1"
 thiserror = "2"
 # JWKS cache and key rules for the MCP JWT arm.
-oidc-relying-party = "0.1"
+oidc-relying-party = "0.2"
 # O(1) LRU eviction for the bearer + revocation caches.
 lru = "0.18"
 parking_lot = "0.12"
@@ -34,7 +34,7 @@ tracing = "0.1"
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
-oidc-relying-party = { version = "0.1", features = ["test-support"] }
+oidc-relying-party = { version = "0.2", features = ["test-support"] }
 # signs a token with a key outside the fixture set
 jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }

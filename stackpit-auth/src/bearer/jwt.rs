@@ -1,8 +1,7 @@
-//! JWT arm: peek unverified `iss` to pick the validator, then RS256-validate
-//! against the JWKS cache. Issuer mismatch fails closed -- never falls through
-//! to introspection.
+//! JWT arm: peek unverified `iss` to pick the validator, then validate against
+//! the JWKS cache with the algorithms discovery advertises. Issuer mismatch
+//! fails closed -- never falls through to introspection.
 
-use oidc_relying_party::algorithms::SigningAlgorithm;
 use oidc_relying_party::jwks::TokenPolicy;
 use oidc_relying_party::unverified::{unverified_header, unverified_payload};
 
@@ -40,10 +39,15 @@ impl BearerGate {
             return BearerAuthOutcome::InvalidToken;
         }
 
-        let Some(jwks) = self.inner.jwks.as_ref() else {
+        let Some(jwt) = self.inner.jwt.as_ref() else {
             tracing::warn!("bearer rejected: JWT received but JWKS not configured");
             return BearerAuthOutcome::InvalidToken;
         };
+        let discovery = jwt.discovery.current();
+        let jwks = jwt
+            .jwks_override
+            .clone()
+            .unwrap_or_else(|| jwt.discovery.jwks());
 
         // Same SHA-256 key as the opaque path: one entry per token regardless of arm.
         let token_key = hash_token(token);
@@ -77,7 +81,7 @@ impl BearerGate {
             skip_audience_check: self.inner.audience.is_empty(),
         };
         let claims = match jwks
-            .verify::<serde_json::Value>(token, &policy, &[SigningAlgorithm::Rs256])
+            .verify::<serde_json::Value>(token, &policy, &discovery.signing_algorithms)
             .await
         {
             Ok(claims) => claims,

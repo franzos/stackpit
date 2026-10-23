@@ -2643,9 +2643,9 @@ dependencies = [
 
 [[package]]
 name = "oidc-relying-party"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0df44d2d544a000ca16aa7073f32829daaa1030bb326ad74cc22411ef1459448"
+checksum = "0abe66eea2d98103f08338f39b49dbca2db75aa28219249e6727d260d475fe4e"
 dependencies = [
  "base64 0.22.1",
  "jsonwebtoken",
@@ -4364,7 +4364,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

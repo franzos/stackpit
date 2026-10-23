@@ -5,7 +5,8 @@
 //! 2. **`sp_grant` cookie** -- look up the server-side grant (the browser
 //!    session), refresh the IdP tokens if they're close to expiring, inject
 //!    `AuthContext`. The grant row is the session: refresh `invalid_grant`,
-//!    back-channel logout, logout and the absolute TTL delete it.
+//!    back-channel logout, logout, the absolute and idle TTLs, and an expired
+//!    access token with no refresh token delete it.
 //! 3. Otherwise -- redirect to `/web/login` (or 401 JSON for API clients).
 //!
 //! Public paths (assets, OAuth callback) skip the gate entirely.
@@ -26,6 +27,9 @@ use crate::server::AppState;
 
 /// Refresh-ahead margin. Eager refresh costs one extra `/token` call.
 const REFRESH_MARGIN_SECS: i64 = 60;
+
+/// `last_used_at` is written at most this often per grant.
+const TOUCH_MIN_INTERVAL_SECS: i64 = 60;
 
 /// Public paths (includes OAuth callback + backchannel + ops health).
 fn is_public_path(path: &str) -> bool {
@@ -151,6 +155,20 @@ pub async fn web_auth_middleware(
             tracing::info!("session absolute TTL exceeded; forcing re-login");
             grants::forget(&state.auth_pool, &handle).await;
             return unauthenticated_response(&req, secure_cookies);
+        }
+        if grant.idle_expired(now, state.config.auth.oauth.session_idle_ttl_secs) {
+            tracing::info!("session idle TTL exceeded; forcing re-login");
+            grants::forget(&state.auth_pool, &handle).await;
+            return unauthenticated_response(&req, secure_cookies);
+        }
+        if grant.refresh_token.is_none() && grant.access_exp <= now {
+            tracing::info!("access token expired with no refresh token; forcing re-login");
+            grants::forget(&state.auth_pool, &handle).await;
+            return unauthenticated_response(&req, secure_cookies);
+        }
+        if let Err(e) = grants::touch(&state.auth_pool, &handle, now, TOUCH_MIN_INTERVAL_SECS).await
+        {
+            tracing::warn!("grant touch failed: {e:#}");
         }
         let grant = if grant.should_refresh(now, REFRESH_MARGIN_SECS) {
             match refresh::refresh(&state.auth_pool, encryptor, oidc, &grant).await {
@@ -511,105 +529,274 @@ mod tests {
         assert_eq!(record.user_id, u.user_id);
     }
 
+    /// An OIDC-enabled app over `pool` with one grant for `sub`, routing
+    /// `/web/projects/` to a handler that echoes the authenticated `sub` and
+    /// `/web/logout` to a stub, behind the web auth and CSRF middleware.
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
+    struct GrantApp {
+        pool: crate::db::DbPool,
+        app: axum::Router,
+        handle: crate::oidc::grants::GrantHandle,
+        encryptor: std::sync::Arc<crate::util::crypto::SecretEncryptor>,
+    }
+
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
+    impl GrantApp {
+        async fn new(sub: &str, access_exp: i64, refresh_token: Option<&str>) -> Self {
+            use super::AuthContext;
+            use crate::oidc::discovery::{OidcReady, OidcSlot};
+            use crate::oidc::grants::{self, NewGrant};
+            use crate::util::crypto::SecretEncryptor;
+            use axum::http::StatusCode;
+            use axum::routing::{get, post};
+            use axum::{Extension, Router};
+
+            let pool = crate::queries::test_helpers::open_test_db().await;
+            let u = crate::queries::users::upsert_from_oidc(&pool, "https://idp", sub, None, None)
+                .await
+                .unwrap();
+            let encryptor = std::sync::Arc::new(
+                SecretEncryptor::from_config_or_env(Some(&secrecy::SecretString::from(
+                    "11".repeat(32),
+                )))
+                .unwrap()
+                .expect("a key was supplied"),
+            );
+            let handle = grants::insert(
+                &pool,
+                &encryptor,
+                &NewGrant {
+                    user_id: u.user_id,
+                    iss: "https://idp",
+                    sub,
+                    sid: None,
+                    access_token: "opaque-token-for-another-audience",
+                    access_exp,
+                    refresh_token,
+                    refresh_exp: None,
+                    id_token: "it",
+                    offline: false,
+                },
+            )
+            .await
+            .unwrap();
+
+            let (mut state, _chans) = crate::server::AppState::for_test(pool.clone());
+            // Parsed, not `Config::default()`: the derived default zeroes the TTL fields.
+            let config: crate::config::Config = toml::from_str(
+                r#"
+                [auth.oauth]
+                issuer_url = "https://idp"
+                client_id = "stackpit"
+                client_secret = "s"
+                redirect_uri = "https://sp/web/auth/callback"
+                "#,
+            )
+            .unwrap();
+            state.config = std::sync::Arc::new(config);
+            state.encryptor = Some(encryptor.clone());
+            state.oidc = OidcSlot::ready(OidcReady {
+                client: std::sync::Arc::new(crate::oidc::client::OidcClient::for_test(
+                    "stackpit",
+                    oidc_relying_party::discovery::DiscoveryHandle::fixed(
+                        crate::oidc::client::test_discovery("https://idp"),
+                        stackpit_auth::JwksCache::new(
+                            reqwest::Client::new(),
+                            url::Url::parse("https://idp/.well-known/jwks.json").unwrap(),
+                            crate::oidc::client::jwks_cache_config(60),
+                        ),
+                    ),
+                )),
+            });
+
+            let app = Router::new()
+                .route(
+                    "/web/projects/",
+                    get(|Extension(ctx): Extension<AuthContext>| async move {
+                        match ctx {
+                            AuthContext::User { sub, .. } => sub,
+                            _ => String::new(),
+                        }
+                    }),
+                )
+                .route("/web/logout", post(|| async { StatusCode::OK }))
+                .layer(axum::middleware::from_fn_with_state(
+                    crate::middleware::CsrfConfig {
+                        max_body_size: 64 * 1024,
+                    },
+                    crate::middleware::csrf_middleware,
+                ))
+                .layer(axum::middleware::from_fn_with_state(
+                    state,
+                    super::web_auth_middleware,
+                ));
+            Self {
+                pool,
+                app,
+                handle,
+                encryptor,
+            }
+        }
+
+        fn grant_cookie(&self) -> String {
+            format!(
+                "{}={}",
+                crate::oidc::cookies::grant_cookie_name(false),
+                self.handle.to_hex()
+            )
+        }
+
+        async fn csrf_token(&self) -> String {
+            crate::oidc::grants::load(&self.pool, &self.encryptor, &self.handle)
+                .await
+                .unwrap()
+                .expect("grant row")
+                .csrf_token
+                .clone()
+        }
+
+        async fn post_logout(&self, body: String) -> axum::response::Response {
+            use axum::body::Body;
+            use axum::http::Request;
+            use tower::ServiceExt;
+
+            self.app
+                .clone()
+                .oneshot(
+                    Request::post("/web/logout")
+                        .header("accept", "text/html")
+                        .header("content-type", "application/x-www-form-urlencoded")
+                        .header("cookie", self.grant_cookie())
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+        }
+
+        async fn get_projects(&self) -> axum::response::Response {
+            use axum::body::Body;
+            use axum::http::Request;
+            use tower::ServiceExt;
+
+            self.app
+                .clone()
+                .oneshot(
+                    Request::get("/web/projects/")
+                        .header("accept", "text/html")
+                        .header("cookie", self.grant_cookie())
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+        }
+
+        async fn set_last_used_at(&self, value: i64) {
+            sqlx::query("UPDATE oidc_grants SET last_used_at = ?1 WHERE handle = ?2")
+                .bind(value)
+                .bind(self.handle.db_key().as_slice())
+                .execute(&self.pool)
+                .await
+                .unwrap();
+        }
+
+        async fn last_used_at(&self) -> Option<i64> {
+            sqlx::query_scalar("SELECT last_used_at FROM oidc_grants WHERE handle = ?1")
+                .bind(self.handle.db_key().as_slice())
+                .fetch_optional(&self.pool)
+                .await
+                .unwrap()
+        }
+    }
+
     // The grant row is the session: an access token no resource-server gate
     // would accept (opaque, wrong audience) still authenticates the browser.
     #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
     #[tokio::test]
     async fn web_request_authenticates_from_grant_without_bearer_gate() {
-        use super::AuthContext;
-        use crate::oidc::discovery::{OidcReady, OidcSlot};
-        use crate::oidc::grants::{self, NewGrant};
-        use crate::util::crypto::SecretEncryptor;
-        use axum::body::Body;
-        use axum::http::{Request, StatusCode};
-        use axum::routing::get;
-        use axum::{Extension, Router};
-        use tower::ServiceExt;
+        use axum::http::StatusCode;
 
-        let pool = crate::queries::test_helpers::open_test_db().await;
-        let u =
-            crate::queries::users::upsert_from_oidc(&pool, "https://idp", "sub-own", None, None)
-                .await
-                .unwrap();
-        let encryptor = std::sync::Arc::new(
-            SecretEncryptor::from_config_or_env(Some(&secrecy::SecretString::from(
-                "11".repeat(32),
-            )))
-            .unwrap()
-            .expect("a key was supplied"),
-        );
-        let handle = grants::insert(
-            &pool,
-            &encryptor,
-            &NewGrant {
-                user_id: u.user_id,
-                iss: "https://idp",
-                sub: "sub-own",
-                sid: None,
-                access_token: "opaque-token-for-another-audience",
-                access_exp: chrono::Utc::now().timestamp() + 3600,
-                refresh_token: None,
-                refresh_exp: None,
-                id_token: "it",
-                offline: false,
-            },
-        )
-        .await
-        .unwrap();
-
-        let (mut state, _chans) = crate::server::AppState::for_test(pool);
-        let mut config = crate::config::Config::default();
-        config.auth.oauth.issuer_url = Some("https://idp".to_string());
-        config.auth.oauth.client_id = Some("stackpit".to_string());
-        config.auth.oauth.client_secret = Some(secrecy::SecretString::from("s"));
-        config.auth.oauth.redirect_uri = Some("https://sp/web/auth/callback".to_string());
-        state.config = std::sync::Arc::new(config);
-        state.encryptor = Some(encryptor);
-        state.oidc = OidcSlot::ready(OidcReady {
-            client: std::sync::Arc::new(crate::oidc::client::OidcClient::for_test(
-                "https://idp".to_string(),
-                "stackpit".to_string(),
-                stackpit_auth::JwksCache::new(
-                    reqwest::Client::new(),
-                    url::Url::parse("https://idp/.well-known/jwks.json").unwrap(),
-                    crate::oidc::client::jwks_cache_config(60),
-                ),
-            )),
-        });
-
-        let app = Router::new()
-            .route(
-                "/web/projects/",
-                get(|Extension(ctx): Extension<AuthContext>| async move {
-                    match ctx {
-                        AuthContext::User { sub, .. } => sub,
-                        _ => String::new(),
-                    }
-                }),
-            )
-            .layer(axum::middleware::from_fn_with_state(
-                state,
-                super::web_auth_middleware,
-            ));
-        let res = app
-            .oneshot(
-                Request::get("/web/projects/")
-                    .header(
-                        "cookie",
-                        format!(
-                            "{}={}",
-                            crate::oidc::cookies::grant_cookie_name(false),
-                            handle.to_hex()
-                        ),
-                    )
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let t = GrantApp::new("sub-own", chrono::Utc::now().timestamp() + 3600, None).await;
+        let res = t.get_projects().await;
         assert_eq!(res.status(), StatusCode::OK);
         let body = axum::body::to_bytes(res.into_body(), 1024).await.unwrap();
         assert_eq!(&body[..], b"sub-own");
+    }
+
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
+    #[tokio::test]
+    async fn logout_requires_the_grant_csrf_token() {
+        use axum::http::StatusCode;
+
+        let t = GrantApp::new("sub-logout", chrono::Utc::now().timestamp() + 3600, None).await;
+
+        let missing = t.post_logout(String::new()).await;
+        assert_eq!(missing.status(), StatusCode::FORBIDDEN);
+
+        let wrong = t
+            .post_logout(format!("csrf_token={}", "0".repeat(32)))
+            .await;
+        assert_eq!(wrong.status(), StatusCode::FORBIDDEN);
+
+        let token = t.csrf_token().await;
+        let ok = t.post_logout(format!("csrf_token={token}")).await;
+        assert_eq!(ok.status(), StatusCode::OK);
+    }
+
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
+    #[tokio::test]
+    async fn idle_grant_is_forgotten_and_redirected_to_login() {
+        use axum::http::StatusCode;
+
+        let now = chrono::Utc::now().timestamp();
+        let t = GrantApp::new("sub-idle", now + 3600, Some("rt")).await;
+        t.set_last_used_at(now - 8 * 24 * 3600).await;
+
+        let res = t.get_projects().await;
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        assert_eq!(res.headers()["location"], "/web/login");
+        assert_eq!(t.last_used_at().await, None, "the grant row must be gone");
+    }
+
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
+    #[tokio::test]
+    async fn a_request_bumps_last_used_at_once_it_is_older_than_the_touch_interval() {
+        use axum::http::StatusCode;
+
+        let now = chrono::Utc::now().timestamp();
+        let t = GrantApp::new("sub-stale", now + 3600, None).await;
+        t.set_last_used_at(now - 120).await;
+
+        assert_eq!(t.get_projects().await.status(), StatusCode::OK);
+        assert!(t.last_used_at().await.unwrap() >= now);
+    }
+
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
+    #[tokio::test]
+    async fn a_request_leaves_a_recently_used_grant_untouched() {
+        use axum::http::StatusCode;
+
+        let now = chrono::Utc::now().timestamp();
+        let t = GrantApp::new("sub-recent", now + 3600, None).await;
+        t.set_last_used_at(now - 10).await;
+
+        assert_eq!(t.get_projects().await.status(), StatusCode::OK);
+        assert_eq!(t.last_used_at().await, Some(now - 10));
+    }
+
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
+    #[tokio::test]
+    async fn expired_access_token_without_refresh_token_ends_the_session() {
+        use axum::http::StatusCode;
+
+        let now = chrono::Utc::now().timestamp();
+        let t = GrantApp::new("sub-norefresh", now - 1, None).await;
+
+        let res = t.get_projects().await;
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        assert_eq!(res.headers()["location"], "/web/login");
+        assert_eq!(t.last_used_at().await, None, "the grant row must be gone");
     }
 
     #[test]

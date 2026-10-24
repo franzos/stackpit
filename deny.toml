@@ -12,4 +12,9 @@ ignore = [
     # no private-key decryption — so the key-recovery attack doesn't apply. No
     # fixed rsa release exists yet.
     "RUSTSEC-2023-0071",
+    # crypto-bigint 0.5 (via elliptic-curve 0.13 / p256 / p384): timing leaks on
+    # secret operands. We only verify ES256/ES384 signatures with public keys, so
+    # no secret goes through it. Fixed only in 0.7.6, which elliptic-curve 0.13
+    # can't take.
+    "RUSTSEC-2026-0387",
 ]

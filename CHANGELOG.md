@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.15] - 2026-10-24
+
+### Security
+- `tokio` 1.54.1 for RUSTSEC-2026-0386
+- `ctutils` 0.4.5 for RUSTSEC-2026-0385
+- Dropped unmaintained `basic-toml` (RUSTSEC-2026-0374)
+
 ## [0.4.14] - 2026-10-24
 
 ### Added

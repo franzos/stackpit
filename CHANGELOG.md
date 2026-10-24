@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.4.14] - 2026-10-24
+
+### Added
+- `session_idle_ttl_secs`: SSO sessions end after 7 days idle
+
+### Changed
+- SSO sessions last 30 days by default, previously 8 hours
+- Without `offline_access`, SSO sessions end when the access token expires
+- Session cookie is `SameSite=Lax`
+- Sign-in, SSO callback and logout routes have their own rate limits
+
+### Fixed
+- Org invites could be created for personal and IdP-managed orgs
+- Signing in again left the previous SSO session active
+
+### Security
+- Logout now requires a CSRF token
+- Session counts and durations clamped at ingest
+- `rustls-webpki` and webpki roots for RUSTSEC-2026-0381, 0382, 0383
+- `quinn-proto` 0.11.19
+
 ## [0.4.13] - 2026-10-19
 
 ### Added

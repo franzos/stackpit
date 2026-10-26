@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.4.16] - 2026-10-26
+
+### Added
+- Sign-in buttons for the upstream providers the IdP advertises
+
 ## [0.4.15] - 2026-10-24
 
 ### Security

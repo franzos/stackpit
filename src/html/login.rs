@@ -2,6 +2,7 @@ use axum::extract::{Form, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use oidc_relying_party::auth_response::AuthorizationErrorCode;
+use oidc_relying_party::discovery::IdpHint;
 use oidc_relying_party::end_session::{build_end_session_url, EndSessionRequest};
 use secrecy::ExposeSecret;
 use serde::Deserialize;
@@ -75,6 +76,21 @@ struct LoginTemplate {
     /// Resolved request locale. LoginTemplate is standalone (no PageChrome),
     /// so it carries its own locale and looks strings up directly.
     locale: LanguageIdentifier,
+    /// One button per upstream provider the IdP advertises; empty when OIDC
+    /// isn't ready.
+    idp_hints: Vec<IdpHint>,
+}
+
+/// Upstream providers to offer as sign-in buttons, from the IdP's discovery.
+fn idp_hints(state: &AppState) -> Vec<IdpHint> {
+    if !state.oidc.is_ready() {
+        return Vec::new();
+    }
+    state
+        .oidc
+        .client()
+        .map(|c| c.discovery().idp_hints_supported.clone())
+        .unwrap_or_default()
 }
 
 impl Localized for LoginTemplate {
@@ -130,6 +146,7 @@ pub struct LoginQuery {
 pub fn render_login(
     error: Option<String>,
     oauth_enabled: bool,
+    idp_hints: Vec<IdpHint>,
     status: StatusCode,
     locale: LanguageIdentifier,
 ) -> axum::response::Response {
@@ -138,6 +155,7 @@ pub fn render_login(
         oauth_enabled,
         info: None,
         locale,
+        idp_hints,
     };
     match askama::Template::render(&tmpl) {
         Ok(html) => (status, axum::response::Html(html)).into_response(),
@@ -206,6 +224,7 @@ pub async fn login_form(
         oauth_enabled,
         info,
         locale,
+        idp_hints: idp_hints(&state),
     };
     let status = StatusCode::OK;
     match askama::Template::render(&tmpl) {
@@ -260,6 +279,7 @@ pub async fn handle_login(
         render_login(
             Some(msg),
             oauth_enabled,
+            idp_hints(&state),
             StatusCode::UNAUTHORIZED,
             chrome.locale,
         )
@@ -557,6 +577,65 @@ mod tests {
         );
     }
 
+    fn github() -> Vec<IdpHint> {
+        vec![IdpHint {
+            id: "git hub".to_string(),
+            name: "GitHub".to_string(),
+        }]
+    }
+
+    #[test]
+    fn login_form_renders_one_button_per_idp_hint() {
+        let tmpl = LoginTemplate {
+            error: None,
+            oauth_enabled: true,
+            info: None,
+            locale: langid!("en"),
+            idp_hints: github(),
+        };
+        let html = tmpl.render().expect("login renders");
+        assert!(
+            html.contains(r#"href="/web/auth/login?idp_hint=git%20hub""#),
+            "{html}"
+        );
+        assert!(html.contains("Continue with GitHub"));
+        assert!(
+            html.contains(r#"href="/web/auth/login""#),
+            "the generic SSO button stays"
+        );
+    }
+
+    #[tokio::test]
+    async fn rejected_token_page_keeps_the_idp_hint_buttons() {
+        let resp = render_login(
+            Some("bad token".to_string()),
+            true,
+            github(),
+            StatusCode::UNAUTHORIZED,
+            langid!("en"),
+        );
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("idp_hint=git%20hub"));
+    }
+
+    #[test]
+    fn login_without_idp_hints_has_no_provider_buttons() {
+        for oauth_enabled in [true, false] {
+            let tmpl = LoginTemplate {
+                error: None,
+                oauth_enabled,
+                info: None,
+                locale: langid!("en"),
+                idp_hints: Vec::new(),
+            };
+            let html = tmpl.render().expect("login renders");
+            assert!(!html.contains("idp_hint"));
+        }
+    }
+
     #[test]
     fn login_renders_german_without_missing_keys() {
         let tmpl = LoginTemplate {
@@ -564,6 +643,7 @@ mod tests {
             oauth_enabled: true,
             info: None,
             locale: langid!("de"),
+            idp_hints: Vec::new(),
         };
         let html = tmpl.render().expect("login renders");
         assert!(

@@ -62,6 +62,7 @@ pub(crate) mod test_util {
                 signing_algorithms: algs.to_vec(),
                 token_endpoint_auth_method: ClientAuthMethod::Basic,
                 authorization_response_iss_parameter_supported: false,
+                idp_hints_supported: Vec::new(),
             },
             jwks,
         )

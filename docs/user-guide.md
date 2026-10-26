@@ -8,7 +8,7 @@ One thing to know up front: Stackpit's UI has no per-user roles. Everyone who si
 
 Open the site and you'll land on the login page. There are two ways in, depending on how the operator set it up:
 
-- Sign in with SSO — if your organization uses single sign-on, click the button and you'll be sent to your identity provider and back.
+- Sign in with SSO — if your organization uses single sign-on, click the button and you'll be sent to your identity provider and back. If there's a "Continue with GitHub" (or similar) button, it takes you straight to that provider instead of your identity provider's sign-in page.
 - Admin token — otherwise, paste the shared admin token and click Sign in. It's a single shared token (from the server's `stackpit.toml`), not a personal username and password, so there's no registration or password reset.
 
 Sign out from the Logout button in the sidebar.

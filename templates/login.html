@@ -42,6 +42,12 @@
         {% endif %}
 
         {% if oauth_enabled %}
+          {% for hint in idp_hints %}
+            <a href="/web/auth/login?idp_hint={{ hint.id|urlencode }}"
+               class="btn btn-secondary w-full justify-center h-10">
+              {{ self.tv1("login-sso-provider", "provider", hint.name.as_str()) }}
+            </a>
+          {% endfor %}
           <a href="/web/auth/login"
              class="btn btn-primary w-full justify-center uppercase tracking-wider text-[11px] h-10">
             {{ self.t("login-sso") }}

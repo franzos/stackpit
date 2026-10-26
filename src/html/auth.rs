@@ -25,9 +25,16 @@ use crate::queries::users;
 use crate::server::AppState;
 use stackpit_auth::read_cookie;
 
+#[derive(Deserialize)]
+pub struct LoginParams {
+    /// Upstream provider to send the user straight to; checked against the
+    /// IdP's `idp_hints_supported`.
+    idp_hint: Option<String>,
+}
+
 /// `GET /web/auth/login` -- generate state/nonce/PKCE, stash in encrypted
 /// cookie, redirect to Hydra.
-pub async fn login(State(state): State<AppState>) -> Response {
+pub async fn login(State(state): State<AppState>, Query(params): Query<LoginParams>) -> Response {
     let Some(oidc) = state.oidc.client() else {
         // Not configured, or discovery hasn't landed yet - the admin-token form still works.
         return Redirect::to("/web/login").into_response();
@@ -38,7 +45,7 @@ pub async fn login(State(state): State<AppState>) -> Response {
         return login_error("encryption_unconfigured");
     };
 
-    let start = match oidc.start_login() {
+    let start = match oidc.start_login(params.idp_hint.as_deref()) {
         Ok(start) => start,
         Err(e) => {
             tracing::error!("building the authorization request failed: {e:#}");

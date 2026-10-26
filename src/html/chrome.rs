@@ -234,6 +234,12 @@ pub(crate) trait Localized {
         crate::i18n::lookup(self.locale(), id)
     }
 
+    fn tv1(&self, id: &str, name: &str, val: &str) -> String {
+        let mut a: HashMap<Cow<'static, str>, FluentValue> = HashMap::new();
+        a.insert(Cow::Owned(name.to_string()), val.to_string().into());
+        crate::i18n::lookup_args(self.locale(), id, &a)
+    }
+
     fn dir(&self) -> &'static str {
         crate::locale::dir_for(self.locale())
     }

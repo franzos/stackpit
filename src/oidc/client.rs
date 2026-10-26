@@ -334,15 +334,24 @@ impl OidcClient {
         self.inner.http.clone()
     }
 
-    /// Build authorize URL + PKCE/state/nonce for session.
-    pub fn start_login(&self) -> Result<LoginStart> {
+    /// Build authorize URL + PKCE/state/nonce for session. An `idp_hint` the
+    /// IdP doesn't advertise is dropped.
+    pub fn start_login(&self, idp_hint: Option<&str>) -> Result<LoginStart> {
         let discovery = self.discovery();
+        let mut params = self.inner.extra_params.clone();
+        if let Some(hint) = idp_hint {
+            if discovery.supports_idp_hint(hint) {
+                params.push(("idp_hint".to_string(), hint.to_string()));
+            } else {
+                tracing::warn!(hint, "idp_hint not advertised by the IdP, dropping it");
+            }
+        }
         let req = build_authorization_request(
             &discovery,
             self.client_id(),
             &self.inner.redirect_uri,
             &self.inner.scopes,
-            &self.inner.extra_params,
+            &params,
         )
         .context("building the authorization request")?;
         Ok(LoginStart {
@@ -644,6 +653,7 @@ pub(crate) fn test_discovery(issuer: &str) -> Discovery {
         signing_algorithms: oidc_relying_party::algorithms::ASYMMETRIC_ALGORITHMS.to_vec(),
         token_endpoint_auth_method: ClientAuthMethod::Basic,
         authorization_response_iss_parameter_supported: false,
+        idp_hints_supported: Vec::new(),
     }
 }
 
@@ -806,7 +816,7 @@ mod tests {
     fn extra_params_only_when_configured() {
         let mut client = test_client();
         let params = |client: &OidcClient| -> std::collections::HashMap<String, String> {
-            let url = Url::parse(&client.start_login().unwrap().auth_url).unwrap();
+            let url = Url::parse(&client.start_login(None).unwrap().auth_url).unwrap();
             url.query_pairs().into_owned().collect()
         };
         let plain = params(&client);
@@ -821,6 +831,26 @@ mod tests {
         let scoped = params(&client);
         assert_eq!(scoped["audience"], "stackpit-web");
         assert_eq!(scoped["organization_id"], "acme");
+    }
+
+    #[test]
+    fn advertised_idp_hint_reaches_the_authorize_url_and_unknown_is_dropped() {
+        let mut discovery = test_discovery(ISSUER);
+        discovery.idp_hints_supported = vec![oidc_relying_party::discovery::IdpHint {
+            id: "github".to_string(),
+            name: "GitHub".to_string(),
+        }];
+        let client =
+            OidcClient::for_test("stackpit", DiscoveryHandle::fixed(discovery, test_cache()));
+        let hint = |h: Option<&str>| -> Option<String> {
+            let url = Url::parse(&client.start_login(h).unwrap().auth_url).unwrap();
+            url.query_pairs()
+                .find(|(k, _)| k == "idp_hint")
+                .map(|(_, v)| v.into_owned())
+        };
+        assert_eq!(hint(Some("github")).as_deref(), Some("github"));
+        assert_eq!(hint(Some("google")), None);
+        assert_eq!(hint(None), None);
     }
 
     #[test]

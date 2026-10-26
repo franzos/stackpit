@@ -5,6 +5,7 @@ login-page-title = Connexion — Stackpit
 login-welcome = Bon retour
 login-subtitle = Connectez-vous pour gérer votre suivi des erreurs
 login-sso = Se connecter avec SSO
+login-sso-provider = Continuer avec { $provider }
 login-or = ou
 login-token-label = Jeton d'administration
 login-token-placeholder = Saisissez votre jeton principal…

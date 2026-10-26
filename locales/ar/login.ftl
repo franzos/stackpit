@@ -5,6 +5,7 @@ login-page-title = تسجيل الدخول — Stackpit
 login-welcome = مرحبًا بعودتك
 login-subtitle = سجّل الدخول لإدارة تتبّع الأخطاء الخاص بك
 login-sso = تسجيل الدخول عبر SSO
+login-sso-provider = المتابعة باستخدام { $provider }
 login-or = أو
 login-token-label = رمز المسؤول
 login-token-placeholder = أدخل رمزك الرئيسي…

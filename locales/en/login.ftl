@@ -5,6 +5,7 @@ login-page-title = Sign in — Stackpit
 login-welcome = Welcome back
 login-subtitle = Sign in to manage your error tracking
 login-sso = Sign in with SSO
+login-sso-provider = Continue with { $provider }
 login-or = or
 login-token-label = Admin Token
 login-token-placeholder = Enter your master token…

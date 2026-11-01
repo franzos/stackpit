@@ -37,28 +37,59 @@ const MAX_REQUEST_BODY_BYTES: usize = 4 * 1024 * 1024;
 const JSONRPC_INVALID_REQUEST: i64 = -32600;
 const JSONRPC_INVALID_PARAMS: i64 = -32602;
 const JSONRPC_PARSE_ERROR: i64 = -32700;
+const JSONRPC_INTERNAL_ERROR: i64 = -32603;
 
 type McpService = StreamableHttpService<McpServer, NeverSessionManager>;
 
-pub(super) fn routes<S>(runtime: &McpRuntime) -> Router<S>
+pub(super) fn routes<S>(runtime: &Arc<McpRuntime>) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
     McpState: FromRef<S>,
 {
-    // Authentication only. Every scope check is per-tool: gating the route on
-    // one scope would stop a token holding just `projects:write` or `admin`
-    // from even completing the handshake.
-    let auth = axum::middleware::from_fn_with_state(
-        McpAuthLayerState {
-            gate: runtime.gate.clone(),
-            required_scope: String::new(),
-        },
-        mcp_auth_middleware,
-    );
+    let auth = axum::middleware::from_fn_with_state(runtime.clone(), bearer_middleware);
     let authenticated = Router::<S>::new()
         .route(MCP_PATH, post_route(runtime))
         .layer(auth);
     with_origin_gate(runtime.origins.clone(), authenticated)
+}
+
+/// Authentication only. Every scope check is per-tool: gating the route on one
+/// scope would stop a token holding just `projects:write` or `admin` from even
+/// completing the handshake.
+async fn bearer_middleware(
+    State(runtime): State<Arc<McpRuntime>>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let gate = match runtime.gate() {
+        Some(gate) => gate.clone(),
+        None if stackpit_auth::extract_bearer(req.headers()).is_none() => {
+            return render_rejection(&runtime.challenge, BearerAuthOutcome::MissingToken)
+                .unwrap_or_else(|| StatusCode::UNAUTHORIZED.into_response());
+        }
+        // A 401 here would send a client holding a good token round the
+        // re-authorization loop against an issuer that is not answering.
+        None => return issuer_unavailable(),
+    };
+    let layer = McpAuthLayerState {
+        gate,
+        required_scope: String::new(),
+    };
+    mcp_auth_middleware(State(layer), req, next).await
+}
+
+fn issuer_unavailable() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({
+            "jsonrpc": "2.0",
+            "error": {
+                "code": JSONRPC_INTERNAL_ERROR,
+                "message": "Token validation is unavailable until the issuer has been discovered",
+            },
+        })),
+    )
+        .into_response()
 }
 
 /// The preflight is merged outside the bearer layer: a browser sends no
@@ -334,7 +365,7 @@ async fn preflight(state: &McpState, parts: &mut Parts, name: &str) -> Option<Re
             parts.extensions.insert(principal);
         }
         Err(err) => {
-            if let Some(rejection) = principal_rejection(&runtime.gate, err) {
+            if let Some(rejection) = principal_rejection(&runtime.challenge, err) {
                 return Some(rejection);
             }
             // Everything else fails closed inside the envelope: a transient IdP
@@ -357,7 +388,7 @@ async fn preflight(state: &McpState, parts: &mut Parts, name: &str) -> Option<Re
         granted = %scopes.as_slice().join(" "),
         "mcp scope step-up",
     );
-    Some(scope_step_up(&runtime.gate, required))
+    Some(scope_step_up(&runtime.challenge, required))
 }
 
 /// The tool the scope pre-check resolved, carried to the handler so rmcp's own

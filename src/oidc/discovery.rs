@@ -1,5 +1,5 @@
 //! Late-bound OIDC discovery: retried in the background, published into an [`OidcSlot`].
-//! Only the browser surface is late-bindable - `/mcp` mounts at startup and still needs a restart.
+//! Browser sign-in and the `/mcp` bearer gate both read the client from the slot.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -85,8 +85,7 @@ pub fn spawn_retry(slot: OidcSlot, cancel: CancellationToken, config: Arc<Config
                     });
                     client.spawn_refresh(cancel.child_token());
                     tracing::info!(
-                        "OIDC discovery succeeded on retry; browser sign-in is live \
-                         (/mcp, if configured, still needs a restart)"
+                        "OIDC discovery succeeded on retry; browser sign-in and /mcp are live"
                     );
                     return;
                 }

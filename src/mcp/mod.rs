@@ -9,7 +9,7 @@ mod tools;
 mod transport;
 
 use std::num::NonZeroUsize;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use axum::extract::{FromRef, State};
@@ -20,13 +20,16 @@ use axum::routing::get;
 use axum::{Json, Router};
 use lru::LruCache;
 use parking_lot::Mutex;
+use secrecy::SecretString;
 use serde_json::{json, Value};
-use stackpit_auth::bearer::UserProvisioner;
-use stackpit_auth::BearerGate;
+use stackpit_auth::{
+    BearerGate, BearerGateConfig, JwksCache, JwtVerifierConfig, RevocationStore, UserProvisioner,
+};
 
 use crate::db::DbPool;
 use crate::ingest::auth::{AuthCache, NegativeAuthCache};
 use crate::oidc::client::OidcClient;
+use crate::oidc::discovery::OidcSlot;
 use crate::server::AppState;
 use crate::util::crypto::SecretEncryptor;
 
@@ -71,14 +74,122 @@ pub const WELL_KNOWN_PATH: &str = "/.well-known/oauth-protected-resource/mcp";
 /// Pre-RFC clients probe the bare path; kept as an alias.
 const WELL_KNOWN_ROOT_PATH: &str = "/.well-known/oauth-protected-resource";
 
-/// Shared via `AppState` so handlers can pull metadata + the auth gate.
-#[derive(Clone)]
+/// Shared via `AppState`. Mounted from configuration alone; the bearer gate is
+/// built on the first request after OIDC discovery has landed in the slot.
 pub struct McpRuntime {
     pub metadata: Arc<ResourceMetadata>,
-    pub gate: BearerGate,
+    /// Renders challenges, including before the issuer has been discovered.
+    pub challenge: BearerGate,
+    gate: OnceLock<BearerGate>,
+    spec: GateSpec,
+    oidc: OidcSlot,
     pub origins: Arc<OriginPolicy>,
     /// Principals resolved from the IdP, keyed by token hash.
     pub principals: Arc<PrincipalCache>,
+}
+
+impl McpRuntime {
+    pub fn new(spec: GateSpec, origins: OriginPolicy, oidc: OidcSlot) -> anyhow::Result<Self> {
+        Ok(Self {
+            metadata: Arc::new(ResourceMetadata::new(&spec.audience, &spec.issuer)),
+            challenge: BearerGate::new(spec.config(None))?,
+            gate: OnceLock::new(),
+            spec,
+            oidc,
+            origins: Arc::new(origins),
+            principals: Arc::new(PrincipalCache::new()),
+        })
+    }
+
+    /// `None` until discovery has published a client.
+    pub(crate) fn gate(&self) -> Option<&BearerGate> {
+        if let Some(gate) = self.gate.get() {
+            return Some(gate);
+        }
+        let client = self.oidc.client()?;
+        Some(self.gate.get_or_init(|| {
+            BearerGate::with_client(client.http_client(), self.spec.config(Some(&client)))
+        }))
+    }
+}
+
+/// The configuration half of the bearer gate; the discovered client supplies the rest.
+pub struct GateSpec {
+    pub audience: String,
+    pub issuer: String,
+    pub resource_metadata_url: String,
+    /// Explicit override; falls back to discovery's introspection endpoint.
+    pub introspection_url: Option<String>,
+    pub introspection_client_id: Option<String>,
+    pub introspection_client_secret: Option<SecretString>,
+    pub jwks_url: Option<url::Url>,
+    pub jwks_cache_ttl_secs: u64,
+    pub cache_ttl_secs: u64,
+    pub cache_max_ttl_secs: u64,
+    pub provisioner: Option<Arc<dyn UserProvisioner>>,
+    pub revocation: Option<Arc<dyn RevocationStore>>,
+}
+
+impl GateSpec {
+    /// Without `oidc` the gate validates nothing and only renders challenges.
+    fn config(&self, oidc: Option<&OidcClient>) -> BearerGateConfig {
+        let base = BearerGateConfig {
+            introspection_url: None,
+            audience: self.audience.clone(),
+            resource_metadata_url: self.resource_metadata_url.clone(),
+            challenge_scope: ADVERTISED_SCOPES.join(" "),
+            realm: "stackpit".to_string(),
+            expected_issuer: Some(self.issuer.clone()),
+            // Empty disables the opaque arm's `client_id` fallback: accepting
+            // the *web* client here would make every web-session token a valid
+            // /mcp credential the moment introspection is configured.
+            client_id: String::new(),
+            jwt_login_client_id: String::new(),
+            allow_audience_less_opaque: false,
+            // MCP accepts only tokens the authorization server issued for this
+            // resource; a static config secret is not one.
+            admin_token: None,
+            introspection_client_id: None,
+            introspection_client_secret: None,
+            cache_ttl_secs: self.cache_ttl_secs,
+            cache_max_ttl_secs: self.cache_max_ttl_secs,
+            provisioner: None,
+            revocation: None,
+            jwt: None,
+        };
+        let Some(oidc) = oidc else {
+            return base;
+        };
+        // The handle's cache by default; an explicit `auth.mcp.jwks_url` gets its
+        // own cache but shares the OIDC HTTP client pool.
+        let jwks_override = self
+            .jwks_url
+            .as_ref()
+            .filter(|url| **url != oidc.jwks_uri())
+            .map(|url| {
+                JwksCache::new(
+                    oidc.http_client(),
+                    url.clone(),
+                    crate::oidc::client::jwks_cache_config(self.jwks_cache_ttl_secs),
+                )
+            });
+        BearerGateConfig {
+            introspection_url: self
+                .introspection_url
+                .clone()
+                .or_else(|| oidc.introspection_endpoint()),
+            jwt_login_client_id: oidc.client_id().to_string(),
+            introspection_client_id: self.introspection_client_id.clone(),
+            introspection_client_secret: self.introspection_client_secret.clone(),
+            provisioner: self.provisioner.clone(),
+            revocation: self.revocation.clone(),
+            jwt: Some(JwtVerifierConfig {
+                discovery: oidc.discovery_handle(),
+                jwks_override,
+            }),
+            ..base
+        }
+    }
 }
 
 /// The slice of `AppState` the MCP surface needs, so the transport handler is
@@ -125,7 +236,7 @@ impl FromRef<AppState> for McpState {
 }
 
 /// Well-known is public; `/mcp` requires a bearer token.
-pub fn routes(runtime: &McpRuntime) -> Router<AppState> {
+pub fn routes(runtime: &Arc<McpRuntime>) -> Router<AppState> {
     well_known_routes().merge(transport::routes(runtime))
 }
 
@@ -242,58 +353,46 @@ impl UserProvisioner for DbProvisioner {
 #[cfg(test)]
 pub(crate) mod test_support {
     use super::*;
-    use oidc_relying_party::discovery::DiscoveryHandle;
-    use stackpit_auth::{BearerGateConfig, JwksCache, JwtVerifierConfig};
 
     pub const TEST_AUDIENCE: &str = "https://stackpit.example.com/mcp";
     pub const TEST_ISSUER: &str = "https://idp.test";
     pub const TEST_METADATA_URL: &str =
         "https://stackpit.example.com/.well-known/oauth-protected-resource/mcp";
 
-    pub fn gate() -> BearerGate {
-        BearerGate::new(BearerGateConfig {
-            introspection_url: None,
+    pub fn spec() -> GateSpec {
+        GateSpec {
             audience: TEST_AUDIENCE.to_string(),
+            issuer: TEST_ISSUER.to_string(),
             resource_metadata_url: TEST_METADATA_URL.to_string(),
-            challenge_scope: ADVERTISED_SCOPES.join(" "),
-            realm: "stackpit".to_string(),
-            expected_issuer: Some(TEST_ISSUER.to_string()),
-            client_id: String::new(),
-            jwt_login_client_id: "stackpit-web".to_string(),
-            allow_audience_less_opaque: false,
-            admin_token: None,
+            introspection_url: None,
             introspection_client_id: None,
             introspection_client_secret: None,
+            jwks_url: None,
+            jwks_cache_ttl_secs: 60,
             cache_ttl_secs: 0,
             cache_max_ttl_secs: 30,
             provisioner: None,
             revocation: None,
-            jwt: Some(JwtVerifierConfig {
-                discovery: DiscoveryHandle::fixed(
-                    crate::oidc::client::test_discovery(TEST_ISSUER),
-                    JwksCache::new(
-                        reqwest::Client::new(),
-                        url::Url::parse("http://127.0.0.1:0/jwks").unwrap(),
-                        crate::oidc::client::jwks_cache_config(60),
-                    ),
-                ),
-                jwks_override: None,
-            }),
-        })
-        .expect("test HTTP client builds")
+        }
     }
 
+    /// Renders challenges only.
+    pub fn gate() -> BearerGate {
+        BearerGate::new(spec().config(None)).expect("test HTTP client builds")
+    }
+
+    pub fn runtime_with(oidc: OidcSlot) -> Arc<McpRuntime> {
+        let origins = OriginPolicy::new(
+            Some("https://stackpit.example.com/"),
+            TEST_AUDIENCE,
+            &["https://claude.ai".to_string()],
+        );
+        Arc::new(McpRuntime::new(spec(), origins, oidc).expect("test HTTP client builds"))
+    }
+
+    /// Discovery has not landed; the transport tests stub the bearer layer.
     pub fn runtime() -> Arc<McpRuntime> {
-        Arc::new(McpRuntime {
-            metadata: Arc::new(ResourceMetadata::new(TEST_AUDIENCE, TEST_ISSUER)),
-            gate: gate(),
-            origins: Arc::new(OriginPolicy::new(
-                Some("https://stackpit.example.com/"),
-                TEST_AUDIENCE,
-                &["https://claude.ai".to_string()],
-            )),
-            principals: Arc::new(PrincipalCache::new()),
-        })
+        runtime_with(OidcSlot::default())
     }
 
     /// No OIDC client, so principal resolution fails closed; the transport and
@@ -322,6 +421,7 @@ pub(crate) mod test_support {
 mod tests {
     use super::test_support::*;
     use super::*;
+    use crate::oidc::discovery::OidcReady;
     use crate::queries::orgs::list_memberships;
     use crate::queries::users::find_by_iss_sub;
     use axum::body::Body;
@@ -390,6 +490,100 @@ mod tests {
             !ADVERTISED_SCOPES.contains(&SCOPE_ADMIN),
             "advertising admin makes every first connect an admin consent",
         );
+    }
+
+    async fn post_mcp(rt: &Arc<McpRuntime>, bearer: Option<&str>) -> axum::response::Response {
+        let mut state = state().await;
+        state.runtime = Some(rt.clone());
+        let mut req = HttpRequest::builder()
+            .method("POST")
+            .uri("/mcp")
+            .header("host", "stackpit.example.com")
+            .header("content-type", "application/json")
+            .header("accept", "application/json, text/event-stream");
+        if let Some(token) = bearer {
+            req = req.header("authorization", format!("Bearer {token}"));
+        }
+        let body = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": { "protocolVersion": "2025-11-25" },
+        });
+        transport::routes::<McpState>(rt)
+            .with_state(state)
+            .oneshot(req.body(Body::from(body.to_string())).unwrap())
+            .await
+            .unwrap()
+    }
+
+    fn signed_token() -> String {
+        use oidc_relying_party::test_support::{rsa_key, sign_id_token, unix_now};
+        let key = rsa_key();
+        sign_id_token(
+            &key,
+            Some(key.kid()),
+            &json!({
+                "iss": TEST_ISSUER,
+                "sub": "alice",
+                "aud": [TEST_AUDIENCE],
+                "scope": SCOPE_EVENTS_READ,
+                "iat": unix_now(),
+                "exp": unix_now() + 300,
+            }),
+        )
+    }
+
+    fn discovered_client() -> OidcReady {
+        use oidc_relying_party::discovery::DiscoveryHandle;
+        use oidc_relying_party::test_support::{jwks, rsa_key};
+        let cache = JwksCache::new(
+            reqwest::Client::new(),
+            url::Url::parse("http://127.0.0.1:0/jwks").unwrap(),
+            crate::oidc::client::jwks_cache_config(60),
+        );
+        cache.prime_raw(&jwks(&[rsa_key()]).to_string()).unwrap();
+        let discovery =
+            DiscoveryHandle::fixed(crate::oidc::client::test_discovery(TEST_ISSUER), cache);
+        OidcReady {
+            client: Arc::new(OidcClient::for_test("stackpit-web", discovery)),
+        }
+    }
+
+    // RFC 9728 5.1: the challenge carries the metadata URL, so a client can
+    // start authorizing while the issuer is still being discovered.
+    #[tokio::test]
+    async fn before_discovery_a_tokenless_request_gets_the_challenge() {
+        let resp = post_mcp(&runtime(), None).await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let www = resp.headers()[axum::http::header::WWW_AUTHENTICATE]
+            .to_str()
+            .unwrap();
+        assert!(www.contains(TEST_METADATA_URL), "{www}");
+    }
+
+    #[tokio::test]
+    async fn before_discovery_a_token_is_not_rejected_as_invalid() {
+        let resp = post_mcp(&runtime(), Some(&signed_token())).await;
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(resp
+            .headers()
+            .get(axum::http::header::WWW_AUTHENTICATE)
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn the_gate_binds_once_discovery_lands() {
+        let slot = OidcSlot::default();
+        let rt = runtime_with(slot.clone());
+        assert!(rt.gate().is_none());
+
+        slot.publish(discovered_client());
+        let resp = post_mcp(&rt, Some(&signed_token())).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let resp = post_mcp(&rt, Some("not-a-token")).await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

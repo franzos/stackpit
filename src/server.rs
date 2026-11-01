@@ -6,7 +6,7 @@ use crate::filter::FilterEngine;
 use crate::html;
 use crate::ingest::auth::{AuthCache, NegativeAuthCache, ProjectCountCache};
 use crate::ingest::failure_limiter::{new_failure_limiter, SharedFailureLimiter};
-use crate::mcp::{McpRuntime, ResourceMetadata, ADVERTISED_SCOPES};
+use crate::mcp::{GateSpec, McpRuntime};
 use crate::middleware;
 use crate::oidc::client::OidcClient;
 use crate::oidc::discovery::{OidcReady, OidcSlot};
@@ -18,7 +18,6 @@ use anyhow::Result;
 use axum::extract::Request;
 use axum::routing::get;
 use axum::{Router, ServiceExt};
-use stackpit_auth::{BearerGate, BearerGateConfig, JwksCache, JwtVerifierConfig};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tower_http::cors::{Any, CorsLayer};
@@ -418,9 +417,9 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
             }
             Err(e) => {
                 tracing::error!(
-                    "OIDC discovery failed at startup: {e:#}. Browser sign-in is down \
-                     (admin-token only) and will come up on its own once the issuer \
-                     answers; /mcp, if configured, stays down until a restart."
+                    "OIDC discovery failed at startup: {e:#}. Browser sign-in and /mcp \
+                     are down (admin-token only) and will come up on their own once the \
+                     issuer answers."
                 );
                 None
             }
@@ -428,14 +427,6 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
     } else {
         None
     };
-
-    // Boot-only: `/mcp` routes mount from this runtime, so a later discovery can't bring them up.
-    let mcp = build_mcp_runtime(
-        &config,
-        boot_client.as_ref(),
-        mcp_writer_pool,
-        revocation_store.clone(),
-    )?;
 
     let oidc = match boot_client {
         Some(client) => OidcSlot::ready(OidcReady { client }),
@@ -451,6 +442,13 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
             slot
         }
     };
+
+    let mcp = build_mcp_runtime(
+        &config,
+        oidc.clone(),
+        mcp_writer_pool,
+        revocation_store.clone(),
+    )?;
 
     let grace_days = crate::commercial::GRACE_DAYS;
     let initial_license = crate::commercial::store::load(&pool, grace_days).await;
@@ -631,8 +629,8 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
                 middleware::web_auth_middleware,
             ));
 
-        // MCP router: bearer auth, no cookies. Merged only when OAuth enabled.
-        let mcp_app = mcp.as_deref().map(crate::mcp::routes).unwrap_or_default();
+        // MCP router: bearer auth, no cookies. Merged when MCP and OAuth are configured.
+        let mcp_app = mcp.as_ref().map(crate::mcp::routes).unwrap_or_default();
 
         let admin_app = admin_app
             .merge(mcp_app)
@@ -760,20 +758,18 @@ async fn serve_with_shutdown<F>(
     }
 }
 
-/// Requires `[auth.oauth]` (issuer + JWKS) and `[auth.mcp].audience`.
-/// `Ok(None)` = MCP not configured; `Err` = configured but no validation path.
+/// Requires `[auth.oauth]` and `[auth.mcp].audience`. Config errors fail startup;
+/// the gate itself waits for discovery to fill `oidc`.
+/// `Ok(None)` = MCP not configured.
 fn build_mcp_runtime(
     config: &Config,
-    oidc: Option<&Arc<OidcClient>>,
+    oidc: OidcSlot,
     writer_pool: DbPool,
     revocation_store: Option<crate::oidc::revocations::DbRevocationStore>,
 ) -> Result<Option<Arc<McpRuntime>>> {
-    if !config.auth.mcp.is_enabled() {
+    if !config.auth.mcp.is_enabled() || !config.auth.oauth.is_enabled() {
         return Ok(None);
     }
-    let Some(oidc) = oidc else {
-        return Ok(None);
-    };
 
     let mcp = &config.auth.mcp;
     let oauth = &config.auth.oauth;
@@ -790,23 +786,14 @@ fn build_mcp_runtime(
             anyhow::anyhow!("auth.oauth.issuer_url is required when auth.mcp is enabled")
         })?
         .to_string();
-    // Precedence: explicit `auth.mcp.introspection_url` → discovery → none.
-    let introspection_url = mcp
-        .introspection_url
-        .clone()
-        .or_else(|| oidc.introspection_endpoint());
-
-    // The handle's cache by default; an explicit `auth.mcp.jwks_url` gets its
-    // own cache but shares the OIDC HTTP client pool.
-    let jwks_override = match mcp.jwks_url.as_deref() {
-        Some(url) if url != oidc.jwks_uri().as_str() => Some(JwksCache::new(
-            oidc.http_client(),
+    let jwks_url = mcp
+        .jwks_url
+        .as_deref()
+        .map(|url| {
             url::Url::parse(url)
-                .map_err(|e| anyhow::anyhow!("auth.mcp.jwks_url '{url}' is not a URL: {e}"))?,
-            crate::oidc::client::jwks_cache_config(mcp.jwks_cache_ttl_secs),
-        )),
-        _ => None,
-    };
+                .map_err(|e| anyhow::anyhow!("auth.mcp.jwks_url '{url}' is not a URL: {e}"))
+        })
+        .transpose()?;
 
     // Well-known absolute URL: prefer external_url (proxy-aware).
     let resource_base = config
@@ -826,53 +813,28 @@ fn build_mcp_runtime(
         );
     }
 
-    // Same `users` table for MCP + browser-OIDC.
-    let provisioner: Arc<dyn stackpit_auth::UserProvisioner> =
-        Arc::new(crate::mcp::DbProvisioner::new(writer_pool));
-
-    let gate = BearerGate::with_client(
-        oidc.http_client(),
-        BearerGateConfig {
-            introspection_url,
-            audience: audience.clone(),
-            resource_metadata_url,
-            challenge_scope: ADVERTISED_SCOPES.join(" "),
-            realm: "stackpit".to_string(),
-            expected_issuer: Some(issuer.clone()),
-            // Empty disables the opaque arm's `client_id` fallback: accepting
-            // the *web* client here would make every web-session token a valid
-            // /mcp credential the moment introspection is configured.
-            client_id: String::new(),
-            jwt_login_client_id: oidc.client_id().to_string(),
-            allow_audience_less_opaque: false,
-            // MCP accepts only tokens the authorization server issued for this
-            // resource; a static config secret is not one.
-            admin_token: None,
-            introspection_client_id: mcp.introspection_client_id.clone(),
-            introspection_client_secret: mcp.introspection_client_secret.clone(),
-            cache_ttl_secs: mcp.effective_cache_ttl_secs(),
-            cache_max_ttl_secs: mcp.cache_max_ttl_secs,
-            provisioner: Some(provisioner),
-            revocation: revocation_store.map(|r| r.into_arc()),
-            jwt: Some(JwtVerifierConfig {
-                discovery: oidc.discovery_handle(),
-                jwks_override,
-            }),
-        },
-    );
-    let metadata = Arc::new(ResourceMetadata::new(&audience, &issuer));
-    let origins = Arc::new(crate::mcp::OriginPolicy::new(
+    let origins = crate::mcp::OriginPolicy::new(
         config.server.external_url.as_deref(),
         &audience,
         &mcp.allowed_origins,
-    ));
+    );
+    let spec = GateSpec {
+        audience,
+        issuer,
+        resource_metadata_url,
+        introspection_url: mcp.introspection_url.clone(),
+        introspection_client_id: mcp.introspection_client_id.clone(),
+        introspection_client_secret: mcp.introspection_client_secret.clone(),
+        jwks_url,
+        jwks_cache_ttl_secs: mcp.jwks_cache_ttl_secs,
+        cache_ttl_secs: mcp.effective_cache_ttl_secs(),
+        cache_max_ttl_secs: mcp.cache_max_ttl_secs,
+        // Same `users` table for MCP + browser-OIDC.
+        provisioner: Some(Arc::new(crate::mcp::DbProvisioner::new(writer_pool))),
+        revocation: revocation_store.map(|r| r.into_arc()),
+    };
 
-    Ok(Some(Arc::new(McpRuntime {
-        metadata,
-        gate,
-        origins,
-        principals: Arc::new(crate::mcp::PrincipalCache::new()),
-    })))
+    Ok(Some(Arc::new(McpRuntime::new(spec, origins, oidc)?)))
 }
 
 async fn shutdown_signal() {

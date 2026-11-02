@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.4.17] - 2026-11-02
+
+### Changed
+- One platform per project, set at creation or by the first event
+- Project list loads in about a second on large databases
+
+### Fixed
+- `/mcp` stayed unmounted when OIDC discovery finished after boot
+- Startup `ANALYZE` could block ingest writes for minutes
+
 ## [0.4.16] - 2026-10-26
 
 ### Added

@@ -9,6 +9,7 @@ use crate::db::sql;
 
 use crate::domain::ProjectStatus;
 
+use super::period::period_to_timestamp;
 use super::types::{ProjectKey, ProjectNavCounts, ProjectRepo, ProjectSummary};
 
 /// Per-project nav badge counts cached with a short TTL, shared via `AppState` (not a global) so each app instance and each test keeps its own map.
@@ -60,14 +61,14 @@ pub fn scope_for(active: &crate::orgs::extractor::ActiveOrg) -> OrgScope {
     )
 }
 
-/// Assembled project-list result cached with the same short TTL as [`NavCountsCache`], shared via `AppState`. Keyed by the params that shape the SQL result (org scope, sort, and a TTL-bucketed `since`); the name/id `query` filter and the org filter/sort both run over the cached clone, so they stay out of the key.
+/// Assembled project-list result cached with the same short TTL as [`NavCountsCache`], shared via `AppState`. Keyed by the params that shape the SQL result (org scope, sort, period); the name/id `query` filter and the org filter/sort both run over the cached clone, so they stay out of the key.
 pub type ProjectListCache =
-    Arc<DashMap<(OrgScope, Option<String>, Option<i64>), (Vec<ProjectSummary>, Instant)>>;
+    Arc<DashMap<(OrgScope, Option<String>, Option<String>), (Vec<ProjectSummary>, Instant)>>;
 
 /// Same rationale as [`NAV_COUNTS_TTL`]: the project list runs full-table GROUP BYs over `events`, so a short staleness window avoids re-aggregating on every render.
 const PROJECT_LIST_TTL: Duration = Duration::from_secs(30);
 
-/// Safety valve for [`ProjectListCache`]: over this many entries an insert first drops expired ones. The live key space is tiny in practice (orgs × sort × current time bucket).
+/// Safety valve for [`ProjectListCache`]: over this many entries an insert first drops expired ones. The live key space is tiny in practice (orgs × sort × period).
 const PROJECT_LIST_CACHE_MAX_ENTRIES: usize = 512;
 
 /// True while a cache entry of the given age is still within the TTL window.
@@ -119,26 +120,23 @@ pub async fn list_projects_for_orgs(
 /// Cached [`list_projects`]: a fresh hit returns the stored list (query-filtered),
 /// otherwise recompute the full list, cache it, and return the filtered view. The
 /// all-time `first_seen` semantics are unchanged; only the assembled Vec is cached.
+/// `period` is one of [`super::period::PERIODS`]; anything else lists all time.
 pub async fn list_projects_cached(
     pool: &crate::db::DbPool,
     cache: &ProjectListCache,
     scope: OrgScope,
     sort: Option<&str>,
     query: Option<&str>,
-    since: Option<i64>,
+    period: Option<&str>,
 ) -> Result<Vec<ProjectSummary>> {
-    // Bucket `since` to the TTL width: callers pass a live `now - period` timestamp
-    // that changes every second, so keying on it raw would never hit and would grow
-    // the cache without bound. Flooring to TTL-wide windows collapses a window onto
-    // one key; the small resulting staleness is within the TTL the cache already accepts.
-    let since_bucket = since.map(|s| s / PROJECT_LIST_TTL.as_secs() as i64);
+    let period = period.filter(|p| period_to_timestamp(p).is_some());
     // Key on the normalized sort, not the raw parameter: the SQL folds every unknown
     // value to the default ORDER BY, so keying on the raw string would let `?sort=aaa`,
     // `?sort=aab`, ... miss the cache forever and re-run the full aggregation per request.
     let key = (
         scope.clone(),
         normalized_sort(sort).map(str::to_string),
-        since_bucket,
+        period.map(str::to_string),
     );
     if let Some(entry) = cache.get(&key) {
         if nav_cache_fresh(entry.1.elapsed(), PROJECT_LIST_TTL) {
@@ -147,6 +145,7 @@ pub async fn list_projects_cached(
             return Ok(projects);
         }
     }
+    let since = period.and_then(period_to_timestamp);
     let full = list_projects_inner(pool, &scope, sort, None, since).await?;
     // Keying on the membership set instead of a single org makes the live key space
     // per-entitlement rather than per-org, so expiry alone no longer bounds it: drop
@@ -192,6 +191,9 @@ pub async fn list_all_projects(
     list_projects_inner(pool, &OrgScope::All, sort, query, since).await
 }
 
+// Repeated in ORDER BY: postgres can't reference a SELECT alias inside an expression.
+const FIRST_SEEN: &str = "(SELECT MIN(timestamp) FROM events WHERE project_id = p.project_id)";
+
 async fn list_projects_inner(
     pool: &crate::db::DbPool,
     scope: &OrgScope,
@@ -199,18 +201,6 @@ async fn list_projects_inner(
     query: Option<&str>,
     since: Option<i64>,
 ) -> Result<Vec<ProjectSummary>> {
-    // Safety: order_expr is always a hardcoded literal from this match, never user input.
-    // COALESCE over the outer-joined aggregates keeps projects with no events in the
-    // period ordering the same way on SQLite and PostgreSQL, which disagree on where
-    // NULLs land in a DESC sort.
-    let order_expr = match sort {
-        Some("issues") => "COALESCE(i.issue_count, 0)",
-        Some("events") => "COALESCE(e.event_count, 0)",
-        Some("first_seen") => "COALESCE(fs.first_seen, 0)",
-        Some("project_id") => "p.project_id",
-        _ => "COALESCE(e.last_seen, 0)",
-    };
-
     // An empty scope entitles the caller to nothing. `IN ()` is not valid SQL on
     // either backend, so this must short-circuit rather than fall through.
     let org_ids: &[i64] = match scope {
@@ -219,10 +209,34 @@ async fn list_projects_inner(
         OrgScope::Orgs(ids) => ids,
     };
 
-    #[cfg(feature = "sqlite")]
-    let platform_agg = "GROUP_CONCAT(DISTINCT platform)";
-    #[cfg(not(feature = "sqlite"))]
-    let platform_agg = "STRING_AGG(DISTINCT platform, ',')";
+    let rows = build_list_query(org_ids, sort, since)
+        .build()
+        .fetch_all(pool)
+        .await?;
+
+    let mut projects: Vec<ProjectSummary> = rows.iter().map(map_project_row).collect();
+    filter_projects_by_query(&mut projects, query);
+    Ok(projects)
+}
+
+/// An empty `org_ids` means every org; callers short-circuit an empty scope first.
+fn build_list_query(
+    org_ids: &[i64],
+    sort: Option<&str>,
+    since: Option<i64>,
+) -> sqlx::QueryBuilder<crate::db::Db> {
+    // Safety: order_expr is always a hardcoded literal from this match, never user input.
+    // COALESCE over the outer-joined aggregates keeps projects with no events in the
+    // period ordering the same way on SQLite and PostgreSQL, which disagree on where
+    // NULLs land in a DESC sort.
+    let first_seen_order = format!("COALESCE({FIRST_SEEN}, 0)");
+    let order_expr = match sort {
+        Some("issues") => "COALESCE(i.issue_count, 0)",
+        Some("events") => "COALESCE(e.event_count, 0)",
+        Some("first_seen") => first_seen_order.as_str(),
+        Some("project_id") => "p.project_id",
+        _ => "COALESCE(e.last_seen, 0)",
+    };
 
     // Driven from `projects`, not from the event aggregate: a project that received
     // nothing in the period (newly created, dormant) still gets a row, with NULL
@@ -237,9 +251,9 @@ async fn list_projects_inner(
             o.slug AS org_slug,
             COALESCE(e.event_count, 0) AS event_count,
             COALESCE(i.issue_count, 0) AS issue_count,
-            fs.first_seen,
+            {FIRST_SEEN} AS first_seen,
             e.last_seen,
-            e.platforms,
+            p.platform AS platforms,
             lr.version AS latest_release,
             COALESCE(e.error_count, 0) AS error_count,
             COALESCE(e.transaction_count, 0) AS transaction_count,
@@ -255,8 +269,7 @@ async fn list_projects_inner(
                 SUM(CASE WHEN item_type = 'transaction' THEN 1 ELSE 0 END) AS transaction_count,
                 SUM(CASE WHEN item_type IN ('session', 'sessions') THEN 1 ELSE 0 END) AS session_count,
                 SUM(CASE WHEN item_type NOT IN ('event', 'transaction', 'session', 'sessions') THEN 1 ELSE 0 END) AS other_count,
-                MAX(timestamp) AS last_seen,
-                {platform_agg} AS platforms
+                MAX(timestamp) AS last_seen
             FROM events"
     ));
     if let Some(ts) = since {
@@ -266,11 +279,6 @@ async fn list_projects_inner(
     qb.push(
         " GROUP BY project_id
          ) e ON e.project_id = p.project_id
-         LEFT JOIN (
-            SELECT project_id, MIN(timestamp) AS first_seen
-            FROM events
-            GROUP BY project_id
-         ) fs ON fs.project_id = p.project_id
          LEFT JOIN (
             SELECT project_id, COUNT(*) AS issue_count
             FROM issues
@@ -298,14 +306,9 @@ async fn list_projects_inner(
         qb.push(")");
     }
     qb.push(format!(
-        " ORDER BY CASE WHEN fs.first_seen IS NULL THEN 1 ELSE 0 END, {order_expr} DESC, p.project_id DESC"
+        " ORDER BY CASE WHEN {FIRST_SEEN} IS NULL THEN 1 ELSE 0 END, {order_expr} DESC, p.project_id DESC"
     ));
-
-    let rows = qb.build().fetch_all(pool).await?;
-
-    let mut projects: Vec<ProjectSummary> = rows.iter().map(map_project_row).collect();
-    filter_projects_by_query(&mut projects, query);
-    Ok(projects)
+    qb
 }
 
 /// Narrow the list to projects whose id or name contains `query` (case-insensitive).
@@ -350,13 +353,13 @@ fn map_project_row(row: &crate::db::DbRow) -> ProjectSummary {
     }
 }
 
-/// Grab project metadata (name, status, source) in a single query.
+/// Grab project metadata (name, status, source, platform) in a single query.
 pub async fn get_project_info(
     pool: &crate::db::DbPool,
     project_id: u64,
 ) -> Result<Option<super::types::ProjectInfo>> {
     let row = sqlx::query(sql!(
-        "SELECT name, status, source FROM projects WHERE project_id = ?1"
+        "SELECT name, status, source, platform FROM projects WHERE project_id = ?1"
     ))
     .bind(project_id as i64)
     .fetch_optional(pool)
@@ -371,6 +374,7 @@ pub async fn get_project_info(
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(ProjectStatus::Active),
             source: row.get("source"),
+            platform: row.get("platform"),
         }
     }))
 }
@@ -682,11 +686,13 @@ pub async fn create_project(
     let public_key = crate::util::crypto::random_hex::<16>();
     let name_val: Option<&str> = if name.is_empty() { None } else { Some(name) };
     sqlx::query(sql!(
-        "INSERT INTO projects (project_id, name, status, source, org_id) VALUES (?1, ?2, 'active', 'manual', ?3)"
+        "INSERT INTO projects (project_id, name, status, source, org_id, platform)
+         VALUES (?1, ?2, 'active', 'manual', ?3, ?4)"
     ))
     .bind(project_id as i64)
     .bind(name_val)
     .bind(org_id)
+    .bind(platform)
     .execute(&mut *tx)
     .await?;
     sqlx::query(sql!(
@@ -694,7 +700,7 @@ pub async fn create_project(
     ))
     .bind(&public_key)
     .bind(project_id as i64)
-    .bind(platform)
+    .bind(None::<&str>)
     .execute(&mut *tx)
     .await?;
 
@@ -1408,6 +1414,62 @@ mod tests {
         assert_eq!(cache.len(), 2, "a real sort still gets its own key");
     }
 
+    #[tokio::test]
+    async fn same_period_hits_the_cache_until_the_ttl() {
+        let pool = open_test_db().await;
+        let cache: ProjectListCache = Default::default();
+        set_project_org(&pool, 1, ORG_A).await;
+        let scope = OrgScope::orgs(vec![ORG_A]);
+        let now = chrono::Utc::now().timestamp();
+        insert_test_event(&pool, "e1", 1, now - 60, None, None, None).await;
+
+        let first = list_projects_cached(&pool, &cache, scope.clone(), None, None, Some("24h"))
+            .await
+            .unwrap();
+        insert_test_event(&pool, "e2", 1, now - 30, None, None, None).await;
+        let second = list_projects_cached(&pool, &cache, scope, None, None, Some("24h"))
+            .await
+            .unwrap();
+
+        assert_eq!(first[0].event_count, 1);
+        assert_eq!(
+            serde_json::to_value(&first).unwrap(),
+            serde_json::to_value(&second).unwrap()
+        );
+        assert_eq!(cache.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn distinct_periods_get_distinct_entries() {
+        let pool = open_test_db().await;
+        let cache: ProjectListCache = Default::default();
+        set_project_org(&pool, 1, ORG_A).await;
+        let scope = OrgScope::orgs(vec![ORG_A]);
+
+        for p in ["1h", "24h", "7d"] {
+            list_projects_cached(&pool, &cache, scope.clone(), None, None, Some(p))
+                .await
+                .unwrap();
+        }
+        assert_eq!(cache.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn unknown_and_blank_periods_share_the_all_time_entry() {
+        let pool = open_test_db().await;
+        let cache: ProjectListCache = Default::default();
+        set_project_org(&pool, 1, ORG_A).await;
+        let scope = OrgScope::orgs(vec![ORG_A]);
+
+        for p in [None, Some(""), Some("bogus")] {
+            list_projects_cached(&pool, &cache, scope.clone(), None, None, p)
+                .await
+                .unwrap();
+        }
+        assert_eq!(cache.len(), 1);
+        assert!(cache.contains_key(&(scope, None, None)));
+    }
+
     #[test]
     fn scope_for_superuser_is_all_orgs() {
         use crate::orgs::extractor::ActiveOrg;
@@ -1467,6 +1529,17 @@ mod tests {
         .unwrap();
     }
 
+    async fn set_project_platform(pool: &crate::db::DbPool, project_id: i64, platform: &str) {
+        sqlx::query(sql!(
+            "UPDATE projects SET platform = ?1 WHERE project_id = ?2"
+        ))
+        .bind(platform)
+        .bind(project_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
     #[tokio::test]
     async fn list_projects_empty() {
         let pool = open_test_db().await;
@@ -1479,6 +1552,8 @@ mod tests {
         let pool = open_test_db().await;
         set_project_org(&pool, 1, ORG_A).await;
         set_project_org(&pool, 2, ORG_A).await;
+        set_project_platform(&pool, 1, "rust").await;
+        set_project_platform(&pool, 2, "python").await;
         insert_test_event(
             &pool,
             "e1",
@@ -1544,10 +1619,12 @@ mod tests {
         assert_eq!(projects[0].issue_count, 1);
         assert_eq!(projects[0].first_seen, Some(100));
         assert_eq!(projects[0].last_seen, Some(200));
+        assert_eq!(projects[0].platforms, "rust");
 
         assert_eq!(projects[1].project_id, 2);
         assert_eq!(projects[1].event_count, 1);
         assert_eq!(projects[1].issue_count, 1);
+        assert_eq!(projects[1].platforms, "python");
     }
 
     #[tokio::test]
@@ -1569,6 +1646,7 @@ mod tests {
     async fn list_projects_includes_project_without_events() {
         let pool = open_test_db().await;
         set_project_org(&pool, 1, ORG_A).await;
+        set_project_platform(&pool, 1, "go").await;
 
         let projects = list_projects(&pool, ORG_A, None, None, None).await.unwrap();
         assert_eq!(projects.len(), 1);
@@ -1577,7 +1655,129 @@ mod tests {
         assert_eq!(projects[0].issue_count, 0);
         assert_eq!(projects[0].first_seen, None);
         assert_eq!(projects[0].last_seen, None);
-        assert!(projects[0].platforms.is_empty());
+        assert_eq!(projects[0].platforms, "go");
+    }
+
+    // `insert_test_event` stores platform `rust` on every event.
+    #[tokio::test]
+    async fn list_projects_reads_platform_from_the_project_not_its_events() {
+        let pool = open_test_db().await;
+        set_project_org(&pool, 1, ORG_A).await;
+        set_project_org(&pool, 2, ORG_A).await;
+        set_project_platform(&pool, 1, "python").await;
+        insert_test_event(&pool, "e1", 1, 100, None, None, None).await;
+        insert_test_event(&pool, "e2", 2, 200, None, None, None).await;
+
+        let projects = list_projects(&pool, ORG_A, Some("project_id"), None, None)
+            .await
+            .unwrap();
+        assert_eq!(projects[0].project_id, 2);
+        assert!(
+            projects[0].platforms.is_empty(),
+            "a NULL column stays empty"
+        );
+        assert_eq!(projects[1].project_id, 1);
+        assert_eq!(projects[1].platforms, "python");
+    }
+
+    #[tokio::test]
+    async fn list_projects_sorts_by_first_seen() {
+        let pool = open_test_db().await;
+        for pid in 1..=4 {
+            set_project_org(&pool, pid, ORG_A).await;
+        }
+        // Later events must not move a project's first_seen.
+        insert_test_event(&pool, "p1a", 1, 100, None, None, None).await;
+        insert_test_event(&pool, "p1b", 1, 900, None, None, None).await;
+        insert_test_event(&pool, "p2a", 2, 300, None, None, None).await;
+        insert_test_event(&pool, "p3a", 3, 200, None, None, None).await;
+        insert_test_event(&pool, "p3b", 3, 250, None, None, None).await;
+
+        for since in [None, Some(150)] {
+            let projects = list_projects(&pool, ORG_A, Some("first_seen"), None, since)
+                .await
+                .unwrap();
+            let got: Vec<(u64, Option<i64>)> = projects
+                .iter()
+                .map(|p| (p.project_id, p.first_seen))
+                .collect();
+            assert_eq!(
+                got,
+                vec![(2, Some(300)), (3, Some(200)), (1, Some(100)), (4, None)],
+                "since {since:?}"
+            );
+        }
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn list_query_plan_stays_on_event_indexes() {
+        let pool = open_test_db().await;
+        for pid in 1..=5 {
+            set_project_org(&pool, pid, ORG_A).await;
+        }
+        sqlx::query(
+            "WITH RECURSIVE seq(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM seq WHERE x < 5000)
+             INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, received_at, platform)
+             SELECT 'plan-' || x,
+                    CASE x % 4 WHEN 0 THEN 'event' WHEN 1 THEN 'session' WHEN 2 THEN 'check_in' ELSE 'transaction' END,
+                    x'00', 1 + x % 5, 'testkey', 1000 + x, 1000 + x, 'native'
+             FROM seq",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        crate::db::sqlite_analyze(&pool).await.unwrap();
+
+        let cases: [(&[i64], Option<&str>, Option<i64>); 4] = [
+            (&[], None, None),
+            (&[ORG_A], Some("first_seen"), Some(3000)),
+            (&[ORG_A, ORG_B], Some("events"), None),
+            (&[], Some("project_id"), Some(3000)),
+        ];
+        for (org_ids, sort, since) in cases {
+            let sql = build_list_query(org_ids, sort, since).into_string();
+            let mut q = sqlx::query(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}")));
+            if let Some(ts) = since {
+                q = q.bind(ts);
+            }
+            for id in org_ids {
+                q = q.bind(*id);
+            }
+            let plan: Vec<(i64, i64, String)> = q
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+                .iter()
+                .map(|r| (r.get(0), r.get(1), r.get(3)))
+                .collect();
+            let ctx = format!("{org_ids:?} {sort:?} {since:?}: {plan:#?}");
+
+            let subqueries: Vec<i64> = plan
+                .iter()
+                .filter(|(_, _, d)| d.starts_with("CORRELATED SCALAR SUBQUERY"))
+                .map(|(id, _, _)| *id)
+                .collect();
+            assert!(!subqueries.is_empty(), "{ctx}");
+            for sub in subqueries {
+                assert!(
+                    plan.iter().any(|(_, parent, d)| *parent == sub
+                        && d.starts_with("SEARCH events")
+                        && d.contains("idx_events_project_time")),
+                    "first_seen must seek idx_events_project_time; {ctx}"
+                );
+            }
+            for (_, _, d) in plan.iter().filter(|(_, _, d)| d.starts_with("SCAN events")) {
+                assert!(d.contains("COVERING INDEX"), "{d}; {ctx}");
+            }
+            for (_, parent, _) in plan.iter().filter(|(_, _, d)| d.contains("TEMP B-TREE")) {
+                assert!(
+                    !plan.iter().any(|(_, p, d)| p == parent
+                        && (d.starts_with("SCAN events") || d.starts_with("SEARCH events"))),
+                    "no temp b-tree over events; {ctx}"
+                );
+            }
+        }
     }
 
     // A project that has never received an event has nothing meaningful to sort
@@ -1783,6 +1983,29 @@ mod tests {
             .unwrap();
         let stored_org: i64 = row.get(0);
         assert_eq!(stored_org, 5);
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn create_project_stores_platform_on_the_project_not_the_key() {
+        let pool = open_test_db().await;
+        let (project_id, _key) = create_project(&pool, 1, "svc", Some("rust")).await.unwrap();
+        let platform: Option<String> =
+            sqlx::query_scalar("SELECT platform FROM projects WHERE project_id = ?1")
+                .bind(project_id as i64)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(platform.as_deref(), Some("rust"));
+        let label: Option<String> =
+            sqlx::query_scalar("SELECT label FROM project_keys WHERE project_id = ?1")
+                .bind(project_id as i64)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(label, None);
+        let info = get_project_info(&pool, project_id).await.unwrap().unwrap();
+        assert_eq!(info.platform.as_deref(), Some("rust"));
     }
 
     #[cfg(feature = "sqlite")]

@@ -1489,6 +1489,45 @@ mod tests {
         assert_eq!(count.0, 0, "client-supplied versions are length-capped");
     }
 
+    // `make_event` carries no fingerprint or release, so this also pins
+    // `Accumulators::is_empty` counting the platforms map.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ingest_fills_a_null_platform_and_keeps_a_set_one() {
+        let pool = test_pool().await;
+        sqlx::query(
+            "INSERT INTO projects (project_id, source, platform) VALUES
+                (50, 'auto', NULL), (51, 'manual', 'rust')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let mut acc = Accumulators::new();
+        for (id, project_id) in [("plat1", 50), ("plat2", 51)] {
+            let mut e = make_event(id);
+            e.project_id = project_id;
+            e.platform = Some("native".to_string());
+            insert_event(&pool, &e).await.unwrap();
+            acc.accumulate(&e);
+        }
+        flush_aggregation(&pool, &mut acc, None).await.unwrap();
+        assert!(acc.platforms.is_empty(), "a flush drains the platforms");
+
+        let rows: Vec<(i64, Option<String>)> = sqlx::query_as(
+            "SELECT project_id, platform FROM projects WHERE project_id IN (50, 51) ORDER BY project_id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                (50, Some("native".to_string())),
+                (51, Some("rust".to_string()))
+            ]
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn sessions_flush_creates_aggregate_row() {
         let pool = test_pool().await;

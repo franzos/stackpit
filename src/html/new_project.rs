@@ -122,7 +122,6 @@ pub async fn created(
     let keys = queries::projects::list_project_keys(&state.pool, project_id)
         .await
         .unwrap_or_default();
-    // `create_project` stores the chosen platform as the first key's label.
     let key = keys
         .first()
         .ok_or_else(|| HtmlError(StatusCode::NOT_FOUND, "Project has no key".into()))?;
@@ -132,8 +131,58 @@ pub async fn created(
         project_label: info.name.clone().unwrap_or_else(|| project_id.to_string()),
         dsn: state.config.server.build_dsn(&key.public_key, project_id),
         public_key: key.public_key.clone(),
-        platform: key.label.clone().unwrap_or_default(),
+        platform: info.platform.unwrap_or_default(),
         chrome,
     };
     Ok(render_template(&tmpl))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use unic_langid::langid;
+
+    #[tokio::test]
+    async fn created_page_shows_the_project_platform_not_a_key_label() {
+        let pool = crate::db::open_test_pool().await;
+        sqlx::query(crate::db::sql!(
+            "INSERT INTO organizations (org_id, slug, name) VALUES (?1, ?2, ?2)"
+        ))
+        .bind(5_i64)
+        .bind("created-org")
+        .execute(&pool)
+        .await
+        .unwrap();
+        let (project_id, _key) = queries::projects::create_project(&pool, 5, "svc", Some("rust"))
+            .await
+            .unwrap();
+        queries::projects::create_project_key(&pool, project_id, Some("python"))
+            .await
+            .unwrap();
+
+        let (state, _chans) = AppState::for_test(pool);
+        let active = ActiveOrg {
+            session_org_id: 5,
+            role: Some(crate::orgs::Role::Owner),
+            org_name: None,
+            memberships: vec![(5, crate::orgs::Role::Owner)],
+        };
+        let chrome = PageChrome::new("csrf".into(), langid!("en"), "/web/projects/".into());
+        let resp = created(
+            State(state),
+            active,
+            Chrome(chrome),
+            ProjectPath(project_id),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains(r#"<span class="badge badge-platform">rust</span>"#));
+        assert!(html.contains("https://docs.sentry.io/platforms/rust/"));
+        assert!(!html.contains("https://docs.sentry.io/platforms/python/"));
+    }
 }

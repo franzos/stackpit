@@ -5,9 +5,7 @@ use axum::response::IntoResponse;
 use crate::extractors::{BrowserDefaults, ReadPool};
 use crate::html::chrome::PageChrome;
 use crate::html::render_template;
-use crate::html::utils::{
-    defaults_redirect_url, period_or_default, period_to_timestamp, Chrome, ListParams,
-};
+use crate::html::utils::{defaults_redirect_url, period_or_default, Chrome, ListParams};
 use crate::orgs::extractor::ActiveOrg;
 use crate::queries;
 use crate::server::AppState;
@@ -52,8 +50,6 @@ pub async fn handler(
     let period_str = period_or_default(params.period.as_deref());
     let org_str = params.org.clone().unwrap_or_default();
 
-    let since = period_to_timestamp(&period_str);
-
     // The unfiltered list backs the org dropdown; the name/id search is applied after.
     // Building the dropdown from the searched list would make it vanish whenever a
     // search narrowed to one org, stranding an active `org=` filter with no control.
@@ -63,7 +59,7 @@ pub async fn handler(
         queries::projects::scope_for(&active_org),
         params.sort.as_deref().filter(|s| !s.is_empty()),
         None,
-        since,
+        Some(&period_str),
     )
     .await?;
     let orgs = org_options(&all_projects);

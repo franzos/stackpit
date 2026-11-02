@@ -282,6 +282,7 @@ fn finalize_agg_flush(
     accumulators.session_aggregates.clear();
     accumulators.transaction_metrics.clear();
     accumulators.releases.clear();
+    accumulators.platforms.clear();
     send_notifications(pending, notify_tx);
     accumulators.last_flush = Instant::now();
 }

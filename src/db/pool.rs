@@ -711,6 +711,71 @@ mod tests {
         .expect("the three new columns must be nullable");
     }
 
+    #[tokio::test]
+    async fn migration_033_backfills_platform_from_first_key_then_recent_events() {
+        let pool = create_write_pool("sqlite::memory:").await.unwrap();
+        run_migrations_to(&pool, 32).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO projects (project_id, source) VALUES
+                (1, 'manual'), (2, 'manual'), (3, 'auto'), (4, 'auto'), (5, 'auto')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO project_keys (public_key, project_id, label, created_at) VALUES
+                ('k1a', 1, 'rust', 100), ('k1b', 1, 'python', 200), ('k2', 2, NULL, 100)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, platform) VALUES
+                ('e1', 'error', x'00', 1, 'k1a', 10, 'native'),
+                ('e2a', 'error', x'00', 2, 'k2', 10, 'python'),
+                ('e2b', 'error', x'00', 2, 'k2', 20, 'native'),
+                ('e2c', 'error', x'00', 2, 'k2', 30, NULL),
+                ('e3', 'error', x'00', 3, 'x', 10, 'javascript')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 300)
+             INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, platform)
+             SELECT 'e4-' || i, 'error', x'00', 4, 'x', 1000 + i, NULL FROM n",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, platform)
+             VALUES ('e4-old', 'error', x'00', 4, 'x', 1, 'python')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        run_migrations(&pool).await.unwrap();
+
+        let rows: Vec<(i64, Option<String>)> =
+            sqlx::query_as("SELECT project_id, platform FROM projects ORDER BY project_id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                (1, Some("rust".into())),
+                (2, Some("native".into())),
+                (3, Some("javascript".into())),
+                (4, None),
+                (5, None),
+            ]
+        );
+    }
+
     /// SQLite drops indexes with the table, so the rebuild has to recreate every one.
     #[tokio::test]
     async fn migration_029_recreates_every_index() {

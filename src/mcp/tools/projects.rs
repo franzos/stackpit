@@ -286,7 +286,7 @@ pub(super) fn create_input() -> Value {
         json!({
             "org_id": prop("integer", "Organization to create the project in. You must own it."),
             "name": prop("string", "Display name for the project."),
-            "platform": prop("string", "Optional platform label, e.g. `python` or `rust`."),
+            "platform": prop("string", "Optional platform, e.g. `python` or `rust`."),
         }),
         &["org_id", "name"],
     )
@@ -320,7 +320,7 @@ pub(super) async fn create_project(
             "`name` must be at most {MAX_PROJECT_NAME_CHARS} characters"
         )));
     }
-    let platform = opt_str_arg(args, "platform")?;
+    let platform = opt_str_arg(args, "platform")?.map(str::trim);
     debug_assert_eq!(target, Target::Org(org_id));
 
     // The DSN this also mints is an ingest credential and is not returned.
@@ -796,13 +796,18 @@ mod tests {
             &pool,
             owner,
             "create_project",
-            json!({ "org_id": mine, "name": "svc", "platform": "rust" }),
+            json!({ "org_id": mine, "name": "svc", "platform": " rust " }),
         )
         .await
         .unwrap();
         assert_eq!(out["org_id"], mine);
         assert_eq!(out["name"], "svc");
         assert_eq!(out["ingest_key_created"], true);
+        let project_id = out["project_id"].as_i64().unwrap();
+        assert_eq!(
+            stored(&pool, project_id).await.platform.as_deref(),
+            Some("rust")
+        );
 
         // An org the caller is not a member of is indistinguishable from absent.
         let outsider = McpPrincipal::for_test(SCOPE_ADMIN, vec![(mine, Role::Owner)]);

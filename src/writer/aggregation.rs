@@ -1,4 +1,4 @@
-use crate::db::{MAX_FN, MIN_FN};
+use crate::db::{sql, MAX_FN, MIN_FN};
 use crate::queries::event_writes;
 use anyhow::Result;
 use sqlx::QueryBuilder;
@@ -240,6 +240,7 @@ pub(super) async fn flush_aggregation_inner(
     flush_session_aggregates(tx, accumulators).await?;
     flush_transaction_metrics(tx, accumulators).await?;
     flush_releases(tx, accumulators).await?;
+    flush_platforms(tx, accumulators).await?;
 
     tracing::debug!("aggregation flush: {issue_count} issues, {tag_count} tag entries");
     Ok(threshold_candidates)
@@ -308,6 +309,33 @@ async fn flush_releases(
         );
 
         builder.build().execute(&mut **tx).await?;
+    }
+
+    Ok(())
+}
+
+/// Fill `projects.platform` from ingest; a value set on creation or by an
+/// earlier flush is never overwritten.
+async fn flush_platforms(
+    tx: &mut sqlx::Transaction<'_, crate::db::Db>,
+    accumulators: &Accumulators,
+) -> Result<()> {
+    let mut rows: Vec<(i64, &str)> = accumulators
+        .platforms
+        .iter()
+        .map(|(project_id, platform)| (*project_id as i64, platform.as_str()))
+        .collect();
+    // Deterministic key order so concurrent writers acquire row locks in the same order.
+    rows.sort_unstable_by_key(|row| row.0);
+
+    for (project_id, platform) in rows {
+        sqlx::query(sql!(
+            "UPDATE projects SET platform = ?1 WHERE project_id = ?2 AND platform IS NULL"
+        ))
+        .bind(platform)
+        .bind(project_id)
+        .execute(&mut **tx)
+        .await?;
     }
 
     Ok(())

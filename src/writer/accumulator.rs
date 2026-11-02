@@ -27,6 +27,10 @@ const MAX_DELTA_RELEASES: usize = 1000;
 /// permanent row, so cap the length. Matches Sentry's `MAX_VERSION_LENGTH`.
 const MAX_RELEASE_VERSION_LEN: usize = 200;
 
+/// The first platform a project sends sticks, so skip values no SDK sends.
+/// Matches the `max_length` of Sentry's `Project.platform`.
+const MAX_PLATFORM_LEN: usize = 64;
+
 /// Map a duration in milliseconds to its log2 histogram bucket, clamped to
 /// `0..=23`. Bucket b covers `[2^b, 2^(b+1))` ms.
 pub(super) fn duration_bucket(ms: i64) -> usize {
@@ -147,6 +151,8 @@ pub(super) struct Accumulators {
     pub transaction_metrics: HashMap<(u64, String, i64), TxnDelta>,
     /// Releases observed on events -- keyed by (project_id, version)
     pub releases: HashMap<(u64, String), ReleaseDelta>,
+    /// First platform seen per project, written only where `projects.platform` is NULL.
+    pub platforms: HashMap<u64, String>,
     pub last_flush: Instant,
 }
 
@@ -158,6 +164,7 @@ impl Accumulators {
             session_aggregates: HashMap::new(),
             transaction_metrics: HashMap::new(),
             releases: HashMap::new(),
+            platforms: HashMap::new(),
             last_flush: Instant::now(),
         }
     }
@@ -169,6 +176,7 @@ impl Accumulators {
         self.accumulate_transactions(event);
         // Every item type can carry a release, fingerprint or not.
         self.accumulate_releases(event);
+        self.accumulate_platform(event);
 
         let fp = match event.fingerprint.as_ref() {
             Some(fp) => fp,
@@ -241,6 +249,17 @@ impl Accumulators {
                 ts
             };
             self.touch_release(event.project_id, &bucket.release, seen, max_ts);
+        }
+    }
+
+    fn accumulate_platform(&mut self, event: &StorableEvent) {
+        let Some(platform) = event.platform.as_deref().map(str::trim) else {
+            return;
+        };
+        if !platform.is_empty() && platform.len() <= MAX_PLATFORM_LEN {
+            self.platforms
+                .entry(event.project_id)
+                .or_insert_with(|| platform.to_string());
         }
     }
 
@@ -424,6 +443,12 @@ impl Accumulators {
             }
         }
 
+        for (project_id, platform) in &other.platforms {
+            self.platforms
+                .entry(*project_id)
+                .or_insert_with(|| platform.clone());
+        }
+
         for (key, src) in &other.transaction_metrics {
             match self.transaction_metrics.get_mut(key) {
                 Some(dst) => {
@@ -461,6 +486,7 @@ impl Accumulators {
             && self.session_aggregates.is_empty()
             && self.transaction_metrics.is_empty()
             && self.releases.is_empty()
+            && self.platforms.is_empty()
     }
 }
 
@@ -699,14 +725,18 @@ mod tests {
                 ("browser".into(), "chrome".into()),
                 ("os".into(), "linux".into()),
             ];
-            let e3 = issue_event("m3", "fp-b", 150, Some("u1"));
+            let mut e3 = issue_event("m3", "fp-b", 150, Some("u1"));
+            e1.platform = Some("python".into());
+            e3.platform = Some("javascript".into());
             acc.accumulate(&e1);
             acc.accumulate(&e2);
             acc.accumulate(&e3);
             acc.accumulate(&sess("s1", 1000, 5, 1, Some("du1")));
             acc.accumulate(&sess("s2", 1000, 3, 0, Some("du2")));
             acc.accumulate(&txn_event("/api/x", 1000, 100, Some("ok")));
-            acc.accumulate(&txn_event("/api/x", 1500, 200, Some("internal_error")));
+            let mut t = txn_event("/api/x", 1500, 200, Some("internal_error"));
+            t.platform = Some("node".into());
+            acc.accumulate(&t);
         };
 
         // Direct accumulate.
@@ -774,6 +804,11 @@ mod tests {
             assert_eq!(d.has_user_data, m.has_user_data);
             assert_eq!(d.users_hll.count(), m.users_hll.count());
         }
+
+        // Platforms.
+        assert_eq!(direct.platforms, merged.platforms);
+        assert_eq!(direct.platforms[&1], "python");
+        assert_eq!(direct.platforms[&7], "node");
     }
 
     /// Merging into an occupied accumulator must combine deltas, matching what accumulating every event into one accumulator would produce.
@@ -816,5 +851,75 @@ mod tests {
             acc.tags[&(2, "fp".to_string(), "k".to_string(), "v".to_string())],
             1
         );
+    }
+
+    fn platform_event(id: &str, project_id: u64, platform: Option<&str>) -> StorableEvent {
+        let mut e = StorableEvent::new(
+            id.to_string(),
+            ItemType::Event,
+            vec![0],
+            project_id,
+            "k".to_string(),
+        );
+        e.platform = platform.map(String::from);
+        e
+    }
+
+    #[test]
+    fn first_platform_per_project_wins() {
+        let mut acc = Accumulators::new();
+        acc.accumulate(&platform_event("p1", 1, Some("python")));
+        acc.accumulate(&platform_event("p2", 1, Some("native")));
+        acc.accumulate(&platform_event("p3", 2, Some("go")));
+        assert_eq!(acc.platforms.len(), 2);
+        assert_eq!(acc.platforms[&1], "python");
+        assert_eq!(acc.platforms[&2], "go");
+    }
+
+    #[test]
+    fn empty_and_whitespace_platforms_are_ignored() {
+        let mut acc = Accumulators::new();
+        acc.accumulate(&platform_event("p1", 1, None));
+        acc.accumulate(&platform_event("p2", 1, Some("")));
+        acc.accumulate(&platform_event("p3", 1, Some("  ")));
+        let oversized = "x".repeat(MAX_PLATFORM_LEN + 1);
+        acc.accumulate(&platform_event("p3b", 1, Some(&oversized)));
+        assert!(acc.platforms.is_empty());
+        assert!(acc.is_empty());
+
+        acc.accumulate(&platform_event("p4", 1, Some(" rust ")));
+        assert_eq!(acc.platforms[&1], "rust");
+    }
+
+    #[test]
+    fn merge_keeps_the_earlier_platform() {
+        let mut base = Accumulators::new();
+        base.accumulate(&platform_event("p1", 1, Some("python")));
+
+        let mut scratch = Accumulators::new();
+        scratch.accumulate(&platform_event("p2", 1, Some("native")));
+        scratch.accumulate(&platform_event("p3", 2, Some("go")));
+        base.merge(&scratch);
+
+        assert_eq!(base.platforms[&1], "python");
+        assert_eq!(base.platforms[&2], "go");
+    }
+
+    #[test]
+    fn transaction_only_event_captures_platform() {
+        let mut acc = Accumulators::new();
+        let mut e = txn_event("/api/x", 1000, 100, Some("ok"));
+        e.platform = Some("node".into());
+        assert!(e.fingerprint.is_none());
+        acc.accumulate(&e);
+        assert_eq!(acc.platforms[&7], "node");
+    }
+
+    #[test]
+    fn platforms_alone_make_the_accumulator_non_empty() {
+        let mut acc = Accumulators::new();
+        acc.accumulate(&platform_event("p1", 1, Some("python")));
+        assert!(acc.issues.is_empty() && acc.releases.is_empty());
+        assert!(!acc.is_empty());
     }
 }

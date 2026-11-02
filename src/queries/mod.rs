@@ -17,6 +17,7 @@ pub mod metrics;
 pub mod monitors;
 pub mod notify_queue;
 pub mod orgs;
+pub mod period;
 pub mod profiles;
 pub mod projects;
 pub mod releases;

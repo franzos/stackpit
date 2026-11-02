@@ -19,7 +19,7 @@ The left sidebar lists your Projects, Organizations, Settings, and Defaults, plu
 
 ## The projects dashboard
 
-The dashboard lists your projects with their platforms, issue and event counts, a small breakdown bar (errors, transactions, sessions), the latest release, and first/last seen times. Search by name, narrow to a time window with the period dropdown (1h through 365d, or all time), and click a column header to sort. From here, "All events" and "All releases" jump to the cross-project views.
+The dashboard lists your projects with their platform (one per project, chosen when you create it or taken from the first event that carries one), issue and event counts, a small breakdown bar (errors, transactions, sessions), the latest release, and first/last seen times. Search by name, narrow to a time window with the period dropdown (1h through 365d, or all time), and click a column header to sort. From here, "All events" and "All releases" jump to the cross-project views.
 
 ## Browsing issues
 

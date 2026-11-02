@@ -64,6 +64,7 @@ pub struct ProjectInfo {
     pub name: Option<String>,
     pub status: ProjectStatus,
     pub source: Option<String>,
+    pub platform: Option<String>,
 }
 
 #[derive(Debug, Clone)]

@@ -42,6 +42,7 @@ spans-pagination-next = ถัดไป »
 spans-count = { $count ->
    *[other] { $count } สแปน
 }
+spans-count-capped = มากกว่า 10,000 สแปน
 
 # --- รายการเทรซทั้งองค์กร ---
 traces-col-root = ทรานแซกชันราก

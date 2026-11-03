@@ -69,19 +69,20 @@ pub async fn get_event_supplements(pool: &DbPool, event: &EventDetail) -> Result
     })
 }
 
+pub(crate) const USER_REPORTS_SQL: &str =
+    "SELECT payload, timestamp FROM events JOIN event_payloads USING (event_id) \
+     WHERE item_type = 'user_report' AND parent_event_id = ?1 \
+     ORDER BY timestamp DESC";
+
 /// Pull user reports attached to a parent event.
 pub async fn list_user_reports_for_event(
     pool: &DbPool,
     parent_event_id: &str,
 ) -> Result<Vec<UserReportData>> {
-    let rows = sqlx::query(sql!(
-        "SELECT payload, timestamp FROM events
-         WHERE item_type = 'user_report' AND parent_event_id = ?1
-         ORDER BY timestamp DESC"
-    ))
-    .bind(parent_event_id)
-    .fetch_all(pool)
-    .await?;
+    let rows = sqlx::query(crate::db::dyn_sql(USER_REPORTS_SQL))
+        .bind(parent_event_id)
+        .fetch_all(pool)
+        .await?;
 
     let mut reports = Vec::new();
     for row in &rows {

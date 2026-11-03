@@ -91,6 +91,10 @@ pub fn to_storable_event(sentry_event: &SentryEvent, project_id: u64) -> Result<
     let title =
         crate::ingest::enrich::extract_title_from(&payload_json, &item_type, None).or(api_title);
     let fp = fingerprint::compute_fingerprint_from_value(project_id, &item_type, &payload_json);
+    let (trace_op, trace_status) = match item_type {
+        ItemType::Transaction => crate::ingest::envelope::trace_op_and_status(&payload_json),
+        _ => (None, None),
+    };
     let compressed = zstd::encode_all(serde_json::to_vec(&payload_json)?.as_slice(), 3)?;
 
     Ok(StorableEvent {
@@ -120,7 +124,8 @@ pub fn to_storable_event(sentry_event: &SentryEvent, project_id: u64) -> Result<
         session_buckets: Vec::new(),
         trace_id: None,
         duration_ms: None,
-        trace_status: None,
+        trace_op,
+        trace_status,
         span_id: None,
         parent_span_id: None,
         start_ms: None,
@@ -393,6 +398,18 @@ fn find_tag<'a>(tags: &'a Value, key: &str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transform_transaction_reads_trace_op_and_status() {
+        let json = serde_json::json!({
+            "eventID": "t1",
+            "type": "transaction",
+            "contexts": {"trace": {"op": "http.server", "status": "ok"}},
+        });
+        let storable = to_storable_event(&SentryEvent { json }, 1).unwrap();
+        assert_eq!(storable.trace_op.as_deref(), Some("http.server"));
+        assert_eq!(storable.trace_status.as_deref(), Some("ok"));
+    }
 
     #[test]
     fn transform_basic_event() {

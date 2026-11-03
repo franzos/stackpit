@@ -37,6 +37,7 @@ transactions-detail-count = { $count ->
     [one] { $count } istanza
    *[other] { $count } istanze
 }
+transactions-detail-count-capped = Più di 10.000 istanze
 transactions-detail-failure-label = Errori
 transactions-list-search-placeholder = Cerca nomi di transazione…
 transactions-list-search-label = Cerca nomi di transazione

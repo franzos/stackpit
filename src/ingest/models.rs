@@ -118,6 +118,8 @@ pub struct StorableEvent {
     pub trace_id: Option<String>,
     /// Transaction wall-clock duration in milliseconds.
     pub duration_ms: Option<i64>,
+    /// `contexts.trace.op` (transactions only).
+    pub trace_op: Option<String>,
     /// `contexts.trace.status`; drives transaction failure classification.
     pub trace_status: Option<String>,
     /// `contexts.trace.span_id`: the transaction's own span, or for an error the
@@ -317,6 +319,7 @@ impl StorableEvent {
             session_buckets: Vec::new(),
             trace_id: None,
             duration_ms: None,
+            trace_op: None,
             trace_status: None,
             span_id: None,
             parent_span_id: None,
@@ -330,15 +333,29 @@ impl StorableEvent {
     /// Byte weight against the queued-memory budget: the payload plus any
     /// pre-extracted derived data carried alongside it to the flush.
     pub fn queued_bytes(&self) -> usize {
-        let embedded: usize = self
-            .embedded_spans
-            .as_ref()
-            .map_or(0, |s| s.iter().map(|e| e.payload.len()).sum());
         let logs: usize = self
             .log_entries
             .as_ref()
             .map_or(0, |l| l.iter().map(|e| e.payload.len()).sum());
-        self.payload.len() + embedded + logs
+        self.payload.len() + logs
+    }
+
+    /// Tags counted into `issue_tag_values`: `environment` and `release` from
+    /// the event columns ahead of the SDK tags (which lose those two keys),
+    /// capped at [`MAX_TAGS_PER_EVENT`].
+    pub fn issue_tags(&self) -> impl Iterator<Item = (&str, &str)> {
+        let synthetic = [
+            ("environment", self.environment.as_deref()),
+            ("release", self.release.as_deref()),
+        ]
+        .into_iter()
+        .filter_map(|(key, value)| value.filter(|v| !v.is_empty()).map(|v| (key, v)));
+        let sdk = self
+            .tags
+            .iter()
+            .filter(|(key, _)| key != "environment" && key != "release")
+            .map(|(key, value)| (key.as_str(), value.as_str()));
+        synthetic.chain(sdk).take(MAX_TAGS_PER_EVENT)
     }
 
     /// Whether the stored payload is worth compressing. Metrics, and logs whose
@@ -406,6 +423,7 @@ impl StorableEvent {
             session_buckets: Vec::new(),
             trace_id: None,
             duration_ms: None,
+            trace_op: None,
             trace_status: None,
             span_id: None,
             parent_span_id: None,
@@ -439,6 +457,28 @@ mod tests {
         ("span", ItemType::Span),
         ("metric", ItemType::Metric),
     ];
+
+    #[test]
+    fn issue_tags_put_columns_first_and_drop_sdk_duplicates() {
+        let mut event = StorableEvent::test_default("e1");
+        event.environment = Some("prod".into());
+        event.release = Some(String::new());
+        event.tags = vec![
+            ("environment".into(), "sdk-env".into()),
+            ("release".into(), "sdk-rel".into()),
+            ("browser".into(), "chrome".into()),
+        ];
+        let tags: Vec<_> = event.issue_tags().collect();
+        assert_eq!(tags, vec![("environment", "prod"), ("browser", "chrome")]);
+
+        event.tags = (0..MAX_TAGS_PER_EVENT)
+            .map(|i| (format!("k{i}"), "v".into()))
+            .collect();
+        event.release = Some("1.0".into());
+        let tags: Vec<_> = event.issue_tags().collect();
+        assert_eq!(tags.len(), MAX_TAGS_PER_EVENT);
+        assert_eq!(tags[..2], [("environment", "prod"), ("release", "1.0")]);
+    }
 
     #[test]
     fn from_str_as_str_round_trip() {

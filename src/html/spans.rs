@@ -71,7 +71,7 @@ pub async fn list_handler(
             ctx.project_id,
             &page,
             since,
-            since.is_none().then_some(ctx.nav.span_count as i64),
+            since.is_none().then_some(ctx.nav.span_count),
         ),
         queries::spans::list_traces(&ctx.pool, ctx.project_id, &trace_page, since),
         queries::spans::aggregate_spans(&ctx.pool, ctx.project_id, since),
@@ -471,6 +471,66 @@ mod tests {
         ActiveOrg::with_memberships(1, None, Vec::new())
     }
 
+    #[test]
+    fn capped_span_total_renders_lower_bound_and_next() {
+        use crate::queries::BoundedCount;
+
+        let capped = BoundedCount::from_limited(10_001);
+        let page = queries::Page::new(Some(10_000), Some(25));
+        let items = (0..25)
+            .map(|i| SpanSummary {
+                span_id: format!("span{i}"),
+                trace_id: TRACE.into(),
+                timestamp: 100,
+                op: None,
+                description: None,
+                duration_ms: None,
+            })
+            .collect();
+        let tmpl = SpanListTemplate {
+            project_id: 1,
+            result: PagedResult::from_bounded(items, capped, &page),
+            traces: PagedResult::from_page(Vec::new(), 0, &page),
+            aggregates: SpanAggregation::default(),
+            agg_cap: queries::spans::MAX_SPAN_GROUPS,
+            period: "all".into(),
+            nav: ProjectNavCounts {
+                span_count: capped,
+                ..ProjectNavCounts::default()
+            },
+            chrome: chrome().0,
+        };
+        let html = tmpl.render().unwrap();
+        assert!(html.contains("More than 10,000 spans"), "{html}");
+        assert!(!html.contains("10,001"), "{html}");
+        assert!(html.contains("offset=10025"), "{html}");
+        assert!(
+            html.contains(r#"<span class="sidebar-count">10k+</span>"#),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn empty_page_past_a_capped_total_links_back() {
+        use crate::queries::BoundedCount;
+
+        let capped = BoundedCount::from_limited(10_001);
+        let page = queries::Page::new(Some(10_050), Some(25));
+        let tmpl = SpanListTemplate {
+            project_id: 1,
+            result: PagedResult::from_bounded(Vec::new(), capped, &page),
+            traces: PagedResult::from_page(Vec::new(), 0, &page),
+            aggregates: SpanAggregation::default(),
+            agg_cap: queries::spans::MAX_SPAN_GROUPS,
+            period: "".into(),
+            nav: ProjectNavCounts::default(),
+            chrome: chrome().0,
+        };
+        let html = tmpl.render().unwrap();
+        assert!(html.contains("offset=10025"), "{html}");
+        assert!(!html.contains("offset=10075"), "{html}");
+    }
+
     async fn body(resp: axum::response::Response) -> String {
         use axum::body::to_bytes;
         let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
@@ -504,22 +564,19 @@ mod tests {
             .unwrap();
         }
 
-        let blob = zstd::encode_all([0u8; 0].as_slice(), 3).unwrap();
         let txn = |event_id: &'static str,
                    project_id: i64,
                    name: &'static str,
                    span_id: &'static str,
                    parent: Option<&'static str>| {
             let pool = pool.clone();
-            let blob = blob.clone();
             async move {
                 sqlx::query(crate::db::sql!(
-                    "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp,
+                    "INSERT INTO events (event_id, item_type, project_id, public_key, timestamp,
                                          transaction_name, trace_id, duration_ms, span_id, parent_span_id, start_ms)
-                     VALUES (?1, 'transaction', ?2, ?3, 'k', 1700000000, ?4, ?5, 100, ?6, ?7, 1700000000000)"
+                     VALUES (?1, 'transaction', ?2, 'k', 1700000000, ?3, ?4, 100, ?5, ?6, 1700000000000)"
                 ))
                 .bind(event_id)
-                .bind(&blob)
                 .bind(project_id)
                 .bind(name)
                 .bind(TRACE)
@@ -543,11 +600,10 @@ mod tests {
 
         // Project 10's outbound client span, the stitch point for project 11.
         sqlx::query(crate::db::sql!(
-            "INSERT INTO spans (span_id, payload, project_id, public_key, timestamp, trace_id,
+            "INSERT INTO spans (span_id, project_id, public_key, timestamp, trace_id,
                                 parent_span_id, op, description, status, duration_ms, start_ms)
-             VALUES ('a-http', ?1, 10, 'k', 1700000000, ?2, 'a000', 'http.client', 'POST http://idp/', 'ok', 80, 1700000000010)"
+             VALUES ('a-http', 10, 'k', 1700000000, ?1, 'a000', 'http.client', 'POST http://idp/', 'ok', 80, 1700000000010)"
         ))
-        .bind(&blob)
         .bind(TRACE)
         .execute(&pool)
         .await
@@ -650,11 +706,10 @@ mod tests {
         let pool = seeded().await;
         let errors_only = "ffffffffffffffffffffffffffffffff";
         sqlx::query(crate::db::sql!(
-            "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp,
+            "INSERT INTO events (event_id, item_type, project_id, public_key, timestamp,
                                  title, level, trace_id, span_id)
-             VALUES ('lonely', 'event', ?1, 10, 'k', 1700000000, 'DuplicateEmail', 'error', ?2, 'gone')"
+             VALUES ('lonely', 'event', 10, 'k', 1700000000, 'DuplicateEmail', 'error', ?1, 'gone')"
         ))
-        .bind(zstd::encode_all([0u8; 0].as_slice(), 3).unwrap())
         .bind(errors_only)
         .execute(&pool)
         .await
@@ -762,11 +817,10 @@ mod tests {
         let pool = seeded().await;
         let foreign_only = "1234567890abcdef1234567890abcdef";
         sqlx::query(crate::db::sql!(
-            "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp,
+            "INSERT INTO events (event_id, item_type, project_id, public_key, timestamp,
                                  transaction_name, trace_id, duration_ms, span_id, start_ms)
-             VALUES ('e-far', 'transaction', ?1, 12, 'k', 1700000000, 'GET /far-only', ?2, 5, 'd000', 1700000000000)"
+             VALUES ('e-far', 'transaction', 12, 'k', 1700000000, 'GET /far-only', ?1, 5, 'd000', 1700000000000)"
         ))
-        .bind(zstd::encode_all([0u8; 0].as_slice(), 3).unwrap())
         .bind(foreign_only)
         .execute(&pool)
         .await
@@ -868,11 +922,10 @@ mod tests {
         let pool = seeded().await;
         let errors_only = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
         sqlx::query(crate::db::sql!(
-            "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp,
+            "INSERT INTO events (event_id, item_type, project_id, public_key, timestamp,
                                  title, level, trace_id)
-             VALUES ('old', 'event', ?1, 10, 'k', 1700000000, 'StaleError', 'error', ?2)"
+             VALUES ('old', 'event', 10, 'k', 1700000000, 'StaleError', 'error', ?1)"
         ))
-        .bind(zstd::encode_all([0u8; 0].as_slice(), 3).unwrap())
         .bind(errors_only)
         .execute(&pool)
         .await

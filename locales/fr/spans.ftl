@@ -45,6 +45,7 @@ spans-count = { $count ->
     [one] { $count } span
    *[other] { $count } spans
 }
+spans-count-capped = Plus de 10 000 spans
 
 # --- Liste des traces à l'échelle de l'organisation ---
 traces-col-root = Transaction racine

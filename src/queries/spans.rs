@@ -5,8 +5,8 @@ use crate::db::sql;
 use crate::db::DbRowExt;
 
 use super::types::{
-    Page, PagedResult, SpanAggRow, SpanAggregation, SpanSummary, TraceError, TraceSpan,
-    TraceSummary, TraceTransaction, Waterfall, WaterfallGap, WaterfallRow,
+    BoundedCount, Page, PagedResult, SpanAggRow, SpanAggregation, SpanSummary, TraceError,
+    TraceSpan, TraceSummary, TraceTransaction, Waterfall, WaterfallGap, WaterfallRow,
 };
 
 /// `None` means all time. Bound as 0 rather than branching the SQL: event
@@ -16,39 +16,42 @@ pub(crate) fn since_bound(since_ts: Option<i64>) -> i64 {
     since_ts.unwrap_or(0)
 }
 
+const SPANS_PAGE_SQL: &str = "SELECT span_id, trace_id, timestamp, op, description, duration_ms \
+     FROM spans WHERE project_id = ?1 AND timestamp >= ?2 \
+     ORDER BY timestamp DESC \
+     LIMIT ?3 OFFSET ?4";
+
 /// `all_time_total` (the nav-count cache) replaces the `COUNT(*)` only when `since_ts` is `None`.
 pub async fn list_spans(
     pool: &crate::db::DbPool,
     project_id: u64,
     page: &Page,
     since_ts: Option<i64>,
-    all_time_total: Option<i64>,
+    all_time_total: Option<BoundedCount>,
 ) -> Result<PagedResult<SpanSummary>> {
     let since = since_bound(since_ts);
     let total = match (since_ts, all_time_total) {
         (None, Some(total)) => total,
-        _ => sqlx::query(sql!(
-            "SELECT COUNT(*) FROM spans WHERE project_id = ?1 AND timestamp >= ?2"
-        ))
-        .bind(project_id as i64)
-        .bind(since)
-        .fetch_one(pool)
-        .await?
-        .get::<i64, _>(0),
+        _ => BoundedCount {
+            count: sqlx::query(sql!(
+                "SELECT COUNT(*) FROM spans WHERE project_id = ?1 AND timestamp >= ?2"
+            ))
+            .bind(project_id as i64)
+            .bind(since)
+            .fetch_one(pool)
+            .await?
+            .get::<i64, _>(0) as u64,
+            capped: false,
+        },
     };
 
-    let rows = sqlx::query(sql!(
-        "SELECT span_id, trace_id, timestamp, op, description, duration_ms
-         FROM spans WHERE project_id = ?1 AND timestamp >= ?2
-         ORDER BY timestamp DESC
-         LIMIT ?3 OFFSET ?4"
-    ))
-    .bind(project_id as i64)
-    .bind(since)
-    .bind(page.limit as i64)
-    .bind(page.offset as i64)
-    .fetch_all(pool)
-    .await?;
+    let rows = sqlx::query(crate::db::dyn_sql(SPANS_PAGE_SQL))
+        .bind(project_id as i64)
+        .bind(since)
+        .bind(page.limit as i64)
+        .bind(page.offset as i64)
+        .fetch_all(pool)
+        .await?;
 
     let items = rows
         .iter()
@@ -62,7 +65,7 @@ pub async fn list_spans(
         })
         .collect();
 
-    Ok(PagedResult::from_page(items, total, page))
+    Ok(PagedResult::from_bounded(items, total, page))
 }
 
 /// Newest spans to scan when aggregating (by (op, description) or by trace).
@@ -220,16 +223,25 @@ pub async fn get_trace_spans(
     if scope.is_empty() {
         return Ok(Vec::new());
     }
-    let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new(
+    let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new("");
+    push_trace_spans(&mut qb, trace_id, scope);
+
+    let rows = qb.build().fetch_all(pool).await?;
+    Ok(rows.iter().map(map_trace_span).collect())
+}
+
+fn push_trace_spans(
+    qb: &mut sqlx::QueryBuilder<crate::db::Db>,
+    trace_id: &str,
+    scope: &TraceScope,
+) {
+    qb.push(
         "SELECT project_id, span_id, parent_span_id, op, description, status, duration_ms, start_ms
          FROM spans WHERE trace_id = ",
     );
     qb.push_bind(trace_id.to_string());
-    scope.push_predicate(&mut qb, "project_id");
+    scope.push_predicate(qb, "project_id");
     qb.push(" ORDER BY timestamp LIMIT 10000");
-
-    let rows = qb.build().fetch_all(pool).await?;
-    Ok(rows.iter().map(map_trace_span).collect())
 }
 
 /// Every transaction on this trace, within the caller's scope. Oldest first so
@@ -729,6 +741,13 @@ pub fn build_waterfall(spans: &[SpanRow], root_duration_ms: i64) -> Waterfall {
     }
 }
 
+/// Stored root spans per trace.
+const ROOT_SPANS_SQL: &str =
+    "SELECT trace_id, op, description FROM spans WHERE parent_span_id IS NULL AND trace_id IN (";
+
+/// Root op per trace; a transaction without an op stores `''`.
+const TRACE_OP_SQL: &str = "SELECT trace_id, trace_op FROM events WHERE item_type = 'transaction' AND trace_op <> '' AND trace_id IN (";
+
 pub async fn list_traces(
     pool: &crate::db::DbPool,
     project_id: u64,
@@ -854,9 +873,7 @@ async fn list_traces_with_scan_limit(
     }
 
     if !items.is_empty() {
-        let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new(
-            "SELECT trace_id, op, description FROM spans WHERE parent_span_id IS NULL AND trace_id IN ("
-        );
+        let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new(ROOT_SPANS_SQL);
         let mut sep = qb.separated(", ");
         for item in &items {
             sep.push_bind(item.trace_id.clone());
@@ -891,12 +908,9 @@ async fn list_traces_with_scan_limit(
         }
     }
 
-    // root_op lives only on the transaction event, not in `spans`; read it from
-    // the transaction payload's contexts.trace.op.
+    // root_op lives only on the transaction event, not in `spans`.
     if items.iter().any(|i| i.root_op.is_none()) {
-        let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new(
-            "SELECT trace_id, payload FROM events WHERE item_type = 'transaction' AND trace_id IN (",
-        );
+        let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new(TRACE_OP_SQL);
         let mut sep = qb.separated(", ");
         for item in &items {
             sep.push_bind(item.trace_id.clone());
@@ -909,22 +923,7 @@ async fn list_traces_with_scan_limit(
             std::collections::HashMap::new();
         for row in &txn_rows {
             let tid: String = row.get_opt_string("trace_id").unwrap_or_default();
-            if op_map.contains_key(&tid) {
-                continue;
-            }
-            let blob: Vec<u8> = row.get("payload");
-            if let Some(op) = crate::queries::events::decompress_payload(&blob)
-                .ok()
-                .and_then(|p| {
-                    p.get("contexts")
-                        .and_then(|c| c.get("trace"))
-                        .and_then(|t| t.get("op"))
-                        .and_then(|v| v.as_str())
-                        .map(String::from)
-                })
-            {
-                op_map.insert(tid, op);
-            }
+            op_map.entry(tid).or_insert_with(|| row.get("trace_op"));
         }
 
         for item in &mut items {
@@ -1380,14 +1379,12 @@ mod tests {
         trace_id: Option<&str>,
         timestamp: i64,
     ) {
-        let compressed = zstd::encode_all([0u8; 0].as_slice(), 3).unwrap();
         sqlx::query(sql!(
-            "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, title, level, trace_id)
-             VALUES (?1, ?2, ?3, ?4, 'testkey', ?5, ?6, 'error', ?7)"
+            "INSERT INTO events (event_id, item_type, project_id, public_key, timestamp, title, level, trace_id)
+             VALUES (?1, ?2, ?3, 'testkey', ?4, ?5, 'error', ?6)"
         ))
         .bind(event_id)
         .bind(item_type)
-        .bind(&compressed)
         .bind(project_id)
         .bind(timestamp)
         .bind(event_id)
@@ -1410,13 +1407,11 @@ mod tests {
         op: Option<&str>,
         description: Option<&str>,
     ) {
-        let compressed = zstd::encode_all([0u8; 0].as_slice(), 3).unwrap();
         sqlx::query(sql!(
-            "INSERT INTO spans (span_id, payload, project_id, public_key, timestamp, trace_id, parent_span_id, op, description, status, duration_ms, start_ms)
-             VALUES (?1, ?2, ?3, 'testkey', ?4, ?5, ?6, ?7, ?8, 'ok', ?9, ?10)"
+            "INSERT INTO spans (span_id, project_id, public_key, timestamp, trace_id, parent_span_id, op, description, status, duration_ms, start_ms)
+             VALUES (?1, ?2, 'testkey', ?3, ?4, ?5, ?6, ?7, 'ok', ?8, ?9)"
         ))
         .bind(span_id)
-        .bind(&compressed)
         .bind(project_id)
         .bind(timestamp)
         .bind(trace_id)
@@ -1441,31 +1436,141 @@ mod tests {
         duration_ms: i64,
         op: &str,
     ) {
-        let payload = serde_json::json!({ "contexts": { "trace": { "op": op } } });
-        let compressed =
-            zstd::encode_all(serde_json::to_vec(&payload).unwrap().as_slice(), 3).unwrap();
         sqlx::query(sql!(
-            "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, trace_id, transaction_name, duration_ms, level)
-             VALUES (?1, 'transaction', ?2, ?3, 'testkey', ?4, ?5, ?6, ?7, 'info')"
+            "INSERT INTO events (event_id, item_type, project_id, public_key, timestamp, trace_id, transaction_name, duration_ms, level, trace_op, trace_status)
+             VALUES (?1, 'transaction', ?2, 'testkey', ?3, ?4, ?5, ?6, 'info', ?7, '')"
         ))
         .bind(event_id)
-        .bind(&compressed)
         .bind(project_id)
         .bind(timestamp)
         .bind(trace_id)
         .bind(transaction_name)
         .bind(duration_ms)
+        .bind(op)
         .execute(pool)
         .await
         .unwrap();
     }
 
+    /// 2000 transactions over 4 projects, each the root of a trace of 6 spans,
+    /// the first of which is a stored root span.
+    async fn seed_plan_traces(pool: &crate::db::DbPool) {
+        sqlx::query(sql!(
+            "WITH RECURSIVE seq(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM seq WHERE x < 2000)
+             INSERT INTO events (event_id, item_type, project_id, public_key, timestamp, received_at,
+                                 transaction_name, trace_id, duration_ms, trace_op, trace_status)
+             SELECT 'txn-' || x, 'transaction', 1 + x % 4, 'testkey', 1000 + x, 1000 + x,
+                    '/n' || (x % 20), 'trace-' || x, x % 500, 'http.server', ''
+             FROM seq"
+        ))
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(sql!(
+            "WITH RECURSIVE seq(x) AS (SELECT 0 UNION ALL SELECT x + 1 FROM seq WHERE x < 11999)
+             INSERT INTO spans (span_id, project_id, public_key, timestamp, received_at, trace_id,
+                                parent_span_id, op, description, duration_ms, start_ms)
+             SELECT 'span-' || x, 1 + (x / 6 + 1) % 4, 'testkey', 1000 + x / 6, 1000 + x / 6,
+                    'trace-' || (x / 6 + 1), CASE WHEN x % 6 > 0 THEN 'span-' || (x - x % 6) END,
+                    'db', 'd', x % 50, x
+             FROM seq"
+        ))
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    fn sorts(plan: &[String]) -> bool {
+        plan.iter()
+            .any(|d| d.contains("TEMP B-TREE") || d.contains("Sort"))
+    }
+
+    #[tokio::test]
+    async fn list_traces_root_op_plan_seeks_the_trace_index_without_payloads() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        seed_plan_traces(&pool).await;
+
+        let select = format!("{TRACE_OP_SQL}?1, ?2) AND project_id = ?3");
+        let mut tx = crate::queries::test_helpers::plan_tx(&pool, &["events"]).await;
+        let plan = crate::queries::test_helpers::query_plan(&mut *tx, &select, |q| {
+            q.bind("trace-1").bind("trace-5").bind(2i64)
+        })
+        .await;
+
+        assert!(
+            !plan.iter().any(|d| d.contains("event_payloads")),
+            "{plan:#?}"
+        );
+        assert!(
+            plan.iter()
+                .any(|d| d.contains("idx_events_trace") && !d.contains("idx_events_trace_list")),
+            "{plan:#?}"
+        );
+    }
+
+    /// SQLite seeks the project-scoped lookup through `idx_spans_project_trace`, Postgres through `idx_spans_root`.
+    #[tokio::test]
+    async fn root_spans_plan_seeks_a_trace_index() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        seed_plan_traces(&pool).await;
+
+        let select = format!("{ROOT_SPANS_SQL}?1, ?2) AND project_id = ?3");
+        let mut tx = crate::queries::test_helpers::plan_tx(&pool, &["spans"]).await;
+        let plan = crate::queries::test_helpers::query_plan(&mut *tx, &select, |q| {
+            q.bind("trace-1").bind("trace-5").bind(2i64)
+        })
+        .await;
+
+        let index = if cfg!(feature = "sqlite") {
+            "idx_spans_project_trace"
+        } else {
+            "idx_spans_root"
+        };
+        assert!(plan.iter().any(|d| d.contains(index)), "{plan:#?}");
+    }
+
+    #[tokio::test]
+    async fn spans_page_plan_walks_the_project_time_index() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        seed_plan_traces(&pool).await;
+
+        let mut tx = crate::queries::test_helpers::plan_tx(&pool, &["spans"]).await;
+        let plan = crate::queries::test_helpers::query_plan(&mut *tx, SPANS_PAGE_SQL, |q| {
+            q.bind(1i64).bind(0i64).bind(50i64).bind(0i64)
+        })
+        .await;
+
+        assert!(
+            plan.iter().any(|d| d.contains("idx_spans_project_time")),
+            "{plan:#?}"
+        );
+        assert!(!sorts(&plan), "{plan:#?}");
+    }
+
+    /// Unscoped (superuser) reads have no project to seek by, so only `idx_spans_trace` serves them.
+    #[tokio::test]
+    async fn unscoped_trace_spans_plan_seeks_the_trace_index() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        seed_plan_traces(&pool).await;
+
+        let mut tx = crate::queries::test_helpers::plan_tx(&pool, &["spans"]).await;
+        let plan = crate::queries::test_helpers::builder_plan(&mut *tx, |qb| {
+            push_trace_spans(qb, "trace-1", &TraceScope::All);
+        })
+        .await;
+
+        assert!(
+            plan.iter().any(|d| d.contains("idx_spans_trace")),
+            "{plan:#?}"
+        );
+    }
+
     // Guards the feature-spans fixes: with no stored root span, the trace row's
     // op/description must fall back to the owning transaction (name -> description,
-    // payload contexts.trace.op -> root_op) instead of rendering blank, and the
+    // trace_op -> root_op) instead of rendering blank, and the
     // duration must follow the transaction when it exceeds the child-span extent.
     #[tokio::test]
-    async fn list_traces_root_falls_back_to_transaction_name_and_payload_op() {
+    async fn list_traces_root_falls_back_to_transaction_name_and_trace_op() {
         let pool = crate::queries::test_helpers::open_test_db().await;
         // Child spans only (both orphaned), so no parent_span_id IS NULL root span.
         // Child extent is 0..400ms = 400ms.
@@ -1588,14 +1693,21 @@ mod tests {
         insert_span(&pool, "new", "t-new", None, 1, 900, 0, 20, None, None).await;
         let page = Page::new(Some(0), Some(25));
 
-        let cached = list_spans(&pool, 1, &page, None, Some(999)).await.unwrap();
+        let cached_total = BoundedCount {
+            count: 999,
+            capped: false,
+        };
+        let cached = list_spans(&pool, 1, &page, None, Some(cached_total))
+            .await
+            .unwrap();
         assert_eq!(cached.total, 999);
         assert_eq!(cached.items.len(), 2);
 
-        let windowed = list_spans(&pool, 1, &page, Some(500), Some(999))
+        let windowed = list_spans(&pool, 1, &page, Some(500), Some(cached_total))
             .await
             .unwrap();
         assert_eq!(windowed.total, 1);
+        assert!(!windowed.total_capped);
 
         let counted = list_spans(&pool, 1, &page, None, None).await.unwrap();
         assert_eq!(counted.total, 2);
@@ -1709,10 +1821,9 @@ mod tests {
         .await;
         // NULL-duration span must be skipped entirely.
         sqlx::query(sql!(
-            "INSERT INTO spans (span_id, payload, project_id, public_key, timestamp, op, description)
-             VALUES ('c1', ?1, 1, 'testkey', 104, 'noop', 'x')"
+            "INSERT INTO spans (span_id, project_id, public_key, timestamp, op, description)
+             VALUES ('c1', 1, 'testkey', 104, 'noop', 'x')"
         ))
-        .bind(zstd::encode_all([0u8; 0].as_slice(), 3).unwrap())
         .execute(&pool)
         .await
         .unwrap();

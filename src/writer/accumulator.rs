@@ -1,4 +1,5 @@
-use crate::ingest::models::{ItemType, Level, StorableEvent, MAX_TAGS_PER_EVENT};
+use crate::ingest::models::{ItemType, Level, StorableEvent};
+use crate::queries::client_reports::{for_each_outcome, OutcomeKey};
 use simple_hll::HyperLogLog;
 use std::collections::{BTreeSet, HashMap};
 use std::time::Instant;
@@ -149,6 +150,8 @@ pub(super) struct Accumulators {
     pub session_aggregates: HashMap<(u64, String, String, i64), SessionDelta>,
     /// Transaction perf rollups -- keyed by (project_id, transaction_name, hour_bucket)
     pub transaction_metrics: HashMap<(u64, String, i64), TxnDelta>,
+    /// Client-report dropped-event quantities -- keyed by (project_id, hour_bucket, category, reason)
+    pub client_report_outcomes: HashMap<OutcomeKey, u64>,
     /// Releases observed on events -- keyed by (project_id, version)
     pub releases: HashMap<(u64, String), ReleaseDelta>,
     /// First platform seen per project, written only where `projects.platform` is NULL.
@@ -163,6 +166,7 @@ impl Accumulators {
             tags: HashMap::new(),
             session_aggregates: HashMap::new(),
             transaction_metrics: HashMap::new(),
+            client_report_outcomes: HashMap::new(),
             releases: HashMap::new(),
             platforms: HashMap::new(),
             last_flush: Instant::now(),
@@ -174,6 +178,7 @@ impl Accumulators {
         self.accumulate_sessions(event);
         // Transactions carry no fingerprint either -- roll up before returning.
         self.accumulate_transactions(event);
+        self.accumulate_client_report(event);
         // Every item type can carry a release, fingerprint or not.
         self.accumulate_releases(event);
         self.accumulate_platform(event);
@@ -224,10 +229,15 @@ impl Accumulators {
             delta.has_hll_data = true;
         }
 
-        for (key, value) in event.tags.iter().take(MAX_TAGS_PER_EVENT) {
+        for (key, value) in event.issue_tags() {
             *self
                 .tags
-                .entry((event.project_id, fp.clone(), key.clone(), value.clone()))
+                .entry((
+                    event.project_id,
+                    fp.clone(),
+                    key.to_string(),
+                    value.to_string(),
+                ))
                 .or_insert(0) += 1;
         }
     }
@@ -376,6 +386,20 @@ impl Accumulators {
         }
     }
 
+    fn accumulate_client_report(&mut self, event: &StorableEvent) {
+        if event.item_type != ItemType::ClientReport {
+            return;
+        }
+        let hour_bucket = (event.timestamp / 3600) * 3600;
+        for_each_outcome(&event.payload, |category, reason, quantity| {
+            let total = self
+                .client_report_outcomes
+                .entry((event.project_id, hour_bucket, category, reason))
+                .or_insert(0);
+            *total = total.saturating_add(quantity);
+        });
+    }
+
     /// Fold `other` (a batch-local scratch) into `self` with the same combination semantics as `accumulate`, iterating only `other`'s batch-bounded entries and leaving `last_flush` untouched.
     pub fn merge(&mut self, other: &Accumulators) {
         for (key, src) in &other.issues {
@@ -449,6 +473,11 @@ impl Accumulators {
                 .or_insert_with(|| platform.clone());
         }
 
+        for (key, quantity) in &other.client_report_outcomes {
+            let total = self.client_report_outcomes.entry(key.clone()).or_insert(0);
+            *total = total.saturating_add(*quantity);
+        }
+
         for (key, src) in &other.transaction_metrics {
             match self.transaction_metrics.get_mut(key) {
                 Some(dst) => {
@@ -476,6 +505,7 @@ impl Accumulators {
             || self.tags.len() >= AGGREGATION_FLUSH_TAG_THRESHOLD
             || self.session_aggregates.len() >= AGGREGATION_FLUSH_FINGERPRINT_THRESHOLD
             || self.transaction_metrics.len() >= AGGREGATION_FLUSH_FINGERPRINT_THRESHOLD
+            || self.client_report_outcomes.len() >= AGGREGATION_FLUSH_FINGERPRINT_THRESHOLD
             // At the cap new versions get dropped, so flush rather than lose them.
             || self.releases.len() >= MAX_DELTA_RELEASES
     }
@@ -485,6 +515,7 @@ impl Accumulators {
             && self.tags.is_empty()
             && self.session_aggregates.is_empty()
             && self.transaction_metrics.is_empty()
+            && self.client_report_outcomes.is_empty()
             && self.releases.is_empty()
             && self.platforms.is_empty()
     }
@@ -516,6 +547,65 @@ mod tests {
         assert_eq!(day_bucket(86401), 86400);
         // 2021-01-01 12:00:00 UTC -> floor to 2021-01-01 00:00:00 UTC
         assert_eq!(day_bucket(1_609_502_400), 1_609_459_200);
+    }
+
+    fn client_report_event(
+        event_id: &str,
+        project_id: u64,
+        ts: i64,
+        body: &serde_json::Value,
+    ) -> StorableEvent {
+        let mut e = StorableEvent::new(
+            event_id.to_string(),
+            ItemType::ClientReport,
+            serde_json::to_vec(body).unwrap(),
+            project_id,
+            "k".to_string(),
+        );
+        e.timestamp = ts;
+        e
+    }
+
+    #[test]
+    fn client_reports_roll_up_per_project_hour_category_reason() {
+        let hour = 1_700_002_800;
+        let body = serde_json::json!({
+            "discarded_events": [{"category": "error", "reason": "sample_rate", "quantity": 4}],
+            "rate_limited_events": [
+                {"category": "error", "reason": "sample_rate", "quantity": 1},
+                {"category": "transaction", "quantity": 2}
+            ]
+        });
+        let mut acc = Accumulators::new();
+        acc.accumulate(&client_report_event("a", 1, hour + 10, &body));
+        let mut compressed = client_report_event("b", 1, hour + 3599, &body);
+        compressed.compress_payload();
+        assert!(compressed.compressed);
+        acc.accumulate(&compressed);
+        acc.accumulate(&client_report_event("c", 1, hour + 3600, &body));
+        acc.accumulate(&client_report_event("d", 2, hour, &body));
+        // Not a client report: same shape, never rolled up.
+        let mut other = client_report_event("e", 1, hour, &body);
+        other.item_type = ItemType::Event;
+        acc.accumulate(&other);
+
+        let key = |p: u64, h: i64, c: &str, r: &str| (p, h, c.to_string(), r.to_string());
+        let mut scratch = Accumulators::new();
+        scratch.accumulate(&client_report_event("f", 1, hour, &body));
+        acc.merge(&scratch);
+
+        let expected: HashMap<OutcomeKey, u64> = [
+            (key(1, hour, "error", "sample_rate"), 15),
+            (key(1, hour, "transaction", "unknown"), 6),
+            (key(1, hour + 3600, "error", "sample_rate"), 5),
+            (key(1, hour + 3600, "transaction", "unknown"), 2),
+            (key(2, hour, "error", "sample_rate"), 5),
+            (key(2, hour, "transaction", "unknown"), 2),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(acc.client_report_outcomes, expected);
+        assert!(!acc.is_empty());
     }
 
     use crate::ingest::models::SessionBucket;

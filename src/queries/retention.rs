@@ -163,6 +163,16 @@ async fn server_pass(pool: &DbPool, policy: &Resolved, now: i64) -> Result<usize
             cutoff(d),
         )
         .await?;
+        // Whole hours only: the bucket holding the cutoff still has reports inside the window.
+        total += chunked_delete(
+            pool,
+            "client_report_outcomes",
+            "hour_bucket < ?1",
+            None,
+            Scope::Server,
+            cutoff(d).div_euclid(3600) * 3600,
+        )
+        .await?;
     }
     if let Some(d) = policy.base {
         // `date` is a `%Y-%m-%d` string, not an epoch timestamp.
@@ -230,15 +240,17 @@ async fn override_pass(pool: &DbPool, policy: &Resolved, now: i64) -> Result<usi
             Category::Metrics => {
                 total += delete("metrics", OVERRIDE_PAST, "timestamp").await?;
                 // A bucket qualifies only once its whole hour is past the cutoff.
-                total += chunked_delete(
-                    pool,
-                    "transaction_metrics",
-                    "hour_bucket < ?1",
-                    Some("hour_bucket"),
-                    scope,
-                    cutoff.div_euclid(3600) * 3600,
-                )
-                .await?;
+                for table in ["transaction_metrics", "client_report_outcomes"] {
+                    total += chunked_delete(
+                        pool,
+                        table,
+                        "hour_bucket < ?1",
+                        Some("hour_bucket"),
+                        scope,
+                        cutoff.div_euclid(3600) * 3600,
+                    )
+                    .await?;
+                }
             }
             Category::Releases => {}
         }
@@ -468,11 +480,14 @@ async fn reconcile_affected_issues(
         push_pair_in_list(&mut qb, chunk);
         qb.build().execute(&mut **tx).await?;
 
-        // Drop tag values for all affected issues: counts can't be partially
-        // recalculated (tags aren't per-event queryable); the accumulator rebuilds them.
+        // SDK tag counts can't be partially recalculated, so they go; environment and
+        // release outlive retention because the issue filters read them.
         let mut qb =
             sqlx::QueryBuilder::<crate::db::Db>::new("DELETE FROM issue_tag_values WHERE ");
         push_pair_in_list(&mut qb, chunk);
+        qb.push(" AND (tag_key NOT IN ('environment', 'release') OR (project_id, fingerprint) IN (SELECT project_id, fingerprint FROM issues WHERE ");
+        push_pair_in_list(&mut qb, chunk);
+        qb.push(" AND event_count = 0))");
         qb.build().execute(&mut **tx).await?;
 
         let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new("DELETE FROM issues WHERE ");
@@ -682,6 +697,51 @@ mod tests {
         assert_eq!(event_rows(&pool).await, 1);
         assert_eq!(issue_count(&pool, "fp1").await, Some(1));
         assert_eq!(issue_count(&pool, "fp2").await, None); // reconciled to 0, dropped
+    }
+
+    #[tokio::test]
+    async fn reconcile_keeps_environment_and_release_tags_of_surviving_issues() {
+        let pool = open_test_db().await;
+        let old = 1_000;
+        let now = chrono::Utc::now().timestamp();
+        insert_test_event(&pool, "e1", 1, old, Some("fp1"), Some("error"), None).await;
+        insert_test_event(&pool, "e2", 1, now, Some("fp1"), Some("error"), None).await;
+        insert_issue(&pool, "fp1", 2).await;
+        insert_test_event(&pool, "e3", 1, old, Some("fp2"), Some("error"), None).await;
+        insert_issue(&pool, "fp2", 1).await;
+        for (fp, key, value) in [
+            ("fp1", "environment", "prod"),
+            ("fp1", "release", "1.0"),
+            ("fp1", "browser", "chrome"),
+            ("fp2", "environment", "prod"),
+        ] {
+            sqlx::query(sql!(
+                "INSERT INTO issue_tag_values (project_id, fingerprint, tag_key, tag_value, count)
+                 VALUES (1, ?1, ?2, ?3, 1)"
+            ))
+            .bind(fp)
+            .bind(key)
+            .bind(value)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        run_sweep(&pool, &Resolved::uniform(1)).await.unwrap();
+
+        let rows: Vec<(String, String)> = sqlx::query_as(sql!(
+            "SELECT fingerprint, tag_key FROM issue_tag_values ORDER BY fingerprint, tag_key"
+        ))
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                ("fp1".to_string(), "environment".to_string()),
+                ("fp1".to_string(), "release".to_string()),
+            ]
+        );
     }
 
     // A fingerprint shared across projects: sweeping project 1's old events must
@@ -922,17 +982,17 @@ mod tests {
     async fn bulk_insert_error_events(pool: &DbPool, n: i64, received_at: i64, fingerprint: &str) {
         sqlx::query(sql!(
             "WITH RECURSIVE seq(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM seq WHERE x < ?1)
-             INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, received_at, fingerprint)
-             SELECT 'bulk-' || x, ?2, ?3, 1, 'testkey', ?4, ?4, ?5 FROM seq"
+             INSERT INTO events (event_id, item_type, project_id, public_key, timestamp, received_at, fingerprint)
+             SELECT 'bulk-' || x, ?2, 1, 'testkey', ?3, ?3, ?4 FROM seq"
         ))
         .bind(n)
         .bind(ItemType::Event.as_str())
-        .bind(&[0u8] as &[u8])
         .bind(received_at)
         .bind(fingerprint)
         .execute(pool)
         .await
         .unwrap();
+        insert_missing_test_payloads(pool).await;
     }
 
     async fn bulk_insert_logs(pool: &DbPool, n: i64, received_at: i64) {
@@ -990,6 +1050,11 @@ mod tests {
 
         assert_eq!(deleted, ALL_ITEM_TYPES.len() + 5);
         assert_eq!(event_ids(&pool).await, vec!["new-event", "new-replay"]);
+        assert_eq!(
+            count_rows(&pool, "event_payloads").await,
+            2,
+            "payload rows go with their events by cascade"
+        );
         for table in [
             "attachments",
             "replay_metadata",
@@ -1302,38 +1367,24 @@ mod tests {
     async fn seed_mixed_events(pool: &DbPool, n: i64, received_at: i64) {
         sqlx::query(sql!(
             "WITH RECURSIVE seq(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM seq WHERE x < ?1)
-             INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, received_at)
+             INSERT INTO events (event_id, item_type, project_id, public_key, timestamp, received_at)
              SELECT 'mix-' || x,
                     CASE x % 10 WHEN 0 THEN 'event' WHEN 1 THEN 'session' WHEN 2 THEN 'check_in' ELSE 'transaction' END,
-                    ?2, 1, 'testkey', ?3 + x, ?3 + x
+                    1, 'testkey', ?2 + x, ?2 + x
              FROM seq"
         ))
         .bind(n)
-        .bind(&[0u8] as &[u8])
         .bind(received_at)
         .execute(pool)
         .await
         .unwrap();
+        insert_missing_test_payloads(pool).await;
     }
 
     async fn typed_event_plans(pool: &DbPool, cutoff: i64) -> Vec<(String, Vec<String>)> {
-        #[cfg(feature = "sqlite")]
-        let (explain, detail_col) = ("EXPLAIN QUERY PLAN", 3);
-        #[cfg(not(feature = "sqlite"))]
-        let (explain, detail_col) = ("EXPLAIN", 0);
-
         let mut plans = Vec::new();
         for select in typed_event_selects() {
-            let rows = sqlx::query(dyn_sql(&format!("{explain} {select}")))
-                .bind(cutoff)
-                .bind(CHUNK_LIMIT)
-                .fetch_all(pool)
-                .await
-                .unwrap();
-            let plan = rows
-                .iter()
-                .map(|r| r.get::<String, _>(detail_col))
-                .collect();
+            let plan = query_plan(pool, &select, |q| q.bind(cutoff).bind(CHUNK_LIMIT)).await;
             plans.push((select, plan));
         }
         plans
@@ -1672,15 +1723,11 @@ mod tests {
             scoped("logs", OVERRIDE_PAST, "timestamp"),
             scoped("metrics", OVERRIDE_PAST, "timestamp"),
             scoped("transaction_metrics", "hour_bucket < ?1", "hour_bucket"),
+            scoped("client_report_outcomes", "hour_bucket < ?1", "hour_bucket"),
         ]
     }
 
     async fn override_plans(pool: &DbPool, cutoff: i64) -> Vec<(String, Vec<String>)> {
-        #[cfg(feature = "sqlite")]
-        let (explain, detail_col) = ("EXPLAIN QUERY PLAN", 3);
-        #[cfg(not(feature = "sqlite"))]
-        let (explain, detail_col) = ("EXPLAIN", 0);
-
         let mut tx = pool.begin().await.unwrap();
         // On near-empty tables Postgres picks a seq scan regardless of indexes; disabling it
         // makes the plan show whether a usable index exists at all.
@@ -1694,20 +1741,37 @@ mod tests {
 
         let mut plans = Vec::new();
         for select in override_selects() {
-            let rows = sqlx::query(dyn_sql(&format!("{explain} {select}")))
-                .bind(cutoff)
-                .bind(CHUNK_LIMIT)
-                .bind(1i64)
-                .fetch_all(&mut *tx)
-                .await
-                .unwrap();
-            let plan = rows
-                .iter()
-                .map(|r| r.get::<String, _>(detail_col))
-                .collect();
+            let plan = query_plan(&mut *tx, &select, |q| {
+                q.bind(cutoff).bind(CHUNK_LIMIT).bind(1i64)
+            })
+            .await;
             plans.push((select, plan));
         }
         plans
+    }
+
+    #[tokio::test]
+    async fn spans_server_pass_uses_received_index() {
+        let pool = open_test_db().await;
+        let old = chrono::Utc::now().timestamp() - 60 * DAY;
+        sqlx::query(sql!(
+            "WITH RECURSIVE seq(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM seq WHERE x < 3000)
+             INSERT INTO spans (span_id, project_id, public_key, timestamp, received_at, trace_id)
+             SELECT 'rs-' || x, 1 + x % 4, 'testkey', ?1 + x, ?1 + x, 't-' || (x / 6) FROM seq"
+        ))
+        .bind(old)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let select = chunk_select_sql("spans", "received_at < ?1", None, Scope::Server);
+        let mut tx = plan_tx(&pool, &["spans"]).await;
+        let plan = query_plan(&mut *tx, &select, |q| q.bind(old + 100).bind(CHUNK_LIMIT)).await;
+
+        assert!(
+            plan.iter().any(|d| d.contains("idx_spans_received")),
+            "{select}: {plan:?}"
+        );
     }
 
     #[tokio::test]
@@ -1728,6 +1792,7 @@ mod tests {
             let index = match table {
                 "events" => "idx_events_project_type_time".to_owned(),
                 "transaction_metrics" => "idx_transaction_metrics_project".to_owned(),
+                "client_report_outcomes" => pk_index("client_report_outcomes"),
                 _ => format!("idx_{table}_project_time"),
             };
             #[cfg(feature = "sqlite")]
@@ -1737,16 +1802,16 @@ mod tests {
                 "{select}: {plan:?}"
             );
             // Postgres may pick any project index; only rule out the full scan and the sort.
+            // The rollup has only its primary key.
             #[cfg(not(feature = "sqlite"))]
-            {
-                let _ = index;
-                assert!(
-                    !plan
-                        .iter()
-                        .any(|d| d.contains("Seq Scan") || d.contains("Sort")),
-                    "{select}: {plan:?}"
-                );
-            }
+            assert!(
+                !plan
+                    .iter()
+                    .any(|d| d.contains("Seq Scan") || d.contains("Sort"))
+                    && (table != "client_report_outcomes"
+                        || plan.iter().any(|d| d.contains(&index))),
+                "{select}: {plan:?}"
+            );
         }
     }
 
@@ -1773,6 +1838,62 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(left, vec!["new", "partial"]);
+    }
+
+    async fn insert_outcome(pool: &DbPool, project_id: i64, hour_bucket: i64, reason: &str) {
+        sqlx::query(sql!(
+            "INSERT INTO client_report_outcomes (project_id, hour_bucket, category, reason, quantity)
+             VALUES (?1, ?2, 'error', ?3, 1)"
+        ))
+        .bind(project_id)
+        .bind(hour_bucket)
+        .bind(reason)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn outcome_rows(pool: &DbPool) -> Vec<(i64, String)> {
+        sqlx::query_as(sql!(
+            "SELECT project_id, reason FROM client_report_outcomes ORDER BY project_id, reason"
+        ))
+        .fetch_all(pool)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn client_report_outcomes_prune_whole_hours_with_metrics() {
+        let pool = open_test_db().await;
+        let now = chrono::Utc::now().timestamp();
+        let cutoff_hour = (now - 30 * DAY).div_euclid(3600) * 3600;
+        let o = |p: i64, r: &str| (p, r.to_string());
+
+        for p in [1, 2] {
+            insert_outcome(&pool, p, cutoff_hour - 3600, "old").await;
+            insert_outcome(&pool, p, cutoff_hour, "edge").await;
+        }
+        let policy = Resolved {
+            metrics: Some(30),
+            ..forever()
+        };
+        assert_eq!(server_pass(&pool, &policy, now).await.unwrap(), 2);
+        assert_eq!(outcome_rows(&pool).await, vec![o(1, "edge"), o(2, "edge")]);
+
+        let hour_10d = (now - 10 * DAY).div_euclid(3600) * 3600;
+        let mid_hour = (now - 20 * DAY).div_euclid(3600) * 3600;
+        for p in [1, 2] {
+            insert_outcome(&pool, p, mid_hour, "mid").await;
+            insert_outcome(&pool, p, hour_10d, "recent").await;
+        }
+        apply_overrides(&pool, 1, &[(Category::Metrics, Some(15))])
+            .await
+            .unwrap();
+        assert_eq!(override_pass(&pool, &policy, now).await.unwrap(), 2);
+        assert_eq!(
+            outcome_rows(&pool).await,
+            vec![o(1, "recent"), o(2, "edge"), o(2, "mid"), o(2, "recent")]
+        );
     }
 
     #[tokio::test]
@@ -1835,21 +1956,8 @@ mod tests {
     }
 
     async fn release_prune_plan(pool: &DbPool, cutoff: i64) -> Vec<String> {
-        #[cfg(feature = "sqlite")]
-        let (explain, detail_col) = ("EXPLAIN QUERY PLAN", 3);
-        #[cfg(not(feature = "sqlite"))]
-        let (explain, detail_col) = ("EXPLAIN", 0);
-
         let select = chunk_select_sql("releases", PRUNABLE_RELEASES, None, Scope::Server);
-        sqlx::query(dyn_sql(&format!("{explain} {select}")))
-            .bind(cutoff)
-            .bind(CHUNK_LIMIT)
-            .fetch_all(pool)
-            .await
-            .unwrap()
-            .iter()
-            .map(|r| r.get::<String, _>(detail_col))
-            .collect()
+        query_plan(pool, &select, |q| q.bind(cutoff).bind(CHUNK_LIMIT)).await
     }
 
     #[tokio::test]

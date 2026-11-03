@@ -138,35 +138,227 @@ async fn create_pg_pool(url: &str, max_connections: Option<u32>) -> Result<sqlx:
     Ok(pool)
 }
 
-// Run migrations
-
-/// Run embedded migrations. For SQLite, runs the sqlite migrations directory.
-/// For PostgreSQL, runs the postgres migrations directory.
-pub async fn run_migrations(pool: &DbPool) -> Result<()> {
+/// Single-connection pool for `stackpit migrate`.
+///
+/// SQLite: `foreign_keys` off, since the pragma is a no-op inside the transaction each migration runs in, and `journal_mode=DELETE` so a table rebuild doesn't grow the WAL to the size of the table. [`restore_journal_mode`] switches back to WAL.
+pub async fn create_migration_pool(url: &str) -> Result<DbPool> {
     #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
     {
-        sqlx::migrate!("migrations/sqlite").run(pool).await?;
+        use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+        use std::str::FromStr;
+
+        let opts = SqliteConnectOptions::from_str(url)?
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Delete)
+            .foreign_keys(false)
+            .busy_timeout(std::time::Duration::from_secs(5));
+        let path = opts.get_filename().to_path_buf();
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await?;
+        secure_sqlite_files(&path);
+        Ok(pool)
     }
 
     #[cfg(all(feature = "postgres", not(feature = "sqlite")))]
     {
-        sqlx::migrate!("migrations/postgres").run(pool).await?;
+        create_pg_pool(url, Some(1)).await
+    }
+}
+
+/// Put a migration pool's database back into WAL mode. No-op on Postgres.
+pub async fn restore_journal_mode(pool: &DbPool) -> Result<()> {
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
+    sqlx::query("PRAGMA journal_mode = WAL")
+        .execute(pool)
+        .await?;
+    #[cfg(all(feature = "postgres", not(feature = "sqlite")))]
+    let _ = pool;
+    Ok(())
+}
+
+// Run migrations
+
+#[cfg(all(feature = "sqlite", not(feature = "postgres")))]
+static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("migrations/sqlite");
+#[cfg(all(feature = "postgres", not(feature = "sqlite")))]
+static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("migrations/postgres");
+
+/// Migrations too slow to run at boot on a populated database; `stackpit migrate` applies them.
+const OFFLINE_MIGRATIONS: &[i64] = &[34, 35, 36];
+
+/// Run embedded migrations, refusing when an offline migration is pending on a database that holds events.
+pub async fn run_migrations(pool: &DbPool) -> Result<()> {
+    refuse_offline_pending(pool, OFFLINE_MIGRATIONS).await?;
+    MIGRATOR.run(pool).await?;
+    Ok(())
+}
+
+async fn refuse_offline_pending(pool: &DbPool, offline: &[i64]) -> Result<()> {
+    let pending = pending_offline(pool, offline).await?;
+    if pending.is_empty() || !events_present(pool).await? {
+        return Ok(());
+    }
+    let list = pending
+        .iter()
+        .map(|v| format!("{v:03}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    anyhow::bail!(
+        "database needs offline migrations ({list}) that are too slow to run at startup; stop stackpit and run `stackpit migrate`"
+    )
+}
+
+/// Versions in `offline` that are embedded but not applied. A fresh database has none.
+async fn pending_offline(pool: &DbPool, offline: &[i64]) -> Result<Vec<i64>> {
+    let Some(applied) = applied_versions(pool).await? else {
+        return Ok(Vec::new());
+    };
+    let embedded: Vec<i64> = up_migrations().map(|m| m.version).collect();
+    Ok(offline_pending(offline, &embedded, &applied))
+}
+
+fn offline_pending(offline: &[i64], embedded: &[i64], applied: &[i64]) -> Vec<i64> {
+    offline
+        .iter()
+        .copied()
+        .filter(|v| embedded.contains(v) && !applied.contains(v))
+        .collect()
+}
+
+fn up_migrations() -> impl Iterator<Item = &'static sqlx::migrate::Migration> {
+    MIGRATOR
+        .iter()
+        .filter(|m| !m.migration_type.is_down_migration())
+}
+
+async fn table_exists(pool: &DbPool, table: &str) -> Result<bool> {
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
+    let exists = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+    )
+    .bind(table)
+    .fetch_one(pool)
+    .await?
+        > 0;
+    #[cfg(all(feature = "postgres", not(feature = "sqlite")))]
+    let exists: bool = sqlx::query_scalar("SELECT to_regclass($1) IS NOT NULL")
+        .bind(table)
+        .fetch_one(pool)
+        .await?;
+    Ok(exists)
+}
+
+/// Versions recorded in `_sqlx_migrations`, or `None` when the table doesn't exist yet.
+async fn applied_versions(pool: &DbPool) -> Result<Option<Vec<i64>>> {
+    if !table_exists(pool, "_sqlx_migrations").await? {
+        return Ok(None);
+    }
+    Ok(Some(
+        sqlx::query_scalar("SELECT version FROM _sqlx_migrations WHERE success")
+            .fetch_all(pool)
+            .await?,
+    ))
+}
+
+async fn events_present(pool: &DbPool) -> Result<bool> {
+    if !table_exists(pool, "events").await? {
+        return Ok(false);
+    }
+    Ok(sqlx::query_scalar::<_, i32>("SELECT 1 FROM events LIMIT 1")
+        .fetch_optional(pool)
+        .await?
+        .is_some())
+}
+
+/// Apply every pending migration, offline-listed or not, one file at a time with progress on stdout.
+pub async fn run_migrations_unchecked(pool: &DbPool) -> Result<()> {
+    use sqlx::migrate::Migrator;
+    use std::borrow::Cow;
+    use std::time::{Duration, Instant};
+
+    const HEARTBEAT: Duration = Duration::from_secs(10);
+
+    let applied = applied_versions(pool).await?.unwrap_or_default();
+    let pending: Vec<_> = up_migrations()
+        .filter(|m| !applied.contains(&m.version))
+        .collect();
+    if pending.is_empty() {
+        println!("no pending migrations");
+        return Ok(());
     }
 
+    for migration in pending {
+        println!(
+            "applying {:03} {} ...",
+            migration.version, migration.description
+        );
+        // ignore_missing: every already-applied version is absent from a one-migration set.
+        let single = Migrator {
+            migrations: Cow::Owned(vec![migration.clone()]),
+            ignore_missing: true,
+            ..Migrator::DEFAULT
+        };
+
+        let start = Instant::now();
+        let run = single.run(pool);
+        tokio::pin!(run);
+        let mut heartbeat =
+            tokio::time::interval_at(tokio::time::Instant::now() + HEARTBEAT, HEARTBEAT);
+        loop {
+            tokio::select! {
+                result = &mut run => {
+                    result?;
+                    break;
+                }
+                _ = heartbeat.tick() => {
+                    println!("  {:.0?} elapsed{}", start.elapsed(), size_report(pool));
+                }
+            }
+        }
+        println!("  done in {:.1?}", start.elapsed());
+    }
     Ok(())
+}
+
+/// `, db X MiB, journal Y MiB` for a file-backed SQLite database; empty otherwise.
+fn size_report(pool: &DbPool) -> String {
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
+    {
+        let mib = |p: &std::path::Path| {
+            std::fs::metadata(p)
+                .map(|m| format!("{:.1} MiB", m.len() as f64 / (1024.0 * 1024.0)))
+                .ok()
+        };
+        let path = pool.connect_options().get_filename().to_path_buf();
+        let mut journal = path.as_os_str().to_owned();
+        journal.push("-journal");
+        let mut out = String::new();
+        if let Some(db) = mib(&path) {
+            out.push_str(&format!(", db {db}"));
+        }
+        if let Some(j) = mib(std::path::Path::new(&journal)) {
+            out.push_str(&format!(", journal {j}"));
+        }
+        out
+    }
+    #[cfg(all(feature = "postgres", not(feature = "sqlite")))]
+    {
+        let _ = pool;
+        String::new()
+    }
 }
 
 /// Run migrations up to and including `version`, so a test can migrate, seed and migrate again.
 ///
-/// SQLite only: Postgres tests share one database whose migration state is global.
-#[cfg(all(test, feature = "sqlite", not(feature = "postgres")))]
+/// On Postgres only against a scratch database: the shared test database's migration state is global.
+#[cfg(test)]
 pub async fn run_migrations_to(pool: &DbPool, version: i64) -> Result<()> {
     use sqlx::migrate::Migrator;
     use std::borrow::Cow;
 
-    let full = sqlx::migrate!("migrations/sqlite");
-    let subset: Vec<_> = full
-        .migrations
+    let subset: Vec<_> = MIGRATOR
         .iter()
         .filter(|m| m.version <= version)
         .cloned()
@@ -757,7 +949,7 @@ mod tests {
         .await
         .unwrap();
 
-        run_migrations(&pool).await.unwrap();
+        run_migrations_to(&pool, 33).await.unwrap();
 
         let rows: Vec<(i64, Option<String>)> =
             sqlx::query_as("SELECT project_id, platform FROM projects ORDER BY project_id")
@@ -810,5 +1002,638 @@ mod tests {
             index_names(&pool, "issue_tag_values").await,
             vec!["idx_issue_tag_values_project_fp_key_count".to_string()]
         );
+    }
+}
+
+#[cfg(test)]
+mod offline_tests {
+    use super::*;
+
+    #[test]
+    fn listed_versions_missing_from_the_binary_are_not_pending() {
+        let embedded: Vec<i64> = (1..=33).collect();
+        assert!(offline_pending(&[34, 35, 36], &embedded, &embedded).is_empty());
+    }
+
+    #[test]
+    fn listed_versions_embedded_but_unapplied_are_pending() {
+        let embedded: Vec<i64> = (1..=36).collect();
+        let applied: Vec<i64> = (1..=34).collect();
+        assert_eq!(
+            offline_pending(&[34, 35, 36], &embedded, &applied),
+            vec![35, 36]
+        );
+    }
+
+    #[test]
+    fn an_unlisted_migration_after_the_offline_ones_does_not_gate_boot() {
+        let embedded: Vec<i64> = (1..=37).collect();
+        let applied: Vec<i64> = (1..=36).collect();
+        assert!(offline_pending(&[34, 35, 36], &embedded, &applied).is_empty());
+    }
+
+    #[cfg(all(feature = "postgres", not(feature = "sqlite")))]
+    #[tokio::test]
+    async fn migrate_reruns_cleanly_on_a_migrated_postgres_database() {
+        let url = std::env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://stackpit:stackpit@localhost:5432/stackpit_test".into());
+        let pool = crate::db::open_test_pool().await;
+
+        let applied = applied_versions(&pool).await.unwrap().unwrap();
+        assert!(applied.contains(&33));
+        assert!(pending_offline(&pool, &[33]).await.unwrap().is_empty());
+
+        crate::cli::migrate::run(&url).await.unwrap();
+        run_migrations(&pool).await.unwrap();
+    }
+}
+
+#[cfg(all(test, feature = "sqlite", not(feature = "postgres")))]
+mod migrate_tests {
+    use super::*;
+
+    /// File-backed database: `stackpit migrate` opens its own pool, and `sqlite::memory:` is per connection.
+    struct TempDb(std::path::PathBuf);
+
+    impl TempDb {
+        fn new(name: &str) -> Self {
+            let path =
+                std::env::temp_dir().join(format!("stackpit-{name}-{}.db", std::process::id()));
+            let db = Self(path);
+            db.remove();
+            db
+        }
+
+        fn url(&self) -> String {
+            format!("sqlite://{}?mode=rwc", self.0.display())
+        }
+
+        fn remove(&self) {
+            for suffix in ["", "-wal", "-shm", "-journal"] {
+                let mut file = self.0.as_os_str().to_owned();
+                file.push(suffix);
+                let _ = std::fs::remove_file(file);
+            }
+        }
+    }
+
+    impl Drop for TempDb {
+        fn drop(&mut self) {
+            self.remove();
+        }
+    }
+
+    async fn applied_count(pool: &DbPool) -> usize {
+        applied_versions(pool).await.unwrap().unwrap().len()
+    }
+
+    #[tokio::test]
+    async fn gate_refuses_a_populated_database_until_migrate_runs() {
+        let db = TempDb::new("gate-populated");
+        let pool = create_write_pool(&db.url()).await.unwrap();
+        run_migrations_to(&pool, 32).await.unwrap();
+        sqlx::query("INSERT INTO projects (project_id, source) VALUES (1, 'manual')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp)
+             VALUES ('e1', 'error', x'00', 1, 'k', 10)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let err = refuse_offline_pending(&pool, &[33])
+            .await
+            .expect_err("a pending offline migration on a populated database must refuse");
+        let msg = err.to_string();
+        assert!(msg.contains("033"), "{msg}");
+        assert!(msg.contains("stackpit migrate"), "{msg}");
+        pool.close().await;
+
+        crate::cli::migrate::run(&db.url()).await.unwrap();
+
+        let pool = create_write_pool(&db.url()).await.unwrap();
+        assert_eq!(applied_count(&pool).await, up_migrations().count());
+        refuse_offline_pending(&pool, &[33]).await.unwrap();
+        // A full run validates every row the one-migration runs recorded.
+        run_migrations(&pool).await.unwrap();
+
+        let mode: String = sqlx::query_scalar("PRAGMA journal_mode")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(mode, "wal");
+        pool.close().await;
+
+        crate::cli::migrate::run(&db.url())
+            .await
+            .expect("migrate must be idempotent");
+        let pool = create_write_pool(&db.url()).await.unwrap();
+        let events: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM events")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(events, 1);
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn gate_lets_an_empty_database_through() {
+        let pool = create_write_pool("sqlite::memory:").await.unwrap();
+        assert!(applied_versions(&pool).await.unwrap().is_none());
+        refuse_offline_pending(&pool, &[33]).await.unwrap();
+
+        run_migrations_to(&pool, 32).await.unwrap();
+        refuse_offline_pending(&pool, &[33]).await.unwrap();
+
+        run_migrations(&pool).await.unwrap();
+        assert_eq!(applied_count(&pool).await, up_migrations().count());
+    }
+
+    #[tokio::test]
+    async fn gate_lets_an_interrupted_first_boot_through() {
+        let pool = create_write_pool("sqlite::memory:").await.unwrap();
+        sqlx::query(
+            "CREATE TABLE _sqlx_migrations (version BIGINT PRIMARY KEY, description TEXT NOT NULL,
+             installed_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, success BOOLEAN NOT NULL,
+             checksum BLOB NOT NULL, execution_time BIGINT NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        refuse_offline_pending(&pool, &[33]).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn migrate_takes_a_fresh_database_straight_through() {
+        let db = TempDb::new("migrate-fresh");
+        crate::cli::migrate::run(&db.url()).await.unwrap();
+
+        let pool = create_write_pool(&db.url()).await.unwrap();
+        assert_eq!(applied_count(&pool).await, up_migrations().count());
+        run_migrations(&pool).await.unwrap();
+        pool.close().await;
+    }
+}
+
+#[cfg(test)]
+mod payload_split_tests {
+    use super::*;
+    use crate::db::sql;
+
+    const EVENT_COLUMNS: &[&str] = &[
+        "event_id",
+        "project_id",
+        "item_type",
+        "timestamp",
+        "received_at",
+        "trace_id",
+        "duration_ms",
+        "start_ms",
+        "span_id",
+        "parent_span_id",
+        "trace_op",
+        "trace_status",
+        "level",
+        "fingerprint",
+        "release",
+        "environment",
+        "transaction_name",
+        "title",
+        "monitor_slug",
+        "session_status",
+        "parent_event_id",
+        "platform",
+        "server_name",
+        "sdk_name",
+        "sdk_version",
+        "public_key",
+    ];
+
+    const EVENT_INDEXES: &[&str] = &[
+        "idx_events_fingerprint",
+        "idx_events_level",
+        "idx_events_monitor",
+        "idx_events_parent",
+        "idx_events_project_release",
+        "idx_events_project_time",
+        "idx_events_project_txn",
+        "idx_events_project_type_time",
+        "idx_events_received",
+        "idx_events_trace",
+        "idx_events_trace_list",
+        "idx_events_txn_duration",
+        "idx_events_type_time",
+    ];
+
+    const SPAN_INDEXES: &[&str] = &[
+        "idx_spans_project_time",
+        "idx_spans_project_trace",
+        "idx_spans_received",
+        "idx_spans_root",
+        "idx_spans_trace",
+    ];
+
+    const TAG_INDEXES: &[&str] = &[
+        "idx_issue_tag_values_project_fp_key_count",
+        "idx_itv_key_value",
+    ];
+
+    fn zstd_json(value: &serde_json::Value) -> Vec<u8> {
+        zstd::encode_all(serde_json::to_vec(value).unwrap().as_slice(), 3).unwrap()
+    }
+
+    fn txn_payload(n: u32) -> serde_json::Value {
+        serde_json::json!({"transaction": format!("/t{n}"), "contexts": {"trace": {"op": "http.server"}}})
+    }
+
+    /// Seeds a database at 033: two transactions, an error with an attachment, a
+    /// replay with metadata, a client report, and spans whose sequence sits above MAX(id).
+    async fn seed_at_033(pool: &DbPool) {
+        sqlx::query("INSERT INTO projects (project_id, source) VALUES (1, 'manual')")
+            .execute(pool)
+            .await
+            .unwrap();
+        let rows: [(&str, &str, Vec<u8>); 5] = [
+            ("t1", "transaction", zstd_json(&txn_payload(1))),
+            ("t2", "transaction", zstd_json(&txn_payload(2))),
+            (
+                "err",
+                "event",
+                zstd_json(&serde_json::json!({"message": "boom"})),
+            ),
+            (
+                "rep",
+                "replay_event",
+                zstd_json(&serde_json::json!({"urls": []})),
+            ),
+            (
+                "cr",
+                "client_report",
+                zstd_json(&serde_json::json!({
+                    "discarded_events": [{"category": "error", "reason": "sample_rate", "quantity": 4}]
+                })),
+            ),
+        ];
+        for (event_id, item_type, payload) in &rows {
+            sqlx::query(sql!(
+                "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, received_at, trace_id, duration_ms)
+                 VALUES (?1, ?2, ?3, 1, 'pk', 1700000000, 1700000000, 'tr', 12)"
+            ))
+            .bind(event_id)
+            .bind(item_type)
+            .bind(payload)
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query(sql!(
+            "INSERT INTO attachments (event_id, filename, data) VALUES ('err', 'a.txt', ?1)"
+        ))
+        .bind(&b"blob"[..])
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO replay_metadata (event_id, project_id, error_count) VALUES ('rep', 1, 2)",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        for span_id in ["s1", "s2", "s3"] {
+            sqlx::query(sql!(
+                "INSERT INTO spans (span_id, payload, project_id, public_key, timestamp, trace_id)
+                 VALUES (?1, ?2, 1, 'pk', 1700000000, 'tr')"
+            ))
+            .bind(span_id)
+            .bind(&b"{}"[..])
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query("DELETE FROM spans WHERE span_id = 's3'")
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE events SET fingerprint = 'fp', release = '1.0',
+                 environment = CASE event_id WHEN 'err' THEN 'prod' ELSE '' END
+             WHERE event_id IN ('err', 'rep')",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO issue_tag_values (project_id, fingerprint, tag_key, tag_value, count) VALUES
+                 (1, 'fp', 'environment', 'sdk-env', 7),
+                 (1, 'fp', 'environment', 'prod', 3),
+                 (1, 'fp', 'browser', 'chrome', 2)",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// Assertions shared by both backends on a database `stackpit migrate` took past 036.
+    async fn assert_migrated(pool: &DbPool) {
+        for (table, expected) in [
+            ("events", 5),
+            ("event_payloads", 5),
+            ("attachments", 1),
+            ("replay_metadata", 1),
+            ("spans", 2),
+            ("client_report_outcomes", 1),
+        ] {
+            let n: i64 =
+                sqlx::query_scalar(crate::db::dyn_sql(&format!("SELECT COUNT(*) FROM {table}")))
+                    .fetch_one(pool)
+                    .await
+                    .unwrap();
+            assert_eq!(n, expected, "{table}");
+        }
+
+        let detail = crate::queries::events::get_event_detail(pool, "t2")
+            .await
+            .unwrap()
+            .expect("t2 must survive with its payload");
+        assert_eq!(detail.payload, txn_payload(2));
+
+        let trace: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT event_id, trace_op, trace_status FROM events
+             WHERE event_id IN ('t1', 't2', 'err') ORDER BY event_id",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        let s = |v: &str| Some(v.to_string());
+        assert_eq!(
+            trace,
+            vec![
+                ("err".to_string(), None, None),
+                ("t1".to_string(), s("http.server"), s("")),
+                ("t2".to_string(), s("http.server"), s("")),
+            ]
+        );
+        let rerun = crate::cli::migrate::backfill_trace_op_and_status(pool, 5000)
+            .await
+            .unwrap();
+        assert_eq!(rerun, 0);
+
+        let outcomes: Vec<(i64, i64, String, String, i64)> = sqlx::query_as(
+            "SELECT project_id, hour_bucket, category, reason, quantity FROM client_report_outcomes",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        let outcome = (
+            1,
+            1699999200,
+            "error".to_string(),
+            "sample_rate".to_string(),
+            4,
+        );
+        assert_eq!(outcomes, vec![outcome]);
+        let rerun = crate::cli::migrate::backfill_client_report_outcomes(pool, 5000)
+            .await
+            .unwrap();
+        assert_eq!(rerun, None, "a completed backfill is not repeated");
+
+        let (data, errors): (Vec<u8>, i64) = sqlx::query_as(
+            "SELECT a.data, m.error_count FROM attachments a, replay_metadata m
+             WHERE a.event_id = 'err' AND m.event_id = 'rep'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!((data.as_slice(), errors), (&b"blob"[..], 2));
+
+        let id: i64 = sqlx::query_scalar(
+            "INSERT INTO spans (span_id, project_id, public_key, timestamp) VALUES ('s4', 1, 'pk', 0) RETURNING id",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(id, 4, "the span id sequence must carry over");
+
+        let tags: Vec<(String, String, i64)> = sqlx::query_as(
+            "SELECT tag_key, tag_value, count FROM issue_tag_values
+             WHERE project_id = 1 AND fingerprint = 'fp' ORDER BY tag_key, tag_value",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        let t = |k: &str, v: &str, n| (k.to_string(), v.to_string(), n);
+        assert_eq!(
+            tags,
+            vec![
+                t("browser", "chrome", 2),
+                t("environment", "prod", 1),
+                t("release", "1.0", 2),
+            ]
+        );
+    }
+
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
+    #[tokio::test]
+    async fn migrate_splits_payloads_and_rebuilds_events_and_spans() {
+        let path =
+            std::env::temp_dir().join(format!("stackpit-payload-split-{}.db", std::process::id()));
+        let remove = || {
+            for suffix in ["", "-wal", "-shm", "-journal"] {
+                let mut file = path.as_os_str().to_owned();
+                file.push(suffix);
+                let _ = std::fs::remove_file(file);
+            }
+        };
+        remove();
+        let url = format!("sqlite://{}?mode=rwc", path.display());
+
+        let pool = create_write_pool(&url).await.unwrap();
+        run_migrations_to(&pool, 33).await.unwrap();
+        seed_at_033(&pool).await;
+        pool.close().await;
+
+        crate::cli::migrate::run(&url).await.unwrap();
+
+        let pool = create_write_pool(&url).await.unwrap();
+        assert_migrated(&pool).await;
+
+        let columns: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('events') ORDER BY cid")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(columns, EVENT_COLUMNS);
+        let span_columns: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('spans')")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert!(!span_columns.iter().any(|c| c == "payload"));
+
+        for child in ["attachments", "replay_metadata", "event_payloads"] {
+            let parents: Vec<String> =
+                sqlx::query_scalar("SELECT \"table\" FROM pragma_foreign_key_list(?1)")
+                    .bind(child)
+                    .fetch_all(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(parents, vec!["events"], "{child}");
+        }
+        let violations = sqlx::query("PRAGMA foreign_key_check")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert!(violations.is_empty());
+        let integrity: String = sqlx::query_scalar("PRAGMA integrity_check")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(integrity, "ok");
+        let seq_names: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM sqlite_sequence WHERE name LIKE 'spans%'")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(seq_names, vec!["spans"]);
+
+        for (table, expected) in [
+            ("events", EVENT_INDEXES),
+            ("spans", SPAN_INDEXES),
+            ("issue_tag_values", TAG_INDEXES),
+        ] {
+            let names: Vec<String> = sqlx::query_scalar(
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ?1
+                 AND name NOT LIKE 'sqlite_autoindex_%' ORDER BY name",
+            )
+            .bind(table)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+            assert_eq!(names, expected, "{table}");
+        }
+
+        sqlx::query("DELETE FROM events WHERE event_id = 'err'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let left: i64 = sqlx::query_scalar(
+            "SELECT (SELECT COUNT(*) FROM event_payloads WHERE event_id = 'err')
+                  + (SELECT COUNT(*) FROM attachments WHERE event_id = 'err')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            left, 0,
+            "children must cascade from the rebuilt events table"
+        );
+        pool.close().await;
+
+        crate::cli::migrate::run(&url).await.unwrap();
+        let pool = create_write_pool(&url).await.unwrap();
+        let quantity: i64 = sqlx::query_scalar("SELECT SUM(quantity) FROM client_report_outcomes")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(quantity, 4, "a second migrate must not add to the rollup");
+
+        pool.close().await;
+        remove();
+    }
+
+    #[cfg(all(feature = "postgres", not(feature = "sqlite")))]
+    #[tokio::test]
+    async fn migrate_splits_payloads_and_drops_the_columns() {
+        let base = std::env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://stackpit:stackpit@localhost:5432/stackpit_test".into());
+        let name = format!("stackpit_payload_split_{}", std::process::id());
+        let (prefix, _) = base.rsplit_once('/').unwrap();
+        let url = format!("{prefix}/{name}");
+
+        let admin = create_pg_pool(&base, Some(1)).await.unwrap();
+        let drop_db = format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)");
+        sqlx::query(crate::db::dyn_sql(&drop_db))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query(crate::db::dyn_sql(&format!("CREATE DATABASE {name}")))
+            .execute(&admin)
+            .await
+            .unwrap();
+
+        let pool = create_pg_pool(&url, Some(2)).await.unwrap();
+        run_migrations_to(&pool, 33).await.unwrap();
+        seed_at_033(&pool).await;
+        pool.close().await;
+
+        crate::cli::migrate::run(&url).await.unwrap();
+
+        let pool = create_pg_pool(&url, Some(2)).await.unwrap();
+        assert_migrated(&pool).await;
+
+        let mut columns: Vec<String> = sqlx::query_scalar(
+            "SELECT column_name::text FROM information_schema.columns WHERE table_name = 'events'",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        columns.sort();
+        let mut expected: Vec<&str> = EVENT_COLUMNS.to_vec();
+        expected.sort_unstable();
+        assert_eq!(columns, expected);
+        let span_payload: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'spans' AND column_name = 'payload'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(span_payload, 0);
+
+        let parents: Vec<String> = sqlx::query_scalar(
+            "SELECT confrelid::regclass::text FROM pg_constraint
+             WHERE conrelid = 'event_payloads'::regclass AND contype = 'f'",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(parents, vec!["events"]);
+
+        for (table, expected) in [
+            ("events", EVENT_INDEXES),
+            ("spans", SPAN_INDEXES),
+            ("issue_tag_values", TAG_INDEXES),
+        ] {
+            let names: Vec<String> = sqlx::query_scalar(
+                "SELECT indexname::text FROM pg_indexes WHERE tablename = $1
+                 AND indexname LIKE 'idx\\_%' ORDER BY indexname",
+            )
+            .bind(table)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+            assert_eq!(names, expected, "{table}");
+        }
+
+        sqlx::query("DELETE FROM events WHERE event_id = 'err'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let left: i64 = sqlx::query_scalar(
+            "SELECT (SELECT COUNT(*) FROM event_payloads WHERE event_id = 'err')
+                  + (SELECT COUNT(*) FROM attachments WHERE event_id = 'err')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(left, 0);
+
+        pool.close().await;
+        sqlx::query(crate::db::dyn_sql(&drop_db))
+            .execute(&admin)
+            .await
+            .unwrap();
     }
 }

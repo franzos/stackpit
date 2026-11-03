@@ -49,6 +49,7 @@ spans-count = { $count ->
     [many] { $count } спанов
    *[other] { $count } спана
 }
+spans-count-capped = Более 10 000 спанов
 
 # --- Список трасс по всей организации ---
 traces-col-root = Корневая транзакция

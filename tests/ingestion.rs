@@ -39,6 +39,7 @@ fn make_event(event_id: &str, project_id: u64, fingerprint: &str) -> StorableEve
         session_buckets: Vec::new(),
         trace_id: None,
         duration_ms: None,
+        trace_op: None,
         trace_status: None,
         span_id: None,
         parent_span_id: None,

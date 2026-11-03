@@ -1,6 +1,6 @@
 //! Shared event write operations (writer batches for throughput; sync one-at-a-time).
 //!
-//! - **Writer**: `insert_event_row` → accumulators → batched issue/tag/HLL upserts
+//! - **Writer**: `insert_event_rows_bulk` → accumulators → batched issue/tag/HLL upserts
 //! - **Sync CLI**: `insert_event_row` → per-event issue/tag/HLL upserts
 
 use std::collections::{HashMap, HashSet};
@@ -12,7 +12,6 @@ use sqlx::QueryBuilder;
 use crate::db::{dyn_sql, sql, DbPool, MAX_FN, MIN_FN};
 use crate::ingest::models::{
     ItemType, StorableAttachment, StorableEvent, StorageBucket, HLL_REGISTER_COUNT,
-    MAX_TAGS_PER_EVENT,
 };
 
 use crate::ingest::parse_log::{
@@ -24,14 +23,15 @@ use crate::ingest::parse_span::{
     extract_span_fields, extract_span_fields_from_value, SpanFields, MAX_EMBEDDED_SPANS,
 };
 
-/// Max events per multi-row INSERT chunk. 24 bind params per event;
-/// SQLite's SQLITE_MAX_VARIABLE_NUMBER is 32766, so 32766 / 24 = 1365.
-/// We use 1300 for a comfortable margin.
+/// Max events per multi-row INSERT chunk. 25 bind params per event;
+/// SQLite's SQLITE_MAX_VARIABLE_NUMBER is 32766, so 32766 / 25 = 1310.
+/// We use 1300 for a comfortable margin. The chunk's `event_payloads` insert
+/// binds 2 per row, well inside the limit.
 const BULK_CHUNK_SIZE: usize = 1300;
 
-/// Max spans per multi-row INSERT chunk. 14 bind params per span;
-/// 32766 / 14 = 2340, use 2300 for margin.
-const SPAN_BULK_CHUNK_SIZE: usize = 2300;
+/// Max spans per multi-row INSERT chunk. 13 bind params per span;
+/// 32766 / 13 = 2520, use 2500 for margin.
+const SPAN_BULK_CHUNK_SIZE: usize = 2500;
 
 /// Max metrics per multi-row INSERT chunk. 8 bind params per metric;
 /// 32766 / 8 = 4095, use 4000 for margin.
@@ -48,7 +48,7 @@ const TAG_CHUNK_SIZE: usize = 6000;
 
 /// Single source of truth for the `events` insert column list. The bind order in
 /// `push_event_row` must match this exactly.
-const EVENT_COLUMNS: &str = "event_id, item_type, payload, project_id, public_key, timestamp, level, platform, release, environment, server_name, transaction_name, title, sdk_name, sdk_version, fingerprint, monitor_slug, session_status, parent_event_id, trace_id, duration_ms, span_id, parent_span_id, start_ms";
+const EVENT_COLUMNS: &str = "event_id, item_type, project_id, public_key, timestamp, level, platform, release, environment, server_name, transaction_name, title, sdk_name, sdk_version, fingerprint, monitor_slug, session_status, parent_event_id, trace_id, duration_ms, span_id, parent_span_id, start_ms, trace_op, trace_status";
 
 /// Push one event row's bind values in `EVENT_COLUMNS` order. Shared by the
 /// single-row and bulk insert paths so the column/bind order lives in one place.
@@ -58,7 +58,6 @@ fn push_event_row(
 ) {
     b.push_bind(&event.event_id);
     b.push_bind(event.item_type.as_str());
-    b.push_bind(&event.payload);
     b.push_bind(event.project_id as i64);
     b.push_bind(&event.public_key);
     b.push_bind(event.timestamp);
@@ -80,25 +79,30 @@ fn push_event_row(
     b.push_bind(&event.span_id);
     b.push_bind(&event.parent_span_id);
     b.push_bind(event.start_ms);
+    let (trace_op, trace_status) = stored_trace_op_and_status(event);
+    b.push_bind(trace_op);
+    b.push_bind(trace_status);
 }
 
-/// Insert an event row, ignoring a duplicate `event_id`. Returns `true` if it was actually new.
-///
-/// Accepts any sqlx executor -- `&DbPool`, `&mut PgConnection`, `&mut SqliteConnection`,
-/// or a dereferenced transaction (`&mut *tx`).
-pub async fn insert_event_row<'e, E>(executor: E, event: &StorableEvent) -> Result<bool>
-where
-    E: sqlx::Executor<'e, Database = crate::db::Db>,
-{
-    let dialect = insert_ignore("events", EVENT_COLUMNS, Some("event_id"));
+/// `trace_op` / `trace_status` column values. A transaction without one stores `''`,
+/// which the `stackpit migrate` backfill reads as done; NULL means not yet backfilled.
+fn stored_trace_op_and_status(event: &StorableEvent) -> (Option<&str>, Option<&str>) {
+    if event.item_type != ItemType::Transaction {
+        return (None, None);
+    }
+    (
+        Some(event.trace_op.as_deref().unwrap_or_default()),
+        Some(event.trace_status.as_deref().unwrap_or_default()),
+    )
+}
 
-    let mut builder = QueryBuilder::<crate::db::Db>::new(&dialect.prefix);
-    builder.push_values(std::iter::once(event), push_event_row);
-    builder.push(&dialect.suffix);
-
-    let result = builder.build().execute(executor).await?;
-
-    Ok(result.rows_affected() == 1)
+/// Insert an event row and its payload, ignoring a duplicate `event_id`. Returns `true` if it was actually new.
+pub async fn insert_event_row(
+    tx: &mut sqlx::Transaction<'_, crate::db::Db>,
+    event: &StorableEvent,
+) -> Result<bool> {
+    let inserted = bulk_insert_events_table(tx, &[&event]).await?;
+    Ok(!inserted.is_empty())
 }
 
 /// `INSERT ... (cols) VALUES` prefix and trailing conflict clause.
@@ -185,12 +189,14 @@ pub async fn insert_event_rows_bulk(
     Ok(inserted_ids)
 }
 
-/// Bulk-insert into the events table, returning only the `event_id`s actually inserted via `RETURNING event_id`; both SQLite (>= 3.35) and Postgres return only genuinely-inserted rows through the conflict clause.
+/// Bulk-insert into the events table, then `event_payloads` for the rows that
+/// were new, returning only the `event_id`s actually inserted via `RETURNING event_id`; both SQLite (>= 3.35) and Postgres return only genuinely-inserted rows through the conflict clause.
 async fn bulk_insert_events_table(
     tx: &mut sqlx::Transaction<'_, crate::db::Db>,
     events: &[&&StorableEvent],
 ) -> Result<HashSet<String>> {
     let dialect = insert_ignore("events", EVENT_COLUMNS, Some("event_id"));
+    let payloads = insert_ignore("event_payloads", "event_id, payload", Some("event_id"));
 
     let mut inserted = HashSet::with_capacity(events.len());
     for chunk in events.chunks(BULK_CHUNK_SIZE) {
@@ -201,7 +207,31 @@ async fn bulk_insert_events_table(
         builder.push(&dialect.suffix);
         builder.push(" RETURNING event_id");
 
-        let ids: Vec<String> = builder.build_query_scalar().fetch_all(&mut **tx).await?;
+        let ids: HashSet<String> = builder
+            .build_query_scalar()
+            .fetch_all(&mut **tx)
+            .await?
+            .into_iter()
+            .collect();
+
+        // A duplicate within one chunk is returned once, so it gets one payload row.
+        let mut new_rows: Vec<&StorableEvent> = Vec::with_capacity(ids.len());
+        let mut seen: HashSet<&str> = HashSet::with_capacity(ids.len());
+        for event in chunk {
+            if ids.contains(&event.event_id) && seen.insert(event.event_id.as_str()) {
+                new_rows.push(event);
+            }
+        }
+        if !new_rows.is_empty() {
+            let mut builder = QueryBuilder::<crate::db::Db>::new(&payloads.prefix);
+            builder.push_values(new_rows, |mut b, event| {
+                b.push_bind(&event.event_id);
+                b.push_bind(&event.payload);
+            });
+            builder.push(&payloads.suffix);
+            builder.build().execute(&mut **tx).await?;
+        }
+
         inserted.extend(ids);
     }
 
@@ -210,7 +240,6 @@ async fn bulk_insert_events_table(
 
 struct SpanRow {
     span_id: String,
-    payload: Vec<u8>,
     project_id: i64,
     public_key: String,
     timestamp: i64,
@@ -226,18 +255,16 @@ struct SpanRow {
 }
 
 /// Build a SpanRow from already-extracted fields and its source event.
-/// `payload` and `trace_id_fallback` differ for standalone vs embedded spans.
+/// `trace_id_fallback` differs for standalone vs embedded spans.
 fn span_row_from_fields(
     fields: SpanFields,
     event: &StorableEvent,
-    payload: Vec<u8>,
     timestamp: i64,
     trace_id_fallback: Option<&str>,
     default_span_id: String,
 ) -> SpanRow {
     SpanRow {
         span_id: fields.span_id.unwrap_or(default_span_id),
-        payload,
         project_id: event.project_id as i64,
         public_key: event.public_key.clone(),
         timestamp,
@@ -333,14 +360,7 @@ async fn bulk_insert_spans_table(
                 None => extract_span_fields(&event.payload),
             };
             let default_id = event.event_id.clone();
-            span_row_from_fields(
-                fields,
-                event,
-                event.payload.clone(),
-                event.timestamp,
-                None,
-                default_id,
-            )
+            span_row_from_fields(fields, event, event.timestamp, None, default_id)
         })
         .collect();
 
@@ -366,7 +386,6 @@ fn extract_embedded_spans(events: &[&&StorableEvent]) -> Vec<SpanRow> {
                 rows.push(span_row_from_fields(
                     es.fields.clone(),
                     event,
-                    es.payload.clone(),
                     es.timestamp.unwrap_or(event.timestamp),
                     event.trace_id.as_deref(),
                     span_id,
@@ -408,7 +427,6 @@ fn extract_embedded_spans(events: &[&&StorableEvent]) -> Vec<SpanRow> {
             let Some(span_id) = fields.span_id.clone() else {
                 continue;
             };
-            let payload = serde_json::to_vec(child).unwrap_or_default();
             let ts = child
                 .get("timestamp")
                 .and_then(serde_json::Value::as_f64)
@@ -417,7 +435,6 @@ fn extract_embedded_spans(events: &[&&StorableEvent]) -> Vec<SpanRow> {
             rows.push(span_row_from_fields(
                 fields,
                 event,
-                payload,
                 ts,
                 parent_trace,
                 span_id,
@@ -438,7 +455,7 @@ async fn bulk_insert_span_rows(
 
     let dialect = insert_ignore(
         "spans",
-        "span_id, payload, project_id, public_key, timestamp, release, environment, trace_id, parent_span_id, op, description, status, duration_ms, start_ms",
+        "span_id, project_id, public_key, timestamp, release, environment, trace_id, parent_span_id, op, description, status, duration_ms, start_ms",
         Some("span_id"),
     );
 
@@ -447,7 +464,6 @@ async fn bulk_insert_span_rows(
 
         builder.push_values(chunk.iter(), |mut b, row| {
             b.push_bind(&row.span_id);
-            b.push_bind(&row.payload);
             b.push_bind(row.project_id);
             b.push_bind(&row.public_key);
             b.push_bind(row.timestamp);
@@ -668,7 +684,7 @@ pub async fn upsert_issue_from_event(pool: &DbPool, event: &StorableEvent) -> Re
         .execute(&mut *tx)
         .await?;
 
-    for (key, value) in event.tags.iter().take(MAX_TAGS_PER_EVENT) {
+    for (key, value) in event.issue_tags() {
         sqlx::query(sql!(
             "INSERT INTO issue_tag_values (project_id, fingerprint, tag_key, tag_value, count)
              VALUES (?1, ?2, ?3, ?4, 1)
@@ -869,7 +885,6 @@ mod tests {
             assert_eq!(a.duration_ms, b.duration_ms);
             assert_eq!(a.start_ms, b.start_ms);
             assert_eq!(a.timestamp, b.timestamp);
-            assert_eq!(a.payload, b.payload);
         }
     }
 
@@ -928,6 +943,51 @@ mod tests {
         let ids = insert_event_rows_bulk(&mut tx, events).await.unwrap();
         tx.commit().await.unwrap();
         ids
+    }
+
+    #[tokio::test]
+    async fn transactions_store_trace_op_and_status_and_empty_when_absent() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        let parsed = |event_id: &str, trace: serde_json::Value| {
+            let raw = serde_json::to_vec(&serde_json::json!({
+                "type": "transaction",
+                "contexts": {"trace": trace},
+            }))
+            .unwrap();
+            let mut e = StorableEvent::new(
+                event_id.to_string(),
+                ItemType::Transaction,
+                raw.clone(),
+                1,
+                "k".to_string(),
+            );
+            crate::ingest::envelope::extract_fields_for_test(&raw, &ItemType::Transaction, &mut e);
+            e
+        };
+        let with = parsed(
+            "with",
+            serde_json::json!({"trace_id": "tr", "op": "http.server", "status": "ok"}),
+        );
+        let without = parsed("without", serde_json::json!({"trace_id": "tr"}));
+        let mut error = plain_event("err", 1);
+        error.trace_op = Some("ignored".to_string());
+        flush(&pool, &[&with, &without, &error]).await;
+
+        let rows: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(sql!(
+            "SELECT event_id, trace_op, trace_status FROM events ORDER BY event_id"
+        ))
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        let s = |v: &str| Some(v.to_string());
+        assert_eq!(
+            rows,
+            vec![
+                ("err".to_string(), None, None),
+                ("with".to_string(), s("http.server"), s("ok")),
+                ("without".to_string(), s(""), s("")),
+            ]
+        );
     }
 
     /// A mixed batch approaching BULK_CHUNK_SIZE must commit, and only the

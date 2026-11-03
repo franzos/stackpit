@@ -62,7 +62,9 @@ pub async fn sync_project_events(
 
         for sentry_event in &page.events {
             let storable = transform::to_storable_event(sentry_event, project.id)?;
-            let is_new = queries::event_writes::insert_event_row(pool, &storable).await?;
+            let mut tx = pool.begin().await?;
+            let is_new = queries::event_writes::insert_event_row(&mut tx, &storable).await?;
+            tx.commit().await?;
             if is_new {
                 queries::event_writes::upsert_issue_from_event(pool, &storable).await?;
                 inserted += 1;

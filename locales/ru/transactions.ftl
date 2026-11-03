@@ -40,6 +40,7 @@ transactions-detail-count = { $count ->
     [many] { $count } экземпляров
    *[other] { $count } экземпляра
 }
+transactions-detail-count-capped = Более 10 000 экземпляров
 transactions-detail-failure-label = Ошибки
 transactions-list-search-placeholder = Поиск по именам транзакций…
 transactions-list-search-label = Поиск по именам транзакций

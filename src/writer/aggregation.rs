@@ -239,6 +239,8 @@ pub(super) async fn flush_aggregation_inner(
     event_writes::bulk_upsert_tag_counts(tx, &accumulators.tags).await?;
     flush_session_aggregates(tx, accumulators).await?;
     flush_transaction_metrics(tx, accumulators).await?;
+    crate::queries::client_reports::upsert_outcomes(tx, &accumulators.client_report_outcomes)
+        .await?;
     flush_releases(tx, accumulators).await?;
     flush_platforms(tx, accumulators).await?;
 
@@ -776,6 +778,103 @@ mod tests {
         .unwrap();
         assert_eq!(row.get::<i64, _>("count"), 3);
         assert_eq!(count(row.get("users_hll")), 3);
+    }
+
+    fn client_report(event_id: &str, ts: i64, body: &serde_json::Value) -> StorableEvent {
+        let mut e = StorableEvent::new(
+            event_id.to_string(),
+            ItemType::ClientReport,
+            serde_json::to_vec(body).unwrap(),
+            1,
+            "k".to_string(),
+        );
+        e.timestamp = ts;
+        e.compress_payload();
+        e
+    }
+
+    /// Accumulates only rows the insert created, as the batch path does.
+    async fn flush_new(pool: &crate::db::DbPool, events: &[StorableEvent]) {
+        let mut acc = Accumulators::new();
+        for e in events {
+            if insert_event(pool, e).await.unwrap() {
+                acc.accumulate(e);
+            }
+        }
+        flush_aggregation(pool, &mut acc, None).await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn client_report_outcomes_add_across_flushes_and_skip_duplicates() {
+        let pool = crate::db::open_test_pool().await;
+        let hour = 1_700_002_800;
+        let body = serde_json::json!({
+            "discarded_events": [{"category": "error", "reason": "sample_rate", "quantity": 3}]
+        });
+        flush_new(&pool, &[client_report("c1", hour + 5, &body)]).await;
+        flush_new(
+            &pool,
+            &[
+                client_report("c1", hour + 5, &body),
+                client_report("c2", hour + 60, &body),
+                client_report("c3", hour + 3600, &body),
+            ],
+        )
+        .await;
+
+        let rows: Vec<(i64, String, String, i64)> = sqlx::query_as(
+            "SELECT hour_bucket, category, reason, quantity FROM client_report_outcomes \
+             WHERE project_id = 1 ORDER BY hour_bucket",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        let row = |h: i64, q: i64| (h, "error".to_string(), "sample_rate".to_string(), q);
+        assert_eq!(rows, vec![row(hour, 6), row(hour + 3600, 3)]);
+    }
+
+    /// The rollup must give the summary the payload fold gave, for windows on hour edges.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn client_report_rollup_summary_matches_payload_fold() {
+        use crate::queries::client_reports::{summarize_client_reports, summarize_from_payloads};
+
+        let pool = crate::db::open_test_pool().await;
+        let hour = 1_700_002_800;
+        let bodies = [
+            serde_json::json!({
+                "discarded_events": [
+                    {"category": "error", "reason": "sample_rate", "quantity": 10},
+                    {"category": "error", "reason": "sample_rate", "quantity": 5}
+                ],
+                "rate_limited_events": [{"category": "transaction", "reason": "ratelimit_backoff", "quantity": 7}]
+            }),
+            serde_json::json!({
+                "discarded_events": [
+                    {"category": "span", "reason": "queue_overflow", "quantity": 40},
+                    {"reason": "network_error", "quantity": 1},
+                    {"category": "error", "reason": "zero"}
+                ]
+            }),
+            serde_json::json!({"rate_limited_events": [{"category": "error", "reason": "sample_rate", "quantity": 2}]}),
+            serde_json::json!({}),
+        ];
+        let mut events = Vec::new();
+        for i in 0..24i64 {
+            let body = &bodies[(i as usize) % bodies.len()];
+            events.push(client_report(&format!("cr{i}"), hour + i * 1800 + 60, body));
+        }
+        flush_new(&pool, &events[..10]).await;
+        flush_new(&pool, &events[10..]).await;
+
+        for since in [0, hour, hour + 3 * 3600, hour + 11 * 3600, hour + 12 * 3600] {
+            let rollup = summarize_client_reports(&pool, 1, since).await.unwrap();
+            let fold = summarize_from_payloads(&pool, 1, since).await.unwrap();
+            assert_eq!(rollup, fold, "since {since}");
+        }
+        assert!(!summarize_client_reports(&pool, 1, 0)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

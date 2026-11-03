@@ -51,6 +51,15 @@
   {%- endmatch -%}
 {% endmacro %}
 
+{# Sidebar badge for a `BoundedCount`; hidden at zero. #}
+{% macro bounded_count(chrome, c) %}
+  {%- if c.capped -%}
+    <span class="sidebar-count">{{ chrome.t("nav-count-capped") }}</span>
+  {%- else if c.count > 0 -%}
+    <span class="sidebar-count">{{ c.count }}</span>
+  {%- endif -%}
+{% endmacro %}
+
 {# Project-scoped sidebar nav. The `active` string marks the current section
    so its link gets `sidebar-link-active`. Sections without recorded events
    are omitted, mirroring the legacy horizontal tab-strip behavior. #}
@@ -73,18 +82,18 @@
     </a>
     <a href="/web/projects/{{ project_id }}/spans/"
        class="sidebar-link{% if active == "spans" %} sidebar-link-active{% endif %}">
-      <span>{{ chrome.t("nav-spans") }}</span>{% if nav.span_count > 0 %}<span class="sidebar-count">{{ nav.span_count }}</span>{% endif %}
+      <span>{{ chrome.t("nav-spans") }}</span>{% call bounded_count(chrome, nav.span_count) %}{% endcall %}
     </a>
-    {% if nav.log_count > 0 %}
+    {% if nav.log_count.count > 0 %}
       <a href="/web/projects/{{ project_id }}/logs/"
          class="sidebar-link{% if active == "logs" %} sidebar-link-active{% endif %}">
-        <span>{{ chrome.t("nav-logs") }}</span><span class="sidebar-count">{{ nav.log_count }}</span>
+        <span>{{ chrome.t("nav-logs") }}</span>{% call bounded_count(chrome, nav.log_count) %}{% endcall %}
       </a>
     {% endif %}
-    {% if nav.metric_count > 0 %}
+    {% if nav.metric_count.count > 0 %}
       <a href="/web/projects/{{ project_id }}/metrics/"
          class="sidebar-link{% if active == "metrics" %} sidebar-link-active{% endif %}">
-        <span>{{ chrome.t("nav-metrics") }}</span><span class="sidebar-count">{{ nav.metric_count }}</span>
+        <span>{{ chrome.t("nav-metrics") }}</span>{% call bounded_count(chrome, nav.metric_count) %}{% endcall %}
       </a>
     {% endif %}
     {% if nav.monitor_count > 0 %}

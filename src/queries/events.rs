@@ -141,28 +141,14 @@ async fn list_all_events_inner(
         return Ok(PagedResult::from_page(Vec::new(), 0, page));
     }
 
-    let sort = EventSort::parse(filter.sort.as_deref());
-
     let mut count_qb: QueryBuilder<crate::db::Db> =
         QueryBuilder::new("SELECT COUNT(*) FROM events");
     push_event_filter_conditions(&mut count_qb, filter, org_ids);
 
     let total: i64 = count_qb.build_query_scalar().fetch_one(pool).await?;
 
-    // Join projects so the firehose shows names instead of bare numeric ids.
-    let mut select_qb: QueryBuilder<crate::db::Db> = QueryBuilder::new(
-        "SELECT events.event_id, events.item_type, events.project_id, p.name AS project_name, \
-         events.fingerprint, events.timestamp, events.level, events.title, events.platform, \
-         events.release, events.environment, events.trace_id \
-         FROM events LEFT JOIN projects p ON p.project_id = events.project_id",
-    );
-    push_event_filter_conditions(&mut select_qb, filter, org_ids);
-    select_qb.push(" ORDER BY ");
-    select_qb.push(sort.as_sql_ident());
-    select_qb.push(" LIMIT ");
-    select_qb.push_bind(page.limit as i64);
-    select_qb.push(" OFFSET ");
-    select_qb.push_bind(page.offset as i64);
+    let mut select_qb: QueryBuilder<crate::db::Db> = QueryBuilder::new("");
+    push_all_events_page(&mut select_qb, filter, page, org_ids);
 
     let rows = select_qb.build().fetch_all(pool).await?;
     let items: Vec<EventSummary> = rows
@@ -171,6 +157,29 @@ async fn list_all_events_inner(
         .collect::<Result<Vec<_>>>()?;
 
     Ok(PagedResult::from_page(items, total, page))
+}
+
+/// Push the firehose page query onto `qb`.
+fn push_all_events_page(
+    qb: &mut sqlx::QueryBuilder<crate::db::Db>,
+    filter: &EventFilter,
+    page: &Page,
+    org_ids: Option<&[i64]>,
+) {
+    // Join projects so the firehose shows names instead of bare numeric ids.
+    qb.push(
+        "SELECT events.event_id, events.item_type, events.project_id, p.name AS project_name, \
+         events.fingerprint, events.timestamp, events.level, events.title, events.platform, \
+         events.release, events.environment, events.trace_id \
+         FROM events LEFT JOIN projects p ON p.project_id = events.project_id",
+    );
+    push_event_filter_conditions(qb, filter, org_ids);
+    qb.push(" ORDER BY ");
+    qb.push(EventSort::parse(filter.sort.as_deref()).as_sql_ident());
+    qb.push(" LIMIT ");
+    qb.push_bind(page.limit as i64);
+    qb.push(" OFFSET ");
+    qb.push_bind(page.offset as i64);
 }
 
 /// Resolve a full or partial trace id to the project and trace it belongs to.
@@ -218,6 +227,11 @@ pub async fn resolve_trace_id(
     Ok(Some((row.get_u64("project_id"), resolved)))
 }
 
+const PROJECT_EVENTS_SQL: &str = "SELECT event_id, item_type, project_id, fingerprint, timestamp, level, title, platform, release, environment, trace_id \
+     FROM events WHERE project_id = ?1 \
+     ORDER BY timestamp DESC \
+     LIMIT ?2 OFFSET ?3";
+
 /// List events for a single project, paginated; `all_time_total` comes from the nav-count cache.
 pub async fn list_events(
     pool: &crate::db::DbPool,
@@ -225,17 +239,12 @@ pub async fn list_events(
     page: &Page,
     all_time_total: i64,
 ) -> Result<PagedResult<EventSummary>> {
-    let rows = sqlx::query(sql!(
-        "SELECT event_id, item_type, project_id, fingerprint, timestamp, level, title, platform, release, environment, trace_id
-         FROM events WHERE project_id = ?1
-         ORDER BY timestamp DESC
-         LIMIT ?2 OFFSET ?3"
-    ))
-    .bind(project_id as i64)
-    .bind(page.limit as i64)
-    .bind(page.offset as i64)
-    .fetch_all(pool)
-    .await?;
+    let rows = sqlx::query(crate::db::dyn_sql(PROJECT_EVENTS_SQL))
+        .bind(project_id as i64)
+        .bind(page.limit as i64)
+        .bind(page.offset as i64)
+        .fetch_all(pool)
+        .await?;
 
     let items: Vec<EventSummary> = rows
         .iter()
@@ -460,21 +469,20 @@ fn push_issue_filter_on_events(qb: &mut sqlx::QueryBuilder<crate::db::Db>, filte
     }
 }
 
-/// Distinct environments seen in a project, for the issue-stream filter dropdown.
-/// Mirrors `list_releases_for_project`: newest-looking first, capped, blanks dropped.
+pub(crate) const ENVIRONMENTS_SQL: &str = "SELECT DISTINCT tag_value FROM issue_tag_values \
+     WHERE project_id = ?1 AND tag_key = 'environment' \
+     ORDER BY tag_value \
+     LIMIT 50";
+
+/// Distinct environments on a project's issues, for the issue-stream filter dropdown.
 pub async fn list_environments_for_project(
     pool: &crate::db::DbPool,
     project_id: u64,
 ) -> Result<Vec<String>> {
-    let rows = sqlx::query(sql!(
-        "SELECT DISTINCT environment FROM events
-         WHERE project_id = ?1 AND environment IS NOT NULL AND environment <> ''
-         ORDER BY environment
-         LIMIT 50"
-    ))
-    .bind(project_id as i64)
-    .fetch_all(pool)
-    .await?;
+    let rows = sqlx::query(crate::db::dyn_sql(ENVIRONMENTS_SQL))
+        .bind(project_id as i64)
+        .fetch_all(pool)
+        .await?;
 
     Ok(rows
         .into_iter()
@@ -482,22 +490,23 @@ pub async fn list_environments_for_project(
         .collect())
 }
 
+const LATEST_ISSUE_EVENT_SQL: &str = "SELECT event_id, item_type, project_id, fingerprint, timestamp, level, title, platform, release, environment, server_name, transaction_name, sdk_name, sdk_version, received_at, payload \
+     FROM events JOIN event_payloads USING (event_id) \
+     WHERE project_id = ?1 AND fingerprint = ?2 \
+     ORDER BY timestamp DESC \
+     LIMIT 1";
+
 /// Grab the most recent event for an issue.
 pub async fn get_latest_event_for_issue(
     pool: &crate::db::DbPool,
     project_id: u64,
     fingerprint: &str,
 ) -> Result<Option<EventDetail>> {
-    let row = sqlx::query(sql!(
-        "SELECT event_id, item_type, project_id, fingerprint, timestamp, level, title, platform, release, environment, server_name, transaction_name, sdk_name, sdk_version, received_at, payload
-         FROM events WHERE project_id = ?1 AND fingerprint = ?2
-         ORDER BY timestamp DESC
-         LIMIT 1"
-    ))
-    .bind(project_id as i64)
-    .bind(fingerprint)
-    .fetch_optional(pool)
-    .await?;
+    let row = sqlx::query(crate::db::dyn_sql(LATEST_ISSUE_EVENT_SQL))
+        .bind(project_id as i64)
+        .bind(fingerprint)
+        .fetch_optional(pool)
+        .await?;
 
     match row {
         Some(row) => {
@@ -508,19 +517,19 @@ pub async fn get_latest_event_for_issue(
         None => Ok(None),
     }
 }
+
+const EVENT_DETAIL_SQL: &str = "SELECT event_id, item_type, project_id, fingerprint, timestamp, level, title, platform, release, environment, server_name, transaction_name, sdk_name, sdk_version, received_at, payload \
+     FROM events JOIN event_payloads USING (event_id) WHERE event_id = ?1";
 
 /// Full event detail by ID -- decompresses the zstd payload and parses it as JSON.
 pub async fn get_event_detail(
     pool: &crate::db::DbPool,
     event_id: &str,
 ) -> Result<Option<EventDetail>> {
-    let row = sqlx::query(sql!(
-        "SELECT event_id, item_type, project_id, fingerprint, timestamp, level, title, platform, release, environment, server_name, transaction_name, sdk_name, sdk_version, received_at, payload
-         FROM events WHERE event_id = ?1"
-    ))
-    .bind(event_id)
-    .fetch_optional(pool)
-    .await?;
+    let row = sqlx::query(crate::db::dyn_sql(EVENT_DETAIL_SQL))
+        .bind(event_id)
+        .fetch_optional(pool)
+        .await?;
 
     match row {
         Some(row) => {
@@ -532,18 +541,18 @@ pub async fn get_event_detail(
     }
 }
 
+const TAIL_EVENTS_SQL: &str = "SELECT item_type, project_id, timestamp, level, title, received_at \
+     FROM events WHERE received_at > ?1 ORDER BY received_at ASC LIMIT 1000";
+
 /// Tail events newer than a given `received_at` timestamp, chronological order.
 pub async fn tail_events(
     pool: &crate::db::DbPool,
     after_received_at: i64,
 ) -> Result<Vec<TailEvent>> {
-    let rows = sqlx::query(sql!(
-        "SELECT item_type, project_id, timestamp, level, title, received_at
-         FROM events WHERE received_at > ?1 ORDER BY received_at ASC LIMIT 1000"
-    ))
-    .bind(after_received_at)
-    .fetch_all(pool)
-    .await?;
+    let rows = sqlx::query(crate::db::dyn_sql(TAIL_EVENTS_SQL))
+        .bind(after_received_at)
+        .fetch_all(pool)
+        .await?;
 
     rows.iter()
         .map(|row| {
@@ -703,11 +712,10 @@ mod tests {
             ("e3", "fp-done", "error", "app@2.0"),
         ] {
             sqlx::query(sql!(
-                "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, level, title, release, received_at, fingerprint)
-                 VALUES (?1, 'event', ?2, 1, 'testkey', ?3, ?4, 'Boom', ?5, ?3, ?6)"
+                "INSERT INTO events (event_id, item_type, project_id, public_key, timestamp, level, title, release, received_at, fingerprint)
+                 VALUES (?1, 'event', 1, 'testkey', ?2, ?3, 'Boom', ?4, ?2, ?5)"
             ))
             .bind(event_id)
-            .bind(Vec::<u8>::new())
             .bind(now - 60)
             .bind(level)
             .bind(release)
@@ -1050,13 +1058,13 @@ mod tests {
         let pool = open_test_db().await;
         // Shove in a garbage payload to make sure decompression errors surface
         sqlx::query(sql!(
-            "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, received_at)
-             VALUES ('bad', 'event', ?1, 1, 'testkey', 100, 100)"
+            "INSERT INTO events (event_id, item_type, project_id, public_key, timestamp, received_at)
+             VALUES ('bad', 'event', 1, 'testkey', 100, 100)"
         ))
-        .bind([0xDEu8, 0xAD, 0xBE, 0xEF].as_slice())
         .execute(&pool)
         .await
         .unwrap();
+        insert_test_payload(&pool, "bad", &[0xDE, 0xAD, 0xBE, 0xEF]).await;
 
         let result = get_event_detail(&pool, "bad").await;
         assert!(result.is_err());
@@ -1516,5 +1524,234 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    async fn firehose_plan<'c, E>(executor: E, filter: &EventFilter) -> Vec<String>
+    where
+        E: sqlx::Executor<'c, Database = crate::db::Db>,
+    {
+        #[cfg(feature = "sqlite")]
+        let (explain, detail_col) = ("EXPLAIN QUERY PLAN ", 3);
+        #[cfg(not(feature = "sqlite"))]
+        let (explain, detail_col) = ("EXPLAIN ", 0);
+
+        let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new(explain);
+        push_all_events_page(&mut qb, filter, &Page::new(None, None), None);
+        qb.build()
+            .fetch_all(executor)
+            .await
+            .unwrap()
+            .iter()
+            .map(|r| r.get::<String, _>(detail_col))
+            .collect()
+    }
+
+    /// The cross-project firehose filtered by type walks `idx_events_type_time`
+    /// in order; no other index serves `item_type = ? ORDER BY timestamp DESC`.
+    #[tokio::test]
+    async fn firehose_type_filter_plan_walks_the_type_time_index() {
+        let pool = open_test_db().await;
+        sqlx::query(sql!(
+            "WITH RECURSIVE seq(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM seq WHERE x < 3000)
+             INSERT INTO events (event_id, item_type, project_id, public_key, timestamp, received_at, trace_id)
+             SELECT 'fh-' || x, CASE x % 3 WHEN 0 THEN 'event' WHEN 1 THEN 'transaction' ELSE 'session' END,
+                    1 + x % 30, 'testkey', 1000 + x, 1000 + x, CASE x % 3 WHEN 1 THEN 'tr-' || x END
+             FROM seq"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        let by_type = EventFilter {
+            item_type: Some("transaction".to_string()),
+            ..EventFilter::default()
+        };
+
+        #[cfg(feature = "sqlite")]
+        let plan = {
+            crate::queries::test_helpers::seed_sqlite_stat1(
+                &pool,
+                crate::queries::test_helpers::VIRT1_STAT1,
+            )
+            .await;
+            firehose_plan(&pool, &by_type).await
+        };
+        #[cfg(not(feature = "sqlite"))]
+        let plan = {
+            sqlx::query("VACUUM ANALYZE events")
+                .execute(&pool)
+                .await
+                .unwrap();
+            let mut tx = pool.begin().await.unwrap();
+            sqlx::query("SET LOCAL enable_seqscan = off")
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            firehose_plan(&mut *tx, &by_type).await
+        };
+
+        assert!(
+            plan.iter().any(|d| d.contains("idx_events_type_time")),
+            "{plan:#?}"
+        );
+        assert!(
+            !plan
+                .iter()
+                .any(|d| d.contains("TEMP B-TREE") || d.contains("Sort")),
+            "{plan:#?}"
+        );
+    }
+
+    /// 3000 events over 30 projects and 300 issues, every tenth a user report on
+    /// the event before it, each with a payload row.
+    async fn seed_plan_events(pool: &crate::db::DbPool) {
+        sqlx::query(sql!(
+            "WITH RECURSIVE seq(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM seq WHERE x < 3000)
+             INSERT INTO events (event_id, item_type, project_id, public_key, timestamp, received_at,
+                                 level, fingerprint, parent_event_id)
+             SELECT 'pe-' || x, CASE WHEN x % 10 = 0 THEN 'user_report' ELSE 'event' END,
+                    1 + x % 30, 'testkey', 1000 + x, 1000 + x,
+                    CASE x % 3 WHEN 0 THEN 'error' WHEN 1 THEN 'warning' ELSE 'info' END,
+                    'fp-' || (x % 300), CASE WHEN x % 10 = 0 THEN 'pe-' || (x - 1) END
+             FROM seq"
+        ))
+        .execute(pool)
+        .await
+        .unwrap();
+        insert_missing_test_payloads(pool).await;
+    }
+
+    fn reads_by_scan(plan: &[String]) -> bool {
+        plan.iter()
+            .any(|d| d.starts_with("SCAN ") || d.contains("Seq Scan"))
+    }
+
+    fn sorts(plan: &[String]) -> bool {
+        plan.iter()
+            .any(|d| d.contains("TEMP B-TREE") || d.contains("Sort"))
+    }
+
+    #[tokio::test]
+    async fn detail_reads_seek_both_primary_keys() {
+        let pool = open_test_db().await;
+        seed_plan_events(&pool).await;
+
+        let mut tx = plan_tx(&pool, &["events", "event_payloads"]).await;
+        let mut plans = vec![query_plan(&mut *tx, EVENT_DETAIL_SQL, |q| q.bind("pe-1")).await];
+        for select in [
+            crate::queries::replays::REPLAY_DETAIL_SQL,
+            crate::queries::profiles::PROFILE_DETAIL_SQL,
+        ] {
+            plans.push(query_plan(&mut *tx, select, |q| q.bind("pe-1").bind(2i64)).await);
+        }
+
+        for plan in plans {
+            assert!(
+                plan.iter().any(|d| d.contains(&pk_index("events"))),
+                "{plan:#?}"
+            );
+            assert!(
+                plan.iter().any(|d| d.contains(&pk_index("event_payloads"))),
+                "{plan:#?}"
+            );
+            assert!(!reads_by_scan(&plan), "{plan:#?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn latest_issue_event_plan_walks_the_fingerprint_index() {
+        let pool = open_test_db().await;
+        seed_plan_events(&pool).await;
+
+        let mut tx = ordered_plan_tx(&pool, &["events", "event_payloads"]).await;
+        let plan = query_plan(&mut *tx, LATEST_ISSUE_EVENT_SQL, |q| {
+            q.bind(2i64).bind("fp-1")
+        })
+        .await;
+
+        assert!(
+            plan.iter().any(|d| d.contains("idx_events_fingerprint")),
+            "{plan:#?}"
+        );
+        assert!(
+            plan.iter().any(|d| d.contains(&pk_index("event_payloads"))),
+            "{plan:#?}"
+        );
+        assert!(!sorts(&plan), "{plan:#?}");
+    }
+
+    #[tokio::test]
+    async fn project_events_plan_walks_the_project_time_index() {
+        let pool = open_test_db().await;
+        seed_plan_events(&pool).await;
+
+        let mut tx = ordered_plan_tx(&pool, &["events"]).await;
+        let plan = query_plan(&mut *tx, PROJECT_EVENTS_SQL, |q| {
+            q.bind(1i64).bind(50i64).bind(0i64)
+        })
+        .await;
+
+        assert!(
+            plan.iter().any(|d| d.contains("idx_events_project_time")),
+            "{plan:#?}"
+        );
+        assert!(!sorts(&plan), "{plan:#?}");
+    }
+
+    #[tokio::test]
+    async fn firehose_level_filter_plan_walks_the_level_index() {
+        let pool = open_test_db().await;
+        seed_plan_events(&pool).await;
+        let filter = EventFilter {
+            project_id: Some(1),
+            level: Some("error".to_string()),
+            ..EventFilter::default()
+        };
+
+        let mut tx = ordered_plan_tx(&pool, &["events"]).await;
+        let plan = firehose_plan(&mut *tx, &filter).await;
+
+        assert!(
+            plan.iter().any(|d| d.contains("idx_events_level")),
+            "{plan:#?}"
+        );
+        assert!(!sorts(&plan), "{plan:#?}");
+    }
+
+    #[tokio::test]
+    async fn tail_plan_walks_the_received_index() {
+        let pool = open_test_db().await;
+        seed_plan_events(&pool).await;
+
+        let mut tx = plan_tx(&pool, &["events"]).await;
+        let plan = query_plan(&mut *tx, TAIL_EVENTS_SQL, |q| q.bind(3990i64)).await;
+
+        assert!(
+            plan.iter().any(|d| d.contains("idx_events_received")),
+            "{plan:#?}"
+        );
+        assert!(!sorts(&plan), "{plan:#?}");
+    }
+
+    #[tokio::test]
+    async fn user_reports_plan_seeks_the_parent_index() {
+        let pool = open_test_db().await;
+        seed_plan_events(&pool).await;
+
+        let mut tx = plan_tx(&pool, &["events", "event_payloads"]).await;
+        let plan = query_plan(
+            &mut *tx,
+            crate::queries::event_supplements::USER_REPORTS_SQL,
+            |q| q.bind("pe-9"),
+        )
+        .await;
+
+        assert!(
+            plan.iter().any(|d| d.contains("idx_events_parent")),
+            "{plan:#?}"
+        );
+        assert!(
+            plan.iter().any(|d| d.contains(&pk_index("event_payloads"))),
+            "{plan:#?}"
+        );
     }
 }

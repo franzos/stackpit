@@ -88,6 +88,13 @@ pub struct PagedResult<T> {
     pub total: u64,
     pub offset: u64,
     pub limit: u64,
+    /// `total` is a lower bound from a bounded count; serialized only when set.
+    #[serde(skip_serializing_if = "is_false")]
+    pub total_capped: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl<T> PagedResult<T> {
@@ -98,10 +105,24 @@ impl<T> PagedResult<T> {
             total: total as u64,
             offset: page.offset,
             limit: page.limit,
+            total_capped: false,
         }
     }
 
+    /// Build from a [`BoundedCount`] total.
+    pub fn from_bounded(items: Vec<T>, total: BoundedCount, page: &Page) -> Self {
+        Self {
+            total_capped: total.capped,
+            ..Self::from_page(items, total.count as i64, page)
+        }
+    }
+
+    /// A capped total says nothing about where the rows end, so a full page
+    /// always offers a next one.
     pub fn has_next(&self) -> bool {
+        if self.total_capped {
+            return self.items.len() as u64 >= self.limit;
+        }
         self.offset.saturating_add(self.limit) < self.total
     }
     pub fn has_prev(&self) -> bool {
@@ -479,6 +500,27 @@ impl UserFeedback {
     }
 }
 
+/// Rows counted up to [`BoundedCount::CAP`]; past it only "more than" is known.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BoundedCount {
+    /// Exact up to `CAP`, `CAP + 1` once capped.
+    pub count: u64,
+    pub capped: bool,
+}
+
+impl BoundedCount {
+    pub const CAP: u64 = 10_000;
+
+    /// From a `COUNT(*)` over a `LIMIT CAP + 1` subquery.
+    pub fn from_limited(count: i64) -> Self {
+        let count = count.max(0) as u64;
+        Self {
+            count,
+            capped: count > Self::CAP,
+        }
+    }
+}
+
 /// Nav badge counts for project sub-pages. Loaded in one shot so we don't
 /// fire separate count queries from every HTML handler.
 #[derive(Debug, Clone, Default)]
@@ -488,9 +530,9 @@ pub struct ProjectNavCounts {
     pub session_count: u64,
     pub user_report_count: u64,
     pub client_report_count: u64,
-    pub log_count: u64,
-    pub span_count: u64,
-    pub metric_count: u64,
+    pub log_count: BoundedCount,
+    pub span_count: BoundedCount,
+    pub metric_count: BoundedCount,
     pub profile_count: u64,
     pub replay_count: u64,
     /// All rows in `events` for the project, every item_type.
@@ -979,8 +1021,32 @@ mod pagination_tests {
             total: 0,
             offset: u64::MAX,
             limit: 100,
+            total_capped: false,
         };
         assert_eq!(r.next_offset(), u64::MAX);
         assert!(!r.has_next());
+    }
+
+    #[test]
+    fn capped_total_offers_next_past_the_cap() {
+        let page = Page::new(Some(10_000), Some(25));
+        let total = BoundedCount::from_limited(10_001);
+        assert!(total.capped);
+
+        let full = PagedResult::from_bounded(vec![0u8; 25], total, &page);
+        assert!(full.has_next());
+        assert_eq!(full.next_offset(), 10_025);
+        let short = PagedResult::from_bounded(vec![0u8; 3], total, &page);
+        assert!(!short.has_next());
+
+        let json = serde_json::to_value(&full).unwrap();
+        assert_eq!(json["total"], 10_001);
+        assert_eq!(json["total_capped"], true);
+        let exact = PagedResult::from_bounded(vec![0u8; 25], BoundedCount::from_limited(30), &page);
+        assert!(!exact.has_next());
+        assert!(serde_json::to_value(&exact)
+            .unwrap()
+            .get("total_capped")
+            .is_none());
     }
 }

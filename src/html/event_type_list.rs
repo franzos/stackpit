@@ -126,6 +126,7 @@ mod tests {
             total: 0,
             offset: 0,
             limit: 25,
+            total_capped: false,
         }
     }
 
@@ -170,6 +171,7 @@ mod tests {
             total: 1,
             offset: 0,
             limit: 25,
+            total_capped: false,
         };
         for lang in [langid!("en"), langid!("de")] {
             let tmpl = ClientReportListTemplate {
@@ -179,6 +181,7 @@ mod tests {
                     total: result.total,
                     offset: result.offset,
                     limit: result.limit,
+                    total_capped: result.total_capped,
                 },
                 outcomes: Vec::new(),
                 period: "7d".into(),

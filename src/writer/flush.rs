@@ -281,6 +281,7 @@ fn finalize_agg_flush(
     accumulators.tags.clear();
     accumulators.session_aggregates.clear();
     accumulators.transaction_metrics.clear();
+    accumulators.client_report_outcomes.clear();
     accumulators.releases.clear();
     accumulators.platforms.clear();
     send_notifications(pending, notify_tx);
@@ -330,7 +331,10 @@ async fn do_flush_inner(
 /// Test-only thin wrapper around `event_writes::insert_event_row`.
 #[cfg(test)]
 pub(super) async fn insert_event(pool: &DbPool, event: &StorableEvent) -> Result<bool> {
-    event_writes::insert_event_row(pool, event).await
+    let mut tx = pool.begin().await?;
+    let is_new = event_writes::insert_event_row(&mut tx, event).await?;
+    tx.commit().await?;
+    Ok(is_new)
 }
 
 /// Flushes accumulated issue deltas, HLL merges, and tag counts.

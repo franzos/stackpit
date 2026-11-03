@@ -240,6 +240,7 @@ mod tests {
             session_buckets: Vec::new(),
             trace_id: None,
             duration_ms: None,
+            trace_op: None,
             trace_status: None,
             span_id: None,
             parent_span_id: None,

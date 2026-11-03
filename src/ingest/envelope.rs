@@ -623,7 +623,19 @@ fn shift_span_start(fields: &mut crate::ingest::parse_span::SpanFields, drift: i
     }
 }
 
-/// Pull trace_id, span ids, start, duration, and trace status off a transaction
+/// `contexts.trace.op` and `contexts.trace.status` of an event payload.
+pub(crate) fn trace_op_and_status(json: &Value) -> (Option<String>, Option<String>) {
+    let trace = json.get("contexts").and_then(|c| c.get("trace"));
+    let field = |key: &str| {
+        trace
+            .and_then(|t| t.get(key))
+            .and_then(Value::as_str)
+            .map(String::from)
+    };
+    (field("op"), field("status"))
+}
+
+/// Pull trace_id, span ids, start, duration, and trace op/status off a transaction
 /// payload. Duration prefers `measurements.duration.value` (already ms);
 /// otherwise it's derived from `start_timestamp`/`timestamp`, either float
 /// seconds or RFC 3339. `start_ms` carries the same drift correction as child
@@ -634,10 +646,7 @@ fn extract_transaction_perf(json: &Value, event: &mut StorableEvent, drift: i64)
         .and_then(|t| t.get("trace_id"))
         .and_then(|v| v.as_str())
         .map(String::from);
-    event.trace_status = trace
-        .and_then(|t| t.get("status"))
-        .and_then(|v| v.as_str())
-        .map(String::from);
+    (event.trace_op, event.trace_status) = trace_op_and_status(json);
     event.span_id = trace
         .and_then(|t| t.get("span_id"))
         .and_then(|v| v.as_str())
@@ -1335,10 +1344,11 @@ mod tests {
         let payload = r#"{"type":"transaction","transaction":"/api/health",
             "start_timestamp":1700000000.0,"timestamp":1700000002.0,
             "measurements":{"duration":{"value":1234.5,"unit":"millisecond"}},
-            "contexts":{"trace":{"trace_id":"abc123","status":"ok"}}}"#;
+            "contexts":{"trace":{"trace_id":"abc123","op":"http.server","status":"ok"}}}"#;
         let event = extract_txn(payload);
         assert_eq!(event.duration_ms, Some(1235));
         assert_eq!(event.trace_id.as_deref(), Some("abc123"));
+        assert_eq!(event.trace_op.as_deref(), Some("http.server"));
         assert_eq!(event.trace_status.as_deref(), Some("ok"));
     }
 

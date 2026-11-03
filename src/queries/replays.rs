@@ -67,19 +67,20 @@ pub async fn list_replays(
     Ok(PagedResult::from_page(items, total, page))
 }
 
+pub(crate) const REPLAY_DETAIL_SQL: &str = "SELECT event_id, project_id, timestamp, item_type, release, environment, payload \
+     FROM events JOIN event_payloads USING (event_id) \
+     WHERE event_id = ?1 AND project_id = ?2 AND item_type IN ('replay_event', 'replay_recording', 'replay_video')";
+
 pub async fn get_replay(
     pool: &crate::db::DbPool,
     project_id: u64,
     event_id: &str,
 ) -> Result<Option<ReplayDetail>> {
-    let row = sqlx::query(sql!(
-        "SELECT event_id, project_id, timestamp, item_type, release, environment, payload
-         FROM events WHERE event_id = ?1 AND project_id = ?2 AND item_type IN ('replay_event', 'replay_recording', 'replay_video')"
-    ))
-    .bind(event_id)
-    .bind(project_id as i64)
-    .fetch_optional(pool)
-    .await?;
+    let row = sqlx::query(crate::db::dyn_sql(REPLAY_DETAIL_SQL))
+        .bind(event_id)
+        .bind(project_id as i64)
+        .fetch_optional(pool)
+        .await?;
 
     match row {
         Some(row) => {

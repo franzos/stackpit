@@ -405,7 +405,7 @@ mod tests {
     use crate::mcp::principal::McpPrincipal;
     use crate::mcp::SCOPE_EVENTS_READ;
     use crate::orgs::Role;
-    use crate::queries::test_helpers::{insert_test_event, insert_test_issue};
+    use crate::queries::test_helpers::{insert_test_event, insert_test_issue, insert_test_payload};
     use serde_json::{json, Value};
 
     const SECRET: &str = "SUPER-SECRET-PAYLOAD-MARKER";
@@ -447,15 +447,15 @@ mod tests {
         let compressed =
             zstd::encode_all(serde_json::to_vec(&payload).unwrap().as_slice(), 3).unwrap();
         sqlx::query(sql!(
-            "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, level, title, platform, release, environment, server_name, transaction_name, sdk_name, sdk_version, received_at, fingerprint)
-             VALUES ('e-rich', 'event', ?1, ?2, 'testkey', 1000, 'error', 'boom', 'python', 'v1', 'prod', 'web-1', '/api', 'sentry.python', '1.0', 1000, ?3)"
+            "INSERT INTO events (event_id, item_type, project_id, public_key, timestamp, level, title, platform, release, environment, server_name, transaction_name, sdk_name, sdk_version, received_at, fingerprint)
+             VALUES ('e-rich', 'event', ?1, 'testkey', 1000, 'error', 'boom', 'python', 'v1', 'prod', 'web-1', '/api', 'sentry.python', '1.0', 1000, ?2)"
         ))
-        .bind(&compressed)
         .bind(project_id)
         .bind(fingerprint)
         .execute(pool)
         .await
         .unwrap();
+        insert_test_payload(pool, "e-rich", &compressed).await;
         insert_test_issue(
             pool,
             fingerprint,
@@ -871,13 +871,18 @@ mod tests {
         )
         .await;
         sqlx::query(sql!(
-            "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, received_at, fingerprint)
-             VALUES ('e-other', 'event', ?1, 6061, 'k', 9000, 9000, 'fp-event')"
+            "INSERT INTO events (event_id, item_type, project_id, public_key, timestamp, received_at, fingerprint)
+             VALUES ('e-other', 'event', 6061, 'k', 9000, 9000, 'fp-event')"
         ))
-        .bind(zstd::encode_all(b"{}".as_slice(), 3).unwrap())
         .execute(&pool)
         .await
         .unwrap();
+        insert_test_payload(
+            &pool,
+            "e-other",
+            &zstd::encode_all(b"{}".as_slice(), 3).unwrap(),
+        )
+        .await;
 
         let out = call(
             &pool,

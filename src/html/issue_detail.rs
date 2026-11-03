@@ -328,6 +328,7 @@ pub async fn handler(
         total: 0,
         offset: 0,
         limit: 25,
+        total_capped: false,
     };
 
     // Computed before slicing: the filter must offer every category the event
@@ -606,6 +607,7 @@ mod tests {
                 total: 0,
                 offset: 0,
                 limit: 50,
+                total_capped: false,
             },
             chart_data: String::new(),
             first_seen_release: None,

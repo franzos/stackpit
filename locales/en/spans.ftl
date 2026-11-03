@@ -45,6 +45,7 @@ spans-count = { $count ->
     [one] { $count } span
    *[other] { $count } spans
 }
+spans-count-capped = More than 10,000 spans
 
 # --- Org-wide traces list ---
 # Reuses spans-traces-heading, spans-col-trace-id, spans-col-duration,

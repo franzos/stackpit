@@ -23,7 +23,8 @@ pub async fn fetch_events_without_fingerprint(
 ) -> Result<Vec<BackfillRow>> {
     let rows = sqlx::query(sql!(
         "SELECT event_id, item_type, payload, project_id, timestamp, title, level
-         FROM events WHERE fingerprint IS NULL LIMIT ?1"
+         FROM events JOIN event_payloads USING (event_id)
+         WHERE fingerprint IS NULL LIMIT ?1"
     ))
     .bind(limit as i64)
     .fetch_all(pool)

@@ -232,6 +232,7 @@ mod tests {
                 total: 2,
                 offset: 0,
                 limit: 25,
+                total_capped: false,
             },
             query: String::new(),
             level: String::new(),

@@ -801,6 +801,82 @@ mod tests {
         assert_eq!(row.0, 1);
     }
 
+    async fn tag_rows(pool: &DbPool, fingerprint: &str, key: &str) -> Vec<(String, i64)> {
+        sqlx::query_as(crate::db::sql!(
+            "SELECT tag_value, count FROM issue_tag_values
+             WHERE fingerprint = ?1 AND tag_key = ?2 ORDER BY tag_value"
+        ))
+        .bind(fingerprint)
+        .bind(key)
+        .fetch_all(pool)
+        .await
+        .unwrap()
+    }
+
+    fn event_with_env_release(event_id: &str, fingerprint: &str) -> StorableEvent {
+        let mut event = make_event(event_id);
+        event.fingerprint = Some(fingerprint.to_string());
+        event.environment = Some("prod".to_string());
+        event.release = Some("app@1.0".to_string());
+        event
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn environment_and_release_tags_land_ahead_of_a_full_tag_set() {
+        let pool = test_pool().await;
+        let mut event = event_with_env_release("cap1", "capfp");
+        event.tags = (0..crate::ingest::models::MAX_TAGS_PER_EVENT)
+            .map(|i| (format!("k{i:03}"), "v".to_string()))
+            .collect();
+
+        let mut acc = Accumulators::new();
+        assert!(insert_event(&pool, &event).await.unwrap());
+        acc.accumulate(&event);
+        flush_aggregation(&pool, &mut acc, None).await.unwrap();
+
+        assert_eq!(
+            tag_rows(&pool, "capfp", "environment").await,
+            vec![("prod".to_string(), 1)]
+        );
+        assert_eq!(
+            tag_rows(&pool, "capfp", "release").await,
+            vec![("app@1.0".to_string(), 1)]
+        );
+        let total: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM issue_tag_values WHERE fingerprint = 'capfp'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(total, crate::ingest::models::MAX_TAGS_PER_EVENT as i64);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn sdk_environment_tag_is_replaced_by_the_column_on_both_write_paths() {
+        let pool = test_pool().await;
+        let mut batched = event_with_env_release("sdk1", "sdkfp");
+        batched.tags = vec![("environment".to_string(), "sdk-env".to_string())];
+        let mut acc = Accumulators::new();
+        assert!(insert_event(&pool, &batched).await.unwrap());
+        acc.accumulate(&batched);
+        flush_aggregation(&pool, &mut acc, None).await.unwrap();
+
+        let mut synced = event_with_env_release("sdk2", "sdkfp");
+        synced.tags = batched.tags.clone();
+        assert!(insert_event(&pool, &synced).await.unwrap());
+        crate::queries::event_writes::upsert_issue_from_event(&pool, &synced)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            tag_rows(&pool, "sdkfp", "environment").await,
+            vec![("prod".to_string(), 2)]
+        );
+        assert_eq!(
+            tag_rows(&pool, "sdkfp", "release").await,
+            vec![("app@1.0".to_string(), 2)]
+        );
+    }
+
     /// Regression test for the accumulate-then-clear race: when `should_agg=true`,
     /// events in the current batch must be accumulated *before* the aggregation
     /// flush runs, so every fingerprint gets a matching issue row.
@@ -1927,7 +2003,7 @@ mod tests {
 
         let page = crate::queries::types::Page::new(Some(0), Some(25));
         let result =
-            crate::queries::transactions::list_transaction_instances(&pool, 1, "/api/y", &page)
+            crate::queries::transactions::list_transaction_instances(&pool, 1, "/api/y", 0, &page)
                 .await
                 .unwrap();
         assert_eq!(result.total, 3);

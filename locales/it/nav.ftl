@@ -15,6 +15,7 @@ nav-replays = Replay
 nav-health = Stato delle release
 nav-user-reports = Report utente
 nav-client-reports = Report client
+nav-count-capped = 10.000+
 nav-across-projects = Tra i progetti
 nav-traces = Trace
 nav-events = Eventi

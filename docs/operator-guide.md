@@ -110,7 +110,7 @@ SQLite is the default, but you can point stackpit at a PostgreSQL database inste
 database_url = "postgres://user:pass@localhost/stackpit"
 ```
 
-When `database_url` is set it takes precedence over `path`. Migrations run automatically on startup for both backends.
+When `database_url` is set it takes precedence over `path`. Migrations run automatically on startup for both backends, except the few that rewrite large tables: when one of those is pending and the database holds events, startup fails with an error naming `stackpit migrate`. Stop the server, run `stackpit migrate` (it applies every pending migration with progress output, then runs `VACUUM` and `ANALYZE` on SQLite or `ANALYZE` on Postgres), and start the server again.
 
 ## Ingestion tuning
 
@@ -148,7 +148,7 @@ Each key is a number of days, and `0` keeps that category forever. An unset key 
 | `errors` | `events` with item type `event` or `user_report`, with their attachments. Source maps follow this value. |
 | `traces` | `events` with item type `transaction`, `profile` or `profile_chunk`; all `spans` |
 | `logs` | `logs` |
-| `metrics` | `metrics`; `transaction_metrics` (hourly rollups, by last seen) |
+| `metrics` | `metrics`; `transaction_metrics` (hourly rollups, by last seen); `client_report_outcomes` (hourly dropped-event totals, whole hours only) |
 | `releases` | auto-created `releases` rows past the cutoff (by last event, else creation) that no remaining event or session aggregate references |
 
 `retention_days` still covers everything outside these categories: the remaining event item types (sessions, replays with their metadata, check-ins, client reports, standalone attachments), `discard_stats`, and `session_aggregates` (whole days only). The server-wide deletes go by `received_at`, the time Stackpit received the row, not the timestamp the SDK reported.
@@ -470,6 +470,7 @@ stackpit events -p 1 -l 50      # filter by project, set limit
 stackpit event <event-id>       # show full event JSON
 stackpit tail                   # stream new events in real-time
 stackpit backfill-issues        # regenerate fingerprints & issue grouping
+stackpit migrate                # apply pending migrations, including the ones startup refuses to run
 ```
 
 ## Edge cases

@@ -15,6 +15,7 @@ nav-replays = عمليات إعادة التشغيل
 nav-health = صحة الإصدار
 nav-user-reports = تقارير المستخدمين
 nav-client-reports = تقارير العميل
+nav-count-capped = +10 آلاف
 nav-across-projects = عبر المشاريع
 nav-traces = التتبّعات
 nav-events = الأحداث

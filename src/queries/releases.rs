@@ -481,9 +481,42 @@ async fn list_all_releases_inner(
 
     let sort = ReleaseSort::parse(filter.sort.as_deref());
 
+    let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new("");
+    push_releases_page(&mut qb, filter, page, sort, adoption_since_ts, org_ids);
+
+    let rows = qb.build().fetch_all(pool).await?;
+
+    let items: Vec<ReleaseSummary> = rows
+        .into_iter()
+        .map(|row| {
+            let adoption_raw: f64 = row.get(7);
+            ReleaseSummary {
+                version: row.get(0),
+                project_id: row.get::<i64, _>(1) as u64,
+                project_name: row.get(2),
+                first_seen: row.get(3),
+                last_seen: row.get(4),
+                event_count: row.get::<i64, _>(5) as u64,
+                issue_count: row.get::<i64, _>(6) as u64,
+                adoption: (adoption_raw * 10.0).round() / 10.0,
+            }
+        })
+        .collect();
+
+    Ok(PagedResult::from_page(items, total, page))
+}
+
+fn push_releases_page(
+    qb: &mut sqlx::QueryBuilder<crate::db::Db>,
+    filter: &ReleaseFilter,
+    page: &Page,
+    sort: ReleaseSort,
+    adoption_since_ts: i64,
+    org_ids: Option<&[i64]>,
+) {
     // Driven off `releases`, not `events`: a release registered up front but not
     // yet seen in traffic is a real release with zero events, not a missing row.
-    let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new(
+    qb.push(
         "WITH project_totals AS (
             SELECT project_id, COUNT(*) AS total
             FROM events
@@ -496,7 +529,7 @@ async fn list_all_releases_inner(
     }
     if let Some(ids) = org_ids {
         qb.push(" AND ");
-        super::push_org_scope_predicate(&mut qb, "project_id", ids);
+        super::push_org_scope_predicate(qb, "project_id", ids);
     }
     qb.push(
         "
@@ -509,7 +542,6 @@ async fn list_all_releases_inner(
                 MIN(timestamp) AS first_seen,
                 MAX(timestamp) AS last_seen,
                 COUNT(*) AS event_count,
-                COUNT(DISTINCT fingerprint) AS issue_count,
                 SUM(CASE WHEN timestamp >= ",
     );
     qb.push_bind(adoption_since_ts);
@@ -533,11 +565,33 @@ async fn list_all_releases_inner(
     }
     if let Some(ids) = org_ids {
         qb.push(" AND ");
-        super::push_org_scope_predicate(&mut qb, "project_id", ids);
+        super::push_org_scope_predicate(qb, "project_id", ids);
     }
     qb.push(
         "
             GROUP BY project_id, release
+        ),
+        release_issues AS (
+            SELECT project_id, tag_value AS release, COUNT(*) AS issue_count
+            FROM issue_tag_values
+            WHERE tag_key = 'release'",
+    );
+    if let Some(project_id) = filter.project_id {
+        qb.push(" AND project_id = ");
+        qb.push_bind(project_id as i64);
+    }
+    if let Some(ref query) = filter.query {
+        qb.push(" AND tag_value LIKE ");
+        qb.push_bind(super::like_contains(query));
+        qb.push(" ESCAPE '\\'");
+    }
+    if let Some(ids) = org_ids {
+        qb.push(" AND ");
+        super::push_org_scope_predicate(qb, "project_id", ids);
+    }
+    qb.push(
+        "
+            GROUP BY project_id, tag_value
         )
         SELECT
             r.version,
@@ -546,7 +600,7 @@ async fn list_all_releases_inner(
             COALESCE(re.first_seen, r.first_event, r.created_at) AS first_seen,
             COALESCE(re.last_seen, r.last_event, r.created_at) AS last_seen,
             COALESCE(re.event_count, 0) AS event_count,
-            COALESCE(re.issue_count, 0) AS issue_count,
+            COALESCE(ri.issue_count, 0) AS issue_count,
             COALESCE(
                 CAST(COALESCE(re.recent_count, 0) AS REAL) /
                 NULLIF(pt.total, 0) * 100.0,
@@ -557,6 +611,8 @@ async fn list_all_releases_inner(
          LEFT JOIN project_totals pt ON pt.project_id = r.project_id
          LEFT JOIN release_events re
                 ON re.project_id = r.project_id AND re.release = r.version
+         LEFT JOIN release_issues ri
+                ON ri.project_id = r.project_id AND ri.release = r.version
          WHERE 1 = 1",
     );
 
@@ -571,7 +627,7 @@ async fn list_all_releases_inner(
     }
     if let Some(ids) = org_ids {
         qb.push(" AND ");
-        super::push_org_scope_predicate(&mut qb, "r.project_id", ids);
+        super::push_org_scope_predicate(qb, "r.project_id", ids);
     }
 
     qb.push(" ORDER BY ");
@@ -580,27 +636,6 @@ async fn list_all_releases_inner(
     qb.push_bind(page.limit as i64);
     qb.push(" OFFSET ");
     qb.push_bind(page.offset as i64);
-
-    let rows = qb.build().fetch_all(pool).await?;
-
-    let items: Vec<ReleaseSummary> = rows
-        .into_iter()
-        .map(|row| {
-            let adoption_raw: f64 = row.get(7);
-            ReleaseSummary {
-                version: row.get(0),
-                project_id: row.get::<i64, _>(1) as u64,
-                project_name: row.get(2),
-                first_seen: row.get(3),
-                last_seen: row.get(4),
-                event_count: row.get::<i64, _>(5) as u64,
-                issue_count: row.get::<i64, _>(6) as u64,
-                adoption: (adoption_raw * 10.0).round() / 10.0,
-            }
-        })
-        .collect();
-
-    Ok(PagedResult::from_page(items, total, page))
 }
 
 #[cfg(test)]
@@ -1232,5 +1267,117 @@ mod tests {
             .unwrap();
         assert_eq!(none.total, 0);
         assert!(none.items.is_empty());
+    }
+
+    /// Old definition: distinct fingerprints among the release's events.
+    async fn issue_count_from_events(pool: &DbPool, project_id: i64, release: &str) -> i64 {
+        sqlx::query_scalar(sql!(
+            "SELECT COUNT(DISTINCT fingerprint) FROM events WHERE project_id = ?1 AND release = ?2"
+        ))
+        .bind(project_id)
+        .bind(release)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn issue_count_from_tags_matches_distinct_event_fingerprints() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        let org = insert_org_rel(&pool, "rel-ic-org").await;
+        insert_project_rel(&pool, 901, org).await;
+        insert_project_rel(&pool, 902, org).await;
+        for (id, project, release, fp) in [
+            ("ic1", 901, "v1", Some("fa")),
+            ("ic2", 901, "v1", Some("fa")),
+            ("ic3", 901, "v1", Some("fb")),
+            ("ic4", 901, "v2", Some("fa")),
+            ("ic5", 901, "v2", None),
+            ("ic6", 902, "v1", Some("fa")),
+            ("ic7", 902, "v3", None),
+        ] {
+            insert_event_with_release(&pool, id, project, release).await;
+            sqlx::query(sql!(
+                "UPDATE events SET fingerprint = ?1 WHERE event_id = ?2"
+            ))
+            .bind(fp)
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        crate::queries::test_helpers::derive_env_release_tags(&pool).await;
+
+        let page = Page::new(None, None);
+        for project_id in [None, Some(901)] {
+            let filter = ReleaseFilter {
+                project_id,
+                ..Default::default()
+            };
+            let list = list_all_releases(&pool, &filter, &page, None, Some(org))
+                .await
+                .unwrap();
+            assert_eq!(list.total, if project_id.is_some() { 2 } else { 4 });
+            for r in &list.items {
+                let expected =
+                    issue_count_from_events(&pool, r.project_id as i64, &r.version).await;
+                assert_eq!(
+                    r.issue_count as i64, expected,
+                    "{} {}",
+                    r.project_id, r.version
+                );
+            }
+        }
+        let counts: Vec<(u64, String, u64)> =
+            list_all_releases(&pool, &ReleaseFilter::default(), &page, None, Some(org))
+                .await
+                .unwrap()
+                .items
+                .into_iter()
+                .map(|r| (r.project_id, r.version, r.issue_count))
+                .collect();
+        let mut counts = counts;
+        counts.sort();
+        assert_eq!(
+            counts,
+            vec![
+                (901, "v1".to_string(), 2),
+                (901, "v2".to_string(), 1),
+                (902, "v1".to_string(), 1),
+                (902, "v3".to_string(), 0),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn releases_issue_count_plan_reads_the_tag_value_index() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        insert_project_rel(&pool, 951, 1).await;
+        insert_event_with_release(&pool, "ip1", 951, "v1").await;
+        crate::queries::test_helpers::derive_env_release_tags(&pool).await;
+
+        let filter = ReleaseFilter {
+            project_id: Some(951),
+            ..Default::default()
+        };
+        let page = Page::new(None, None);
+        let mut tx = crate::queries::test_helpers::plan_tx(
+            &pool,
+            &["events", "issue_tag_values", "releases"],
+        )
+        .await;
+        let plan = crate::queries::test_helpers::builder_plan(&mut *tx, |qb| {
+            push_releases_page(qb, &filter, &page, ReleaseSort::parse(None), 0, None);
+        })
+        .await;
+
+        assert!(
+            plan.iter().any(|d| d.contains("idx_itv_key_value")),
+            "{plan:#?}"
+        );
+        assert!(
+            !plan.iter().any(|d| d.contains("count(DISTINCT)")),
+            "{plan:#?}"
+        );
     }
 }

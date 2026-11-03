@@ -15,6 +15,7 @@ nav-replays = Реплеи
 nav-health = Состояние релиза
 nav-user-reports = Отчёты пользователей
 nav-client-reports = Отчёты клиента
+nav-count-capped = 10 тыс.+
 nav-across-projects = По всем проектам
 nav-traces = Трассы
 nav-events = События

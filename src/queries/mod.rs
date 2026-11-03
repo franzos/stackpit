@@ -150,16 +150,41 @@ pub(crate) mod test_helpers {
         let compressed = zstd::encode_all(payload_bytes.as_slice(), 3).unwrap();
 
         sqlx::query(sql!(
-            "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, level, title, platform, release, environment, server_name, transaction_name, sdk_name, sdk_version, received_at, fingerprint)
-             VALUES (?1, 'event', ?2, ?3, 'testkey', ?4, ?5, ?6, 'rust', 'v1.0', 'production', 'server1', '/api/test', 'sentry.rust', '0.1.0', ?4, ?7)",
+            "INSERT INTO events (event_id, item_type, project_id, public_key, timestamp, level, title, platform, release, environment, server_name, transaction_name, sdk_name, sdk_version, received_at, fingerprint)
+             VALUES (?1, 'event', ?2, 'testkey', ?3, ?4, ?5, 'rust', 'v1.0', 'production', 'server1', '/api/test', 'sentry.rust', '0.1.0', ?3, ?6)",
         ))
         .bind(event_id)
-        .bind(&compressed)
         .bind(project_id)
         .bind(timestamp)
         .bind(level)
         .bind(title)
         .bind(fingerprint)
+        .execute(pool)
+        .await
+        .unwrap();
+        insert_test_payload(pool, event_id, &compressed).await;
+    }
+
+    /// Gives every event without an `event_payloads` row a one-byte payload.
+    pub async fn insert_missing_test_payloads(pool: &DbPool) {
+        sqlx::query(sql!(
+            "INSERT INTO event_payloads (event_id, payload)
+             SELECT event_id, ?1 FROM events
+             WHERE event_id NOT IN (SELECT event_id FROM event_payloads)"
+        ))
+        .bind(&[0u8] as &[u8])
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// Inserts the `event_payloads` row for an existing event.
+    pub async fn insert_test_payload(pool: &DbPool, event_id: &str, payload: &[u8]) {
+        sqlx::query(sql!(
+            "INSERT INTO event_payloads (event_id, payload) VALUES (?1, ?2)"
+        ))
+        .bind(event_id)
+        .bind(payload)
         .execute(pool)
         .await
         .unwrap();
@@ -206,12 +231,11 @@ pub(crate) mod test_helpers {
         fingerprint: Option<&str>,
     ) {
         sqlx::query(sql!(
-            "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, received_at, fingerprint)
-             VALUES (?1, ?2, ?3, ?4, 'testkey', ?5, ?6, ?7)",
+            "INSERT INTO events (event_id, item_type, project_id, public_key, timestamp, received_at, fingerprint)
+             VALUES (?1, ?2, ?3, 'testkey', ?4, ?5, ?6)",
         ))
         .bind(event_id)
         .bind(item_type.as_str())
-        .bind(&[0u8] as &[u8])
         .bind(project_id)
         .bind(timestamp)
         .bind(received_at)
@@ -219,6 +243,7 @@ pub(crate) mod test_helpers {
         .execute(pool)
         .await
         .unwrap();
+        insert_test_payload(pool, event_id, &[0u8]).await;
     }
 
     pub async fn insert_test_span(
@@ -229,11 +254,10 @@ pub(crate) mod test_helpers {
         received_at: i64,
     ) {
         sqlx::query(sql!(
-            "INSERT INTO spans (span_id, payload, project_id, public_key, timestamp, received_at)
-             VALUES (?1, ?2, ?3, 'testkey', ?4, ?5)",
+            "INSERT INTO spans (span_id, project_id, public_key, timestamp, received_at)
+             VALUES (?1, ?2, 'testkey', ?3, ?4)",
         ))
         .bind(span_id)
-        .bind(&[0u8] as &[u8])
         .bind(project_id)
         .bind(timestamp)
         .bind(received_at)
@@ -351,11 +375,228 @@ pub(crate) mod test_helpers {
         .unwrap();
     }
 
+    /// Writes the `environment` / `release` tag rows the writer would have
+    /// produced for the events already in the table.
+    pub async fn derive_env_release_tags(pool: &DbPool) {
+        for column in ["environment", "release"] {
+            sqlx::query(db::dyn_sql(&format!(
+                "INSERT INTO issue_tag_values (project_id, fingerprint, tag_key, tag_value, count)
+                 SELECT project_id, fingerprint, '{column}', {column}, COUNT(*) FROM events
+                 WHERE fingerprint IS NOT NULL AND {column} IS NOT NULL AND {column} <> ''
+                 GROUP BY project_id, fingerprint, {column}
+                 ON CONFLICT (project_id, fingerprint, tag_key, tag_value) DO UPDATE SET count = excluded.count"
+            )))
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+    }
+
     pub async fn count_rows(pool: &DbPool, table: &'static str) -> i64 {
         sqlx::query_scalar(db::dyn_sql(&format!("SELECT COUNT(*) FROM {table}")))
             .fetch_one(pool)
             .await
             .unwrap()
+    }
+
+    pub type PlanQuery = sqlx::query::Query<'static, db::Db, <db::Db as sqlx::Database>::Arguments>;
+
+    /// Plan detail lines of `select`: `EXPLAIN QUERY PLAN` on SQLite, `EXPLAIN` on Postgres.
+    pub async fn query_plan<'c, E>(
+        executor: E,
+        select: &str,
+        bind: impl FnOnce(PlanQuery) -> PlanQuery,
+    ) -> Vec<String>
+    where
+        E: sqlx::Executor<'c, Database = db::Db>,
+    {
+        bind(sqlx::query(db::dyn_sql(&format!("{EXPLAIN} {select}"))))
+            .fetch_all(executor)
+            .await
+            .unwrap()
+            .iter()
+            .map(plan_detail)
+            .collect()
+    }
+
+    #[cfg(feature = "sqlite")]
+    const EXPLAIN: &str = "EXPLAIN QUERY PLAN";
+    #[cfg(not(feature = "sqlite"))]
+    const EXPLAIN: &str = "EXPLAIN";
+
+    fn plan_detail(row: &<db::Db as sqlx::Database>::Row) -> String {
+        use sqlx::Row;
+        #[cfg(feature = "sqlite")]
+        return row.get(3);
+        #[cfg(not(feature = "sqlite"))]
+        return row.get(0);
+    }
+
+    /// Plan detail lines of the query `push` appends to the backend's `EXPLAIN` prefix.
+    pub async fn builder_plan<'c, E>(
+        executor: E,
+        push: impl FnOnce(&mut sqlx::QueryBuilder<db::Db>),
+    ) -> Vec<String>
+    where
+        E: sqlx::Executor<'c, Database = db::Db>,
+    {
+        let mut qb = sqlx::QueryBuilder::<db::Db>::new(format!("{EXPLAIN} "));
+        push(&mut qb);
+        qb.build()
+            .fetch_all(executor)
+            .await
+            .unwrap()
+            .iter()
+            .map(plan_detail)
+            .collect()
+    }
+
+    /// Name of the index backing `table`'s primary key.
+    pub fn pk_index(table: &str) -> String {
+        #[cfg(feature = "sqlite")]
+        return format!("sqlite_autoindex_{table}_1");
+        #[cfg(not(feature = "sqlite"))]
+        return format!("{table}_pkey");
+    }
+
+    /// [`plan_tx`] that also disables sorts on Postgres, which at test size
+    /// prefers a bitmap scan and a sort over walking an ordered index.
+    pub async fn ordered_plan_tx(
+        pool: &DbPool,
+        tables: &[&str],
+    ) -> sqlx::Transaction<'static, db::Db> {
+        #[allow(unused_mut)]
+        let mut tx = plan_tx(pool, tables).await;
+        #[cfg(not(feature = "sqlite"))]
+        sqlx::query("SET LOCAL enable_sort = off")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        tx
+    }
+
+    /// virt1-shaped `sqlite_stat1` rows: ~2.34M events over 30 projects, ~200k
+    /// per item type; ~13.9M spans, ~6 per trace; ~6k issues with ~400k tag rows.
+    #[cfg(feature = "sqlite")]
+    pub const VIRT1_STAT1: &[(&str, &str, &str)] = &[
+        ("events", "sqlite_autoindex_events_1", "2340000 1"),
+        ("events", "idx_events_project_time", "2340000 78000 2 1"),
+        ("events", "idx_events_type_time", "2340000 200000 2"),
+        ("events", "idx_events_level", "2340000 78000 30000 2"),
+        ("events", "idx_events_received", "2340000 2"),
+        ("events", "idx_events_fingerprint", "2340000 2000 2"),
+        ("events", "idx_events_monitor", "20000 2000 1000 1"),
+        ("events", "idx_events_parent", "5000 2"),
+        (
+            "events",
+            "idx_events_project_type_time",
+            "2340000 78000 15000 2",
+        ),
+        ("events", "idx_events_trace", "1500000 2"),
+        ("events", "idx_events_project_txn", "1200000 40000 500 2"),
+        (
+            "events",
+            "idx_events_project_release",
+            "1800000 60000 300 2 1",
+        ),
+        (
+            "events",
+            "idx_events_trace_list",
+            "1500000 200000 2 1 1 1 1 1 1",
+        ),
+        ("events", "idx_events_txn_duration", "200000 6700 85 2 1 1"),
+        ("spans", "sqlite_autoindex_spans_1", "13900000 1"),
+        ("spans", "idx_spans_project_time", "13900000 463000 2"),
+        ("spans", "idx_spans_trace", "13900000 6"),
+        ("spans", "idx_spans_received", "13900000 2"),
+        ("spans", "idx_spans_root", "2300000 1 1"),
+        ("spans", "idx_spans_project_trace", "13900000 463000 6"),
+        ("issues", "sqlite_autoindex_issues_1", "6000 200 1"),
+        ("issues", "idx_issues_project_time", "6000 200 2"),
+        ("issues", "idx_issues_project_status", "6000 200 100 2"),
+        ("issues", "idx_issues_project_type", "6000 200 100 2"),
+        ("issues", "idx_issues_fingerprint", "6000 1"),
+        (
+            "issue_tag_values",
+            "sqlite_autoindex_issue_tag_values_1",
+            "400000 13300 66 5 1",
+        ),
+        (
+            "issue_tag_values",
+            "idx_issue_tag_values_project_fp_key_count",
+            "400000 13300 66 5 2",
+        ),
+        (
+            "issue_tag_values",
+            "idx_itv_key_value",
+            "400000 13300 900 20 1",
+        ),
+    ];
+
+    /// Replace the planner statistics of every table named in `rows` with the given
+    /// `(table, index, stat)` rows, so plans reflect production row counts.
+    #[cfg(feature = "sqlite")]
+    pub async fn seed_sqlite_stat1(pool: &DbPool, rows: &[(&str, &str, &str)]) {
+        let mut conn = pool.acquire().await.unwrap();
+        let mut tables: Vec<&str> = rows.iter().map(|(table, _, _)| *table).collect();
+        tables.sort_unstable();
+        tables.dedup();
+        for table in tables {
+            // ANALYZE creates the stat tables; its rows for `table` are then replaced.
+            sqlx::query(db::dyn_sql(&format!("ANALYZE \"{table}\"")))
+                .execute(&mut *conn)
+                .await
+                .unwrap();
+            // STAT4 samples take precedence over stat1 estimates.
+            for stat_table in ["sqlite_stat1", "sqlite_stat4"] {
+                sqlx::query(db::dyn_sql(&format!(
+                    "DELETE FROM {stat_table} WHERE tbl = ?1"
+                )))
+                .bind(table)
+                .execute(&mut *conn)
+                .await
+                .unwrap();
+            }
+        }
+        for (table, index, stat) in rows {
+            sqlx::query("INSERT INTO sqlite_stat1 (tbl, idx, stat) VALUES (?1, ?2, ?3)")
+                .bind(table)
+                .bind(index)
+                .bind(stat)
+                .execute(&mut *conn)
+                .await
+                .unwrap();
+        }
+        sqlx::query("ANALYZE sqlite_schema")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+    }
+
+    /// A transaction to explain in: virt1 stats on SQLite; on Postgres `tables`
+    /// vacuum-analyzed and sequential scans disabled.
+    pub async fn plan_tx(pool: &DbPool, tables: &[&str]) -> sqlx::Transaction<'static, db::Db> {
+        #[cfg(feature = "sqlite")]
+        {
+            let _ = tables;
+            seed_sqlite_stat1(pool, VIRT1_STAT1).await;
+            pool.begin().await.unwrap()
+        }
+        #[cfg(not(feature = "sqlite"))]
+        {
+            for table in tables {
+                sqlx::query(db::dyn_sql(&format!("VACUUM ANALYZE {table}")))
+                    .execute(pool)
+                    .await
+                    .unwrap();
+            }
+            let mut tx = pool.begin().await.unwrap();
+            sqlx::query("SET LOCAL enable_seqscan = off")
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            tx
+        }
     }
 }
 

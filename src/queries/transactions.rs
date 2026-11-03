@@ -5,11 +5,10 @@ use anyhow::Result;
 use simple_hll::HyperLogLog;
 use sqlx::Row;
 
-use crate::db::sql;
 use crate::ingest::models::HLL_REGISTER_COUNT;
 
 use super::types::{
-    DurationBucket, Page, PagedResult, SpanAggregation, TransactionDistribution,
+    BoundedCount, DurationBucket, Page, PagedResult, SpanAggregation, TransactionDistribution,
     TransactionInstance, TransactionSummary, TransactionTrendPoint,
 };
 
@@ -418,110 +417,104 @@ pub async fn transaction_percentile_trend(
         .collect())
 }
 
+/// Newest transactions per breakdown; their traces bound the span lookup.
+const SPAN_BREAKDOWN_TRACES: i64 = 1000;
+
+// `IN`, not a join: transactions sharing a trace would count its spans twice.
+const SPAN_BREAKDOWN_SQL: &str =
+    "SELECT s.op AS op, s.description AS description, s.duration_ms AS duration_ms \
+     FROM spans s \
+     WHERE s.project_id = ?1 AND s.timestamp >= ?3 AND s.duration_ms IS NOT NULL \
+       AND s.trace_id IN (SELECT e.trace_id FROM events e \
+                          WHERE e.project_id = ?1 AND e.transaction_name = ?2 \
+                            AND e.item_type = 'transaction' AND e.timestamp >= ?3 \
+                            AND e.trace_id IS NOT NULL \
+                          ORDER BY e.timestamp DESC \
+                          LIMIT ?4) \
+     LIMIT ?5";
+
 /// Break one transaction's traces down by span (op, description), reusing the
 /// spans page's fold so both surfaces agree on percentiles, ordering and cap.
 ///
-/// Membership is an EXISTS subquery rather than a join: several transaction
-/// events share one `trace_id` whenever a transaction is recorded more than
-/// once in the same trace, and a join would count each span once per match.
-///
-/// The period bounds the spans as well as the transactions. Without it the scan
-/// reads every span the project ever stored however short the window, and a
-/// trace straddling the window edge contributes spans from outside it.
+/// Reads the traces of the newest [`SPAN_BREAKDOWN_TRACES`] transactions in the
+/// period, and only their spans inside the period.
 pub async fn transaction_span_breakdown(
     pool: &crate::db::DbPool,
     project_id: u64,
     name: &str,
     since_ts: i64,
 ) -> Result<SpanAggregation> {
-    let rows = sqlx::query(sql!(
-        "SELECT s.op AS op, s.description AS description, s.duration_ms AS duration_ms \
-         FROM spans s \
-         WHERE s.project_id = ?1 AND s.timestamp >= ?4 \
-           AND s.duration_ms IS NOT NULL AND s.trace_id IS NOT NULL \
-           AND EXISTS (SELECT 1 FROM events e \
-                       WHERE e.trace_id = s.trace_id AND e.project_id = ?2 \
-                         AND e.item_type = 'transaction' AND e.transaction_name = ?3 \
-                         AND e.timestamp >= ?4) \
-         ORDER BY s.timestamp DESC \
-         LIMIT ?5"
-    ))
-    .bind(project_id as i64)
-    .bind(project_id as i64)
-    .bind(name)
-    .bind(since_ts)
-    .bind(super::spans::SPAN_AGG_SCAN_LIMIT)
-    .fetch_all(pool)
-    .await?;
+    let rows = sqlx::query(crate::db::dyn_sql(SPAN_BREAKDOWN_SQL))
+        .bind(project_id as i64)
+        .bind(name)
+        .bind(since_ts)
+        .bind(SPAN_BREAKDOWN_TRACES)
+        .bind(super::spans::SPAN_AGG_SCAN_LIMIT)
+        .fetch_all(pool)
+        .await?;
 
     Ok(super::spans::fold_span_rows(&rows))
 }
 
-/// List individual transaction events for a given name, slowest first.
+// Matches idx_events_txn_duration, so the page reads in index order without a sort.
+const TRANSACTION_INSTANCES_SQL: &str = "SELECT event_id, trace_id, duration_ms, timestamp, \
+            NULLIF(trace_op, '') AS op, NULLIF(trace_status, '') AS status \
+     FROM events \
+     WHERE project_id = ?1 AND item_type = 'transaction' AND transaction_name = ?2 \
+       AND timestamp >= ?3 \
+     ORDER BY duration_ms DESC NULLS LAST, event_id \
+     LIMIT ?4 OFFSET ?5";
+
+const TRANSACTION_INSTANCE_COUNT_SQL: &str = "SELECT COUNT(*) FROM (SELECT 1 FROM events \
+     WHERE project_id = ?1 AND item_type = 'transaction' AND transaction_name = ?2 \
+       AND timestamp >= ?3 LIMIT ?4) c";
+
+/// List individual transaction events for a given name in the period, slowest first.
 pub async fn list_transaction_instances(
     pool: &crate::db::DbPool,
     project_id: u64,
     name: &str,
+    since_ts: i64,
     page: &Page,
 ) -> Result<PagedResult<TransactionInstance>> {
-    let count_row = sqlx::query(sql!(
-        "SELECT COUNT(*) FROM events \
-         WHERE project_id = ?1 AND item_type = 'transaction' AND transaction_name = ?2"
-    ))
-    .bind(project_id as i64)
-    .bind(name)
-    .fetch_one(pool)
-    .await?;
-    let total = count_row.get::<i64, _>(0);
+    let count_row = sqlx::query(crate::db::dyn_sql(TRANSACTION_INSTANCE_COUNT_SQL))
+        .bind(project_id as i64)
+        .bind(name)
+        .bind(since_ts)
+        .bind(BoundedCount::CAP as i64 + 1)
+        .fetch_one(pool)
+        .await?;
+    let total = BoundedCount::from_limited(count_row.get::<i64, _>(0));
 
-    // Explicit NULLS-last ordering for cross-backend parity.
-    let rows = sqlx::query(sql!(
-        "SELECT event_id, trace_id, duration_ms, timestamp, payload FROM events \
-         WHERE project_id = ?1 AND item_type = 'transaction' AND transaction_name = ?2 \
-         ORDER BY duration_ms IS NULL, duration_ms DESC \
-         LIMIT ?3 OFFSET ?4"
-    ))
-    .bind(project_id as i64)
-    .bind(name)
-    .bind(page.limit as i64)
-    .bind(page.offset as i64)
-    .fetch_all(pool)
-    .await?;
+    let rows = sqlx::query(crate::db::dyn_sql(TRANSACTION_INSTANCES_SQL))
+        .bind(project_id as i64)
+        .bind(name)
+        .bind(since_ts)
+        .bind(page.limit as i64)
+        .bind(page.offset as i64)
+        .fetch_all(pool)
+        .await?;
 
-    // Page is small (<= 100), so per-row payload decode for trace op/status is cheap.
     let items = rows
         .iter()
-        .map(|row| {
-            let blob: Vec<u8> = row.get("payload");
-            let trace = crate::queries::events::decompress_payload(&blob)
-                .ok()
-                .and_then(|p| p.get("contexts").and_then(|c| c.get("trace")).cloned());
-            let str_field = |key: &str| {
-                trace
-                    .as_ref()
-                    .and_then(|t| t.get(key))
-                    .and_then(|v| v.as_str())
-                    .map(String::from)
-            };
-            TransactionInstance {
-                event_id: row.get("event_id"),
-                trace_id: row.get("trace_id"),
-                duration_ms: row.get("duration_ms"),
-                timestamp: row.get("timestamp"),
-                op: str_field("op"),
-                status: str_field("status"),
-            }
+        .map(|row| TransactionInstance {
+            event_id: row.get("event_id"),
+            trace_id: row.get("trace_id"),
+            duration_ms: row.get("duration_ms"),
+            timestamp: row.get("timestamp"),
+            op: row.get("op"),
+            status: row.get("status"),
         })
         .collect();
 
-    Ok(PagedResult::from_page(items, total, page))
+    Ok(PagedResult::from_bounded(items, total, page))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db::sql;
-    use crate::queries::test_helpers::open_test_db;
+    use crate::queries::test_helpers::{insert_test_payload, open_test_db};
     use crate::queries::types::Page;
 
     async fn insert_txn_instance(
@@ -533,21 +526,16 @@ mod tests {
         op: &str,
         status: &str,
     ) {
-        let payload = serde_json::json!({
-            "event_id": event_id,
-            "contexts": {"trace": {"op": op, "status": status}},
-        });
-        let compressed =
-            zstd::encode_all(serde_json::to_vec(&payload).unwrap().as_slice(), 3).unwrap();
         sqlx::query(sql!(
-            "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, transaction_name, duration_ms, received_at)
-             VALUES (?1, 'transaction', ?2, ?3, 'testkey', 100, ?4, ?5, 100)"
+            "INSERT INTO events (event_id, item_type, project_id, public_key, timestamp, transaction_name, duration_ms, received_at, trace_op, trace_status)
+             VALUES (?1, 'transaction', ?2, 'testkey', 100, ?3, ?4, 100, ?5, ?6)"
         ))
         .bind(event_id)
-        .bind(&compressed)
         .bind(project_id)
         .bind(name)
         .bind(duration_ms)
+        .bind(op)
+        .bind(status)
         .execute(pool)
         .await
         .unwrap();
@@ -569,7 +557,7 @@ mod tests {
         insert_txn_instance(&pool, "t2", 1, "/checkout", 100, "http.server", "ok").await;
 
         let page = Page::new(None, None);
-        let result = list_transaction_instances(&pool, 1, "/checkout", &page)
+        let result = list_transaction_instances(&pool, 1, "/checkout", 0, &page)
             .await
             .unwrap();
         assert_eq!(result.total, 2);
@@ -583,6 +571,179 @@ mod tests {
         assert!(!result.items[1].is_failed());
     }
 
+    #[tokio::test]
+    async fn instances_read_empty_trace_op_and_status_as_absent() {
+        let pool = open_test_db().await;
+        insert_txn_instance(&pool, "t1", 1, "/checkout", 100, "", "").await;
+
+        let page = Page::new(None, None);
+        let result = list_transaction_instances(&pool, 1, "/checkout", 0, &page)
+            .await
+            .unwrap();
+        assert!(result.items[0].op.is_none());
+        assert!(result.items[0].status.is_none());
+        assert!(!result.items[0].is_failed());
+    }
+
+    #[tokio::test]
+    async fn instances_honour_the_period() {
+        let pool = open_test_db().await;
+        insert_txn_instance(&pool, "t1", 1, "/checkout", 500, "", "").await;
+
+        let page = Page::new(None, None);
+        let all = list_transaction_instances(&pool, 1, "/checkout", 0, &page)
+            .await
+            .unwrap();
+        assert_eq!((all.total, all.items.len()), (1, 1));
+        let later = list_transaction_instances(&pool, 1, "/checkout", 500, &page)
+            .await
+            .unwrap();
+        assert_eq!((later.total, later.items.len()), (0, 0));
+    }
+
+    #[tokio::test]
+    async fn instances_order_slowest_first_then_event_id_with_missing_durations_last() {
+        let pool = open_test_db().await;
+        insert_txn_instance(&pool, "b", 1, "/checkout", 100, "", "").await;
+        insert_txn_instance(&pool, "a", 1, "/checkout", 100, "", "").await;
+        insert_txn_instance(&pool, "c", 1, "/checkout", 900, "", "").await;
+        sqlx::query(sql!(
+            "INSERT INTO events (event_id, item_type, project_id, public_key, timestamp, transaction_name, received_at)
+             VALUES ('n', 'transaction', 1, 'testkey', 100, '/checkout', 100)"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let page = Page::new(None, None);
+        let ids: Vec<String> = list_transaction_instances(&pool, 1, "/checkout", 0, &page)
+            .await
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|i| i.event_id)
+            .collect();
+        assert_eq!(ids, ["c", "a", "b", "n"]);
+    }
+
+    #[tokio::test]
+    async fn instances_plan_walks_the_duration_index_without_payloads_or_sort() {
+        let pool = open_test_db().await;
+        insert_txn_instance(&pool, "t1", 1, "/checkout", 100, "http.server", "ok").await;
+
+        #[cfg(feature = "sqlite")]
+        let plan = {
+            crate::queries::test_helpers::seed_sqlite_stat1(
+                &pool,
+                crate::queries::test_helpers::VIRT1_STAT1,
+            )
+            .await;
+            crate::queries::test_helpers::query_plan(&pool, TRANSACTION_INSTANCES_SQL, |q| {
+                q.bind(1i64)
+                    .bind("/checkout")
+                    .bind(0i64)
+                    .bind(50i64)
+                    .bind(0i64)
+            })
+            .await
+        };
+        #[cfg(not(feature = "sqlite"))]
+        let plan = {
+            sqlx::query("VACUUM ANALYZE events")
+                .execute(&pool)
+                .await
+                .unwrap();
+            let mut tx = pool.begin().await.unwrap();
+            sqlx::query("SET LOCAL enable_seqscan = off")
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            crate::queries::test_helpers::query_plan(&mut *tx, TRANSACTION_INSTANCES_SQL, |q| {
+                q.bind(1i64)
+                    .bind("/checkout")
+                    .bind(0i64)
+                    .bind(50i64)
+                    .bind(0i64)
+            })
+            .await
+        };
+
+        assert!(
+            !plan.iter().any(|d| d.contains("event_payloads")),
+            "{plan:#?}"
+        );
+        assert!(
+            plan.iter().any(|d| d.contains("idx_events_txn_duration")),
+            "{plan:#?}"
+        );
+        assert!(
+            !plan
+                .iter()
+                .any(|d| d.contains("TEMP B-TREE") || d.contains("Sort")),
+            "{plan:#?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn instance_count_plan_reads_one_index_without_payloads() {
+        let pool = open_test_db().await;
+        sqlx::query(sql!(
+            "WITH RECURSIVE seq(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM seq WHERE x < 2000)
+             INSERT INTO events (event_id, item_type, project_id, public_key, timestamp, received_at, transaction_name, duration_ms)
+             SELECT 'ic-' || x, 'transaction', 1 + x % 4, 'testkey', 1000 + x, 1000 + x, '/n' || (x % 20), x % 500
+             FROM seq"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let mut tx = crate::queries::test_helpers::plan_tx(&pool, &["events"]).await;
+        let plan = crate::queries::test_helpers::query_plan(
+            &mut *tx,
+            TRANSACTION_INSTANCE_COUNT_SQL,
+            |q| q.bind(1i64).bind("/n4").bind(0i64).bind(10_001i64),
+        )
+        .await;
+
+        assert!(
+            plan.iter().any(|d| d.contains("idx_events_txn_duration")),
+            "{plan:#?}"
+        );
+        assert!(
+            !plan.iter().any(|d| d.contains("event_payloads")),
+            "{plan:#?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn instance_total_caps_past_ten_thousand() {
+        let pool = open_test_db().await;
+        sqlx::query(sql!(
+            "WITH RECURSIVE seq(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM seq WHERE x < 10005)
+             INSERT INTO events (event_id, item_type, project_id, public_key, timestamp, received_at, transaction_name, duration_ms)
+             SELECT 'txn-' || x, 'transaction', 1, 'testkey', 1000 + x, 1000 + x, '/busy', x
+             FROM seq"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let page = Page::new(Some(0), Some(25));
+        let result = list_transaction_instances(&pool, 1, "/busy", 0, &page)
+            .await
+            .unwrap();
+        assert!(result.total_capped);
+        assert_eq!(result.items.len(), 25);
+        assert_eq!(result.items[0].duration_ms, Some(10005));
+        assert!(result.has_next());
+
+        let exact = list_transaction_instances(&pool, 1, "/busy", 1000 + 10, &page)
+            .await
+            .unwrap();
+        assert!(!exact.total_capped);
+        assert_eq!(exact.total, 9996);
+    }
+
     async fn insert_txn_with_trace(
         pool: &crate::db::DbPool,
         event_id: &str,
@@ -593,11 +754,10 @@ mod tests {
     ) {
         let compressed = zstd::encode_all(b"{}".as_slice(), 3).unwrap();
         sqlx::query(sql!(
-            "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, transaction_name, trace_id, received_at)
-             VALUES (?1, 'transaction', ?2, ?3, 'testkey', ?4, ?5, ?6, ?4)"
+            "INSERT INTO events (event_id, item_type, project_id, public_key, timestamp, transaction_name, trace_id, received_at)
+             VALUES (?1, 'transaction', ?2, 'testkey', ?3, ?4, ?5, ?3)"
         ))
         .bind(event_id)
-        .bind(&compressed)
         .bind(project_id)
         .bind(timestamp)
         .bind(name)
@@ -605,6 +765,7 @@ mod tests {
         .execute(pool)
         .await
         .unwrap();
+        insert_test_payload(pool, event_id, &compressed).await;
     }
 
     async fn insert_span(
@@ -627,13 +788,11 @@ mod tests {
         duration_ms: i64,
         timestamp: i64,
     ) {
-        let compressed = zstd::encode_all(b"{}".as_slice(), 3).unwrap();
         sqlx::query(sql!(
-            "INSERT INTO spans (span_id, payload, project_id, public_key, timestamp, trace_id, op, description, duration_ms)
-             VALUES (?1, ?2, ?3, 'testkey', ?7, ?4, ?5, 'd', ?6)"
+            "INSERT INTO spans (span_id, project_id, public_key, timestamp, trace_id, op, description, duration_ms)
+             VALUES (?1, ?2, 'testkey', ?6, ?3, ?4, 'd', ?5)"
         ))
         .bind(span_id)
-        .bind(&compressed)
         .bind(project_id)
         .bind(trace_id)
         .bind(op)
@@ -754,6 +913,84 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn span_breakdown_plan_seeks_traces_from_the_transaction_index() {
+        let pool = open_test_db().await;
+        // 2000 transactions over 4 projects and 20 names, 6 spans per trace.
+        sqlx::query(sql!(
+            "WITH RECURSIVE seq(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM seq WHERE x < 2000)
+             INSERT INTO events (event_id, item_type, project_id, public_key, timestamp, received_at, transaction_name, trace_id)
+             SELECT 'txn-' || x, 'transaction', 1 + x % 4, 'testkey', 1000 + x, 1000 + x, '/n' || (x % 20), 'trace-' || x
+             FROM seq"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(sql!(
+            "WITH RECURSIVE seq(x) AS (SELECT 0 UNION ALL SELECT x + 1 FROM seq WHERE x < 11999)
+             INSERT INTO spans (span_id, project_id, public_key, timestamp, received_at, trace_id, op, description, duration_ms)
+             SELECT 'span-' || x, 1 + (x / 6 + 1) % 4, 'testkey', 1000 + x / 6, 1000 + x / 6, 'trace-' || (x / 6 + 1), 'db', 'd', x % 50
+             FROM seq"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        #[cfg(feature = "sqlite")]
+        let plan = {
+            crate::queries::test_helpers::seed_sqlite_stat1(
+                &pool,
+                crate::queries::test_helpers::VIRT1_STAT1,
+            )
+            .await;
+            plan_for(&pool).await
+        };
+        #[cfg(not(feature = "sqlite"))]
+        let plan = {
+            sqlx::query("VACUUM ANALYZE events, spans")
+                .execute(&pool)
+                .await
+                .unwrap();
+            let mut tx = pool.begin().await.unwrap();
+            sqlx::query("SET LOCAL enable_seqscan = off")
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            plan_for(&mut *tx).await
+        };
+
+        // At test sizes Postgres may seek (project_id, transaction_name) through either index and sort the few rows.
+        assert!(
+            plan.iter().any(|d| d.contains("idx_events_project_txn")
+                || (cfg!(not(feature = "sqlite")) && d.contains("idx_events_txn_duration"))),
+            "{plan:#?}"
+        );
+        assert!(
+            plan.iter().any(|d| d.contains("idx_spans_project_trace")),
+            "{plan:#?}"
+        );
+        assert!(
+            !plan
+                .iter()
+                .any(|d| d.starts_with("SCAN s") || d.contains("Seq Scan on spans")),
+            "{plan:#?}"
+        );
+    }
+
+    async fn plan_for<'c, E>(executor: E) -> Vec<String>
+    where
+        E: sqlx::Executor<'c, Database = crate::db::Db>,
+    {
+        crate::queries::test_helpers::query_plan(executor, SPAN_BREAKDOWN_SQL, |q| {
+            q.bind(1i64)
+                .bind("/n4")
+                .bind(0i64)
+                .bind(SPAN_BREAKDOWN_TRACES)
+                .bind(crate::queries::spans::SPAN_AGG_SCAN_LIMIT)
+        })
+        .await
     }
 
     async fn insert_metric_hour(

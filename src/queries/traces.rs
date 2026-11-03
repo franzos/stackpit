@@ -31,9 +31,8 @@ impl TraceListFilter {
     }
 }
 
-/// The bounded scan both the count and the row query group over. Emitted from
-/// one place so the two can never drift — that identity is what keeps
-/// pagination consistent with what the listing can actually return.
+/// The bounded scan the page and its past-the-end count group over. Emitted
+/// from one place so the two can never drift.
 fn push_recent_transactions(
     qb: &mut sqlx::QueryBuilder<crate::db::Db>,
     scope: &TraceScope,
@@ -122,39 +121,14 @@ pub(crate) async fn list_org_traces_with_scan_limit(
     }
     let since = since_bound(since_ts);
 
-    // `COUNT(DISTINCT trace_id)` cannot carry a HAVING, so the grouped scan is
-    // nested and counted as rows.
-    let mut qb =
-        sqlx::QueryBuilder::<crate::db::Db>::new("SELECT COUNT(*) FROM (SELECT trace_id FROM ");
-    push_recent_transactions(&mut qb, scope, since, scan_limit);
-    qb.push(" GROUP BY trace_id");
-    push_having(&mut qb, filter);
-    qb.push(") g");
-    let total = qb.build().fetch_one(pool).await?.get::<i64, _>(0);
-
-    let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new(
-        "SELECT trace_id,
-                COUNT(*) AS transaction_count,
-                COUNT(DISTINCT project_id) AS project_count,
-                MIN(timestamp) AS first_timestamp,
-                MAX(timestamp) AS last_timestamp,
-                MAX(start_ms + COALESCE(duration_ms, 0)) - MIN(start_ms) AS extent_ms,
-                MIN(CASE WHEN parent_span_id IS NULL THEN transaction_name END) AS root_name,
-                MIN(transaction_name) AS any_name
-         FROM ",
-    );
-    push_recent_transactions(&mut qb, scope, since, scan_limit);
-    qb.push(" GROUP BY trace_id");
-    push_having(&mut qb, filter);
-    // `trace_id` is the group key, so it breaks ties totally. Without it,
-    // traces sharing a second — routine on an org-wide list, where timestamps
-    // are Unix seconds — can repeat across pages or be skipped entirely.
-    qb.push(" ORDER BY last_timestamp DESC, trace_id DESC LIMIT ");
-    qb.push_bind(page.limit as i64);
-    qb.push(" OFFSET ");
-    qb.push_bind(page.offset as i64);
-
+    let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new("");
+    push_trace_page(&mut qb, scope, filter, page, since, scan_limit);
     let rows = qb.build().fetch_all(pool).await?;
+    let total = match rows.first() {
+        Some(row) => row.get::<i64, _>("total"),
+        None if page.offset > 0 => count_traces(pool, scope, filter, since, scan_limit).await?,
+        None => 0,
+    };
     let items = rows
         .iter()
         .map(|row| OrgTraceSummary {
@@ -171,6 +145,57 @@ pub(crate) async fn list_org_traces_with_scan_limit(
         .collect();
 
     Ok(PagedResult::from_page(items, total, page))
+}
+
+/// One grouped pass over the bounded scan: the page plus the number of traces
+/// that survive the `HAVING`, carried on every row.
+fn push_trace_page(
+    qb: &mut sqlx::QueryBuilder<crate::db::Db>,
+    scope: &TraceScope,
+    filter: &TraceListFilter,
+    page: &Page,
+    since: i64,
+    scan_limit: i64,
+) {
+    qb.push(
+        "SELECT trace_id,
+                COUNT(*) AS transaction_count,
+                COUNT(DISTINCT project_id) AS project_count,
+                MIN(timestamp) AS first_timestamp,
+                MAX(timestamp) AS last_timestamp,
+                MAX(start_ms + COALESCE(duration_ms, 0)) - MIN(start_ms) AS extent_ms,
+                MIN(CASE WHEN parent_span_id IS NULL THEN transaction_name END) AS root_name,
+                MIN(transaction_name) AS any_name,
+                COUNT(*) OVER () AS total
+         FROM ",
+    );
+    push_recent_transactions(qb, scope, since, scan_limit);
+    qb.push(" GROUP BY trace_id");
+    push_having(qb, filter);
+    // `trace_id` is the group key, so it breaks ties totally. Without it,
+    // traces sharing a second — routine on an org-wide list, where timestamps
+    // are Unix seconds — can repeat across pages or be skipped entirely.
+    qb.push(" ORDER BY last_timestamp DESC, trace_id DESC LIMIT ");
+    qb.push_bind(page.limit as i64);
+    qb.push(" OFFSET ");
+    qb.push_bind(page.offset as i64);
+}
+
+/// The total for a page past the end, which carries no row to read it from.
+async fn count_traces(
+    pool: &crate::db::DbPool,
+    scope: &TraceScope,
+    filter: &TraceListFilter,
+    since: i64,
+    scan_limit: i64,
+) -> Result<i64> {
+    let mut qb =
+        sqlx::QueryBuilder::<crate::db::Db>::new("SELECT COUNT(*) FROM (SELECT trace_id FROM ");
+    push_recent_transactions(&mut qb, scope, since, scan_limit);
+    qb.push(" GROUP BY trace_id");
+    push_having(&mut qb, filter);
+    qb.push(") g");
+    Ok(qb.build().fetch_one(pool).await?.get::<i64, _>(0))
 }
 
 /// Per-(trace, project) transaction counts and per-trace error counts, in one
@@ -378,14 +403,12 @@ mod tests {
         parent: Option<&str>,
         start_ms: Option<i64>,
     ) {
-        let blob = zstd::encode_all([0u8; 0].as_slice(), 3).unwrap();
         sqlx::query(sql!(
-            "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp,
+            "INSERT INTO events (event_id, item_type, project_id, public_key, timestamp,
                                  transaction_name, trace_id, duration_ms, parent_span_id, start_ms)
-             VALUES (?1, 'transaction', ?2, ?3, 'k', ?4, ?5, ?6, 100, ?7, ?8)"
+             VALUES (?1, 'transaction', ?2, 'k', ?3, ?4, ?5, 100, ?6, ?7)"
         ))
         .bind(event_id)
-        .bind(&blob)
         .bind(project_id)
         .bind(timestamp)
         .bind(name)
@@ -398,14 +421,12 @@ mod tests {
     }
 
     async fn error(pool: &DbPool, event_id: &str, project_id: i64, trace_id: &str) {
-        let blob = zstd::encode_all([0u8; 0].as_slice(), 3).unwrap();
         sqlx::query(sql!(
-            "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp,
+            "INSERT INTO events (event_id, item_type, project_id, public_key, timestamp,
                                  title, level, trace_id)
-             VALUES (?1, 'event', ?2, ?3, 'k', 1700000005, 'boom', 'error', ?4)"
+             VALUES (?1, 'event', ?2, 'k', 1700000005, 'boom', 'error', ?3)"
         ))
         .bind(event_id)
-        .bind(&blob)
         .bind(project_id)
         .bind(trace_id)
         .execute(pool)
@@ -724,6 +745,165 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn every_page_carries_the_total_including_one_past_the_end() {
+        let pool = seeded().await;
+        let filter = TraceListFilter::default();
+        let second = list_org_traces(
+            &pool,
+            &TraceScope::All,
+            &filter,
+            &Page::new(Some(2), Some(2)),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(second.items.len(), 1);
+        assert_eq!(second.items[0].trace_id, A);
+        assert_eq!(second.total, 3);
+
+        let past = list_org_traces(
+            &pool,
+            &TraceScope::All,
+            &filter,
+            &Page::new(Some(10), Some(2)),
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(past.items.is_empty());
+        assert_eq!(past.total, 3);
+    }
+
+    async fn trace_list_plan<'c, E>(executor: E, scope: &TraceScope) -> Vec<String>
+    where
+        E: sqlx::Executor<'c, Database = crate::db::Db>,
+    {
+        #[cfg(feature = "sqlite")]
+        let (explain, detail_col) = ("EXPLAIN QUERY PLAN ", 3);
+        #[cfg(not(feature = "sqlite"))]
+        let (explain, detail_col) = ("EXPLAIN ", 0);
+
+        let filter = TraceListFilter {
+            projects: Some(vec![2]),
+            multi_project_only: true,
+        };
+        let mut qb = sqlx::QueryBuilder::<crate::db::Db>::new(explain);
+        push_trace_page(
+            &mut qb,
+            scope,
+            &filter,
+            &page(),
+            since_bound(Some(1_000)),
+            SPAN_AGG_SCAN_LIMIT,
+        );
+        qb.build()
+            .fetch_all(executor)
+            .await
+            .unwrap()
+            .iter()
+            .map(|r| r.get::<String, _>(detail_col))
+            .collect()
+    }
+
+    /// The bounded scan reads `idx_events_trace_list` alone, scoped or not;
+    /// the only sorts are over the grouped result.
+    #[tokio::test]
+    async fn trace_list_plan_reads_only_the_trace_list_index() {
+        // Org 1 is the system org every database starts with.
+        let pool = crate::db::open_test_pool().await;
+        sqlx::query(sql!(
+            "INSERT INTO projects (project_id, org_id, name)
+             SELECT p, 1, 'p' || p FROM (SELECT 1 AS p UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4) ps"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(sql!(
+            "WITH RECURSIVE seq(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM seq WHERE x < 3000)
+             INSERT INTO events (event_id, item_type, project_id, public_key, timestamp, received_at,
+                                 transaction_name, trace_id, start_ms, duration_ms, parent_span_id)
+             SELECT 'tl-' || x, CASE x % 3 WHEN 0 THEN 'event' WHEN 1 THEN 'transaction' ELSE 'session' END,
+                    1 + x % 4, 'testkey', 1000 + x, 1000 + x, '/n' || (x % 20),
+                    CASE WHEN x % 3 < 2 THEN 'trace-' || (x / 6) END, x * 1000, 50,
+                    CASE WHEN x % 2 = 0 THEN 'p' || x END
+             FROM seq"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let scopes = [
+            TraceScope::All,
+            TraceScope::Orgs(vec![1]),
+            TraceScope::Projects(vec![1, 2]),
+        ];
+        for scope in &scopes {
+            #[cfg(feature = "sqlite")]
+            let plan = {
+                crate::queries::test_helpers::seed_sqlite_stat1(
+                    &pool,
+                    crate::queries::test_helpers::VIRT1_STAT1,
+                )
+                .await;
+                trace_list_plan(&pool, scope).await
+            };
+            #[cfg(not(feature = "sqlite"))]
+            let plan = {
+                sqlx::query("VACUUM ANALYZE events")
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+                let mut tx = pool.begin().await.unwrap();
+                sqlx::query("SET LOCAL enable_seqscan = off")
+                    .execute(&mut *tx)
+                    .await
+                    .unwrap();
+                trace_list_plan(&mut *tx, scope).await
+            };
+
+            #[cfg(feature = "sqlite")]
+            {
+                assert!(
+                    plan.iter()
+                        .any(|d| d.contains("COVERING INDEX idx_events_trace_list")),
+                    "{scope:?}: {plan:#?}"
+                );
+                assert!(
+                    plan.iter()
+                        .filter(|d| d.contains("events"))
+                        .all(|d| d.contains("COVERING INDEX idx_events_trace_list")),
+                    "{scope:?}: {plan:#?}"
+                );
+                // All three run over the materialized scan, not over events.
+                assert!(
+                    plan.iter().filter(|d| d.contains("TEMP B-TREE")).all(|d| {
+                        [
+                            "USE TEMP B-TREE FOR GROUP BY",
+                            "USE TEMP B-TREE FOR count(DISTINCT)",
+                            "USE TEMP B-TREE FOR ORDER BY",
+                        ]
+                        .contains(&d.as_str())
+                    }),
+                    "{scope:?}: {plan:#?}"
+                );
+            }
+            #[cfg(not(feature = "sqlite"))]
+            {
+                assert!(
+                    plan.iter()
+                        .any(|d| d.contains("Index Only Scan using idx_events_trace_list")),
+                    "{scope:?}: {plan:#?}"
+                );
+                assert!(
+                    !plan.iter().any(|d| d.contains("on events")
+                        && !d.contains("Index Only Scan using idx_events_trace_list")),
+                    "{scope:?}: {plan:#?}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn rollups_carry_the_chips_and_the_error_count_at_scope() {
         let pool = seeded().await;
         error(&pool, "x1", 10, A).await;
@@ -776,14 +956,12 @@ mod tests {
     #[tokio::test]
     async fn span_counts_are_scoped_to_the_caller() {
         let pool = seeded().await;
-        let blob = zstd::encode_all([0u8; 0].as_slice(), 3).unwrap();
         for (span_id, project_id) in [("s1", 10i64), ("s2", 11)] {
             sqlx::query(sql!(
-                "INSERT INTO spans (span_id, payload, project_id, public_key, timestamp, trace_id, op)
-                 VALUES (?1, ?2, ?3, 'k', 1700000000, ?4, 'db')"
+                "INSERT INTO spans (span_id, project_id, public_key, timestamp, trace_id, op)
+                 VALUES (?1, ?2, 'k', 1700000000, ?3, 'db')"
             ))
             .bind(span_id)
-            .bind(&blob)
             .bind(project_id)
             .bind(A)
             .execute(&pool)

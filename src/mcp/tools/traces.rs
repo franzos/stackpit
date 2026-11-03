@@ -274,13 +274,11 @@ mod tests {
         duration_ms: i64,
         description: Option<&str>,
     ) {
-        let payload = zstd::encode_all([0u8; 0].as_slice(), 3).unwrap();
         sqlx::query(sql!(
-            "INSERT INTO spans (span_id, payload, project_id, public_key, timestamp, trace_id, parent_span_id, op, description, status, duration_ms, start_ms)
-             VALUES (?1, ?2, ?3, 'testkey', ?4, ?5, ?6, 'db.query', ?7, 'ok', ?8, ?9)"
+            "INSERT INTO spans (span_id, project_id, public_key, timestamp, trace_id, parent_span_id, op, description, status, duration_ms, start_ms)
+             VALUES (?1, ?2, 'testkey', ?3, ?4, ?5, 'db.query', ?6, 'ok', ?7, ?8)"
         ))
         .bind(span_id)
-        .bind(&payload)
         .bind(project_id)
         .bind(timestamp)
         .bind(trace_id)
@@ -298,26 +296,24 @@ mod tests {
         let compressed =
             zstd::encode_all(serde_json::to_vec(&payload).unwrap().as_slice(), 3).unwrap();
         sqlx::query(sql!(
-            "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, trace_id, transaction_name, duration_ms, level)
-             VALUES (?1, 'transaction', ?2, ?3, 'testkey', 100, ?4, 'GET /checkout', 1000, 'info')"
+            "INSERT INTO events (event_id, item_type, project_id, public_key, timestamp, trace_id, transaction_name, duration_ms, level)
+             VALUES (?1, 'transaction', ?2, 'testkey', 100, ?3, 'GET /checkout', 1000, 'info')"
         ))
         .bind(event_id)
-        .bind(&compressed)
         .bind(project_id)
         .bind(trace_id)
         .execute(pool)
         .await
         .unwrap();
+        crate::queries::test_helpers::insert_test_payload(pool, event_id, &compressed).await;
     }
 
     async fn insert_error(pool: &DbPool, event_id: &str, project_id: i64, trace_id: &str) {
-        let compressed = zstd::encode_all([0u8; 0].as_slice(), 3).unwrap();
         sqlx::query(sql!(
-            "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, trace_id, title, level)
-             VALUES (?1, 'event', ?2, ?3, 'testkey', 110, ?4, 'boom', 'error')"
+            "INSERT INTO events (event_id, item_type, project_id, public_key, timestamp, trace_id, title, level)
+             VALUES (?1, 'event', ?2, 'testkey', 110, ?3, 'boom', 'error')"
         ))
         .bind(event_id)
-        .bind(&compressed)
         .bind(project_id)
         .bind(trace_id)
         .execute(pool)

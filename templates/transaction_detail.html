@@ -206,7 +206,13 @@
 
 <nav class="pagination"
      aria-label="{{ chrome.t("transactions-pagination-label") }}">
-  <span>{{ chrome.tv_count("transactions-detail-count", result.total as i64) }}</span>
+  <span>
+    {% if result.total_capped %}
+      {{ chrome.t("transactions-detail-count-capped") }}
+    {% else %}
+      {{ chrome.tv_count("transactions-detail-count", result.total as i64) }}
+    {% endif %}
+  </span>
   <span class="flex gap-2">
     {% if result.has_prev() %}
       <a class="btn btn-ghost"

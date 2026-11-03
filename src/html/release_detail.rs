@@ -103,6 +103,7 @@ mod tests {
             total: 0,
             offset: 0,
             limit: 50,
+            total_capped: false,
         }
     }
 

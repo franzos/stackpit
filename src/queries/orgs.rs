@@ -2378,9 +2378,8 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(sql!(
-            "INSERT INTO spans (span_id, payload, project_id, public_key, timestamp) VALUES ('os1', ?1, 7400, 'k', 0)"
+            "INSERT INTO spans (span_id, project_id, public_key, timestamp) VALUES ('os1', 7400, 'k', 0)"
         ))
-        .bind(&b"{}"[..])
         .execute(&pool)
         .await
         .unwrap();
@@ -2394,7 +2393,14 @@ mod tests {
         let outcome = delete_org_guarded(&pool, org).await.unwrap();
         assert!(matches!(outcome, DeleteOrgOutcome::Deleted(_)));
 
-        for table in ["events", "attachments", "logs", "spans", "metrics"] {
+        for table in [
+            "events",
+            "event_payloads",
+            "attachments",
+            "logs",
+            "spans",
+            "metrics",
+        ] {
             let n: i64 =
                 sqlx::query_scalar(crate::db::dyn_sql(&format!("SELECT COUNT(*) FROM {table}")))
                     .fetch_one(&pool)

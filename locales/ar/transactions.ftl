@@ -40,6 +40,7 @@ transactions-detail-count = { $count ->
     [many] { $count } مثيلًا
    *[other] { $count } مثيل
 }
+transactions-detail-count-capped = أكثر من 10000 مثيل
 transactions-detail-failure-label = الإخفاقات
 transactions-list-search-placeholder = البحث في أسماء المعاملات…
 transactions-list-search-label = البحث في أسماء المعاملات

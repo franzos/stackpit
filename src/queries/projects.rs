@@ -10,7 +10,7 @@ use crate::db::sql;
 use crate::domain::ProjectStatus;
 
 use super::period::period_to_timestamp;
-use super::types::{ProjectKey, ProjectNavCounts, ProjectRepo, ProjectSummary};
+use super::types::{BoundedCount, ProjectKey, ProjectNavCounts, ProjectRepo, ProjectSummary};
 
 /// Per-project nav badge counts cached with a short TTL, shared via `AppState` (not a global) so each app instance and each test keeps its own map.
 pub type NavCountsCache = Arc<DashMap<u64, (ProjectNavCounts, Instant)>>;
@@ -449,53 +449,68 @@ pub async fn get_org_repos(pool: &crate::db::DbPool, org_id: i64) -> Result<Vec<
         .collect())
 }
 
-/// Load nav badge counts for a project in one shot. Scans the events table
-/// once with conditional aggregation, plus a count each for logs/spans/metrics.
+/// Per-type event counts; reads only `idx_events_project_type_time`.
+const NAV_TYPE_COUNTS_SQL: &str =
+    "SELECT item_type, COUNT(*) FROM events WHERE project_id = ?1 GROUP BY item_type";
+
+/// Monitor and transaction counts, plus spans/logs/metrics counted up to `?2` rows.
+const NAV_OTHER_COUNTS_SQL: &str = "SELECT
+    (SELECT COUNT(*) FROM events WHERE project_id = ?1 AND monitor_slug IS NOT NULL),
+    (SELECT COUNT(DISTINCT transaction_name) FROM transaction_metrics WHERE project_id = ?1),
+    (SELECT COUNT(*) FROM (SELECT 1 FROM spans WHERE project_id = ?1 LIMIT ?2) s),
+    (SELECT COUNT(*) FROM (SELECT 1 FROM logs WHERE project_id = ?1 LIMIT ?2) l),
+    (SELECT COUNT(*) FROM (SELECT 1 FROM metrics WHERE project_id = ?1 LIMIT ?2) m)";
+
+/// Load nav badge counts for a project. Every count is index-only; spans,
+/// logs and metrics stop at [`BoundedCount::CAP`]. A failed read leaves its
+/// counts at zero so the page still renders.
 pub async fn get_nav_counts(pool: &crate::db::DbPool, project_id: u64) -> ProjectNavCounts {
-    // Transactions live in transaction_metrics; everything else comes from events.
-    let transaction_count = count_transactions(pool, project_id).await.unwrap_or(0);
-    let label = project_label(pool, project_id).await;
+    let mut counts = ProjectNavCounts {
+        label: project_label(pool, project_id).await,
+        ..Default::default()
+    };
 
-    let result = sqlx::query(sql!(
-        "SELECT
-            COALESCE(SUM(CASE WHEN monitor_slug IS NOT NULL THEN 1 ELSE 0 END), 0),
-            COALESCE(SUM(CASE WHEN item_type IN ('session', 'sessions') AND session_status IS NOT NULL THEN 1 ELSE 0 END), 0),
-            COALESCE(SUM(CASE WHEN item_type = 'user_report' THEN 1 ELSE 0 END), 0),
-            COALESCE(SUM(CASE WHEN item_type = 'client_report' THEN 1 ELSE 0 END), 0),
-            (SELECT COUNT(*) FROM logs WHERE project_id = ?1),
-            (SELECT COUNT(*) FROM spans WHERE project_id = ?1),
-            (SELECT COUNT(*) FROM metrics WHERE project_id = ?1),
-            COALESCE(SUM(CASE WHEN item_type IN ('profile', 'profile_chunk') THEN 1 ELSE 0 END), 0),
-            COALESCE(SUM(CASE WHEN item_type = 'replay_event' THEN 1 ELSE 0 END), 0),
-            COUNT(*)
-         FROM events
-         WHERE project_id = ?1"
-    ))
-    .bind(project_id as i64)
-    .fetch_optional(pool)
-    .await;
-
-    match result {
-        Ok(Some(row)) => ProjectNavCounts {
-            transaction_count,
-            monitor_count: row.get::<i64, _>(0) as u64,
-            session_count: row.get::<i64, _>(1) as u64,
-            user_report_count: row.get::<i64, _>(2) as u64,
-            client_report_count: row.get::<i64, _>(3) as u64,
-            log_count: row.get::<i64, _>(4) as u64,
-            span_count: row.get::<i64, _>(5) as u64,
-            metric_count: row.get::<i64, _>(6) as u64,
-            profile_count: row.get::<i64, _>(7) as u64,
-            replay_count: row.get::<i64, _>(8) as u64,
-            event_count: row.get::<i64, _>(9) as u64,
-            label,
-        },
-        _ => ProjectNavCounts {
-            transaction_count,
-            label,
-            ..Default::default()
-        },
+    match sqlx::query(crate::db::dyn_sql(NAV_TYPE_COUNTS_SQL))
+        .bind(project_id as i64)
+        .fetch_all(pool)
+        .await
+    {
+        Ok(rows) => {
+            for row in rows {
+                let item_type: String = row.get(0);
+                let n = row.get::<i64, _>(1) as u64;
+                counts.event_count += n;
+                match item_type.as_str() {
+                    // Individual session updates; `sessions` aggregate items are not counted.
+                    "session" => counts.session_count += n,
+                    "user_report" => counts.user_report_count += n,
+                    "client_report" => counts.client_report_count += n,
+                    "profile" | "profile_chunk" => counts.profile_count += n,
+                    "replay_event" => counts.replay_count += n,
+                    _ => {}
+                }
+            }
+        }
+        Err(e) => tracing::warn!("nav counts for project {project_id}: {e}"),
     }
+
+    match sqlx::query(crate::db::dyn_sql(NAV_OTHER_COUNTS_SQL))
+        .bind(project_id as i64)
+        .bind((BoundedCount::CAP + 1) as i64)
+        .fetch_one(pool)
+        .await
+    {
+        Ok(row) => {
+            counts.monitor_count = row.get::<i64, _>(0) as u64;
+            counts.transaction_count = row.get::<i64, _>(1) as u64;
+            counts.span_count = BoundedCount::from_limited(row.get(2));
+            counts.log_count = BoundedCount::from_limited(row.get(3));
+            counts.metric_count = BoundedCount::from_limited(row.get(4));
+        }
+        Err(e) => tracing::warn!("nav counts for project {project_id}: {e}"),
+    }
+
+    counts
 }
 
 /// Resolve the display label for a project: stored `name` if set, else
@@ -569,17 +584,6 @@ pub async fn labels_for(
             )
         })
         .collect())
-}
-
-/// Count distinct transaction names for a project's nav badge.
-pub async fn count_transactions(pool: &crate::db::DbPool, project_id: u64) -> Result<u64> {
-    let row = sqlx::query(sql!(
-        "SELECT COUNT(DISTINCT transaction_name) FROM transaction_metrics WHERE project_id = ?1"
-    ))
-    .bind(project_id as i64)
-    .fetch_one(pool)
-    .await?;
-    Ok(row.get::<i64, _>(0) as u64)
 }
 
 pub async fn count_distinct_projects(pool: &crate::db::DbPool) -> Result<usize> {
@@ -1069,6 +1073,7 @@ const PROJECT_SCOPED_TABLES: &[&str] = &[
     "integration_exclusions",
     "notification_delivery_queue",
     "project_retention",
+    "client_report_outcomes",
 ];
 
 /// Delete a project and all it owns, reusing the caller's transaction.
@@ -1196,6 +1201,219 @@ mod tests {
         assert_eq!(get_nav_counts(&pool, 1).await.event_count, 3);
         assert_eq!(get_nav_counts(&pool, 2).await.event_count, 1);
         assert_eq!(get_nav_counts(&pool, 3).await.event_count, 0);
+    }
+
+    #[tokio::test]
+    async fn get_nav_counts_counts_every_badge() {
+        use crate::ingest::models::ItemType;
+
+        let pool = open_test_db().await;
+        let typed = [
+            ItemType::Session,
+            ItemType::Session,
+            ItemType::Sessions,
+            ItemType::UserReport,
+            ItemType::ClientReport,
+            ItemType::ClientReport,
+            ItemType::Profile,
+            ItemType::ProfileChunk,
+            ItemType::ReplayEvent,
+            ItemType::Transaction,
+        ];
+        for (i, t) in typed.into_iter().enumerate() {
+            insert_typed_event(&pool, &format!("t{i}"), 1, t, 100, 100, None).await;
+        }
+        insert_typed_event(&pool, "other", 2, ItemType::Session, 100, 100, None).await;
+        sqlx::query(sql!(
+            "INSERT INTO events (event_id, item_type, project_id, public_key, timestamp, received_at, monitor_slug)
+             VALUES ('c1', 'check_in', 1, 'testkey', 100, 100, 'nightly')"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        insert_test_transaction_metric(&pool, 1, "/a", 0, 100).await;
+        insert_test_transaction_metric(&pool, 1, "/a", 3600, 100).await;
+        insert_test_transaction_metric(&pool, 1, "/b", 0, 100).await;
+        insert_test_span(&pool, "s1", 1, 100, 100).await;
+        insert_test_span(&pool, "s2", 1, 100, 100).await;
+        insert_test_log(&pool, 1, 100, 100).await;
+        insert_test_metric(&pool, 1, 100, 100).await;
+        insert_test_metric(&pool, 1, 100, 100).await;
+        insert_test_metric(&pool, 1, 100, 100).await;
+
+        let n = get_nav_counts(&pool, 1).await;
+        assert_eq!(n.event_count, 11);
+        assert_eq!(n.session_count, 2);
+        assert_eq!(n.user_report_count, 1);
+        assert_eq!(n.client_report_count, 2);
+        assert_eq!(n.profile_count, 2);
+        assert_eq!(n.replay_count, 1);
+        assert_eq!(n.monitor_count, 1);
+        assert_eq!(n.transaction_count, 2);
+        let exact = |count| BoundedCount {
+            count,
+            capped: false,
+        };
+        assert_eq!(n.span_count, exact(2));
+        assert_eq!(n.log_count, exact(1));
+        assert_eq!(n.metric_count, exact(3));
+        assert_eq!(n.label, "Project 1");
+    }
+
+    /// `n` rows of `project_id` in each of spans, logs and metrics.
+    async fn seed_bounded_rows(pool: &crate::db::DbPool, project_id: i64, n: i64) {
+        let seq = format!(
+            "WITH RECURSIVE seq(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM seq WHERE x < {n})"
+        );
+        sqlx::query(crate::db::dyn_sql(&format!(
+            "{seq} INSERT INTO spans (span_id, project_id, public_key, timestamp, received_at)
+             SELECT 'p{project_id}-' || x, {project_id}, 'testkey', x, x FROM seq"
+        )))
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(crate::db::dyn_sql(&format!(
+            "{seq} INSERT INTO logs (payload, project_id, public_key, timestamp, received_at)
+             SELECT ?1, {project_id}, 'testkey', x, x FROM seq"
+        )))
+        .bind(&[0u8] as &[u8])
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(crate::db::dyn_sql(&format!(
+            "{seq} INSERT INTO metrics (project_id, timestamp, received_at, mri, metric_type)
+             SELECT {project_id}, x, x, 'c:test@none', 'c' FROM seq"
+        )))
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn get_nav_counts_caps_spans_logs_and_metrics() {
+        let pool = open_test_db().await;
+        let cap = BoundedCount::CAP as i64;
+        seed_bounded_rows(&pool, 1, cap + 5).await;
+        seed_bounded_rows(&pool, 2, cap).await;
+
+        let over = get_nav_counts(&pool, 1).await;
+        let capped = BoundedCount {
+            count: BoundedCount::CAP + 1,
+            capped: true,
+        };
+        assert_eq!(over.span_count, capped);
+        assert_eq!(over.log_count, capped);
+        assert_eq!(over.metric_count, capped);
+
+        let at = get_nav_counts(&pool, 2).await;
+        let exact = BoundedCount {
+            count: BoundedCount::CAP,
+            capped: false,
+        };
+        assert_eq!(at.span_count, exact);
+        assert_eq!(at.log_count, exact);
+        assert_eq!(at.metric_count, exact);
+    }
+
+    #[tokio::test]
+    async fn nav_count_plans_are_index_only() {
+        let pool = open_test_db().await;
+        sqlx::query(sql!(
+            "WITH RECURSIVE seq(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM seq WHERE x < 2000)
+             INSERT INTO events (event_id, item_type, project_id, public_key, timestamp, received_at, monitor_slug)
+             SELECT 'e-' || x, CASE x % 3 WHEN 0 THEN 'event' WHEN 1 THEN 'session' ELSE 'check_in' END,
+                    1 + x % 4, 'testkey', x, x, CASE x % 3 WHEN 2 THEN 'cron' END
+             FROM seq"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        for p in 1..=4 {
+            seed_bounded_rows(&pool, p, 500).await;
+            for h in 0..50 {
+                insert_test_transaction_metric(&pool, p, &format!("/t{}", h % 10), h * 3600, 1)
+                    .await;
+            }
+        }
+
+        #[cfg(feature = "sqlite")]
+        let plan = {
+            seed_sqlite_stat1(&pool, VIRT1_STAT1).await;
+            let mut plan = query_plan(&pool, NAV_TYPE_COUNTS_SQL, bind_type_counts).await;
+            plan.extend(query_plan(&pool, NAV_OTHER_COUNTS_SQL, bind_other_counts).await);
+            plan
+        };
+        #[cfg(not(feature = "sqlite"))]
+        let plan = {
+            sqlx::query("VACUUM ANALYZE events, spans, logs, metrics, transaction_metrics")
+                .execute(&pool)
+                .await
+                .unwrap();
+            let mut tx = pool.begin().await.unwrap();
+            sqlx::query("SET LOCAL enable_seqscan = off")
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            let mut plan = query_plan(&mut *tx, NAV_TYPE_COUNTS_SQL, bind_type_counts).await;
+            plan.extend(query_plan(&mut *tx, NAV_OTHER_COUNTS_SQL, bind_other_counts).await);
+            plan
+        };
+
+        let tables = ["events", "spans", "logs", "metrics", "transaction_metrics"];
+        #[cfg(feature = "sqlite")]
+        {
+            let reads: Vec<&String> = plan
+                .iter()
+                .filter(|d| {
+                    let mut w = d.split_whitespace();
+                    matches!(w.next(), Some("SEARCH" | "SCAN"))
+                        && w.next().is_some_and(|t| tables.contains(&t))
+                })
+                .collect();
+            for t in tables {
+                assert!(
+                    reads.iter().any(|d| d.split_whitespace().nth(1) == Some(t)),
+                    "{t} not read: {plan:#?}"
+                );
+            }
+            assert!(
+                reads.iter().all(|d| d.contains("COVERING INDEX")),
+                "{plan:#?}"
+            );
+        }
+        #[cfg(not(feature = "sqlite"))]
+        {
+            for t in tables {
+                assert!(
+                    plan.iter()
+                        .any(|d| d.contains("Index Only Scan") && d.contains(&format!(" on {t} "))),
+                    "{t} not index-only: {plan:#?}"
+                );
+            }
+            assert!(
+                !plan.iter().any(|d| d.contains("Seq Scan")
+                    || d.contains("Bitmap Heap Scan")
+                    || d.contains("Index Scan using")),
+                "{plan:#?}"
+            );
+        }
+        assert!(
+            plan.iter()
+                .any(|d| d.contains("idx_events_project_type_time")),
+            "{plan:#?}"
+        );
+        assert!(
+            plan.iter().any(|d| d.contains("idx_events_monitor")),
+            "{plan:#?}"
+        );
+    }
+
+    fn bind_type_counts(q: PlanQuery) -> PlanQuery {
+        q.bind(1i64)
+    }
+
+    fn bind_other_counts(q: PlanQuery) -> PlanQuery {
+        q.bind(1i64).bind((BoundedCount::CAP + 1) as i64)
     }
 
     // The membership-set key makes the live key space per-entitlement rather than
@@ -1718,16 +1936,25 @@ mod tests {
         }
         sqlx::query(
             "WITH RECURSIVE seq(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM seq WHERE x < 5000)
-             INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, received_at, platform)
+             INSERT INTO events (event_id, item_type, project_id, public_key, timestamp, received_at, platform)
              SELECT 'plan-' || x,
                     CASE x % 4 WHEN 0 THEN 'event' WHEN 1 THEN 'session' WHEN 2 THEN 'check_in' ELSE 'transaction' END,
-                    x'00', 1 + x % 5, 'testkey', 1000 + x, 1000 + x, 'native'
+                    1 + x % 5, 'testkey', 1000 + x, 1000 + x, 'native'
              FROM seq",
         )
         .execute(&pool)
         .await
         .unwrap();
         crate::db::sqlite_analyze(&pool).await.unwrap();
+
+        // With STAT4 and a bound `since`, a large table plans the aggregate on
+        // idx_events_project_time; without item_type there it reads table rows.
+        let cols: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_index_info('idx_events_project_time')")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(cols, ["project_id", "timestamp", "item_type"]);
 
         let cases: [(&[i64], Option<&str>, Option<i64>); 4] = [
             (&[], None, None),
@@ -1767,7 +1994,10 @@ mod tests {
                     "first_seen must seek idx_events_project_time; {ctx}"
                 );
             }
-            for (_, _, d) in plan.iter().filter(|(_, _, d)| d.starts_with("SCAN events")) {
+            for (_, _, d) in plan
+                .iter()
+                .filter(|(_, _, d)| d.starts_with("SCAN events") || d.starts_with("SEARCH events"))
+            {
                 assert!(d.contains("COVERING INDEX"), "{d}; {ctx}");
             }
             for (_, parent, _) in plan.iter().filter(|(_, _, d)| d.contains("TEMP B-TREE")) {
@@ -2277,9 +2507,8 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(sql!(
-            "INSERT INTO spans (span_id, payload, project_id, public_key, timestamp) VALUES ('s1', ?1, 77, 'k', 0)"
+            "INSERT INTO spans (span_id, project_id, public_key, timestamp) VALUES ('s1', 77, 'k', 0)"
         ))
-        .bind(&b"{}"[..])
         .execute(&pool)
         .await
         .unwrap();
@@ -2306,6 +2535,7 @@ mod tests {
 
         for table in [
             "events",
+            "event_payloads",
             "attachments",
             "logs",
             "spans",

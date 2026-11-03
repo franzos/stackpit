@@ -141,6 +141,7 @@ mod snapshot_tests {
                 total: 0,
                 offset: 0,
                 limit: 25,
+                total_capped: false,
             },
             nav: ProjectNavCounts {
                 label: "Test Project".to_string(),
@@ -184,6 +185,7 @@ mod snapshot_tests {
                 total: 3,
                 offset: 0,
                 limit: 25,
+                total_capped: false,
             },
             nav: ProjectNavCounts::default(),
             chrome: PageChrome::new(

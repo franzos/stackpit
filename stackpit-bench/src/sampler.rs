@@ -164,9 +164,8 @@ mod tests {
             .create_if_missing(true);
         let pool = sqlx::SqlitePool::connect_with(opts).await.unwrap();
         sqlx::query(
-            "CREATE TABLE events (event_id TEXT PRIMARY KEY, item_type TEXT NOT NULL, \
-             payload BLOB NOT NULL, project_id INTEGER NOT NULL, public_key TEXT NOT NULL, \
-             timestamp INTEGER NOT NULL)",
+            "CREATE TABLE events (event_id TEXT PRIMARY KEY, project_id INTEGER NOT NULL, \
+             item_type TEXT NOT NULL, timestamp INTEGER NOT NULL, public_key TEXT NOT NULL)",
         )
         .execute(&pool)
         .await
@@ -179,7 +178,7 @@ mod tests {
         let opts = sqlx::sqlite::SqliteConnectOptions::new().filename(path);
         let pool = sqlx::SqlitePool::connect_with(opts).await.unwrap();
         for i in from..from + n {
-            sqlx::query("INSERT INTO events VALUES (?1, 'event', x'00', 1, 'k', 0)")
+            sqlx::query("INSERT INTO events VALUES (?1, 1, 'event', 0, 'k')")
                 .bind(format!("ev{i:028}"))
                 .execute(&pool)
                 .await

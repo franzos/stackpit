@@ -124,9 +124,14 @@ pub async fn detail_handler(
     let since = period_to_timestamp(&period).unwrap_or(0);
     let page = params.page.page();
 
-    let result =
-        queries::transactions::list_transaction_instances(&ctx.pool, ctx.project_id, &name, &page)
-            .await?;
+    let result = queries::transactions::list_transaction_instances(
+        &ctx.pool,
+        ctx.project_id,
+        &name,
+        since,
+        &page,
+    )
+    .await?;
     let distribution =
         queries::transactions::transaction_distribution(&ctx.pool, ctx.project_id, &name, since)
             .await?;
@@ -250,6 +255,7 @@ mod tests {
                     total: 1,
                     offset: 0,
                     limit: 25,
+                    total_capped: false,
                 },
                 nav: ProjectNavCounts::default(),
                 chrome: chrome_for(lang.clone()),
@@ -281,6 +287,7 @@ mod tests {
                 total: 0,
                 offset: 0,
                 limit: 25,
+                total_capped: false,
             },
             nav: ProjectNavCounts::default(),
             chrome: chrome_for(langid!("en")),

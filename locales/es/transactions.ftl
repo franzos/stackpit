@@ -37,6 +37,7 @@ transactions-detail-count = { $count ->
     [one] { $count } instancia
    *[other] { $count } instancias
 }
+transactions-detail-count-capped = Más de 10.000 instancias
 transactions-detail-failure-label = Fallos
 transactions-list-search-placeholder = Buscar nombres de transacción…
 transactions-list-search-label = Buscar nombres de transacción

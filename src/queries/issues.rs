@@ -54,7 +54,7 @@ pub async fn list_issues(
     let mut count_qb: QueryBuilder<crate::db::Db> =
         QueryBuilder::new("SELECT COUNT(*) FROM issues WHERE project_id = ");
     count_qb.push_bind(project_id as i64);
-    push_issue_filter_conditions(&mut count_qb, filter, since);
+    push_issue_filter_conditions(&mut count_qb, project_id, filter, since);
 
     let total: i64 = count_qb.build_query_scalar().fetch_one(pool).await?;
 
@@ -63,7 +63,7 @@ pub async fn list_issues(
          FROM issues WHERE project_id = ",
     );
     select_qb.push_bind(project_id as i64);
-    push_issue_filter_conditions(&mut select_qb, filter, since);
+    push_issue_filter_conditions(&mut select_qb, project_id, filter, since);
     select_qb.push(" ORDER BY ");
     select_qb.push(sort.as_sql_ident());
     select_qb.push(" DESC LIMIT ");
@@ -81,6 +81,7 @@ pub async fn list_issues(
 /// Caller must have already pushed `WHERE project_id = ` + bind before calling this.
 fn push_issue_filter_conditions(
     qb: &mut sqlx::QueryBuilder<crate::db::Db>,
+    project_id: u64,
     filter: &IssueFilter,
     since: Option<i64>,
 ) {
@@ -102,14 +103,10 @@ fn push_issue_filter_conditions(
         qb.push_bind(item_type.as_str());
     }
     if let Some(ref release) = filter.release {
-        qb.push(" AND EXISTS (SELECT 1 FROM events e WHERE e.fingerprint = issues.fingerprint AND e.project_id = issues.project_id AND e.release = ");
-        qb.push_bind(release.as_str());
-        qb.push(")");
+        push_tag_value_filter(qb, project_id, "release", release);
     }
     if let Some(ref environment) = filter.environment {
-        qb.push(" AND EXISTS (SELECT 1 FROM events e WHERE e.fingerprint = issues.fingerprint AND e.project_id = issues.project_id AND e.environment = ");
-        qb.push_bind(environment.as_str());
-        qb.push(")");
+        push_tag_value_filter(qb, project_id, "environment", environment);
     }
     if let Some((ref key, ref value)) = filter.tag {
         qb.push(" AND EXISTS (SELECT 1 FROM issue_tag_values itv WHERE itv.project_id = issues.project_id AND itv.fingerprint = issues.fingerprint AND itv.tag_key = ");
@@ -122,6 +119,22 @@ fn push_issue_filter_conditions(
         qb.push(" AND last_seen >= ");
         qb.push_bind(ts);
     }
+}
+
+/// Seeks `idx_itv_key_value` for the fingerprints carrying `key = value`.
+fn push_tag_value_filter(
+    qb: &mut sqlx::QueryBuilder<crate::db::Db>,
+    project_id: u64,
+    key: &'static str,
+    value: &str,
+) {
+    qb.push(" AND fingerprint IN (SELECT fingerprint FROM issue_tag_values WHERE project_id = ");
+    qb.push_bind(project_id as i64);
+    qb.push(" AND tag_key = ");
+    qb.push_bind(key);
+    qb.push(" AND tag_value = ");
+    qb.push_bind(value);
+    qb.push(")");
 }
 
 /// Issues whose events carry a given `transaction_name`, most recently seen
@@ -577,9 +590,7 @@ mod tests {
         assert_eq!(result.items[0].fingerprint, "fp1");
     }
 
-    // The environment filter mirrors `release`: an EXISTS over the issue's events,
-    // not a column on `issues`. An issue qualifies if *any* of its events landed in
-    // that environment.
+    // An issue qualifies if *any* of its events landed in that environment.
     #[tokio::test]
     async fn list_issues_filter_environment() {
         let pool = open_test_db().await;
@@ -624,6 +635,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        crate::queries::test_helpers::derive_env_release_tags(&pool).await;
 
         let page = Page::new(None, None);
 
@@ -799,10 +811,132 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_issues_filter_release_matches_any_event_of_the_issue() {
+        let pool = open_test_db().await;
+        for fp in ["fp1", "fp2"] {
+            insert_test_issue(
+                &pool,
+                fp,
+                1,
+                Some(fp),
+                Some("error"),
+                100,
+                200,
+                1,
+                "unresolved",
+            )
+            .await;
+        }
+        for (fp, event_id, ts) in [("fp1", "e1", 100), ("fp2", "e2", 150), ("fp2", "e3", 160)] {
+            insert_test_event(&pool, event_id, 1, ts, Some(fp), Some("error"), Some(fp)).await;
+        }
+        sqlx::query(sql!(
+            "UPDATE events SET release = 'v2.0' WHERE event_id = 'e3'"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        derive_env_release_tags(&pool).await;
+
+        let page = Page::new(None, None);
+        let by_release = |release: &str| IssueFilter {
+            release: Some(release.to_string()),
+            ..Default::default()
+        };
+        let v2 = list_issues(&pool, 1, &by_release("v2.0"), &page, None)
+            .await
+            .unwrap();
+        let fps: Vec<&str> = v2.items.iter().map(|i| i.fingerprint.as_str()).collect();
+        assert_eq!((v2.total, fps), (1, vec!["fp2"]));
+
+        let v1 = list_issues(&pool, 1, &by_release("v1.0"), &page, None)
+            .await
+            .unwrap();
+        assert_eq!(v1.total, 2);
+        let other_project = list_issues(&pool, 2, &by_release("v1.0"), &page, None)
+            .await
+            .unwrap();
+        assert_eq!(other_project.total, 0);
+    }
+
+    async fn seed_tagged_issues(pool: &crate::db::DbPool) {
+        for (fp, event_id) in [("fp1", "e1"), ("fp2", "e2")] {
+            insert_test_issue(
+                pool,
+                fp,
+                1,
+                Some(fp),
+                Some("error"),
+                100,
+                200,
+                1,
+                "unresolved",
+            )
+            .await;
+            insert_test_event(pool, event_id, 1, 100, Some(fp), Some("error"), Some(fp)).await;
+        }
+        derive_env_release_tags(pool).await;
+    }
+
+    #[tokio::test]
+    async fn environment_dropdown_plan_reads_the_tag_value_index() {
+        let pool = open_test_db().await;
+        seed_tagged_issues(&pool).await;
+
+        let mut tx = plan_tx(&pool, &["issue_tag_values"]).await;
+        let plan = query_plan(&mut *tx, crate::queries::events::ENVIRONMENTS_SQL, |q| {
+            q.bind(1i64)
+        })
+        .await;
+
+        assert!(
+            plan.iter().any(|d| d.contains("idx_itv_key_value")),
+            "{plan:#?}"
+        );
+        assert!(
+            !plan
+                .iter()
+                .any(|d| d.contains("TEMP B-TREE") || d.contains("Sort")),
+            "{plan:#?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn environment_and_release_filter_plans_seek_the_tag_value_index() {
+        let pool = open_test_db().await;
+        seed_tagged_issues(&pool).await;
+
+        for filter in [
+            IssueFilter {
+                environment: Some("production".to_string()),
+                ..Default::default()
+            },
+            IssueFilter {
+                release: Some("v1.0".to_string()),
+                ..Default::default()
+            },
+        ] {
+            let mut tx = plan_tx(&pool, &["issues", "issue_tag_values"]).await;
+            let plan = builder_plan(&mut *tx, |qb| {
+                qb.push("SELECT COUNT(*) FROM issues WHERE project_id = ");
+                qb.push_bind(1i64);
+                push_issue_filter_conditions(qb, 1, &filter, None);
+            })
+            .await;
+
+            assert!(
+                plan.iter().any(|d| d.contains("idx_itv_key_value")),
+                "{plan:#?}"
+            );
+            assert!(!plan.iter().any(|d| d.contains("events")), "{plan:#?}");
+        }
+    }
+
+    #[tokio::test]
     async fn list_environments_for_project_is_distinct_and_skips_blanks() {
         let pool = open_test_db().await;
         for (id, ts) in [("v1", 100), ("v2", 150), ("v3", 200), ("v4", 250)] {
-            crate::queries::test_helpers::insert_test_event(&pool, id, 1, ts, None, None, None)
+            crate::queries::test_helpers::insert_test_event(&pool, id, 1, ts, Some(id), None, None)
                 .await;
         }
         // v1 keeps the default 'production'; give the rest distinct/blank values.
@@ -816,6 +950,7 @@ mod tests {
             .await
             .unwrap();
         }
+        crate::queries::test_helpers::derive_env_release_tags(&pool).await;
 
         let envs = crate::queries::events::list_environments_for_project(&pool, 1)
             .await

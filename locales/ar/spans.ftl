@@ -52,6 +52,7 @@ spans-count = { $count ->
     [many] { $count } امتدادًا
    *[other] { $count } امتداد
 }
+spans-count-capped = أكثر من 10000 امتداد
 
 # --- قائمة التتبّعات على مستوى المؤسسة ---
 traces-col-root = المعاملة الجذرية

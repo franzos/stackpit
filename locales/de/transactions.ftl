@@ -38,5 +38,6 @@ transactions-detail-count = { $count ->
     [one] { $count } Instanz
    *[other] { $count } Instanzen
 }
+transactions-detail-count-capped = Mehr als 10.000 Instanzen
 transactions-list-search-placeholder = Transaktionsnamen suchen…
 transactions-list-search-label = Transaktionsnamen suchen

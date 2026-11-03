@@ -9,9 +9,12 @@ pub mod pool;
 #[cfg(any(feature = "sqlite", test))]
 use anyhow::Result;
 
-#[cfg(all(test, feature = "sqlite", not(feature = "postgres")))]
+#[cfg(test)]
 pub use pool::run_migrations_to;
-pub use pool::{run_migrations, Db, DbPool, DbRow};
+pub use pool::{
+    create_migration_pool, restore_journal_mode, run_migrations, run_migrations_unchecked, Db,
+    DbPool, DbRow,
+};
 
 use sqlx::Row;
 
@@ -117,6 +120,12 @@ pub use pool::create_ingest_pool;
 pub use pool::create_read_pool as create_pool;
 pub use pool::create_write_pool as create_writer_pool;
 
+/// Rows sampled per index by the periodic ANALYZE. Per-value estimates stop
+/// near this limit; on a 2.5M-row events table 100k keeps them within 3x and
+/// still analyses every table in about 2.5 s from a cold cache.
+#[cfg(feature = "sqlite")]
+pub const SQLITE_ANALYSIS_LIMIT: u32 = 100_000;
+
 /// Refresh the query planner's statistics.
 ///
 /// With no `sqlite_stat1` the planner scores an index by how many constraints
@@ -130,9 +139,11 @@ pub use pool::create_write_pool as create_writer_pool;
 #[cfg(feature = "sqlite")]
 pub async fn sqlite_analyze(pool: &DbPool) -> Result<()> {
     let mut conn = pool.acquire().await?;
-    sqlx::query("PRAGMA analysis_limit=400")
-        .execute(&mut *conn)
-        .await?;
+    sqlx::query(dyn_sql(&format!(
+        "PRAGMA analysis_limit={SQLITE_ANALYSIS_LIMIT}"
+    )))
+    .execute(&mut *conn)
+    .await?;
     sqlx::query("PRAGMA optimize=0x10002")
         .execute(&mut *conn)
         .await?;
@@ -150,7 +161,7 @@ pub async fn sqlite_pragma(pool: &DbPool, pragma: &'static str) -> Result<()> {
 #[cfg(test)]
 pub(crate) async fn get_event(pool: &DbPool, event_id: &str) -> Result<Option<EventRow>> {
     let row = sqlx::query(sql!(
-        "SELECT event_id, item_type, project_id, timestamp, level, title, release, environment, received_at, payload
+        "SELECT event_id, item_type, project_id, timestamp, level, title, release, environment, received_at
          FROM events WHERE event_id = ?1",
     ))
     .bind(event_id)
@@ -167,7 +178,6 @@ pub(crate) async fn get_event(pool: &DbPool, event_id: &str) -> Result<Option<Ev
         release: row.get("release"),
         environment: row.get("environment"),
         received_at: row.get("received_at"),
-        payload: row.get("payload"),
     }))
 }
 
@@ -188,8 +198,6 @@ pub(crate) struct EventRow {
     pub environment: Option<String>,
     #[allow(dead_code)]
     pub received_at: i64,
-    #[allow(dead_code)]
-    pub payload: Vec<u8>,
 }
 
 #[cfg(any(test, feature = "integration-tests"))]
@@ -293,16 +301,48 @@ mod tests {
 
     async fn insert_test_event(pool: &DbPool, event_id: &str, project_id: i64, timestamp: i64) {
         sqlx::query(sql!(
-            "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, level, title, received_at, monitor_slug, session_status, parent_event_id)
-             VALUES (?1, 'event', ?2, ?3, 'testkey', ?4, 'error', 'test title', ?4, NULL, NULL, NULL)",
+            "INSERT INTO events (event_id, item_type, project_id, public_key, timestamp, level, title, received_at, monitor_slug, session_status, parent_event_id)
+             VALUES (?1, 'event', ?2, 'testkey', ?3, 'error', 'test title', ?3, NULL, NULL, NULL)",
         ))
         .bind(event_id)
-        .bind(&[0u8] as &[u8])
         .bind(project_id)
         .bind(timestamp)
         .execute(pool)
         .await
         .unwrap();
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn sqlite_analyze_replaces_stale_per_type_estimates() {
+        let pool = setup().await;
+        crate::queries::test_helpers::seed_sqlite_stat1(
+            &pool,
+            &[("events", "idx_events_project_type_time", "10 10 10 1")],
+        )
+        .await;
+        // 3 types x 20000 rows: past optimize's drift threshold, and past a 400-row sample.
+        sqlx::query(
+            "WITH RECURSIVE seq(x) AS (SELECT 0 UNION ALL SELECT x + 1 FROM seq WHERE x < 59999)
+             INSERT INTO events (event_id, item_type, project_id, public_key, timestamp, received_at)
+             SELECT 'e-' || x, CASE x % 3 WHEN 0 THEN 'event' WHEN 1 THEN 'transaction' ELSE 'session' END,
+                    1, 'testkey', 1000 + x, 1000 + x
+             FROM seq",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlite_analyze(&pool).await.unwrap();
+
+        let stat: String = sqlx::query_scalar(
+            "SELECT stat FROM sqlite_stat1 WHERE idx = 'idx_events_project_type_time'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let per_type: u64 = stat.split(' ').nth(2).unwrap().parse().unwrap();
+        assert!((2_000..=200_000).contains(&per_type), "stat1 = {stat:?}");
     }
 
     /// Every table the migrations are expected to leave live after a fresh
@@ -351,6 +391,8 @@ mod tests {
         "organization_members",
         "invites",
         "project_retention",
+        "event_payloads",
+        "client_report_outcomes",
     ];
 
     #[cfg(feature = "sqlite")]
@@ -420,11 +462,10 @@ mod tests {
         received_at: i64,
     ) {
         sqlx::query(sql!(
-            "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp, level, title, received_at, fingerprint)
-             VALUES (?1, 'event', ?2, ?3, 'testkey', ?4, 'error', 'test title', ?4, ?5)",
+            "INSERT INTO events (event_id, item_type, project_id, public_key, timestamp, level, title, received_at, fingerprint)
+             VALUES (?1, 'event', ?2, 'testkey', ?3, 'error', 'test title', ?3, ?4)",
         ))
         .bind(event_id)
-        .bind(&[0u8] as &[u8])
         .bind(project_id)
         .bind(received_at)
         .bind(fingerprint)

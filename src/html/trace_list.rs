@@ -199,6 +199,7 @@ pub async fn handler(
             total: result.total,
             offset: result.offset,
             limit: result.limit,
+            total_capped: result.total_capped,
         },
         projects: projects_str,
         multi: multi_str,
@@ -272,7 +273,6 @@ mod tests {
             .unwrap();
         }
 
-        let blob = zstd::encode_all([0u8; 0].as_slice(), 3).unwrap();
         for (event_id, project_id, trace, name, ts) in [
             ("e1", 10i64, A, "POST /kyc/start", 1_700_000_000i64),
             ("e2", 11, A, "POST /users/registration", 1_700_000_001),
@@ -286,12 +286,11 @@ mod tests {
             ),
         ] {
             sqlx::query(crate::db::sql!(
-                "INSERT INTO events (event_id, item_type, payload, project_id, public_key, timestamp,
+                "INSERT INTO events (event_id, item_type, project_id, public_key, timestamp,
                                      transaction_name, trace_id, duration_ms, start_ms)
-                 VALUES (?1, 'transaction', ?2, ?3, 'k', ?4, ?5, ?6, 100, 1700000000000)"
+                 VALUES (?1, 'transaction', ?2, 'k', ?3, ?4, ?5, 100, 1700000000000)"
             ))
             .bind(event_id)
-            .bind(&blob)
             .bind(project_id)
             .bind(ts)
             .bind(name)
@@ -505,6 +504,7 @@ mod tests {
                 total: 0,
                 offset: 0,
                 limit: 25,
+                total_capped: false,
             },
             projects: String::new(),
             multi: String::new(),

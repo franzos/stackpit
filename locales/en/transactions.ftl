@@ -42,3 +42,4 @@ transactions-detail-count = { $count ->
     [one] { $count } instance
    *[other] { $count } instances
 }
+transactions-detail-count-capped = More than 10,000 instances

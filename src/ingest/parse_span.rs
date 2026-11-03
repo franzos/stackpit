@@ -20,8 +20,6 @@ pub struct SpanFields {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EmbeddedSpan {
     pub fields: SpanFields,
-    /// Serialized child span JSON; stored as the span row payload.
-    pub payload: Vec<u8>,
     /// The child's own timestamp; falls back to the parent event's at flush.
     pub timestamp: Option<i64>,
 }
@@ -48,7 +46,6 @@ pub fn extract_embedded_spans_from_value(json: &Value) -> Vec<EmbeddedSpan> {
             let fields = extract_span_fields_from_value(child);
             fields.span_id.as_ref()?;
             Some(EmbeddedSpan {
-                payload: serde_json::to_vec(child).unwrap_or_default(),
                 timestamp: child
                     .get("timestamp")
                     .and_then(timestamp_secs)

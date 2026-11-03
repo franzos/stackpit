@@ -64,6 +64,9 @@ enum Command {
     /// Retroactively generate fingerprints and issues for old events
     BackfillIssues,
 
+    /// Apply pending migrations, including those too slow to run at startup
+    Migrate,
+
     /// Pull events from a remote Sentry instance
     Sync {
         /// Sentry org slug
@@ -149,6 +152,9 @@ fn main() -> anyhow::Result<()> {
                 db::run_migrations(&pool).await?;
                 cli::backfill::run(&pool).await
             })?;
+        }
+        Command::Migrate => {
+            cli_run(cli::migrate::run(&database_url))?;
         }
         Command::Sync {
             org,

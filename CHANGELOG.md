@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.18] - 2026-11-03
+
+### Added
+- `stackpit migrate` for migrations too slow to run at startup
+
+### Changed
+- Upgrading needs `stackpit migrate` with the server stopped (about an hour on 25 GB)
+- Event payloads stored apart from events; SQLite files shrink by about half
+- Trace, issue, transaction and release pages load in milliseconds on large databases
+- Span, log and metric counts stop at 10k; transaction instance totals too
+- Environment and release appear as issue tags
+- Client report summary counts whole hours
+
 ## [0.4.17] - 2026-11-02
 
 ### Changed

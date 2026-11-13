@@ -99,8 +99,8 @@ fn accumulate_row(agg: &mut TxnAgg, row: &crate::db::DbRow) {
     agg.count += row.get::<i64, _>("count") as u64;
     agg.sum_duration_ms += row.get::<i64, _>("sum_duration_ms").max(0) as u64;
     agg.failed_count += row.get::<i64, _>("failed_count") as u64;
-    for i in 0..NUM_BUCKETS {
-        agg.buckets[i] += row.get::<i64, _>(format!("bucket_{i}").as_str()).max(0) as u64;
+    for (i, bucket) in agg.buckets.iter_mut().enumerate() {
+        *bucket += row.get::<i64, _>(format!("bucket_{i}").as_str()).max(0) as u64;
     }
     let blob: Option<Vec<u8>> = row.get("users_hll");
     if blob.is_some() {

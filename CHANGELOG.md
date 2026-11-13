@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.4.19] - 2026-11-13
+
+### Changed
+- `STACKPIT_METRICS_TOKEN` must be at least 16 characters
+- Client IP taken from the rightmost untrusted `X-Forwarded-For` entry
+- `/mcp` rejects JSON-RPC responses sent by clients
+
+### Fixed
+- Attachments and user reports readable across projects
+- Events with NUL bytes or oversized text failed whole batches on Postgres
+- Client report quantities could overflow the rollup
+- A failing aggregation flush retried forever
+- Fingerprint backfill never finished on non-error events
+
+### Security
+- zstd, rmcp and rustix updated for RustSec advisories
+
 ## [0.4.18] - 2026-11-03
 
 ### Added

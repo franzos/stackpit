@@ -1,5 +1,7 @@
 //! Metric payload parsing (JSON buckets + statsd lines) -> normalized rows.
 
+use crate::ingest::text::clean_text;
+
 /// (mri, metric_type, value, tags, values_json, bucket_timestamp).
 pub type MetricRow = (
     String,
@@ -15,12 +17,16 @@ const MAX_METRIC_ENTRIES: usize = 10_000;
 /// Parse a metric payload into normalized rows. `bucket_timestamp` is `Some`
 /// when the bucket includes its own timestamp.
 pub fn parse_metric_payload(payload: &[u8]) -> Vec<MetricRow> {
-    let decoded_bytes = match zstd::decode_all(std::io::Cursor::new(payload)) {
-        Ok(bytes) => bytes,
-        Err(_) => payload.to_vec(),
-    };
+    let mut rows = parse_metric_rows(payload);
+    for (mri, metric_type, ..) in &mut rows {
+        *mri = clean_text(mri);
+        *metric_type = clean_text(metric_type);
+    }
+    rows
+}
 
-    if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&decoded_bytes) {
+fn parse_metric_rows(payload: &[u8]) -> Vec<MetricRow> {
+    if let Ok(json) = serde_json::from_slice::<serde_json::Value>(payload) {
         if let Some(arr) = json.as_array() {
             return arr
                 .iter()
@@ -56,7 +62,7 @@ pub fn parse_metric_payload(payload: &[u8]) -> Vec<MetricRow> {
         return vec![(mri, metric_type, value, tags, values_json, None)];
     }
 
-    let text = match std::str::from_utf8(&decoded_bytes) {
+    let text = match std::str::from_utf8(payload) {
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };
@@ -189,4 +195,58 @@ fn parse_statsd_line(line: &str) -> MetricRow {
     });
 
     (mri, metric_type, value, tags, values_json, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_metric_payload_ignores_zstd_compressed_input() {
+        let json = br#"[{"name":"requests","type":"c","value":1.0}]"#;
+        assert_eq!(parse_metric_payload(json).len(), 1);
+
+        let compressed = zstd::encode_all(json.as_slice(), 3).unwrap();
+        assert!(parse_metric_payload(&compressed).is_empty());
+    }
+
+    #[test]
+    fn mri_and_type_are_cleaned_on_json_and_statsd_paths() {
+        use crate::ingest::text::MAX_TEXT_CHARS;
+        let long = "x".repeat(5000);
+        let assert_clean = |path: &str, row: &MetricRow, mri_prefix: &str, ty_prefix: &str| {
+            let (mri, ty) = (&row.0, &row.1);
+            assert!(
+                !mri.contains('\0') && !ty.contains('\0'),
+                "{path}: NUL kept"
+            );
+            assert_eq!(
+                mri.chars().count(),
+                MAX_TEXT_CHARS,
+                "{path}: mri not capped"
+            );
+            assert!(mri.starts_with(mri_prefix), "{path}: mri {mri:.40}");
+            assert!(
+                ty.chars().count() <= MAX_TEXT_CHARS,
+                "{path}: type not capped"
+            );
+            assert!(ty.starts_with(ty_prefix), "{path}: type {ty:.40}");
+        };
+
+        let bucket = format!(r#"[{{"name":"req\u0000{long}","type":"c\u0000{long}"}}]"#);
+        let rows = parse_metric_payload(bucket.as_bytes());
+        assert_clean("bucket", &rows[0], "c", "c");
+
+        let single = format!(r#"{{"mri":"c:custom/req\u0000{long}","type":"g\u0000{long}"}}"#);
+        let rows = parse_metric_payload(single.as_bytes());
+        assert_clean("single", &rows[0], "c:custom/req", "g");
+
+        let statsd = format!("req\0{long}:1|x\0{long}");
+        let rows = parse_metric_payload(statsd.as_bytes());
+        assert_clean("statsd", &rows[0], "x", "x");
+
+        let rows = parse_metric_payload(b"api.requests@second:1|c");
+        assert_eq!(rows[0].0, "counter:custom/api.requests@second");
+        assert_eq!(rows[0].1, "counter");
+    }
 }

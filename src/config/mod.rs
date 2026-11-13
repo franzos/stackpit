@@ -9,6 +9,7 @@ pub(crate) mod url;
 mod validate;
 
 pub use retention::{Category, OverrideError, Resolved, RetentionConfig, MAX_OVERRIDE_DAYS};
+pub use validate::MIN_SECRET_LEN;
 
 pub const DEFAULT_CONFIG_PATH: &str = "stackpit.toml";
 

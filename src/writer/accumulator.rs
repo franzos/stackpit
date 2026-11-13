@@ -2,12 +2,14 @@ use crate::ingest::models::{ItemType, Level, StorableEvent};
 use crate::queries::client_reports::{for_each_outcome, OutcomeKey};
 use simple_hll::HyperLogLog;
 use std::collections::{BTreeSet, HashMap};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Test default; production batch size comes from `storage.ingest_batch_size`.
 #[cfg(test)]
 pub(super) const BATCH_SIZE: usize = 2000;
 pub(super) const AGGREGATION_FLUSH_INTERVAL_MS: u128 = 1000;
+/// How long aggregation flushes may fail before the delta is dropped; the batch retry ladder's total.
+pub(super) const AGG_FLUSH_GIVE_UP: Duration = Duration::from_secs(12);
 pub(super) const AGGREGATION_FLUSH_FINGERPRINT_THRESHOLD: usize = 1000;
 pub(super) const AGGREGATION_FLUSH_TAG_THRESHOLD: usize = 10_000;
 
@@ -157,6 +159,8 @@ pub(super) struct Accumulators {
     /// First platform seen per project, written only where `projects.platform` is NULL.
     pub platforms: HashMap<u64, String>,
     pub last_flush: Instant,
+    /// Start of the current run of failed aggregation flushes; never merged from a scratch.
+    pub failing_since: Option<Instant>,
 }
 
 impl Accumulators {
@@ -170,7 +174,46 @@ impl Accumulators {
             releases: HashMap::new(),
             platforms: HashMap::new(),
             last_flush: Instant::now(),
+            failing_since: None,
         }
+    }
+
+    /// Drop every delta and restart the flush timer and failure window.
+    pub fn reset_deltas(&mut self) {
+        self.issues.clear();
+        self.tags.clear();
+        self.session_aggregates.clear();
+        self.transaction_metrics.clear();
+        self.client_report_outcomes.clear();
+        self.releases.clear();
+        self.platforms.clear();
+        self.failing_since = None;
+        self.last_flush = Instant::now();
+    }
+
+    /// Record a failed flush; returns true if the delta was dropped after `AGG_FLUSH_GIVE_UP`.
+    pub fn note_flush_failure(&mut self) -> bool {
+        // Nothing held means nothing to give up on (a failed batch on an empty delta).
+        if self.is_empty() {
+            self.failing_since = None;
+            return false;
+        }
+        let since = *self.failing_since.get_or_insert_with(Instant::now);
+        if since.elapsed() < AGG_FLUSH_GIVE_UP {
+            return false;
+        }
+        tracing::error!(
+            issues = self.issues.len(),
+            tags = self.tags.len(),
+            sessions = self.session_aggregates.len(),
+            transactions = self.transaction_metrics.len(),
+            client_reports = self.client_report_outcomes.len(),
+            releases = self.releases.len(),
+            platforms = self.platforms.len(),
+            "dropping aggregation delta after repeated flush failures"
+        );
+        self.reset_deltas();
+        true
     }
 
     pub fn accumulate(&mut self, event: &StorableEvent) {
@@ -400,7 +443,7 @@ impl Accumulators {
         });
     }
 
-    /// Fold `other` (a batch-local scratch) into `self` with the same combination semantics as `accumulate`, iterating only `other`'s batch-bounded entries and leaving `last_flush` untouched.
+    /// Fold `other` (a batch-local scratch) into `self` with the same combination semantics as `accumulate`, iterating only `other`'s batch-bounded entries and leaving `last_flush` and `failing_since` untouched.
     pub fn merge(&mut self, other: &Accumulators) {
         for (key, src) in &other.issues {
             match self.issues.get_mut(key) {
@@ -1003,6 +1046,29 @@ mod tests {
         assert!(e.fingerprint.is_none());
         acc.accumulate(&e);
         assert_eq!(acc.platforms[&7], "node");
+    }
+
+    #[test]
+    fn failure_window_is_not_merged_and_needs_a_delta() {
+        let mut empty = Accumulators::new();
+        assert!(!empty.note_flush_failure());
+        assert!(empty.failing_since.is_none());
+
+        let mut scratch = Accumulators::new();
+        scratch.accumulate(&issue_event("w1", "fp", 100, None));
+        scratch.failing_since = Some(Instant::now() - AGG_FLUSH_GIVE_UP);
+        let mut base = Accumulators::new();
+        base.merge(&scratch);
+        assert!(base.failing_since.is_none());
+
+        assert!(!base.note_flush_failure());
+        let since = base.failing_since.expect("window opened");
+        let restored = base.clone();
+        scratch.failing_since = None;
+        base.merge(&scratch);
+        assert_eq!(base.failing_since, Some(since));
+        assert_eq!(restored.failing_since, Some(since));
+        assert_eq!(base.issues[&(1, "fp".to_string())].event_count, 2);
     }
 
     #[test]

@@ -673,7 +673,7 @@ pub async fn create_project(
     name: &str,
     platform: Option<&str>,
 ) -> Result<(u64, String)> {
-    let mut tx = pool.begin().await?;
+    let mut tx = crate::db::begin_write(pool).await?;
 
     let row = sqlx::query(sql!(
         "SELECT MAX(id) FROM (
@@ -2213,6 +2213,22 @@ mod tests {
             .unwrap();
         let stored_org: i64 = row.get(0);
         assert_eq!(stored_org, 5);
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn create_project_waits_for_a_concurrent_writer() {
+        let (_db, a, b) = crate::db::two_writer_pools("create-project-lock").await;
+        let writer = crate::db::hold_write_lock(
+            &b,
+            "INSERT INTO projects (project_id, status, source, org_id) VALUES (500, 'active', 'manual', 1)",
+            std::time::Duration::from_millis(100),
+        )
+        .await;
+
+        let (project_id, _key) = create_project(&a, 1, "svc", None).await.unwrap();
+        writer.await.unwrap();
+        assert_eq!(project_id, 501, "must read after the other writer's commit");
     }
 
     #[cfg(feature = "sqlite")]

@@ -5,6 +5,7 @@ use sqlx::Row;
 use std::collections::HashMap;
 
 use crate::db::{sql, DbPool};
+use crate::ingest::text::clean_text;
 use crate::queries::types::{Page, PagedResult};
 use serde::Serialize;
 
@@ -30,11 +31,16 @@ pub struct ClientReportRow {
 /// Rollup key of `client_report_outcomes`: (project_id, hour_bucket, category, reason).
 pub(crate) type OutcomeKey = (u64, i64, String, String);
 
+/// Per-entry ceiling on an outcome quantity; the rollup column is BIGINT and sums
+/// with `quantity + excluded.quantity`, which Postgres rejects on overflow.
+pub(crate) const MAX_OUTCOME_QUANTITY: u64 = 1_000_000_000;
+
 /// Max rollup rows per multi-row upsert: 5 binds per row, under SQLite's 32766.
 const OUTCOME_UPSERT_CHUNK_SIZE: usize = 6400;
 
 /// Call `f(category, reason, quantity)` for every entry of a client-report
-/// payload's `discarded_events` and `rate_limited_events`. Accepts zstd or raw JSON.
+/// payload's `discarded_events` and `rate_limited_events`, with text cleaned and
+/// quantity clamped to [`MAX_OUTCOME_QUANTITY`]. Accepts zstd or raw JSON.
 pub(crate) fn for_each_outcome(bytes: &[u8], mut f: impl FnMut(String, String, u64)) {
     let decoded = zstd::decode_all(bytes).ok();
     let bytes = decoded.as_deref().unwrap_or(bytes);
@@ -46,17 +52,23 @@ pub(crate) fn for_each_outcome(bytes: &[u8], mut f: impl FnMut(String, String, u
             continue;
         };
         for entry in arr {
-            let category = entry
-                .get("category")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            let reason = entry
-                .get("reason")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            let quantity = entry.get("quantity").and_then(|v| v.as_u64()).unwrap_or(0);
+            let category = clean_text(
+                entry
+                    .get("category")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown"),
+            );
+            let reason = clean_text(
+                entry
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown"),
+            );
+            let quantity = entry
+                .get("quantity")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0)
+                .min(MAX_OUTCOME_QUANTITY);
             f(category, reason, quantity);
         }
     }
@@ -65,7 +77,8 @@ pub(crate) fn for_each_outcome(bytes: &[u8], mut f: impl FnMut(String, String, u
 /// Decode a single client-report payload into (category, reason) -> quantity.
 fn accumulate_outcomes(bytes: &[u8], totals: &mut HashMap<(String, String), u64>) {
     for_each_outcome(bytes, |category, reason, quantity| {
-        *totals.entry((category, reason)).or_insert(0) += quantity;
+        let total = totals.entry((category, reason)).or_insert(0);
+        *total = total.saturating_add(quantity);
     });
 }
 
@@ -159,7 +172,7 @@ pub async fn list_client_reports(
             let payload: Vec<u8> = row.get("payload");
             let mut totals: HashMap<(String, String), u64> = HashMap::new();
             accumulate_outcomes(&payload, &mut totals);
-            let total_dropped = totals.values().sum();
+            let total_dropped = totals.values().fold(0u64, |acc, q| acc.saturating_add(*q));
             let mut outcomes = sorted_outcomes(totals);
             outcomes.truncate(3);
             ClientReportRow {
@@ -354,6 +367,49 @@ mod tests {
             .unwrap();
         assert_eq!(windowed.total, 1);
         assert_eq!(windowed.items[0].event_id, "new");
+    }
+
+    #[tokio::test]
+    async fn outcomes_are_clamped_and_cleaned() {
+        let reason = format!("a\0b{}", "r".repeat(5000));
+        let body = serde_json::json!({
+            "discarded_events": [{"category": "er\u{0}ror", "reason": reason, "quantity": u64::MAX}]
+        });
+        let bytes = serde_json::to_vec(&body).unwrap();
+        let mut seen = Vec::new();
+        for_each_outcome(&bytes, |c, r, q| seen.push((c, r, q)));
+        let clean_reason = clean_text(&reason);
+        assert_eq!(
+            clean_reason.chars().count(),
+            crate::ingest::text::MAX_TEXT_CHARS
+        );
+        assert!(clean_reason.starts_with("abr"));
+        assert_eq!(
+            seen,
+            vec![(
+                "error".to_string(),
+                clean_reason.clone(),
+                MAX_OUTCOME_QUANTITY
+            )]
+        );
+
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        insert_client_report(&pool, "huge1", 1, 1000, &body).await;
+        insert_client_report(&pool, "huge2", 1, 1000, &body).await;
+        rebuild_rollup(&pool).await;
+
+        let out = summarize_client_reports(&pool, 1, 0).await.unwrap();
+        assert_eq!(
+            out,
+            vec![ClientReportOutcome {
+                category: "error".to_string(),
+                reason: clean_reason,
+                quantity: 2 * MAX_OUTCOME_QUANTITY,
+            }]
+        );
+        let page = Page::new(Some(0), Some(25));
+        let list = list_client_reports(&pool, 1, &page, None).await.unwrap();
+        assert_eq!(list.items[0].total_dropped, MAX_OUTCOME_QUANTITY);
     }
 
     #[tokio::test]

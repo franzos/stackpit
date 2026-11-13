@@ -1,5 +1,5 @@
 use crate::api;
-use crate::config::Config;
+use crate::config::{Config, MIN_SECRET_LEN};
 use crate::db::{self, DbPool};
 use crate::endpoints;
 use crate::filter::FilterEngine;
@@ -157,6 +157,20 @@ impl AppState {
             },
         )
     }
+}
+
+/// `STACKPIT_METRICS_TOKEN`: unset or empty is `None`, shorter than [`MIN_SECRET_LEN`] is an error.
+fn metrics_scrape_token(raw: Option<String>) -> Result<Option<secrecy::SecretString>> {
+    let Some(token) = raw.filter(|t| !t.is_empty()) else {
+        return Ok(None);
+    };
+    if token.len() < MIN_SECRET_LEN {
+        anyhow::bail!(
+            "STACKPIT_METRICS_TOKEN is too short ({} chars); use at least {MIN_SECRET_LEN} characters",
+            token.len()
+        );
+    }
+    Ok(Some(secrecy::SecretString::from(token)))
 }
 
 /// Receivers for the channels `AppState::for_test` hands out; drop it and every send fails.
@@ -489,10 +503,7 @@ pub async fn run(config: Config, ingest_only: bool) -> Result<()> {
     );
 
     let metrics_handle = crate::metrics::install_metrics_recorder();
-    let metrics_scrape_token = std::env::var("STACKPIT_METRICS_TOKEN")
-        .ok()
-        .filter(|t| !t.is_empty())
-        .map(secrecy::SecretString::from);
+    let metrics_scrape_token = metrics_scrape_token(std::env::var("STACKPIT_METRICS_TOKEN").ok())?;
 
     let state = AppState {
         config: config.clone(),
@@ -868,7 +879,7 @@ async fn shutdown_signal() {
 
 #[cfg(test)]
 mod tests {
-    use super::not_found_fallback;
+    use super::{metrics_scrape_token, not_found_fallback};
     use axum::body::Body;
     use axum::http::{header, Request, StatusCode};
     use axum::Router;
@@ -927,5 +938,16 @@ mod tests {
             .await
             .unwrap();
         assert!(String::from_utf8_lossy(&body).contains("\"detail\""));
+    }
+
+    #[test]
+    fn metrics_scrape_token_enforces_min_length() {
+        use secrecy::ExposeSecret;
+
+        assert!(metrics_scrape_token(None).unwrap().is_none());
+        assert!(metrics_scrape_token(Some(String::new())).unwrap().is_none());
+        assert!(metrics_scrape_token(Some("a".repeat(15))).is_err());
+        let token = metrics_scrape_token(Some("a".repeat(16))).unwrap().unwrap();
+        assert_eq!(token.expose_secret(), "a".repeat(16));
     }
 }

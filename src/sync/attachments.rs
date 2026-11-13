@@ -1,5 +1,6 @@
 use crate::db::DbPool;
 use crate::ingest::models::StorableAttachment;
+use crate::ingest::text::clean_text;
 use crate::queries;
 use crate::sync::client::{SentryClient, SentryProject};
 use anyhow::Result;
@@ -45,7 +46,8 @@ pub async fn sync_attachments(
         }
 
         for att_info in &attachments {
-            if existing_attachments.contains(&(event_id.clone(), att_info.name.clone())) {
+            let filename = clean_text(&att_info.name);
+            if existing_attachments.contains(&(event_id.clone(), filename.clone())) {
                 continue;
             }
 
@@ -65,13 +67,13 @@ pub async fn sync_attachments(
 
             let storable_att = StorableAttachment {
                 event_id: event_id.clone(),
-                filename: att_info.name.clone(),
-                content_type: att_info.mimetype.clone(),
+                filename,
+                content_type: att_info.mimetype.as_deref().map(clean_text),
                 data,
             };
-            queries::event_writes::insert_attachment(pool, &storable_att).await?;
-
-            total_attachments += 1;
+            if queries::event_writes::insert_attachment(pool, project.id, &storable_att).await? {
+                total_attachments += 1;
+            }
         }
     }
 

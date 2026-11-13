@@ -9,12 +9,15 @@ pub mod pool;
 #[cfg(any(feature = "sqlite", test))]
 use anyhow::Result;
 
+pub(crate) use pool::begin_write;
 #[cfg(test)]
 pub use pool::run_migrations_to;
 pub use pool::{
     create_migration_pool, restore_journal_mode, run_migrations, run_migrations_unchecked, Db,
     DbPool, DbRow,
 };
+#[cfg(all(test, feature = "sqlite"))]
+pub(crate) use pool::{hold_write_lock, two_writer_pools};
 
 use sqlx::Row;
 

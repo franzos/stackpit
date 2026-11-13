@@ -88,3 +88,34 @@ async fn process_backfill_batch(pool: &DbPool, batch: &[BackfillRow]) -> Result<
 
     Ok((processed, skipped))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::sql;
+    use crate::ingest::models::ItemType;
+    use crate::queries::test_helpers::{insert_test_event, insert_typed_event, open_test_db};
+
+    async fn fingerprint_of(pool: &DbPool, event_id: &str) -> Option<String> {
+        sqlx::query_scalar(sql!("SELECT fingerprint FROM events WHERE event_id = ?1"))
+            .bind(event_id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn backfill_terminates_with_unfingerprintable_rows() {
+        let pool = open_test_db().await;
+        insert_test_event(&pool, "evt-1", 1, 100, None, Some("error"), Some("boom")).await;
+        insert_typed_event(&pool, "sess-1", 1, ItemType::Session, 100, 100, None).await;
+
+        tokio::time::timeout(std::time::Duration::from_secs(10), run(&pool))
+            .await
+            .expect("backfill must terminate")
+            .unwrap();
+
+        assert!(fingerprint_of(&pool, "evt-1").await.is_some());
+        assert!(fingerprint_of(&pool, "sess-1").await.is_none());
+    }
+}

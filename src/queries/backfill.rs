@@ -6,10 +6,11 @@ use crate::db::DbPool;
 
 use super::types::BackfillRow;
 
-/// How many events are still missing a fingerprint.
+/// How many fingerprintable events are still missing a fingerprint. Only
+/// `event` rows can be fingerprinted; other item types stay NULL for good.
 pub async fn count_missing_fingerprints(pool: &DbPool) -> Result<u64> {
     let row = sqlx::query(sql!(
-        "SELECT COUNT(*) FROM events WHERE fingerprint IS NULL"
+        "SELECT COUNT(*) FROM events WHERE fingerprint IS NULL AND item_type = 'event'"
     ))
     .fetch_one(pool)
     .await?;
@@ -24,7 +25,7 @@ pub async fn fetch_events_without_fingerprint(
     let rows = sqlx::query(sql!(
         "SELECT event_id, item_type, payload, project_id, timestamp, title, level
          FROM events JOIN event_payloads USING (event_id)
-         WHERE fingerprint IS NULL LIMIT ?1"
+         WHERE fingerprint IS NULL AND item_type = 'event' LIMIT ?1"
     ))
     .bind(limit as i64)
     .fetch_all(pool)

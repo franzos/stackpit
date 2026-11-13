@@ -549,6 +549,97 @@ mod tests {
         assert_eq!(row.0, 1);
     }
 
+    async fn flush_msgs(pool: &DbPool, mut batch: Vec<WriteMsg>) {
+        #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
+        assert!(flush_batch(pool, &mut batch, &mut Accumulators::new(), None).await);
+        #[cfg(all(feature = "postgres", not(feature = "sqlite")))]
+        assert!(flush::flush_batch_insert_only(pool, &mut batch)
+            .await
+            .is_some());
+    }
+
+    fn event_with_attachment(
+        event_id: &str,
+        project_id: u64,
+        filename: &str,
+        data: &[u8],
+    ) -> WriteMsg {
+        let mut event = make_event(event_id);
+        event.project_id = project_id;
+        let att = StorableAttachment {
+            event_id: event_id.to_string(),
+            filename: filename.to_string(),
+            content_type: Some("text/plain".to_string()),
+            data: data.to_vec(),
+        };
+        WriteMsg::EventWithAttachments(event, vec![att])
+    }
+
+    async fn attachment_rows(pool: &DbPool, event_id: &str) -> Vec<(String, Vec<u8>)> {
+        sqlx::query_as(db::sql!(
+            "SELECT filename, data FROM attachments WHERE event_id = ?1 ORDER BY filename"
+        ))
+        .bind(event_id)
+        .fetch_all(pool)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn attachment_on_another_projects_event_is_dropped() {
+        let pool = test_pool().await;
+        flush_msgs(
+            &pool,
+            vec![event_with_attachment("xp-1", 1, "log.txt", b"owner")],
+        )
+        .await;
+
+        let mut foreign = event_with_attachment("xp-1", 2, "log.txt", b"attacker");
+        if let WriteMsg::EventWithAttachments(_, atts) = &mut foreign {
+            atts.push(StorableAttachment {
+                event_id: "xp-1".to_string(),
+                filename: "extra.txt".to_string(),
+                content_type: None,
+                data: b"attacker".to_vec(),
+            });
+        }
+        flush_msgs(&pool, vec![foreign]).await;
+
+        assert_eq!(
+            attachment_rows(&pool, "xp-1").await,
+            vec![("log.txt".to_string(), b"owner".to_vec())]
+        );
+        let owner: (i64,) = sqlx::query_as("SELECT project_id FROM events WHERE event_id = 'xp-1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(owner.0, 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn owning_project_attachment_lands_on_new_and_resent_event() {
+        let pool = test_pool().await;
+        flush_msgs(
+            &pool,
+            vec![event_with_attachment("own-1", 1, "log.txt", b"first")],
+        )
+        .await;
+        assert_eq!(
+            attachment_rows(&pool, "own-1").await,
+            vec![("log.txt".to_string(), b"first".to_vec())]
+        );
+
+        flush_msgs(
+            &pool,
+            vec![event_with_attachment("own-1", 1, "log.txt", b"second")],
+        )
+        .await;
+        assert_eq!(
+            attachment_rows(&pool, "own-1").await,
+            vec![("log.txt".to_string(), b"second".to_vec())]
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn queued_bytes_returns_to_zero_after_flush() {
         let pool = test_pool().await;
@@ -1071,6 +1162,130 @@ mod tests {
             !acc.releases.contains_key(&(1, "fail@1.0".to_string())),
             "the failed batch's release must not be merged"
         );
+    }
+
+    fn give_up_backdated() -> Option<std::time::Instant> {
+        Some(std::time::Instant::now() - accumulator::AGG_FLUSH_GIVE_UP)
+    }
+
+    /// A failing delta is kept inside the window, dropped after it, and a later one flushes.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn failed_agg_flush_keeps_delta_then_gives_up() {
+        let live = test_pool().await;
+        let closed = test_pool().await;
+        closed.close().await;
+
+        let mut acc = Accumulators::new();
+        let mut e1 = make_event("giveup1");
+        e1.fingerprint = Some("giveup_fp".to_string());
+        assert!(insert_event(&live, &e1).await.unwrap());
+        acc.accumulate(&e1);
+
+        let err = flush_aggregation(&closed, &mut acc, None)
+            .await
+            .expect_err("flush against a closed pool must fail");
+        assert!(
+            matches!(
+                err.downcast_ref::<sqlx::Error>(),
+                Some(sqlx::Error::PoolClosed)
+            ),
+            "unexpected error: {err:#}"
+        );
+        let since = acc.failing_since.expect("first failure opens the window");
+        assert!(acc.issues.contains_key(&(1, "giveup_fp".to_string())));
+
+        assert!(flush_aggregation(&closed, &mut acc, None).await.is_err());
+        assert_eq!(acc.failing_since, Some(since), "window start is kept");
+        assert!(!acc.is_empty(), "delta is kept inside the window");
+
+        acc.failing_since = give_up_backdated();
+        assert!(flush_aggregation(&closed, &mut acc, None).await.is_err());
+        assert!(acc.is_empty(), "delta is dropped after the window");
+        assert!(acc.failing_since.is_none());
+
+        let mut e2 = make_event("giveup2");
+        e2.fingerprint = Some("giveup_fp".to_string());
+        assert!(insert_event(&live, &e2).await.unwrap());
+        acc.accumulate(&e2);
+        assert!(flush_aggregation(&closed, &mut acc, None).await.is_err());
+        assert!(!acc.is_empty(), "a fresh failure must not drop immediately");
+        assert!(acc.failing_since.is_some_and(|s| s > since));
+
+        flush_aggregation(&live, &mut acc, None).await.unwrap();
+        assert!(acc.is_empty());
+        assert!(acc.failing_since.is_none());
+        let row: (i64,) =
+            sqlx::query_as("SELECT event_count FROM issues WHERE fingerprint = 'giveup_fp'")
+                .fetch_one(&live)
+                .await
+                .unwrap();
+        assert_eq!(row.0, 1, "only the delta after the drop lands");
+    }
+
+    /// A batch whose aggregation keeps failing commits its events insert-only and drops the delta after the window.
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn flush_batch_commits_events_when_aggregation_fails() {
+        let pool = test_pool().await;
+        sqlx::query("DROP TABLE issue_tag_values")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let mut acc = Accumulators::new();
+        let mut prior = make_event("window1");
+        prior.fingerprint = Some("window_fp".to_string());
+        prior.tags = vec![("browser".to_string(), "chrome".to_string())];
+        acc.accumulate(&prior);
+        acc.last_flush = std::time::Instant::now() - std::time::Duration::from_secs(2);
+
+        let mut e = make_event("window2");
+        e.fingerprint = Some("batch_fp".to_string());
+        let mut batch = vec![WriteMsg::Event(e)];
+
+        assert!(flush_batch(&pool, &mut batch, &mut acc, None).await);
+        assert!(db::get_event(&pool, "window2").await.unwrap().is_some());
+        assert!(
+            acc.failing_since.is_some(),
+            "aggregation failure opens the window"
+        );
+        assert!(acc.issues.contains_key(&(1, "window_fp".to_string())));
+        assert_eq!(
+            acc.issues
+                .get(&(1, "batch_fp".to_string()))
+                .map(|d| d.event_count),
+            Some(1),
+            "the insert-only commit merges its scratch once"
+        );
+
+        // No fingerprint, so this batch's scratch is empty.
+        let mut batch2 = vec![WriteMsg::Event(make_event("window3"))];
+        acc.failing_since = give_up_backdated();
+        assert!(flush_batch(&pool, &mut batch2, &mut acc, None).await);
+        assert!(db::get_event(&pool, "window3").await.unwrap().is_some());
+        assert!(acc.is_empty(), "delta is dropped after the window");
+        assert!(acc.failing_since.is_none());
+    }
+
+    /// A batch whose insert fails never ran aggregation, so it must not age or drop the prior delta.
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn failed_batch_insert_keeps_the_prior_delta() {
+        let pool = test_pool().await;
+        pool.close().await;
+
+        let mut acc = Accumulators::new();
+        let mut prior = make_event("keep1");
+        prior.fingerprint = Some("keep_fp".to_string());
+        acc.accumulate(&prior);
+        acc.last_flush = std::time::Instant::now() - std::time::Duration::from_secs(2);
+
+        let mut batch = vec![WriteMsg::Event(make_event("keep2"))];
+        for _ in 0..2 {
+            assert!(!flush_batch(&pool, &mut batch, &mut acc, None).await);
+            assert!(acc.issues.contains_key(&(1, "keep_fp".to_string())));
+            assert!(acc.failing_since.is_none(), "no aggregation ran");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2074,6 +2289,185 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(issues.0, 0, "no aggregation SQL runs on the insert path");
+    }
+
+    /// Postgres rejects `\0` in text and oversized index rows; one such event
+    /// must not take down the batch or the aggregation flush after it.
+    #[cfg(all(feature = "postgres", not(feature = "sqlite")))]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pg_poisoned_text_does_not_fail_the_batch() {
+        use flush::flush_batch_insert_only;
+
+        let pool = test_pool().await;
+
+        // Pseudo-random so Postgres can't compress the index row under its limit.
+        let mut seed: u64 = 0x9e37_79b9_7f4a_7c15;
+        let long_txn: String = (0..3000)
+            .map(|_| {
+                seed = seed
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                char::from(b'a' + ((seed >> 33) % 26) as u8)
+            })
+            .collect();
+        let event = serde_json::json!({
+            "event_id": "pgpoison00000000000000000000000a",
+            "message": "boom\u{0}here",
+            "transaction": long_txn,
+            "tags": {"re\u{0}gion": "e\u{0}u"},
+        });
+        let txn = serde_json::json!({
+            "event_id": "pgpoison00000000000000000000000b",
+            "type": "transaction",
+            "transaction": long_txn,
+            "start_timestamp": 1_700_000_000.0,
+            "timestamp": 1_700_000_001.0,
+            "contexts": {"trace": {
+                "trace_id": "0af7651916cd43dd8448eb211c80319c",
+                "op": "http\u{0}.server",
+                "status": "o\u{0}k",
+            }},
+        });
+        let body =
+            format!("{{}}\n{{\"type\":\"event\"}}\n{event}\n{{\"type\":\"transaction\"}}\n{txn}\n");
+        let auth = crate::ingest::auth::SentryAuth {
+            sentry_key: "k".to_string(),
+        };
+        let parsed = crate::ingest::envelope::parse(body.as_bytes(), 1, &auth).unwrap();
+        assert_eq!(parsed.events.len(), 2);
+
+        let mut batch: Vec<WriteMsg> = parsed
+            .events
+            .into_iter()
+            .map(|mut e| {
+                crate::ingest::enrich::enrich_event(&mut e);
+                WriteMsg::Event(e)
+            })
+            .collect();
+        batch.push(WriteMsg::Event(make_event("pg_poison_clean")));
+
+        let mut scratch = flush_batch_insert_only(&pool, &mut batch)
+            .await
+            .expect("poisoned text must not fail the batch");
+        assert!(!scratch.is_empty());
+        flush_aggregation(&pool, &mut scratch, None)
+            .await
+            .expect("aggregation flush must succeed");
+
+        let events: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM events WHERE event_id IN \
+             ('pgpoison00000000000000000000000a', 'pgpoison00000000000000000000000b', 'pg_poison_clean')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(events.0, 3);
+        let issues: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM issues WHERE title = 'boomhere'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(issues.0, 1);
+        let tags: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM issue_tag_values WHERE tag_key = 'region' AND tag_value = 'eu'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(tags.0, 1);
+    }
+
+    /// Two maximal client-report quantities must not overflow the BIGINT rollup.
+    #[cfg(all(feature = "postgres", not(feature = "sqlite")))]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pg_client_report_overflow_flushes_twice() {
+        use crate::queries::client_reports::MAX_OUTCOME_QUANTITY;
+
+        let pool = test_pool().await;
+        let auth = crate::ingest::auth::SentryAuth {
+            sentry_key: "k".to_string(),
+        };
+        let body = b"{}\n{\"type\":\"client_report\"}\n{\"timestamp\":1700000000,\"discarded_events\":[{\"category\":\"pg_overflow\",\"reason\":\"sample_rate\",\"quantity\":9223372036854775807}]}\n";
+
+        for _ in 0..2 {
+            let parsed = crate::ingest::envelope::parse(body, 1, &auth).unwrap();
+            assert_eq!(parsed.events.len(), 1);
+            let mut acc = Accumulators::new();
+            for e in &parsed.events {
+                assert_eq!(e.item_type, crate::ingest::models::ItemType::ClientReport);
+                assert!(insert_event(&pool, e).await.unwrap());
+                acc.accumulate(e);
+            }
+            flush_aggregation(&pool, &mut acc, None)
+                .await
+                .expect("client-report flush must succeed");
+        }
+
+        let row: (i64,) = sqlx::query_as(
+            "SELECT CAST(SUM(quantity) AS BIGINT) FROM client_report_outcomes \
+             WHERE category = 'pg_overflow'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0, i64::try_from(2 * MAX_OUTCOME_QUANTITY).unwrap());
+    }
+
+    /// A delta Postgres keeps rejecting is dropped after the window, not retried forever.
+    #[cfg(all(feature = "postgres", not(feature = "sqlite")))]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pg_poisoned_delta_is_dropped_after_the_window() {
+        let pool = test_pool().await;
+        // Past the parse-time clamp, so the second upsert overflows BIGINT.
+        let key = (
+            1u64,
+            1_699_999_200i64,
+            "pg_giveup".to_string(),
+            "sample_rate".to_string(),
+        );
+        let seed = |acc: &mut Accumulators| {
+            acc.client_report_outcomes
+                .insert(key.clone(), i64::MAX as u64);
+        };
+
+        let mut acc = Accumulators::new();
+        seed(&mut acc);
+        flush_aggregation(&pool, &mut acc, None)
+            .await
+            .expect("first flush fits in BIGINT");
+
+        seed(&mut acc);
+        let err = flush_aggregation(&pool, &mut acc, None)
+            .await
+            .expect_err("second flush overflows BIGINT");
+        assert!(format!("{err:#}").contains("out of range"), "{err:#}");
+        assert!(!acc.is_empty(), "delta is kept inside the window");
+        assert!(acc.failing_since.is_some());
+
+        acc.failing_since = give_up_backdated();
+        assert!(flush_aggregation(&pool, &mut acc, None).await.is_err());
+        assert!(acc.is_empty(), "delta is dropped after the window");
+
+        let mut e = make_event("pg_giveup_ok");
+        e.fingerprint = Some("pg_giveup_fp".to_string());
+        assert!(insert_event(&pool, &e).await.unwrap());
+        acc.accumulate(&e);
+        flush_aggregation(&pool, &mut acc, None)
+            .await
+            .expect("a later delta flushes");
+
+        let issue: (i64,) =
+            sqlx::query_as("SELECT event_count FROM issues WHERE fingerprint = 'pg_giveup_fp'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(issue.0, 1);
+        let stored: (i64,) = sqlx::query_as(
+            "SELECT quantity FROM client_report_outcomes WHERE category = 'pg_giveup'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(stored.0, i64::MAX, "the rejected delta never landed");
     }
 
     /// Closing the scratch channel makes the aggregation task flush what it

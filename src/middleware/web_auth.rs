@@ -166,9 +166,13 @@ pub async fn web_auth_middleware(
             grants::forget(&state.auth_pool, &handle).await;
             return unauthenticated_response(&req, secure_cookies);
         }
-        if let Err(e) = grants::touch(&state.auth_pool, &handle, now, TOUCH_MIN_INTERVAL_SECS).await
-        {
-            tracing::warn!("grant touch failed: {e:#}");
+        // Checked here too so a recent grant doesn't take the SQLite write lock.
+        if now.saturating_sub(grant.last_used_at) >= TOUCH_MIN_INTERVAL_SECS {
+            if let Err(e) =
+                grants::touch(&state.auth_pool, &handle, now, TOUCH_MIN_INTERVAL_SECS).await
+            {
+                tracing::warn!("grant touch failed: {e:#}");
+            }
         }
         let grant = if grant.should_refresh(now, REFRESH_MARGIN_SECS) {
             match refresh::refresh(&state.auth_pool, encryptor, oidc, &grant).await {

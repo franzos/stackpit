@@ -1741,7 +1741,7 @@ mod tests {
         let plan = query_plan(
             &mut *tx,
             crate::queries::event_supplements::USER_REPORTS_SQL,
-            |q| q.bind("pe-9"),
+            |q| q.bind("pe-9").bind(11i64),
         )
         .await;
 

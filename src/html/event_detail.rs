@@ -164,3 +164,59 @@ pub async fn download_attachment(
         .into_response(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::sql;
+
+    async fn download(
+        pool: &crate::db::DbPool,
+        project_id: u64,
+        event_id: &str,
+    ) -> axum::response::Response {
+        let (state, _channels) = AppState::for_test(pool.clone());
+        download_attachment(
+            ActiveOrg::bare(1, None),
+            State(state),
+            ReadPool(pool.clone()),
+            Path((project_id, event_id.to_string(), "log.txt".to_string())),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn download_attachment_is_scoped_to_the_events_project() {
+        let pool = crate::db::open_test_pool().await;
+        for project_id in [1i64, 2] {
+            sqlx::query(sql!(
+                "INSERT INTO projects (project_id, name) VALUES (?1, 'p')"
+            ))
+            .bind(project_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        crate::queries::test_helpers::insert_test_event(&pool, "dl-1", 1, 1000, None, None, None)
+            .await;
+        sqlx::query(sql!(
+            "INSERT INTO attachments (event_id, filename, data) VALUES ('dl-1', 'log.txt', ?1)"
+        ))
+        .bind(b"bytes".as_slice())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let resp = download(&pool, 1, "dl-1").await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], b"bytes");
+
+        assert_eq!(
+            download(&pool, 2, "dl-1").await.status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+}

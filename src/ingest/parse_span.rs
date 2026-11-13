@@ -2,6 +2,8 @@
 
 use serde_json::Value;
 
+use crate::ingest::text::strip_nul;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpanFields {
     pub span_id: Option<String>,
@@ -132,17 +134,14 @@ pub(crate) fn extract_span_fields_from_value(v: &Value) -> SpanFields {
             .get("parent_span_id")
             .and_then(|v| v.as_str())
             .and_then(crate::ingest::ids::sanitize_id),
-        op: v.get("op").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        description: v
-            .get("description")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
+        op: v.get("op").and_then(|v| v.as_str()).map(strip_nul),
+        description: v.get("description").and_then(|v| v.as_str()).map(strip_nul),
         status: v
             .get("status")
             .or_else(|| v.get("data").and_then(|d| d.get("status")))
             .and_then(|v| {
                 v.as_str()
-                    .map(|s| s.to_string())
+                    .map(strip_nul)
                     .or_else(|| v.as_u64().map(span_status_from_code))
                     .or_else(|| v.as_i64().map(|code| span_status_from_code(code as u64)))
             }),
@@ -166,6 +165,25 @@ mod tests {
         let fields = extract_span_fields_from_value(&span);
         assert_eq!(fields.duration_ms, Some(107));
         assert_eq!(fields.start_ms, Some(1789734036443));
+    }
+
+    #[test]
+    fn span_text_fields_lose_nul_but_keep_their_length() {
+        let long = "d".repeat(5000);
+        let raw = format!(
+            r#"{{"span_id":"3622ed28e50b40aa","op":"http\u0000.client","description":"{long}\u0000","status":"o\u0000k"}}"#
+        );
+        let span: Value = serde_json::from_str(&raw).unwrap();
+        let fields = extract_span_fields_from_value(&span);
+        assert_eq!(fields.op.as_deref(), Some("http.client"));
+        assert_eq!(fields.description.as_deref(), Some(long.as_str()));
+        assert_eq!(fields.status.as_deref(), Some("ok"));
+
+        let clean = json!({"op": "db.query", "description": "SELECT 1", "status": "ok"});
+        let fields = extract_span_fields_from_value(&clean);
+        assert_eq!(fields.op.as_deref(), Some("db.query"));
+        assert_eq!(fields.description.as_deref(), Some("SELECT 1"));
+        assert_eq!(fields.status.as_deref(), Some("ok"));
     }
 
     #[test]

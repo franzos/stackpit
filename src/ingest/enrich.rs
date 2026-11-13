@@ -3,6 +3,7 @@
 use crate::ingest::fingerprint;
 use crate::ingest::lenient::{lenient_field, message_text};
 use crate::ingest::models::{ItemType, StorableEvent};
+use crate::ingest::text::clean_text;
 use serde_json::Value;
 
 /// Parse the JSON payload and fill in `fingerprint` (if missing) and `title`.
@@ -33,10 +34,6 @@ pub fn enrich_event(event: &mut StorableEvent) {
     }
 }
 
-/// Cap on a stored title. Every branch is untrusted payload text that gets
-/// persisted, rendered per issue row, and interpolated into email subjects.
-const MAX_TITLE_CHARS: usize = 200;
-
 /// Extract a title from pre-parsed JSON — exposed so `envelope::extract_fields`
 /// can compute it without a second parse.
 pub(crate) fn extract_title_from(
@@ -47,16 +44,9 @@ pub(crate) fn extract_title_from(
     extract_title(json, item_type, monitor_slug)
 }
 
-/// Truncate on a char boundary, leaving short strings untouched.
-fn truncate_chars(s: String, max: usize) -> String {
-    match s.char_indices().nth(max) {
-        Some((idx, _)) => s[..idx].to_string(),
-        None => s,
-    }
-}
-
+/// Every branch is untrusted text that reaches issue rows and email subjects.
 fn extract_title(json: &Value, item_type: &ItemType, monitor_slug: Option<&str>) -> Option<String> {
-    extract_title_inner(json, item_type, monitor_slug).map(|t| truncate_chars(t, MAX_TITLE_CHARS))
+    extract_title_inner(json, item_type, monitor_slug).map(|t| clean_text(&t))
 }
 
 /// Pick a human-readable title: special cases (check-ins, sessions, user
@@ -124,6 +114,7 @@ fn extract_title_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ingest::text::MAX_TEXT_CHARS;
 
     fn make_event(json: &Value, item_type: ItemType) -> StorableEvent {
         let raw = serde_json::to_vec(json).unwrap();
@@ -241,7 +232,7 @@ mod tests {
         let mut event = make_event(&json, ItemType::Event);
         enrich_event(&mut event);
         let title = event.title.unwrap();
-        assert_eq!(title.chars().count(), MAX_TITLE_CHARS);
+        assert_eq!(title.chars().count(), MAX_TEXT_CHARS);
         assert!(title.starts_with("Error: xxx"));
     }
 
@@ -250,7 +241,7 @@ mod tests {
         let json = serde_json::json!({"transaction": "/".repeat(1000)});
         let mut event = make_event(&json, ItemType::Transaction);
         enrich_event(&mut event);
-        assert_eq!(event.title.unwrap().chars().count(), MAX_TITLE_CHARS);
+        assert_eq!(event.title.unwrap().chars().count(), MAX_TEXT_CHARS);
     }
 
     // Multi-byte input must not be sliced mid-character.
@@ -260,8 +251,16 @@ mod tests {
         let mut event = make_event(&json, ItemType::Event);
         enrich_event(&mut event);
         let title = event.title.unwrap();
-        assert_eq!(title.chars().count(), MAX_TITLE_CHARS);
-        assert_eq!(title.len(), MAX_TITLE_CHARS * 2);
+        assert_eq!(title.chars().count(), MAX_TEXT_CHARS);
+        assert_eq!(title.len(), MAX_TEXT_CHARS * 2);
+    }
+
+    #[test]
+    fn enrich_title_strips_nul() {
+        let json = serde_json::json!({"message": "boom\u{0}here"});
+        let mut event = make_event(&json, ItemType::Event);
+        enrich_event(&mut event);
+        assert_eq!(event.title.as_deref(), Some("boomhere"));
     }
 
     #[test]

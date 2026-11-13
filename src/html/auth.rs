@@ -176,7 +176,7 @@ pub async fn callback(
 
     warn_orgs_claim_absent_once(success.claims.orgs.is_none());
 
-    let recon = crate::orgs::reconcile::reconcile(
+    let recon = match crate::orgs::reconcile::reconcile(
         &state.auth_pool,
         crate::orgs::reconcile::ReconcileInput {
             user_id: user.user_id,
@@ -186,10 +186,13 @@ pub async fn callback(
         },
     )
     .await
-    .unwrap_or_else(|e| {
-        tracing::error!("reconcile failed: {e:#}");
-        Default::default()
-    });
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("reconcile failed for user {}: {e:#}", user.user_id);
+            return finish_with_error(&state, "provisioning_failed");
+        }
+    };
 
     let secure = state.config.server.cookies_should_be_secure();
     retire_prior_grant(&state, &headers, secure, encryptor, &oidc).await;

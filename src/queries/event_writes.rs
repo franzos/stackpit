@@ -410,7 +410,8 @@ fn extract_embedded_spans(events: &[&&StorableEvent]) -> Vec<SpanRow> {
             .and_then(|c| c.get("trace"))
             .and_then(|t| t.get("trace_id"))
             .and_then(|v| v.as_str())
-            .or(event.trace_id.as_deref());
+            .and_then(crate::ingest::ids::sanitize_id)
+            .or_else(|| event.trace_id.clone());
 
         if spans.len() > MAX_EMBEDDED_SPANS {
             tracing::warn!(
@@ -436,7 +437,7 @@ fn extract_embedded_spans(events: &[&&StorableEvent]) -> Vec<SpanRow> {
                 fields,
                 event,
                 ts,
-                parent_trace,
+                parent_trace.as_deref(),
                 span_id,
             ));
         }
@@ -773,32 +774,40 @@ pub async fn bulk_upsert_tag_counts(
 }
 
 /// Store an attachment for an event (replaces if one with the same filename exists).
+/// Returns false, storing nothing, unless the event exists in `project_id`.
 ///
 /// Accepts any sqlx executor -- `&DbPool`, `&mut PgConnection`, `&mut SqliteConnection`,
 /// or a dereferenced transaction (`&mut *tx`).
-pub async fn insert_attachment<'e, E>(executor: E, att: &StorableAttachment) -> Result<()>
+pub async fn insert_attachment<'e, E>(
+    executor: E,
+    project_id: u64,
+    att: &StorableAttachment,
+) -> Result<bool>
 where
     E: sqlx::Executor<'e, Database = crate::db::Db>,
 {
     #[cfg(feature = "sqlite")]
     let query = sql!(
         "INSERT OR REPLACE INTO attachments (event_id, filename, content_type, data)
-         VALUES (?1, ?2, ?3, ?4)"
+         SELECT ?1, ?2, ?3, ?4
+         WHERE EXISTS (SELECT 1 FROM events WHERE event_id = ?1 AND project_id = ?5)"
     );
     #[cfg(not(feature = "sqlite"))]
     let query = sql!("INSERT INTO attachments (event_id, filename, content_type, data)
-         VALUES (?1, ?2, ?3, ?4)
+         SELECT ?1, ?2, ?3, ?4
+         WHERE EXISTS (SELECT 1 FROM events WHERE event_id = ?1 AND project_id = ?5)
          ON CONFLICT (event_id, filename) DO UPDATE SET content_type = EXCLUDED.content_type, data = EXCLUDED.data");
 
-    sqlx::query(query)
+    let res = sqlx::query(query)
         .bind(&att.event_id)
         .bind(&att.filename)
         .bind(&att.content_type)
         .bind(&att.data)
+        .bind(project_id as i64)
         .execute(executor)
         .await?;
 
-    Ok(())
+    Ok(res.rows_affected() > 0)
 }
 
 #[cfg(test)]
@@ -856,6 +865,44 @@ mod tests {
         let refs: Vec<&&StorableEvent> = vec![&r];
         let rows = extract_embedded_spans(&refs);
         assert_eq!(rows.len(), MAX_EMBEDDED_SPANS);
+    }
+
+    #[test]
+    fn embedded_span_text_and_trace_ids_are_sanitized_on_both_paths() {
+        let long = "d".repeat(5000);
+        let raw = format!(
+            r#"{{"type":"transaction","contexts":{{"trace":{{"trace_id":"0af7651916cd43dd\u0000"}}}},
+            "spans":[{{"span_id":"s1","trace_id":"{}","op":"db\u0000","description":"{long}\u0000","status":"o\u0000k"}}]}}"#,
+            "a".repeat(65)
+        );
+        let fallback = StorableEvent::new(
+            "txn".to_string(),
+            ItemType::Transaction,
+            raw.clone().into_bytes(),
+            1,
+            "k".to_string(),
+        );
+        let mut pre = fallback.clone();
+        crate::ingest::envelope::extract_fields_for_test(
+            raw.as_bytes(),
+            &ItemType::Transaction,
+            &mut pre,
+        );
+        assert!(pre.embedded_spans.is_some());
+
+        for (path, event) in [("fallback", &fallback), ("pre-extracted", &pre)] {
+            let refs: Vec<&&StorableEvent> = vec![&event];
+            let rows = extract_embedded_spans(&refs);
+            assert_eq!(rows.len(), 1, "{path}");
+            assert_eq!(rows[0].trace_id, None, "{path}");
+            assert_eq!(rows[0].op.as_deref(), Some("db"), "{path}");
+            assert_eq!(
+                rows[0].description.as_deref(),
+                Some(long.as_str()),
+                "{path}"
+            );
+            assert_eq!(rows[0].status.as_deref(), Some("ok"), "{path}");
+        }
     }
 
     /// The parse-time pre-extracted path must produce the same span rows as

@@ -780,6 +780,30 @@ mod tests {
         assert_eq!(count(row.get("users_hll")), 3);
     }
 
+    #[cfg(feature = "sqlite")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn flush_aggregation_waits_for_a_concurrent_writer() {
+        let (_db, a, b) = crate::db::two_writer_pools("flush-aggregation-lock").await;
+        let mut acc = Accumulators::new();
+        acc.accumulate(&issue_event("lock1", "u1"));
+        assert!(!acc.issues.is_empty());
+
+        let writer = crate::db::hold_write_lock(
+            &b,
+            "INSERT INTO projects (project_id, status, source, org_id) VALUES (500, 'active', 'manual', 1)",
+            std::time::Duration::from_millis(100),
+        )
+        .await;
+
+        flush_aggregation(&a, &mut acc, None).await.unwrap();
+        writer.await.unwrap();
+        let row = sqlx::query("SELECT event_count FROM issues WHERE fingerprint = 'hll_fp'")
+            .fetch_one(&a)
+            .await
+            .unwrap();
+        assert_eq!(row.get::<i64, _>("event_count"), 1);
+    }
+
     fn client_report(event_id: &str, ts: i64, body: &serde_json::Value) -> StorableEvent {
         let mut e = StorableEvent::new(
             event_id.to_string(),

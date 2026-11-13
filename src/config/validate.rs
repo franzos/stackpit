@@ -14,6 +14,9 @@ const REFRESH_TOKEN_MAX_TTL_CAP_SECS: u64 = 90 * 24 * 3600;
 /// rotations linger past the next IdP rotation.
 const BEARER_CACHE_MAX_TTL_CAP_SECS: u64 = 300;
 
+/// Minimum length of `admin_token` and `STACKPIT_METRICS_TOKEN`.
+pub const MIN_SECRET_LEN: usize = 16;
+
 impl Config {
     /// Catches misconfigurations early; call right after loading.
     pub fn validate(&self) -> Result<()> {
@@ -94,9 +97,9 @@ impl Config {
                     "server.admin_token is set but empty — either remove it or set a real token"
                 );
             }
-            if trimmed.len() < 16 {
+            if trimmed.len() < MIN_SECRET_LEN {
                 anyhow::bail!(
-                    "server.admin_token is too short ({} chars) — use at least 16 characters",
+                    "server.admin_token is too short ({} chars) — use at least {MIN_SECRET_LEN} characters",
                     trimmed.len()
                 );
             }

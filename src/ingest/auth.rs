@@ -201,13 +201,16 @@ pub enum AuthError {
 }
 
 /// Generous bound on a project key: real DSN public keys are 32 hex chars, but
-/// open mode registers whatever an SDK sent, so only the length is constrained.
-/// Both auth caches are bounded by entry count, not bytes, so an oversized key
-/// would inflate their worst-case footprint.
+/// open mode registers whatever an SDK sent, so only the length and control
+/// characters are constrained. Both auth caches are bounded by entry count, not
+/// bytes, so an oversized key would inflate their worst-case footprint.
 const MAX_SENTRY_KEY_BYTES: usize = 256;
 
-fn key_length_ok(sentry_key: &str) -> bool {
-    !sentry_key.is_empty() && sentry_key.len() <= MAX_SENTRY_KEY_BYTES
+/// A NUL would otherwise reach the key lookup, where Postgres rejects the bind.
+fn key_shape_ok(sentry_key: &str) -> bool {
+    !sentry_key.is_empty()
+        && sentry_key.len() <= MAX_SENTRY_KEY_BYTES
+        && !sentry_key.chars().any(char::is_control)
 }
 
 /// Checks a sentry key against the cache first, falls back to DB on miss.
@@ -219,7 +222,7 @@ pub async fn validate_project_key(
 ) -> Result<(), AuthError> {
     // Rejected before any cache lookup or DB query, and before open mode could
     // persist it as a project key.
-    if !key_length_ok(sentry_key) {
+    if !key_shape_ok(sentry_key) {
         return Err(AuthError::Denied("project or key denied"));
     }
 
@@ -569,11 +572,22 @@ mod tests {
     }
 
     #[test]
-    fn key_length_bounds() {
-        assert!(key_length_ok(&"a".repeat(32)));
-        assert!(key_length_ok(&"a".repeat(MAX_SENTRY_KEY_BYTES)));
-        assert!(!key_length_ok(&"a".repeat(MAX_SENTRY_KEY_BYTES + 1)));
-        assert!(!key_length_ok(""));
+    fn key_shape_bounds() {
+        assert!(key_shape_ok(&"a".repeat(32)));
+        assert!(key_shape_ok(&"a".repeat(MAX_SENTRY_KEY_BYTES)));
+        assert!(!key_shape_ok(&"a".repeat(MAX_SENTRY_KEY_BYTES + 1)));
+        assert!(!key_shape_ok(""));
+        assert!(!key_shape_ok("abc\0def"));
+        assert!(!key_shape_ok("abc\ndef"));
+    }
+
+    #[tokio::test]
+    async fn nul_key_is_denied_before_the_database() {
+        let pool = crate::queries::test_helpers::open_test_db().await;
+        pool.close().await;
+        let (state, _channels) = crate::server::AppState::for_test(pool);
+        let result = validate_project_key(&state, "abc\0def", 1).await;
+        assert!(matches!(result, Err(AuthError::Denied(_))));
     }
 
     #[test]

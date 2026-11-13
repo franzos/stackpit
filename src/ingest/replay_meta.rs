@@ -6,6 +6,8 @@
 //! payload for browser SDKs — `contexts` carries only framework entries — so
 //! they fall back to classifying `request.headers["User-Agent"]`.
 
+use crate::ingest::text::strip_nul;
+
 /// Everything the replay list renders per row, beyond what `events` already has.
 #[derive(Debug, Default, PartialEq)]
 pub struct ReplayMeta {
@@ -155,12 +157,13 @@ fn os_from_ua(ua: &str) -> Option<String> {
 /// Extract everything the replay list needs. `error_count` is passed in rather
 /// than read here: it comes from the caller's already-parsed `error_ids`.
 pub fn extract(payload: &serde_json::Value, error_count: i64) -> ReplayMeta {
+    let clean = |v: Option<String>| v.map(|s| strip_nul(&s));
     ReplayMeta {
         duration_ms: duration_ms(payload),
-        url: url(payload),
-        user_label: user_label(payload),
-        browser: browser(payload),
-        os: os(payload),
+        url: clean(url(payload)),
+        user_label: clean(user_label(payload)),
+        browser: clean(browser(payload)),
+        os: clean(os(payload)),
         error_count,
     }
 }
@@ -202,6 +205,27 @@ mod tests {
         assert_eq!(m.browser.as_deref(), Some("Chrome 150"));
         assert_eq!(m.os.as_deref(), Some("Linux"));
         assert_eq!(m.error_count, 1);
+    }
+
+    #[test]
+    fn replay_text_loses_nul_but_keeps_its_length() {
+        let long = "x".repeat(5000);
+        let raw = format!(
+            r#"{{"urls":["https://a.example/{long}\u0000"],"user":{{"username":"al\u0000ice"}},
+            "request":{{"headers":{{"User-Agent":"Mozilla/5.0 (X11; Linux) Chrome/150\u0000.0 Safari/537.36"}}}}}}"#
+        );
+        let payload: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let m = extract(&payload, 0);
+        assert_eq!(m.url, Some(format!("https://a.example/{long}")));
+        assert_eq!(m.user_label.as_deref(), Some("alice"));
+        assert_eq!(m.browser.as_deref(), Some("Chrome 150"));
+        assert_eq!(m.os.as_deref(), Some("Linux"));
+
+        let raw =
+            r#"{"contexts":{"browser":{"name":"Fire\u0000fox"},"os":{"name":"Win\u0000dows"}}}"#;
+        let m = extract(&serde_json::from_str(raw).unwrap(), 0);
+        assert_eq!(m.browser.as_deref(), Some("Firefox"));
+        assert_eq!(m.os.as_deref(), Some("Windows"));
     }
 
     #[test]

@@ -29,7 +29,7 @@ pub async fn get_event_supplements(pool: &DbPool, event: &EventDetail) -> Result
     };
 
     let user_reports_fut = async {
-        list_user_reports_for_event(pool, &event.event_id)
+        list_user_reports_for_event(pool, event.project_id, &event.event_id)
             .await
             .unwrap_or_default()
     };
@@ -71,16 +71,18 @@ pub async fn get_event_supplements(pool: &DbPool, event: &EventDetail) -> Result
 
 pub(crate) const USER_REPORTS_SQL: &str =
     "SELECT payload, timestamp FROM events JOIN event_payloads USING (event_id) \
-     WHERE item_type = 'user_report' AND parent_event_id = ?1 \
+     WHERE item_type = 'user_report' AND parent_event_id = ?1 AND project_id = ?2 \
      ORDER BY timestamp DESC";
 
-/// Pull user reports attached to a parent event.
+/// Pull user reports attached to a parent event, from the parent's project only.
 pub async fn list_user_reports_for_event(
     pool: &DbPool,
+    project_id: u64,
     parent_event_id: &str,
 ) -> Result<Vec<UserReportData>> {
     let rows = sqlx::query(crate::db::dyn_sql(USER_REPORTS_SQL))
         .bind(parent_event_id)
+        .bind(project_id as i64)
         .fetch_all(pool)
         .await?;
 
@@ -141,6 +143,7 @@ pub async fn get_adjacent_events(
 }
 
 /// List attachment metadata for an event -- no blob data, just the essentials.
+/// Unscoped: callers must have checked the event's project.
 pub async fn list_attachments_for_event(
     pool: &DbPool,
     event_id: &str,
@@ -163,7 +166,7 @@ pub async fn list_attachments_for_event(
         .collect())
 }
 
-/// Fetch the raw attachment blob, scoped by `project_id` to block cross-project IDOR.
+/// Fetch the raw attachment blob, scoped through its event's `project_id` to block cross-project IDOR.
 pub async fn get_attachment_data(
     pool: &DbPool,
     project_id: i64,
@@ -171,8 +174,9 @@ pub async fn get_attachment_data(
     filename: &str,
 ) -> Result<Option<(Vec<u8>, Option<String>)>> {
     let row = sqlx::query(sql!(
-        "SELECT data, content_type FROM attachments \
-         WHERE project_id = ?1 AND event_id = ?2 AND filename = ?3"
+        "SELECT a.data, a.content_type FROM attachments a \
+         JOIN events e ON e.event_id = a.event_id \
+         WHERE e.project_id = ?1 AND a.event_id = ?2 AND a.filename = ?3"
     ))
     .bind(project_id)
     .bind(event_id)
@@ -393,6 +397,48 @@ async fn get_project_repos(pool: &DbPool, project_id: u64) -> Result<Vec<Project
 mod tests {
     use super::*;
     use serde_json::json;
+
+    async fn insert_user_report(pool: &DbPool, event_id: &str, project_id: i64, comments: &str) {
+        sqlx::query(sql!(
+            "INSERT INTO events (event_id, item_type, project_id, public_key, timestamp, received_at, parent_event_id)
+             VALUES (?1, 'user_report', ?2, 'testkey', 1000, 1000, 'ur-parent')"
+        ))
+        .bind(event_id)
+        .bind(project_id)
+        .execute(pool)
+        .await
+        .unwrap();
+        let payload = serde_json::to_vec(&json!({"comments": comments})).unwrap();
+        crate::queries::test_helpers::insert_test_payload(
+            pool,
+            event_id,
+            &zstd::encode_all(payload.as_slice(), 3).unwrap(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn user_reports_from_another_project_are_not_listed() {
+        let pool = crate::db::open_test_pool().await;
+        crate::queries::test_helpers::insert_test_event(
+            &pool,
+            "ur-parent",
+            1,
+            1000,
+            None,
+            None,
+            None,
+        )
+        .await;
+        insert_user_report(&pool, "ur-own", 1, "mine").await;
+        insert_user_report(&pool, "ur-foreign", 2, "planted").await;
+
+        let reports = list_user_reports_for_event(&pool, 1, "ur-parent")
+            .await
+            .unwrap();
+        let comments: Vec<_> = reports.iter().map(|r| r.comments.as_deref()).collect();
+        assert_eq!(comments, vec![Some("mine")]);
+    }
 
     #[test]
     fn extracts_classic_user_report_fields() {

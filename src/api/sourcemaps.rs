@@ -200,18 +200,20 @@ pub async fn assemble(
             super::ApiError::internal(e)
         })?;
 
-    let stored = entries.len();
+    // Chunks are kept on failure so sentry-cli can retry the assemble.
     for entry in &entries {
-        if let Err(e) = sourcemap::store_sourcemap(pool, entry, project_id).await {
-            tracing::error!("store sourcemap {}: {e}", entry.debug_id);
-        }
+        sourcemap::store_sourcemap(pool, entry, project_id)
+            .await
+            .map_err(|e| {
+                super::ApiError::internal(format_args!("store sourcemap {}: {e}", entry.debug_id))
+            })?;
     }
 
     if let Err(e) = sourcemap::delete_chunks(pool, &body.chunks, project_id).await {
         tracing::warn!("cleanup chunks: {e}");
     }
 
-    tracing::info!("stored {stored} sourcemaps from artifact bundle");
+    tracing::info!("stored {} sourcemaps from artifact bundle", entries.len());
     Ok(Json(json!({
         "state": "ok",
         "missingChunks": []
@@ -233,4 +235,106 @@ fn sha1_hex(data: &[u8]) -> String {
     use sha1::Digest;
     let hash = sha1::Sha1::digest(data);
     hex::encode(hash)
+}
+
+#[cfg(all(test, feature = "sqlite", not(feature = "postgres")))]
+mod tests {
+    use std::io::Write;
+
+    use axum::http::HeaderValue;
+
+    use super::*;
+    use crate::db::DbPool;
+
+    const TOKEN: &str = "sk_test_sourcemap_token";
+
+    fn bundle() -> Vec<u8> {
+        let debug_id = "f3a1b2c4-1111-2222-3333-444455556666";
+        let manifest = json!({
+            "files": {
+                "app.js.map": { "type": "source_map", "url": "~/app.js.map", "debug_id": debug_id }
+            }
+        });
+        let map = json!({
+            "version": 3, "sources": ["app.js"], "names": [], "mappings": "", "debug_id": debug_id
+        });
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        zip.start_file("manifest.json", opts).unwrap();
+        zip.write_all(manifest.to_string().as_bytes()).unwrap();
+        zip.start_file("app.js.map", opts).unwrap();
+        zip.write_all(map.to_string().as_bytes()).unwrap();
+        zip.finish().unwrap().into_inner()
+    }
+
+    async fn setup() -> (AppState, String) {
+        let pool = crate::db::open_test_pool().await;
+        sqlx::query("INSERT INTO projects (project_id, source) VALUES (1, 'manual')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let hash = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(TOKEN.as_bytes()));
+        crate::queries::api_keys::create_api_key(&pool, 1, "sourcemap", &hash, "sk_test")
+            .await
+            .unwrap();
+        let zip = bundle();
+        let checksum = sha1_hex(&zip);
+        sourcemap::store_chunk(&pool, &checksum, &zip, 1)
+            .await
+            .unwrap();
+        let (state, _channels) = AppState::for_test(pool);
+        (state, checksum)
+    }
+
+    async fn call_assemble(state: &AppState, checksum: &str) -> axum::response::Response {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            HeaderValue::from_str(&format!("Bearer {TOKEN}")).unwrap(),
+        );
+        let body = AssembleRequest {
+            checksum: Some(checksum.to_string()),
+            chunks: vec![checksum.to_string()],
+            projects: None,
+        };
+        match assemble(State(state.clone()), headers, Json(body)).await {
+            Ok(r) => r.into_response(),
+            Err(e) => e.into_response(),
+        }
+    }
+
+    async fn count(pool: &DbPool, sql: &'static str) -> i64 {
+        sqlx::query_scalar(sql).fetch_one(pool).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn assemble_stores_sourcemaps_and_deletes_chunks() {
+        let (state, checksum) = setup().await;
+        let resp = call_assemble(&state, &checksum).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            count(&state.pool, "SELECT COUNT(*) FROM sourcemaps").await,
+            1
+        );
+        assert_eq!(
+            count(&state.pool, "SELECT COUNT(*) FROM upload_chunks").await,
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn assemble_keeps_chunks_when_a_store_fails() {
+        let (state, checksum) = setup().await;
+        sqlx::query("DROP TABLE sourcemaps")
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        let resp = call_assemble(&state, &checksum).await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            count(&state.pool, "SELECT COUNT(*) FROM upload_chunks").await,
+            1
+        );
+    }
 }

@@ -693,7 +693,7 @@ pub async fn delete_org_guarded(pool: &DbPool, org_id: i64) -> Result<DeleteOrgO
         crate::queries::projects::prechunk_project_data(pool, row.get("project_id")).await?;
     }
 
-    let mut tx = pool.begin().await?;
+    let mut tx = crate::db::begin_write(pool).await?;
 
     // Capture true totals before the project cascade: alert_rules and
     // digest_schedules are project-scoped, so `delete_project_in_tx` removes the
@@ -2252,6 +2252,38 @@ mod tests {
                 .unwrap()
                 .get("c");
         assert_eq!(proj_rows, 0, "projects gone");
+    }
+
+    // No projects in the org: the pre-pass would otherwise wait out the other writer before the tx begins.
+    #[cfg(feature = "sqlite")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn delete_org_guarded_waits_for_a_concurrent_writer() {
+        let (_db, a, b) = crate::db::two_writer_pools("delete-org-lock").await;
+        let u = crate::queries::users::upsert_from_oidc(&a, "iss", "del-lock", None, None)
+            .await
+            .unwrap();
+        let org = create_native_org(&a, u.user_id, "lock-org", "Lock")
+            .await
+            .unwrap();
+        sqlx::query(sql!(
+            "INSERT INTO alert_rules (org_id, trigger_kind) VALUES (?1, 'rate')"
+        ))
+        .bind(org)
+        .execute(&a)
+        .await
+        .unwrap();
+
+        let writer = crate::db::hold_write_lock(
+            &b,
+            "INSERT INTO projects (project_id, status, source, org_id) VALUES (500, 'active', 'manual', 1)",
+            std::time::Duration::from_millis(100),
+        )
+        .await;
+
+        let outcome = delete_org_guarded(&a, org).await.unwrap();
+        writer.await.unwrap();
+        assert!(matches!(outcome, DeleteOrgOutcome::Deleted(_)));
+        assert!(get_org(&a, org).await.unwrap().is_none());
     }
 
     // Project-scoped alert rules (removed by the project cascade) must still be

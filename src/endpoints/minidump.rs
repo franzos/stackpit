@@ -7,6 +7,7 @@ use crate::endpoints::{
     sentry_response, sentry_response_with_discarded,
 };
 use crate::ingest::models::StorableAttachment;
+use crate::ingest::text::clean_text;
 use crate::server::AppState;
 
 pub async fn handle(
@@ -35,8 +36,8 @@ pub async fn handle(
             break;
         }
         let name = field.name().unwrap_or("").to_string();
-        let filename = field.file_name().unwrap_or("upload.dmp").to_string();
-        let content_type = field.content_type().map(String::from);
+        let filename = clean_text(field.file_name().unwrap_or("upload.dmp"));
+        let content_type = field.content_type().map(clean_text);
 
         match field.bytes().await {
             Ok(data) if data.len() > MAX_FIELD_SIZE => {

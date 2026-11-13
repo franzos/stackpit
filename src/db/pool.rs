@@ -31,6 +31,18 @@ pub async fn create_write_pool(url: &str) -> Result<DbPool> {
     create_pool_inner(url, Some(1), true).await
 }
 
+/// Begin a transaction that reads before it writes; SQLite can't upgrade a deferred one once another writer commits.
+#[cfg(all(feature = "sqlite", not(feature = "postgres")))]
+pub(crate) async fn begin_write(pool: &DbPool) -> sqlx::Result<sqlx::Transaction<'static, Db>> {
+    pool.begin_with("BEGIN IMMEDIATE").await
+}
+
+/// Begin a transaction that reads before it writes; Postgres needs no up-front lock.
+#[cfg(all(feature = "postgres", not(feature = "sqlite")))]
+pub(crate) async fn begin_write(pool: &DbPool) -> sqlx::Result<sqlx::Transaction<'static, Db>> {
+    pool.begin().await
+}
+
 /// Create a small background-writer pool for PostgreSQL (low connection ceiling
 /// since background tasks are infrequent). SQLite uses per-subsystem writer
 /// pools instead, so this is Postgres-only.
@@ -151,7 +163,8 @@ pub async fn create_migration_pool(url: &str) -> Result<DbPool> {
             .create_if_missing(true)
             .journal_mode(SqliteJournalMode::Delete)
             .foreign_keys(false)
-            .busy_timeout(std::time::Duration::from_secs(5));
+            .busy_timeout(std::time::Duration::from_secs(5))
+            .pragma("auto_vacuum", "INCREMENTAL");
         let path = opts.get_filename().to_path_buf();
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
@@ -1048,40 +1061,73 @@ mod offline_tests {
     }
 }
 
+/// File-backed test database, removed on drop; `sqlite::memory:` is per connection.
+#[cfg(all(test, feature = "sqlite"))]
+pub(crate) struct TempDb(std::path::PathBuf);
+
+#[cfg(all(test, feature = "sqlite"))]
+impl TempDb {
+    pub(crate) fn new(name: &str) -> Self {
+        let path = std::env::temp_dir().join(format!("stackpit-{name}-{}.db", std::process::id()));
+        let db = Self(path);
+        db.remove();
+        db
+    }
+
+    pub(crate) fn url(&self) -> String {
+        format!("sqlite://{}?mode=rwc", self.0.display())
+    }
+
+    fn remove(&self) {
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            let mut file = self.0.as_os_str().to_owned();
+            file.push(suffix);
+            let _ = std::fs::remove_file(file);
+        }
+    }
+}
+
+#[cfg(all(test, feature = "sqlite"))]
+impl Drop for TempDb {
+    fn drop(&mut self) {
+        self.remove();
+    }
+}
+
+/// Two migrated writer pools on one database file, as two processes would see it.
+#[cfg(all(test, feature = "sqlite"))]
+pub(crate) async fn two_writer_pools(name: &str) -> (TempDb, DbPool, DbPool) {
+    let db = TempDb::new(name);
+    let a = create_write_pool(&db.url()).await.unwrap();
+    run_migrations(&a).await.unwrap();
+    let b = create_write_pool(&db.url()).await.unwrap();
+    (db, a, b)
+}
+
+/// Run `write` in an immediate transaction on `pool` and return once it has
+/// executed; the transaction commits `hold` later on the returned task.
+#[cfg(all(test, feature = "sqlite"))]
+pub(crate) async fn hold_write_lock(
+    pool: &DbPool,
+    write: &'static str,
+    hold: std::time::Duration,
+) -> tokio::task::JoinHandle<()> {
+    let pool = pool.clone();
+    let (written_tx, written_rx) = tokio::sync::oneshot::channel();
+    let handle = tokio::spawn(async move {
+        let mut tx = begin_write(&pool).await.unwrap();
+        sqlx::query(write).execute(&mut *tx).await.unwrap();
+        written_tx.send(()).unwrap();
+        tokio::time::sleep(hold).await;
+        tx.commit().await.unwrap();
+    });
+    written_rx.await.unwrap();
+    handle
+}
+
 #[cfg(all(test, feature = "sqlite", not(feature = "postgres")))]
 mod migrate_tests {
     use super::*;
-
-    /// File-backed database: `stackpit migrate` opens its own pool, and `sqlite::memory:` is per connection.
-    struct TempDb(std::path::PathBuf);
-
-    impl TempDb {
-        fn new(name: &str) -> Self {
-            let path =
-                std::env::temp_dir().join(format!("stackpit-{name}-{}.db", std::process::id()));
-            let db = Self(path);
-            db.remove();
-            db
-        }
-
-        fn url(&self) -> String {
-            format!("sqlite://{}?mode=rwc", self.0.display())
-        }
-
-        fn remove(&self) {
-            for suffix in ["", "-wal", "-shm", "-journal"] {
-                let mut file = self.0.as_os_str().to_owned();
-                file.push(suffix);
-                let _ = std::fs::remove_file(file);
-            }
-        }
-    }
-
-    impl Drop for TempDb {
-        fn drop(&mut self) {
-            self.remove();
-        }
-    }
 
     async fn applied_count(pool: &DbPool) -> usize {
         applied_versions(pool).await.unwrap().unwrap().len()
@@ -1174,6 +1220,21 @@ mod migrate_tests {
         let pool = create_write_pool(&db.url()).await.unwrap();
         assert_eq!(applied_count(&pool).await, up_migrations().count());
         run_migrations(&pool).await.unwrap();
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn migrate_creates_an_incremental_auto_vacuum_database() {
+        let db = TempDb::new("migrate-auto-vacuum");
+        crate::cli::migrate::run(&db.url()).await.unwrap();
+
+        // A plain connection, so the pools' own auto_vacuum pragma can't mask the file header.
+        let pool = sqlx::SqlitePool::connect(&db.url()).await.unwrap();
+        let mode: i64 = sqlx::query_scalar("PRAGMA auto_vacuum")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(mode, 2);
         pool.close().await;
     }
 }

@@ -12,3 +12,4 @@ pub mod parse_metric;
 pub mod parse_span;
 pub mod replay_meta;
 pub mod sourcemap;
+pub mod text;

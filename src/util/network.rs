@@ -34,10 +34,11 @@ impl TrustedProxies {
 }
 
 /// Extract the real client IP. Forwarding headers are honored only when the
-/// TCP peer is trusted (loopback or in `trusted_proxies`). X-Forwarded-For is
-/// walked right to left, skipping trusted proxies, because only the rightmost
-/// entries were appended by proxies we control; the leftmost entries are
-/// attacker-supplied. X-Real-IP is single-valued and used as a fallback.
+/// TCP peer is trusted (loopback or in `trusted_proxies`). X-Forwarded-For,
+/// across all its header lines, is walked right to left, skipping trusted
+/// proxies, because only the rightmost entries were appended by proxies we
+/// control; the leftmost entries are attacker-supplied. X-Real-IP is
+/// single-valued and used as a fallback.
 pub fn extract_client_ip(
     headers: &axum::http::HeaderMap,
     peer_addr: Option<std::net::SocketAddr>,
@@ -48,12 +49,14 @@ pub fn extract_client_ip(
     note_untrusted_forwarding(peer_is_trusted, peer_ip.is_some(), headers);
 
     if peer_is_trusted {
-        if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-            let mut leftmost_trusted: Option<IpAddr> = None;
-            for entry in xff.split(',').rev() {
+        // Proxies may append a new header line instead of extending the last one.
+        let mut leftmost_trusted: Option<IpAddr> = None;
+        'chain: for line in headers.get_all("x-forwarded-for").iter().rev() {
+            // Malformed line or entry breaks the verifiable chain; stop here.
+            let Ok(line) = line.to_str() else { break };
+            for entry in line.split(',').rev() {
                 let Ok(ip) = entry.trim().parse::<IpAddr>() else {
-                    // Malformed entry breaks the verifiable chain; stop here.
-                    break;
+                    break 'chain;
                 };
                 if trusted.is_trusted(ip) {
                     leftmost_trusted = Some(ip);
@@ -61,10 +64,10 @@ pub fn extract_client_ip(
                     return Some(ip.to_string());
                 }
             }
-            // Whole (verifiable) chain is trusted proxies: use the leftmost one.
-            if let Some(ip) = leftmost_trusted {
-                return Some(ip.to_string());
-            }
+        }
+        // Whole (verifiable) chain is trusted proxies: use the leftmost one.
+        if let Some(ip) = leftmost_trusted {
+            return Some(ip.to_string());
         }
 
         if let Some(real_ip) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
@@ -298,6 +301,34 @@ mod tests {
         assert_eq!(
             extract_client_ip(&headers, Some(loopback), &no_proxies()),
             Some("127.0.0.1".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_client_ip_walks_appended_header_lines() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.append("x-forwarded-for", "203.0.113.1".parse().unwrap());
+        headers.append("x-forwarded-for", "70.41.3.18".parse().unwrap());
+        let loopback: std::net::SocketAddr = "127.0.0.1:12345".parse().unwrap();
+        assert_eq!(
+            extract_client_ip(&headers, Some(loopback), &no_proxies()),
+            Some("70.41.3.18".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_client_ip_invalid_header_line_stops_the_walk() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.append("x-forwarded-for", "203.0.113.1".parse().unwrap());
+        headers.append(
+            "x-forwarded-for",
+            axum::http::HeaderValue::from_bytes(b"\xff").unwrap(),
+        );
+        headers.append("x-forwarded-for", "10.0.0.9".parse().unwrap());
+        let loopback: std::net::SocketAddr = "127.0.0.1:12345".parse().unwrap();
+        assert_eq!(
+            extract_client_ip(&headers, Some(loopback), &proxies(&["10.0.0.0/8"])),
+            Some("10.0.0.9".to_string())
         );
     }
 

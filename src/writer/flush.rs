@@ -147,14 +147,36 @@ pub(super) async fn flush_batch(
                 true
             }
             Err(e2) => {
+                if !merged {
+                    tracing::error!(
+                        "batch flush failed after retry ({} items), pending re-queue: {e2}",
+                        batch.len()
+                    );
+                    return false;
+                }
+                // The insert succeeded and only aggregation failed: keep the events, not the counts.
                 tracing::error!(
-                    "batch flush failed after retry ({} items), pending re-queue: {e2}",
+                    "aggregation failed after retry ({} items), committing insert-only: {e2}",
                     batch.len()
                 );
-                if merged {
-                    *accumulators = snapshot;
+                *accumulators = snapshot;
+                // After the restore, which would otherwise overwrite the failure window.
+                accumulators.note_flush_failure();
+                pending.clear();
+                match do_flush_tx(pool, batch, false, accumulators, &mut pending, &mut merged).await
+                {
+                    Ok(t) => {
+                        log_flush_timings(batch.len(), false, compress, &t);
+                        true
+                    }
+                    Err(e3) => {
+                        tracing::error!(
+                            "insert-only flush failed ({} items), pending re-queue: {e3}",
+                            batch.len()
+                        );
+                        false
+                    }
                 }
-                false
             }
         }
     }
@@ -271,21 +293,14 @@ async fn do_insert_tx(pool: &DbPool, batch: &[WriteMsg]) -> Result<(Accumulators
     Ok((scratch, timings))
 }
 
-/// Post-commit protocol for an aggregation flush: clear the drained deltas, emit notifications, and reset the flush timer.
+/// Post-commit protocol for an aggregation flush: clear the drained deltas, reset the flush timer and failure window, and emit notifications.
 fn finalize_agg_flush(
     accumulators: &mut Accumulators,
     pending: Vec<crate::notify::NotificationEvent>,
     notify_tx: Option<&tokio::sync::mpsc::Sender<crate::notify::NotificationEvent>>,
 ) {
-    accumulators.issues.clear();
-    accumulators.tags.clear();
-    accumulators.session_aggregates.clear();
-    accumulators.transaction_metrics.clear();
-    accumulators.client_report_outcomes.clear();
-    accumulators.releases.clear();
-    accumulators.platforms.clear();
+    accumulators.reset_deltas();
     send_notifications(pending, notify_tx);
-    accumulators.last_flush = Instant::now();
 }
 
 /// Does the actual event/attachment inserts inside a transaction.
@@ -317,9 +332,15 @@ async fn do_flush_inner(
     let new_ids = event_writes::insert_event_rows_bulk(tx, &all_events).await?;
 
     for &idx in &attachment_msgs {
-        if let WriteMsg::EventWithAttachments(_, attachments) = &batch[idx] {
+        if let WriteMsg::EventWithAttachments(event, attachments) = &batch[idx] {
             for att in attachments {
-                event_writes::insert_attachment(&mut **tx, att).await?;
+                if !event_writes::insert_attachment(&mut **tx, event.project_id, att).await? {
+                    tracing::debug!(
+                        "dropped attachment for event {} not stored in project {}",
+                        att.event_id,
+                        event.project_id
+                    );
+                }
             }
         }
     }
@@ -337,7 +358,7 @@ pub(super) async fn insert_event(pool: &DbPool, event: &StorableEvent) -> Result
     Ok(is_new)
 }
 
-/// Flushes accumulated issue deltas, HLL merges, and tag counts.
+/// Flushes accumulated issue deltas, HLL merges, and tag counts; failed deltas are kept until `AGG_FLUSH_GIVE_UP`.
 pub(super) async fn flush_aggregation(
     pool: &DbPool,
     accumulators: &mut Accumulators,
@@ -350,9 +371,20 @@ pub(super) async fn flush_aggregation(
 
     let mut pending = Vec::new();
     let agg_started = Instant::now();
-    let mut tx = pool.begin().await?;
-    let threshold_candidates = flush_aggregation_inner(&mut tx, accumulators, &mut pending).await?;
-    tx.commit().await?;
+    let result = async {
+        let mut tx = crate::db::begin_write(pool).await?;
+        let candidates = flush_aggregation_inner(&mut tx, accumulators, &mut pending).await?;
+        tx.commit().await?;
+        anyhow::Ok(candidates)
+    }
+    .await;
+    let threshold_candidates = match result {
+        Ok(candidates) => candidates,
+        Err(e) => {
+            accumulators.note_flush_failure();
+            return Err(e);
+        }
+    };
     tracing::debug!(
         agg_us = agg_started.elapsed().as_micros() as u64,
         "standalone aggregation flush timings"

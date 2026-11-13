@@ -1,5 +1,8 @@
 //! Structured-log payload parsing (OTEL-style entries) -> per-entry fields.
 
+use crate::ingest::ids::sanitize_id;
+use crate::ingest::text::{clean_text, strip_nul};
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct LogFields {
     pub level: Option<String>,
@@ -67,7 +70,7 @@ pub(crate) fn extract_log_fields(v: &serde_json::Value) -> LogFields {
             .get("level")
             .or_else(|| v.get("severity_text"))
             .and_then(|v| v.as_str())
-            .map(normalize_log_level),
+            .map(|s| normalize_log_level(&clean_text(s))),
         body: v
             .get("body")
             .or_else(|| v.get("message"))
@@ -75,9 +78,15 @@ pub(crate) fn extract_log_fields(v: &serde_json::Value) -> LogFields {
                 v.as_str()
                     .or_else(|| v.get("string_value").and_then(|sv| sv.as_str()))
             })
-            .map(String::from),
-        trace_id: v.get("trace_id").and_then(|v| v.as_str()).map(String::from),
-        span_id: v.get("span_id").and_then(|v| v.as_str()).map(String::from),
+            .map(strip_nul),
+        trace_id: v
+            .get("trace_id")
+            .and_then(|v| v.as_str())
+            .and_then(sanitize_id),
+        span_id: v
+            .get("span_id")
+            .and_then(|v| v.as_str())
+            .and_then(sanitize_id),
         attributes: v.get("attributes").map(|a| a.to_string()),
     }
 }
@@ -126,4 +135,42 @@ pub(crate) fn compress_log_entry(entry: &serde_json::Value) -> Vec<u8> {
 /// Compress pre-serialized log entry bytes to their own zstd blob.
 pub(crate) fn compress_log_bytes(json_bytes: &[u8]) -> Vec<u8> {
     zstd::encode_all(std::io::Cursor::new(json_bytes), 3).unwrap_or_else(|_| json_bytes.to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ingest::text::MAX_TEXT_CHARS;
+
+    #[test]
+    fn log_text_and_ids_are_sanitized() {
+        let long = "x".repeat(5000);
+        let raw = format!(
+            r#"{{"level":"WARN\u0000{long}","body":"disk\u0000 full {long}","trace_id":"{}","span_id":"ab\u0000cd"}}"#,
+            "a".repeat(65)
+        );
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let f = extract_log_fields(&v);
+        let level = f.level.unwrap();
+        assert_eq!(level.chars().count(), MAX_TEXT_CHARS);
+        assert!(level.starts_with("warn") && !level.contains('\0'));
+        assert_eq!(f.body, Some(format!("disk full {long}")));
+        assert_eq!(f.trace_id, None);
+        assert_eq!(f.span_id, None);
+
+        let v = serde_json::json!({
+            "level": "WARN",
+            "body": "disk full",
+            "trace_id": "0af7651916cd43dd8448eb211c80319c",
+            "span_id": "b7ad6b7169203331",
+        });
+        let f = extract_log_fields(&v);
+        assert_eq!(f.level.as_deref(), Some("warning"));
+        assert_eq!(f.body.as_deref(), Some("disk full"));
+        assert_eq!(
+            f.trace_id.as_deref(),
+            Some("0af7651916cd43dd8448eb211c80319c")
+        );
+        assert_eq!(f.span_id.as_deref(), Some("b7ad6b7169203331"));
+    }
 }

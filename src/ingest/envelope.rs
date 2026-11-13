@@ -1,6 +1,7 @@
 use crate::ingest::auth;
 use crate::ingest::auth::SentryAuth;
 use crate::ingest::models::{ItemType, StorableAttachment, StorableEvent};
+use crate::ingest::text::{clean_text, strip_nul};
 use anyhow::{bail, Result};
 use serde_json::Value;
 
@@ -128,15 +129,12 @@ pub fn parse(body: &[u8], project_id: u64, auth: &SentryAuth) -> Result<ParsedEn
             .parse::<ItemType>()
             .unwrap_or(ItemType::Unknown);
         let declared_length = item_header.get("length").and_then(|v| v.as_u64());
-        let filename = item_header
-            .get("filename")
-            .and_then(|v| v.as_str())
-            .map(String::from);
-        let content_type = item_header
-            .get("content_type")
-            .or_else(|| item_header.get("content-type"))
-            .and_then(|v| v.as_str())
-            .map(String::from);
+        let filename = str_field(item_header.get("filename"));
+        let content_type = str_field(
+            item_header
+                .get("content_type")
+                .or_else(|| item_header.get("content-type")),
+        );
 
         pos = if item_nl < body.len() {
             item_nl + 1
@@ -327,7 +325,15 @@ fn user_identifier_from(
 }
 
 fn str_field(v: Option<&Value>) -> Option<String> {
-    v.and_then(|v| v.as_str()).map(String::from)
+    v.and_then(Value::as_str).map(clean_text)
+}
+
+fn trace_id_from(contexts: Option<&Value>) -> Option<String> {
+    contexts
+        .and_then(|c| c.get("trace"))
+        .and_then(|t| t.get("trace_id"))
+        .and_then(Value::as_str)
+        .and_then(crate::ingest::ids::sanitize_id)
 }
 
 /// The few top-level keys a profile item contributes to its row. serde skips
@@ -406,13 +412,7 @@ fn extract_fields_head(
     event.monitor_slug = str_field(head.monitor_slug.as_ref());
 
     if event.trace_id.is_none() {
-        event.trace_id = head
-            .contexts
-            .as_ref()
-            .and_then(|c| c.get("trace"))
-            .and_then(|t| t.get("trace_id"))
-            .and_then(|v| v.as_str())
-            .map(String::from);
+        event.trace_id = trace_id_from(head.contexts.as_ref());
     }
 
     if let Some(sdk) = &head.sdk {
@@ -496,36 +496,15 @@ fn extract_fields_full(
             s.parse::<crate::ingest::models::Level>()
                 .unwrap_or(crate::ingest::models::Level::Unknown)
         });
-    event.platform = json
-        .get("platform")
-        .and_then(|v| v.as_str())
-        .map(String::from);
-    event.release = json
-        .get("release")
-        .and_then(|v| v.as_str())
-        .map(String::from);
-    event.environment = json
-        .get("environment")
-        .and_then(|v| v.as_str())
-        .map(String::from);
-    event.server_name = json
-        .get("server_name")
-        .and_then(|v| v.as_str())
-        .map(String::from);
-    event.transaction_name = json
-        .get("transaction")
-        .and_then(|v| v.as_str())
-        .map(String::from);
-    event.monitor_slug = json
-        .get("monitor_slug")
-        .and_then(|v| v.as_str())
-        .map(String::from);
+    event.platform = str_field(json.get("platform"));
+    event.release = str_field(json.get("release"));
+    event.environment = str_field(json.get("environment"));
+    event.server_name = str_field(json.get("server_name"));
+    event.transaction_name = str_field(json.get("transaction"));
+    event.monitor_slug = str_field(json.get("monitor_slug"));
 
     if *item_type == ItemType::Session {
-        event.session_status = json
-            .get("status")
-            .and_then(|v| v.as_str())
-            .map(String::from);
+        event.session_status = str_field(json.get("status"));
         extract_session_bucket(&json, event, drift);
     } else if *item_type == ItemType::Sessions {
         extract_session_aggregates(&json, event, drift);
@@ -548,12 +527,7 @@ fn extract_fields_full(
     // Error and default events also carry a trace context; capture trace_id so
     // they correlate to the trace waterfall.
     if event.trace_id.is_none() {
-        event.trace_id = json
-            .get("contexts")
-            .and_then(|c| c.get("trace"))
-            .and_then(|t| t.get("trace_id"))
-            .and_then(|v| v.as_str())
-            .map(String::from);
+        event.trace_id = trace_id_from(json.get("contexts"));
     }
 
     // For an error the same field names the span that was active at capture,
@@ -568,11 +542,8 @@ fn extract_fields_full(
     }
 
     if let Some(sdk) = json.get("sdk") {
-        event.sdk_name = sdk.get("name").and_then(|v| v.as_str()).map(String::from);
-        event.sdk_version = sdk
-            .get("version")
-            .and_then(|v| v.as_str())
-            .map(String::from);
+        event.sdk_name = str_field(sdk.get("name"));
+        event.sdk_version = str_field(sdk.get("version"));
     }
 
     event.user_identifier = json.get("user").and_then(|u| {
@@ -630,7 +601,7 @@ pub(crate) fn trace_op_and_status(json: &Value) -> (Option<String>, Option<Strin
         trace
             .and_then(|t| t.get(key))
             .and_then(Value::as_str)
-            .map(String::from)
+            .map(strip_nul)
     };
     (field("op"), field("status"))
 }
@@ -642,10 +613,7 @@ pub(crate) fn trace_op_and_status(json: &Value) -> (Option<String>, Option<Strin
 /// spans so a waterfall drawn from both lines up.
 fn extract_transaction_perf(json: &Value, event: &mut StorableEvent, drift: i64) {
     let trace = json.get("contexts").and_then(|c| c.get("trace"));
-    event.trace_id = trace
-        .and_then(|t| t.get("trace_id"))
-        .and_then(|v| v.as_str())
-        .map(String::from);
+    event.trace_id = trace_id_from(json.get("contexts"));
     (event.trace_op, event.trace_status) = trace_op_and_status(json);
     event.span_id = trace
         .and_then(|t| t.get("span_id"))
@@ -685,17 +653,8 @@ fn extract_transaction_perf(json: &Value, event: &mut StorableEvent, drift: i64)
 /// Read release/environment from a session item's `attrs`, defaulting to ''.
 fn session_attrs(json: &Value) -> (String, String) {
     let attrs = json.get("attrs");
-    let release = attrs
-        .and_then(|a| a.get("release"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let environment = attrs
-        .and_then(|a| a.get("environment"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    (release, environment)
+    let attr = |key: &str| str_field(attrs.and_then(|a| a.get(key))).unwrap_or_default();
+    (attr("release"), attr("environment"))
 }
 
 /// Parse a single `session` item into one SessionBucket.
@@ -799,8 +758,8 @@ fn extract_tags(tags: Option<&Value>) -> Vec<(String, String)> {
             for pair in arr {
                 if let Some(inner) = pair.as_array() {
                     if inner.len() == 2 {
-                        let key = inner[0].as_str().unwrap_or("").to_string();
-                        let value = inner[1].as_str().unwrap_or("").to_string();
+                        let key = clean_text(inner[0].as_str().unwrap_or(""));
+                        let value = clean_text(inner[1].as_str().unwrap_or(""));
                         if !key.is_empty() {
                             result.push((key, value));
                         }
@@ -810,11 +769,15 @@ fn extract_tags(tags: Option<&Value>) -> Vec<(String, String)> {
         }
         Value::Object(map) => {
             for (key, val) in map {
-                let value = val
-                    .as_str()
-                    .map(String::from)
-                    .unwrap_or_else(|| val.to_string());
-                result.push((key.clone(), value));
+                let key = clean_text(key);
+                if key.is_empty() {
+                    continue;
+                }
+                let value = match val.as_str() {
+                    Some(s) => clean_text(s),
+                    None => clean_text(&val.to_string()),
+                };
+                result.push((key, value));
             }
         }
         _ => {}
@@ -1872,5 +1835,164 @@ mod tests {
         let mut event = parse_store_body(body, 1, &test_auth()).unwrap();
         crate::ingest::enrich::enrich_event(&mut event);
         assert!(event.title.is_none());
+    }
+
+    // --- text sanitising ---
+
+    fn poisoned(prefix: &str) -> String {
+        format!("{prefix}\u{0}{}", "x".repeat(5000))
+    }
+
+    fn envelope_of(items: &[(&str, &Value)]) -> ParsedEnvelope {
+        let mut body = String::from("{}\n");
+        for (item_type, payload) in items {
+            body.push_str(&format!("{{\"type\":\"{item_type}\"}}\n{payload}\n"));
+        }
+        parse(body.as_bytes(), 1, &test_auth()).unwrap()
+    }
+
+    #[track_caller]
+    fn assert_capped(field: &str, value: Option<&str>, prefix: &str) {
+        use crate::ingest::text::MAX_TEXT_CHARS;
+        let value = value.unwrap_or_else(|| panic!("{field} missing"));
+        assert!(!value.contains('\0'), "{field} kept a NUL");
+        assert_eq!(value.chars().count(), MAX_TEXT_CHARS, "{field} not capped");
+        assert!(value.starts_with(prefix), "{field} lost its prefix");
+    }
+
+    #[test]
+    fn poisoned_text_is_cleaned_on_head_and_full_paths() {
+        let mut tags_obj = serde_json::Map::new();
+        tags_obj.insert(poisoned("region"), Value::String(poisoned("eu")));
+        tags_obj.insert("\u{0}".to_string(), Value::String("dropped".to_string()));
+        let payload = serde_json::json!({
+            "event_id": "abcdef0123456789abcdef0123456789",
+            "platform": poisoned("python"),
+            "release": poisoned("app@1"),
+            "environment": poisoned("prod"),
+            "server_name": poisoned("web-1"),
+            "transaction": poisoned("/api"),
+            "monitor_slug": poisoned("cron"),
+            "sdk": {"name": poisoned("sentry.python"), "version": poisoned("2.0")},
+            "tags": tags_obj,
+            "message": poisoned("boom"),
+            "contexts": {"trace": {
+                "trace_id": "0af7651916cd43dd8448eb211c80319c",
+                "op": poisoned("http.server"),
+                "status": poisoned("ok"),
+            }},
+            "profile": {"samples": []},
+        });
+        let mut txn = payload.clone();
+        txn["tags"] =
+            serde_json::json!([[poisoned("region"), poisoned("eu")], ["\u{0}", "dropped"],]);
+
+        let result = envelope_of(&[
+            ("profile", &payload),
+            ("event", &payload),
+            ("transaction", &txn),
+        ]);
+        assert_eq!(result.events.len(), 3);
+        for mut ev in result.events {
+            crate::ingest::enrich::enrich_event(&mut ev);
+            let path = ev.item_type.as_str();
+            assert_capped(path, ev.platform.as_deref(), "python");
+            assert_capped(path, ev.release.as_deref(), "app@1");
+            assert_capped(path, ev.environment.as_deref(), "prod");
+            assert_capped(path, ev.server_name.as_deref(), "web-1");
+            assert_capped(path, ev.transaction_name.as_deref(), "/api");
+            assert_capped(path, ev.monitor_slug.as_deref(), "cron");
+            assert_capped(path, ev.sdk_name.as_deref(), "sentry.python");
+            assert_capped(path, ev.sdk_version.as_deref(), "2.0");
+            assert_capped(path, ev.title.as_deref(), "boom");
+            assert_eq!(ev.tags.len(), 1, "{path}: the NUL-only key is dropped");
+            assert_capped(path, Some(&ev.tags[0].0), "region");
+            assert_capped(path, Some(&ev.tags[0].1), "eu");
+        }
+
+        // Display-only trace context keeps its length and only loses the NUL.
+        let txn_event = envelope_of(&[("transaction", &txn)]).events.remove(0);
+        let op = txn_event.trace_op.unwrap();
+        assert!(!op.contains('\0'));
+        assert_eq!(op.chars().count(), "http.server".len() + 5000);
+        let status = txn_event.trace_status.unwrap();
+        assert!(!status.contains('\0'));
+        assert_eq!(status.chars().count(), "ok".len() + 5000);
+    }
+
+    #[test]
+    fn poisoned_session_text_is_cleaned() {
+        let attrs =
+            serde_json::json!({"release": poisoned("app@1"), "environment": poisoned("prod")});
+        let session = serde_json::json!({
+            "sid": "s1", "init": true, "status": poisoned("ok"), "errors": 0, "attrs": attrs,
+        });
+        let sessions = serde_json::json!({
+            "aggregates": [{"started": "2025-03-07T12:00:00.000Z", "exited": 1}],
+            "attrs": attrs,
+        });
+        let result = envelope_of(&[("session", &session), ("sessions", &sessions)]);
+        assert_eq!(result.events.len(), 2);
+        assert_capped(
+            "session_status",
+            result.events[0].session_status.as_deref(),
+            "ok",
+        );
+        for ev in &result.events {
+            let b = &ev.session_buckets[0];
+            assert_capped("bucket release", Some(&b.release), "app@1");
+            assert_capped("bucket environment", Some(&b.environment), "prod");
+        }
+    }
+
+    #[test]
+    fn poisoned_attachment_header_is_cleaned() {
+        let attachment = |filename: &str, content_type: &str| {
+            let header = serde_json::json!({
+                "type": "attachment", "filename": filename, "content_type": content_type, "length": 3,
+            });
+            let body = format!("{{}}\n{header}\nabc\n");
+            parse(body.as_bytes(), 1, &test_auth())
+                .unwrap()
+                .attachments
+                .remove(0)
+        };
+        let att = attachment(&poisoned("crash.log"), &poisoned("text/plain"));
+        assert_capped("filename", Some(&att.filename), "crash.log");
+        assert_capped("content_type", att.content_type.as_deref(), "text/plain");
+
+        let att = attachment("crash.log", "text/plain");
+        assert_eq!(att.filename, "crash.log");
+        assert_eq!(att.content_type.as_deref(), Some("text/plain"));
+    }
+
+    #[test]
+    fn trace_id_is_sanitized_on_every_path() {
+        let ok = "a".repeat(64);
+        for (trace_id, expected) in [
+            (ok.clone(), Some(ok.as_str())),
+            ("a".repeat(65), None),
+            ("0af76519\u{0}16cd43dd".to_string(), None),
+        ] {
+            let payload = serde_json::json!({
+                "transaction": "/t",
+                "contexts": {"trace": {"trace_id": trace_id}},
+                "profile": {"samples": []},
+            });
+            let result = envelope_of(&[
+                ("profile", &payload),
+                ("event", &payload),
+                ("transaction", &payload),
+            ]);
+            assert_eq!(result.events.len(), 3);
+            for ev in &result.events {
+                assert_eq!(
+                    ev.trace_id.as_deref(),
+                    expected,
+                    "{} path, trace_id {trace_id:?}",
+                    ev.item_type.as_str()
+                );
+            }
+        }
     }
 }

@@ -3,3 +3,7 @@
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0192"
 reason = "ttf-parser via charts-rs is flagged unmaintained, not vulnerable; it only reads the fonts charts-rs bundles"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0459"
+reason = "libsqlite3-sys via sqlx-sqlite: needs a crafted db/-wal pair; the bench opens only databases it creates, and sqlx 0.9.0 caps libsqlite3-sys below the fixed 0.39"

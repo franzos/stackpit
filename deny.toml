@@ -17,4 +17,8 @@ ignore = [
     # no secret goes through it. Fixed only in 0.7.6, which elliptic-curve 0.13
     # can't take.
     "RUSTSEC-2026-0387",
+    # libsqlite3-sys (via sqlx-sqlite): bundled SQLite before 3.54.0 leaks
+    # page-cache memory on a crafted db/-wal pair. Stackpit opens only its own
+    # database files. sqlx 0.9.0 caps libsqlite3-sys below the fixed 0.39.
+    "RUSTSEC-2026-0459",
 ]

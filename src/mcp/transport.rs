@@ -830,7 +830,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn jsonrpc_response_body_is_accepted() {
+    // The server never sends a request, so there is no response to accept.
+    async fn jsonrpc_response_body_is_rejected() {
         let resp = app()
             .await
             .oneshot(post_request(
@@ -838,8 +839,11 @@ mod tests {
             ))
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::ACCEPTED);
-        assert!(body_bytes(resp).await.is_empty());
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            json_body(resp).await["error"]["code"],
+            JSONRPC_INVALID_REQUEST
+        );
     }
 
     #[tokio::test]

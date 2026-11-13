@@ -3,3 +3,11 @@
 [[IgnoredVulns]]
 id = "RUSTSEC-2023-0071"
 reason = "rsa via openidconnect: Marvin attack targets RSA decryption; Stackpit only verifies RS256 signatures with public keys"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0387"
+reason = "crypto-bigint 0.5 via elliptic-curve 0.13: timing leaks on secret operands; Stackpit only verifies ES256/ES384 signatures with public keys"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0459"
+reason = "libsqlite3-sys via sqlx-sqlite: needs a crafted db/-wal pair; Stackpit opens only its own database files, and sqlx 0.9.0 caps libsqlite3-sys below the fixed 0.39"
